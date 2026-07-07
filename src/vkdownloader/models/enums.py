@@ -1,0 +1,32 @@
+"""Domain enums for VK Video Downloader."""
+
+from enum import StrEnum
+
+
+class QualityEnum(StrEnum):
+    """Video quality options for stream selection."""
+
+    Q240 = "240"
+    Q360 = "360"
+    Q480 = "480"
+    Q720 = "720"
+    Q1080 = "1080"
+    BEST = "best"
+    WORST = "worst"
+
+
+class StreamFormat(StrEnum):
+    """Stream format types."""
+
+    HLS = "hls"
+    DASH = "dash"
+    MP4 = "mp4"
+
+
+class DownloadStatus(StrEnum):
+    """Download status states."""
+
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
