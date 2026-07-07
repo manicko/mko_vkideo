@@ -94,7 +94,7 @@ permission:
     "git update-ref -d*": ask
 
     # === ASK: potentially destructive filesystem ===
-    "*pip*": deny
+    "*pip*": ask
     "rm -rf *": ask
     "rm -r *": ask
     "Remove-Item -Recurse -Force *": ask
@@ -171,7 +171,7 @@ permission:
     "git reflog*": deny
 
     # === DENY: git write (orchestrator's job) ===
-    "git add*": deny
+    "git add*": s
     "git commit*": deny
 
     # === DENY: destructive filesystem ===
