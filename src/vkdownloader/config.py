@@ -86,6 +86,10 @@ class Settings(BaseSettings):
         le=300,
         description="Request timeout in seconds",
     )
+    download_method: str = Field(
+        default="auto",
+        description="Download method: 'yt-dlp', 'ffmpeg', or 'auto'",
+    )
 
     # Logging settings
     log_level: str = Field(

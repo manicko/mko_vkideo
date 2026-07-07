@@ -91,6 +91,7 @@ class BrowserManager:
         context = await self.browser.new_context(  # type: ignore[union-attr]
             viewport={"width": 1920, "height": 1080},
             user_agent=self.settings.user_agent,
+            locale=self.settings.locale,
         )
 
         page = await context.new_page()

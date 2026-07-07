@@ -46,3 +46,9 @@ class DownloadProgress(BaseModel):
     segments_total: int
     status: DownloadStatus
     error: str | None = None
+
+
+class StreamWithCookies(Stream):
+    """Stream with associated cookies for authentication."""
+
+    cookies: str | None = None

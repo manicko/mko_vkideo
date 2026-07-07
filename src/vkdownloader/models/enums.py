@@ -30,3 +30,11 @@ class DownloadStatus(StrEnum):
     DOWNLOADING = "downloading"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class DownloadMethod(StrEnum):
+    """Download method options."""
+
+    YTDLP = "yt-dlp"
+    FFMPEG = "ffmpeg"
+    AUTO = "auto"

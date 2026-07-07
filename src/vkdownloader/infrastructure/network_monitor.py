@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 class NetworkMonitor:
     """Monitors network traffic to capture m3u8 URLs from responses."""
 
-    M3U8_PATTERN = re.compile(r"https?://.*\.m3u8.*")
+    M3U8_PATTERN = re.compile(r"(?:https?://)?[^\s\"'<>]+\.m3u8(?:\?[^\s\"'<>]*)?")
 
     def __init__(self, page: Page) -> None:
         """
@@ -30,6 +30,18 @@ class NetworkMonitor:
         logger.debug("setting_up_network_interceptors")
         self.page.on("response", self._intercept_response)
 
+    def _normalize_url(self, url: str) -> str:
+        """Convert relative m3u8 URL to absolute URL."""
+        url = url.strip()
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        # Handle relative URLs from VK CDN
+        if url.startswith("/"):
+            return f"https://{url[1:]}" if not url.startswith("//") else f"https:{url}"
+        if url.startswith("//"):
+            return f"https:{url}"
+        return f"https://{url}"
+
     async def _intercept_response(self, response: Any) -> None:
         """
         Intercept network responses and capture m3u8 URLs.
@@ -38,9 +50,12 @@ class NetworkMonitor:
             response: Playwright Response object.
         """
         url = response.url
-        if self.M3U8_PATTERN.match(url):
-            self.m3u8_urls.append(url)
-            logger.debug("m3u8_url_captured", url=url)
+        # Check both absolute and relative m3u8 URLs
+        if ".m3u8" in url.lower() or self.M3U8_PATTERN.search(url):
+            normalized = self._normalize_url(url)
+            if normalized not in self.m3u8_urls:
+                self.m3u8_urls.append(normalized)
+            logger.debug("m3u8_url_captured", url=normalized)
 
         # Also check for XHR responses containing stream URLs
         if "video" in url and response.headers.get("content-type", "").startswith("application/json"):
@@ -59,9 +74,11 @@ class NetworkMonitor:
         """
         if isinstance(data, dict):
             for value in data.values():
-                if isinstance(value, str) and self.M3U8_PATTERN.match(value):
-                    self.m3u8_urls.append(value)
-                    logger.debug("m3u8_url_found_in_json", url=value)
+                if isinstance(value, str) and ".m3u8" in value.lower():
+                    normalized = self._normalize_url(value)
+                    if normalized not in self.m3u8_urls:
+                        self.m3u8_urls.append(normalized)
+                        logger.debug("m3u8_url_found_in_json", url=normalized)
                 elif isinstance(value, (dict, list)):
                     self._extract_urls_from_json(value)
         elif isinstance(data, list):

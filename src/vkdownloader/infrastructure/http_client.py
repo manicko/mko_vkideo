@@ -1,6 +1,7 @@
 """HTTP client wrapper with aiohttp for VK Video Downloader."""
 
 import asyncio
+import ssl
 from collections.abc import Callable
 from pathlib import Path
 
@@ -44,7 +45,14 @@ class HttpClient:
             "Accept-Language": self.settings.accept_language,
         }
 
-        self._session = aiohttp.ClientSession(headers=headers, timeout=timeout)
+        # Create SSL context that doesn't verify certificates (needed for VK CDN)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+        self._session = aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector)
         return self
 
     async def __aexit__(

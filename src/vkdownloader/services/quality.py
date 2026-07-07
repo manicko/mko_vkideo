@@ -36,9 +36,11 @@ class QualitySelector:
                 result = min(streams, key=lambda s: s.height or float("inf"))
                 logger.debug("selected_worst_quality", quality=result.quality)
             case _:
-                # Try to find matching quality
+                # Try to find matching quality (support both "720" and "720p" formats)
+                quality_str = str(quality)
                 for stream in streams:
-                    if str(stream.quality) == str(quality):
+                    stream_quality = stream.quality.replace("p", "") if stream.quality else ""
+                    if stream_quality == quality_str or stream.quality == quality_str:
                         logger.debug("selected_matching_quality", quality=stream.quality)
                         return stream
                 # Fallback to best available

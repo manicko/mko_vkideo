@@ -21,30 +21,30 @@ class HLSDownloader:
             settings: Application settings. Uses global settings if not provided.
         """
         self.settings = settings if settings is not None else Settings()
-        logger.debug("hls_downloader_initialized")
 
-    def _build_ffmpeg_cmd(self, m3u8_url: str, output_file: Path) -> list[str]:
+    def _build_ffmpeg_cmd(self, m3u8_url: str, output_file: Path, cookies: str | None = None) -> list[str]:
         """
         Build ffmpeg command for HLS to MP4 conversion.
 
         Args:
             m3u8_url: URL of the HLS m3u8 playlist.
             output_file: Path where the output MP4 file will be saved.
+            cookies: Optional cookies string for authentication.
 
         Returns:
             List of command arguments for ffmpeg subprocess.
         """
+        # Build headers string with required \r\n line endings
         headers = f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n"
+        if cookies:
+            headers += f"Cookie: {cookies}\r\n"
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-headers",
-            headers,
-            "-i",
-            m3u8_url,
-            "-c",
-            "copy",
+            "-headers", headers,
+            "-i", m3u8_url,
+            "-c", "copy",
             str(output_file),
         ]
 
@@ -52,7 +52,7 @@ class HLSDownloader:
         return cmd
 
     async def download_with_ffmpeg(
-        self, m3u8_url: str, output_file: Path, quality: str = "best"
+        self, m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None
     ) -> Path | None:
         """
         Download HLS stream to MP4 using ffmpeg.
@@ -61,13 +61,14 @@ class HLSDownloader:
             m3u8_url: URL of the HLS m3u8 playlist to download.
             output_file: Path where the output MP4 file will be saved.
             quality: Quality identifier for logging purposes.
+            cookies: Optional cookies from browser session for authentication.
 
         Returns:
             Path to downloaded MP4 file on success, None on failure.
         """
-        logger.info("starting_ffmpeg_download", url=m3u8_url, output=str(output_file), quality=quality)
+        logger.info("starting_ffmpeg_download", url=m3u8_url, output=str(output_file), quality=quality, has_cookies=bool(cookies))
 
-        cmd = self._build_ffmpeg_cmd(m3u8_url, output_file)
+        cmd = self._build_ffmpeg_cmd(m3u8_url, output_file, cookies)
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -84,4 +85,3 @@ class HLSDownloader:
 
         logger.info("ffmpeg_download_completed", output=str(output_file))
         return output_file
-
