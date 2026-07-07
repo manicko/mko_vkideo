@@ -1,0 +1,49 @@
+id: TASK_001_rename_logging_setup
+
+title: Rename logging_setup.py → logging.py
+
+priority: high
+
+depends_on: []
+
+source_reference: .ai/plans/FILE_NAMING_RESEARCH.md
+source_section: "5.1 — Files to Rename (Priority Order)"
+
+description: >
+  Rename src/mko_telebot/logging_setup.py to src/mko_telebot/logging.py.
+  Remove the redundant "setup" suffix — the module describes logging functionality.
+
+goals:
+  - rename file logging_setup.py → logging.py
+  - preserve all internal content exactly as-is
+  - keep __all__ exports unchanged
+  - do NOT update any importers (handled by TASK_006)
+
+files:
+  - path: src/mko_telebot/logging_setup.py
+
+    targets:
+      - type: file
+        name: logging_setup.py
+
+changes:
+  - action: rename_file
+
+    description: >
+      Rename src/mko_telebot/logging_setup.py → src/mko_telebot/logging.py.
+      The file content, module docstring, all functions (setup_logging), and
+      __all__ exports remain untouched. Only the filename changes.
+
+    from_path: src/mko_telebot/logging_setup.py
+    to_path: src/mko_telebot/logging.py
+
+risk_assessment:
+  level: low
+  reason: >
+    Simple file rename. The module has no internal self-references that depend
+    on its filename. No other file is modified by this task.
+
+acceptance_criteria:
+  - src/mko_telebot/logging_setup.py no longer exists
+  - src/mko_telebot/logging.py exists with identical content
+  - all tests still pass after dependent import updates

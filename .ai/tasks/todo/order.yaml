@@ -1,0 +1,49 @@
+tasks:
+  - id: TASK_001_rename_logging_setup
+    depends_on: []
+
+  - id: TASK_002_rename_telethon_models
+    depends_on: []
+
+  - id: TASK_003_rename_channels_file_and_class
+    depends_on: []
+
+  - id: TASK_004_rename_config_reader
+    depends_on: []
+
+  - id: TASK_005_documentation_update
+    depends_on: []
+
+  - id: TASK_006_update_cli_imports
+    depends_on:
+      - TASK_001_rename_logging_setup
+      - TASK_004_rename_config_reader
+
+  - id: TASK_007_update_core_init_imports
+    depends_on:
+      - TASK_002_rename_telethon_models
+      - TASK_003_rename_channels_file_and_class
+      - TASK_004_rename_config_reader
+
+  - id: TASK_008_update_core_models
+    depends_on:
+      - TASK_002_rename_telethon_models
+      - TASK_003_rename_channels_file_and_class
+
+  - id: TASK_009_update_test_imports
+    depends_on:
+      - TASK_004_rename_config_reader
+      - TASK_008_update_core_models
+
+  - id: TASK_010_update_yaml_templates
+    depends_on:
+      - TASK_003_rename_channels_file_and_class
+
+  - id: TASK_011_verification
+    depends_on:
+      - TASK_005_documentation_update
+      - TASK_006_update_cli_imports
+      - TASK_007_update_core_init_imports
+      - TASK_008_update_core_models
+      - TASK_009_update_test_imports
+      - TASK_010_update_yaml_templates

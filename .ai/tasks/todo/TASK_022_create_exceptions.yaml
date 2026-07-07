@@ -1,0 +1,42 @@
+id: task_022
+title: Create exception hierarchy
+
+priority: medium
+
+depends_on:
+  - task_021
+
+description: >
+  Create custom exception classes for VK video downloader: VKDownloadError,
+  VideoNotFoundError, QualityNotAvailableError, ExtractionError, DownloadError.
+
+files:
+  - path: src/vkdownloader/exceptions.py
+    targets:
+      - type: class
+        name: VKDownloadError
+      - type: class
+        name: VideoNotFoundError
+      - type: class
+        name: QualityNotAvailableError
+      - type: class
+        name: ExtractionError
+      - type: class
+        name: DownloadError
+
+changes:
+  - action: add_code
+    description: Create base VKDownloadError exception class
+    code_hint: |
+      class VKDownloadError(Exception):
+          pass
+  - action: add_code
+    description: Create specific exception classes inheriting from base
+    code_hint: |
+      class VideoNotFoundError(VKDownloadError):
+          pass
+
+acceptance_criteria:
+  - All exception classes created with proper docstrings
+  - Exception hierarchy follows plan specification
+  - Importable from vkdownloader.exceptions

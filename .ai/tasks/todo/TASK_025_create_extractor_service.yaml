@@ -1,0 +1,60 @@
+id: task_025
+title: Create VK video extractor service
+
+priority: high
+
+depends_on:
+  - task_023
+  - task_024
+
+description: >
+  Implement VKVideoExtractor class to navigate to video pages, wait for VideoPlayer
+  container, intercept m3u8 URLs, and parse available video qualities.
+
+source_reference: .ai\plans\02-implementation-details.md
+source_section: 10.2 Phase 2 Tasks (Extraction)
+
+files:
+  - path: src/vkdownloader/services/__init__.py
+    targets:
+      - type: file
+        name: __init__.py
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: class
+        name: VKVideoExtractor
+      - type: method
+        name: parse_video_id
+      - type: method
+        name: extract_streams
+      - type: method
+        name: _simulate_video_interaction
+      - type: method
+        name: _parse_m3u8_playlist
+
+changes:
+  - action: add_code
+    description: Create extract_streams method that uses browser to get streams
+    code_hint: |
+      async def extract_streams(self, url: str) -> VideoWithStreams:
+          owner_id, video_id = self.parse_video_id(url)
+          async with BrowserManager() as browser:
+              page = await browser.create_stealth_page()
+              interceptor = NetworkInterceptor(page)
+              await page.goto(url, wait_until="networkidle")
+              await self._simulate_video_interaction(page)
+              await asyncio.sleep(3)
+              return VideoWithStreams(id=f"{owner_id}_{video_id}", streams=...)
+  - action: add_code
+    description: Parse m3u8 playlist to extract quality variants
+    code_hint: |
+      async def _parse_m3u8_playlist(self, url: str) -> list[Stream]:
+          async with self.http_client.get(url) as resp:
+              content = await resp.text()
+          # Parse EXT-X-STREAM-INF for quality variants
+
+acceptance_criteria:
+  - extract_streams returns VideoWithStreams with available qualities
+  - VideoPlayer container detection works
+  - m3u8 URLs captured from network traffic
+  - Quality variants extracted with resolution info

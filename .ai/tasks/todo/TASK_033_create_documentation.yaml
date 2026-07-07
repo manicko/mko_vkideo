@@ -1,0 +1,80 @@
+id: task_033
+title: Create documentation and README
+
+priority: medium
+
+depends_on:
+  - task_029
+
+description: |
+  Create comprehensive documentation following doc-maintenance-rules.md:
+  - README.md with installation, usage, examples
+  - docs/01-tools/vkdownloader-overview.md with frontmatter
+  - API documentation for each service
+  - User guide for quality selection
+
+source_reference: C:\py_exp\mko_vkideo\docs\00-overview\doc-maintenance-rules.md
+
+files:
+  - path: README.md
+    targets:
+      - type: file
+        name: README.md
+  - path: docs/01-tools/vkdownloader-overview.md
+    targets:
+      - type: file
+        name: vkdownloader-overview.md
+  - path: docs/01-tools/installation.md
+    targets:
+      - type: file
+        name: installation.md
+  - path: docs/01-tools/api-reference.md
+    targets:
+      - type: file
+        name: api-reference.md
+  - path: docs/01-tools/quality-selection.md
+    targets:
+      - type: file
+        name: quality-selection.md
+
+changes:
+  - action: add_documentation
+    description: Create README with frontmatter and English content
+    code_hint: |
+      ---
+      id: vkdownloader-readme
+      domain: tools
+      tags:
+        - vkdownloader
+        - download
+        - hls
+      related:
+        - vkdownloader-installation
+        - vkdownloader-api-reference
+      ---
+      # VK Video Downloader
+      Async Python module to download videos from vkvideo.ru with quality selection.
+  - action: add_documentation
+    description: Create docs/01-tools directory structure
+    code_hint: |
+      mkdir -p docs/01-tools
+  - action: add_documentation
+    description: Create frontmatter for docs following maintenance rules
+    code_hint: |
+      ---
+      id: vkdownloader-overview
+      domain: tools
+      tags:
+        - overview
+        - architecture
+      related:
+        - vkdownloader-installation
+        - vkdownloader-api-reference
+      ---
+
+acceptance_criteria:
+  - All docs have proper YAML frontmatter (id, domain, tags, related)
+  - All documentation in English
+  - Cross-links use relative paths
+  - README includes installation, CLI usage, programmatic usage examples
+  - API reference documents all public classes and methods

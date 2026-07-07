@@ -1,0 +1,66 @@
+id: TASK_005_documentation_update
+
+title: Fix mko_telepost → mko_telebot in user-facing documentation
+
+priority: medium
+
+depends_on: []
+
+source_reference: .ai/plans/FILE_NAMING_RESEARCH.md
+source_section: "4.2 — Documentation Fix (Must Fix)"
+
+description: >
+  The README.md references the wrong application name `mko_telepost`
+  in user-facing config paths. The package is `mko_telebot`. These
+  inconsistencies confuse users during setup.
+
+  Occurrences in README.md:
+  1. Line 101: "~/.config/mko_telepost/settings/"
+  2. Line 115: "~/.config/mko_telepost/settings/"
+  3. Line 190: "~/.config/mko_telepost/settings/"
+  4. Line 239: "~/.config/mko_telepost/settings/"
+  5. Line 243: "~/.config/mko_telepost/logs/"
+
+  Docs folder (docs/11-guides/configuration.md) already uses correct
+  path `mko_telebot` — no changes needed there.
+
+goals:
+  - fix all ~/.config/mko_telepost → ~/.config/mko_telebot in README.md
+  - keep all other content unchanged
+  - do NOT modify internal .kilo/commands/ or .ai/ files that reference
+    mko_telepost (those are agent internals referencing the old project name)
+
+files:
+  - path: README.md
+
+    targets:
+      - type: file
+        name: README.md
+
+    semantic_anchors:
+      config_path_ref: ~/.config/mko_telepost/settings/
+      log_path_ref: ~/.config/mko_telepost/logs/
+
+changes:
+  - action: replace_text
+
+    description: >
+      Replace all user-facing "~/.config/mko_telepost" with
+      "~/.config/mko_telebot" in README.md. This covers both settings
+      directory and logs directory paths.
+
+    file: README.md
+    old: "~/.config/mko_telepost"
+    new: "~/.config/mko_telebot"
+    occurrences: 5
+
+risk_assessment:
+  level: low
+  reason: >
+    Simple text replacement in documentation. No code or config files
+    are affected. Changes only impact user-facing path descriptions.
+
+acceptance_criteria:
+  - no occurrences of "mko_telepost" in README.md
+  - all ~/.config/ paths in README.md reference mko_telebot
+  - README.md remains valid markdown with no broken formatting

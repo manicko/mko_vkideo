@@ -1,0 +1,202 @@
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.cli
+  layer: unknown
+  imports:
+  - __future__
+  - importlib.metadata
+  - pathlib
+  - rich.console
+  - rich.table
+  - mko_telebot.core.config_reader
+  - mko_telebot.core.errors
+  - mko_telebot.core.paths
+  - mko_telebot.logging_setup
+  - mko_telebot.monitor
+  classes: []
+  functions:
+  - init
+  - validate
+  - run
+  - config
+  - version
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\logging_setup.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.logging_setup
+  layer: unknown
+  imports:
+  - __future__
+  - pathlib
+  - typing
+  - mko_telebot.core.config_reader
+  - mko_telebot.core.errors
+  - mko_telebot.core.paths
+  classes: []
+  functions:
+  - setup_logging
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\main.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.main
+  layer: unknown
+  imports:
+  - mko_telebot.cli
+  classes: []
+  functions:
+  - main
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.monitor
+  layer: unknown
+  imports:
+  - pathlib
+  - telethon
+  - telethon.errors
+  - mko_telebot.core
+  - mko_telebot.core.config_reader
+  - mko_telebot.core.errors
+  - mko_telebot.core.models
+  classes: []
+  functions:
+  - create_client
+  - build_message_link
+  - launcher
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\__init__.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.__init__
+  layer: unknown
+  imports: []
+  classes: []
+  functions: []
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.chats_config
+  layer: unknown
+  imports:
+  - __future__
+  - enum
+  - pydantic
+  classes:
+  - LogLevel
+  - ChannelConfig
+  - ChannelDefaults
+  - ChatsConfig
+  functions:
+  - strip_defaults_from_channels
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.config_reader
+  layer: unknown
+  imports:
+  - __future__
+  - pathlib
+  - typing
+  - mko_telebot.core.errors
+  - mko_telebot.core.models
+  - mko_telebot.core.paths
+  classes:
+  - TelepostConfigReader
+  functions:
+  - resolve_path
+  - _load_yaml
+  - _merge_dicts
+  - __init__
+  - from_user_dir
+  - validate_files
+  - load
+  - load_logging_config
+  - settings
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\errors.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.errors
+  layer: unknown
+  imports:
+  - __future__
+  - pathlib
+  classes:
+  - MkoTelebotError
+  - ConfigError
+  - TelegramAuthError
+  - TelegramServiceError
+  - StateError
+  functions:
+  - __init__
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\models.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.models
+  layer: unknown
+  imports:
+  - __future__
+  - pydantic
+  - chats_config
+  - telethon_models
+  classes:
+  - TelepostSettings
+  functions: []
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.parser
+  layer: unknown
+  imports:
+  - dataclasses
+  classes:
+  - ASTNode
+  - ExactMatch
+  - OrOperation
+  - Sequence
+  - Wildcard
+  - Exclusion
+  - PatternParser
+  functions:
+  - __init__
+  - _tokenize
+  - _peek
+  - _consume
+  - parse
+  - _parse_or_expr
+  - _parse_and_expr
+  - _parse_term
+  - ast_to_regex
+  - patterns_for_node
+  - search_match
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.paths
+  layer: unknown
+  imports:
+  - __future__
+  - pathlib
+  - platformdirs
+  - pydantic
+  classes:
+  - PathResolver
+  - AppPaths
+  functions:
+  - __init__
+  - resolve
+  - ensure_dir
+  - ensure_file_parent
+  - app_settings_dir
+  - user_settings_dir
+  - state_dir
+  - session_dir
+  - log_dir
+  - config_file
+  - secrets_file
+  - log_config_file
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.telethon_models
+  layer: unknown
+  imports:
+  - __future__
+  - pydantic
+  classes:
+  - ClientConfig
+  - TelethonConfig
+  functions:
+  - validate_api_hash
+  - validate_not_placeholder
+  - validate_api_id
+  - validate_phone_or_token
+- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.utils
+  layer: unknown
+  imports:
+  - os
+  - pathlib
+  - typing
+  classes: []
+  functions:
+  - list_files_in_directory
+  - ensure_path_exists
+  - resolve_path
+  - load_config
+  - merge_dicts

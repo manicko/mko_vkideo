@@ -1,0 +1,66 @@
+id: TASK_006_update_cli_imports
+
+title: Update cli.py imports for renamed modules (logging_setup + config_reader)
+
+priority: high
+
+depends_on:
+  - TASK_001_rename_logging_setup
+  - TASK_004_rename_config_reader
+
+source_reference: .ai/plans/FILE_NAMING_RESEARCH.md
+source_section: "5.2 — Import Updates Required After Rename"
+
+description: >
+  Update import statements in cli.py to reference the renamed modules:
+  1. from mko_telebot.logging_setup → from mko_telebot.logging
+  2. from mko_telebot.core.config_reader → from mko_telebot.core.config
+
+goals:
+  - update logging_setup to logging in import line 22
+  - update core.config_reader to core.config in import line 19
+  - keep all other imports and code unchanged
+
+files:
+  - path: src/mko_telebot/cli.py
+
+    targets:
+      - type: import
+        name: logging_setup
+
+      - type: import
+        name: config_reader
+
+    semantic_anchors:
+      line_22: from mko_telebot.logging_setup import setup_logging
+      line_19: from mko_telebot.core.config_reader import TelepostConfigReader
+
+changes:
+  - action: update_import
+
+    description: >
+      Replace import of logging_setup module with logging module.
+
+    old: from mko_telebot.logging_setup import setup_logging
+    new: from mko_telebot.logging import setup_logging
+
+  - action: update_import
+
+    description: >
+      Replace import of core.config_reader module with core.config module.
+
+    old: from mko_telebot.core.config_reader import TelepostConfigReader
+    new: from mko_telebot.core.config import TelepostConfigReader
+
+risk_assessment:
+  level: low
+  reason: >
+    Direct import path update. Both target modules have already been
+    renamed (TASK_001, TASK_004). No symbol names change — only the
+    module paths.
+
+acceptance_criteria:
+  - cli.py imports from mko_telebot.logging (not logging_setup)
+  - cli.py imports from mko_telebot.core.config (not config_reader)
+  - all references to imported symbols remain unchanged
+  - uv run ruff check on cli.py passes

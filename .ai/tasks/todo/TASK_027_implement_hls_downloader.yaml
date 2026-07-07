@@ -1,0 +1,46 @@
+id: task_027
+title: Implement HLS downloader with ffmpeg direct integration
+
+priority: high
+
+depends_on:
+  - task_026
+
+description: >
+  Create HLSDownloader class using ffmpeg for direct HLS to MP4 conversion.
+  This approach uses ffmpeg's native HLS support instead of manual segment downloading.
+
+source_reference: .ai\plans\05-recommendations-and-improvements.md
+source_section: 3.1 Direct HLS to MP4 Conversion (Recommended)
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: class
+        name: HLSDownloader
+      - type: method
+        name: __init__
+      - type: method
+        name: download_with_ffmpeg
+      - type: method
+        name: _build_ffmpeg_cmd
+
+changes:
+  - action: add_code
+    description: Create HLSDownloader with ffmpeg direct download
+    code_hint: |
+      class HLSDownloader:
+          def __init__(self, settings: Settings):
+              self.settings = settings
+
+          async def download_with_ffmpeg(self, m3u8_url: str, output_file: Path, quality: str) -> Optional[Path]:
+              cmd = ["ffmpeg", "-y", "-headers", f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n", "-i", m3u8_url, "-c", "copy", str(output_file)]
+              process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+              await process.communicate()
+              return output_file if process.returncode == 0 else None
+
+acceptance_criteria:
+  - download_with_ffmpeg executes ffmpeg command with headers
+  - User-Agent and Referer passed to ffmpeg for CDN access
+  - Returns valid MP4 file path on success
+  - Handles ffmpeg errors gracefully

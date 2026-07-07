@@ -1,0 +1,71 @@
+id: task_023
+title: Implement browser infrastructure with Playwright stealth
+
+priority: high
+
+depends_on:
+  - task_022
+
+description: >
+  Create BrowserManager and NetworkMonitor classes using Playwright for browser automation.
+  Implement stealth configuration to bypass anti-scraping protections. Use launch_persistent_context
+  with timezone/locale settings and extended m3u8 pattern detection.
+
+source_reference: .ai\plans\02-implementation-details.md
+source_section: 10.2 Phase 2 Tasks (Infrastructure)
+
+files:
+  - path: src/vkdownloader/infrastructure/__init__.py
+    targets:
+      - type: file
+        name: __init__.py
+  - path: src/vkdownloader/infrastructure/browser.py
+    targets:
+      - type: class
+        name: BrowserManager
+      - type: method
+        name: __aenter__
+      - type: method
+        name: __aexit__
+      - type: method
+        name: create_stealth_page
+      - type: function
+        name: create_stealth_context
+  - path: src/vkdownloader/infrastructure/network_monitor.py
+    targets:
+      - type: class
+        name: NetworkMonitor
+      - type: method
+        name: _setup_interceptors
+      - type: method
+        name: _intercept_response
+
+changes:
+  - action: add_code
+    description: Create BrowserManager async context manager
+    code_hint: |
+      class BrowserManager:
+          def __init__(self, settings: Settings):
+              self.settings = settings
+          
+          async def __aenter__(self):
+              self.playwright = await async_playwright().start()
+              self.browser = await self.playwright.chromium.launch(headless=False)
+              return self
+  - action: add_code
+    description: Implement stealth page creation
+    code_hint: |
+      async def create_stealth_page(self) -> Page:
+          context = await self.browser.new_context(
+              viewport={"width": 1920, "height": 1080},
+              user_agent=self.settings.user_agent,
+          )
+          page = await context.new_page()
+          await page.add_init_script(path="stealth.min.js")
+          return page
+
+acceptance_criteria:
+  - BrowserManager works as async context manager
+  - NetworkInterceptor captures m3u8 URLs from responses
+  - Stealth configuration applied (user-agent, viewport, init scripts)
+  - Can navigate to VK video page and detect player container

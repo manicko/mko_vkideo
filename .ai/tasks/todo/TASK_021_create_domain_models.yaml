@@ -1,0 +1,70 @@
+id: task_021
+title: Create domain models with Pydantic and StrEnum
+
+priority: high
+
+depends_on:
+  - task_020
+
+description: >
+  Create Pydantic models for Video, Stream, DownloadStatus, and StrEnum for QualityEnum, StreamFormat.
+  Implement Settings class using pydantic-settings for configuration.
+
+source_reference: .ai\plans\01-research-and-analysis.md
+source_section: 8.1 Core Domain Models
+
+files:
+  - path: src/vkdownloader/models/__init__.py
+    targets:
+      - type: file
+        name: __init__.py
+  - path: src/vkdownloader/models/video.py
+    targets:
+      - type: class
+        name: Video
+      - type: class
+        name: Stream
+      - type: class
+        name: VideoWithStreams
+      - type: class
+        name: DownloadProgress
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: str_enum
+        name: QualityEnum
+      - type: str_enum
+        name: StreamFormat
+      - type: str_enum
+        name: DownloadStatus
+  - path: src/vkdownloader/models/dtos.py
+    targets:
+      - type: class
+        name: DownloadRequest
+      - type: class
+        name: DownloadResult
+
+changes:
+  - action: add_code
+    description: Create Video model with id, title, duration, thumbnail fields
+    code_hint: |
+      class Video(BaseModel):
+          id: str
+          title: Optional[str] = None
+          duration: Optional[int] = None
+          thumbnail: Optional[HttpUrl] = None
+  - action: add_code
+    description: Create Stream model with url, format, quality, resolution fields
+    code_hint: |
+      class Stream(BaseModel):
+          url: HttpUrl
+          format: StreamFormat
+          quality: str
+          resolution: Optional[str] = None
+          height: Optional[int] = None
+
+acceptance_criteria:
+  - All models created with proper Pydantic v2 syntax
+  - QualityEnum with 240/360/480/720/1080/best/worst using StrEnum
+  - StreamFormat enum with HLS, DASH, MP4
+  - DownloadStatus enum with pending/downloading/completed/failed
+  - All models pass mypy type checking

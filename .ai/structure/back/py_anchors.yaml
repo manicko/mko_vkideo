@@ -1,0 +1,1674 @@
+- id: 396f55cd
+  symbol_path: []
+  type: function_call
+  value: Console
+  stable_hash: 396f55cd
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 4c5106f5
+  symbol_path:
+  - run
+  type: function_call
+  value: setup_logging
+  stable_hash: 4c5106f5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 04029183
+  symbol_path:
+  - run
+  type: function_call
+  value: create_client
+  stable_hash: 04029183
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 918aa3ca
+  symbol_path:
+  - run
+  type: function_call
+  value: run_monitor
+  stable_hash: 918aa3ca
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: bf027660
+  symbol_path:
+  - config
+  type: function_call
+  value: Table
+  stable_hash: bf027660
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 767c0980
+  symbol_path:
+  - config
+  type: function_call
+  value: str
+  stable_hash: 767c0980
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 535e4a15
+  symbol_path:
+  - version
+  type: function_call
+  value: pkg_version
+  stable_hash: 535e4a15
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: 69500b2b
+  symbol_path: []
+  type: function_call
+  value: app
+  stable_hash: 69500b2b
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
+- id: ce804fd8
+  symbol_path:
+  - setup_logging
+  type: function_call
+  value: TelepostConfigReader
+  stable_hash: ce804fd8
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\logging_setup.py
+- id: 263fe1fc
+  symbol_path:
+  - setup_logging
+  type: return_statement
+  stable_hash: 263fe1fc
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\logging_setup.py
+- id: 1d3866da
+  symbol_path:
+  - main
+  type: function_call
+  value: app
+  stable_hash: 1d3866da
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\main.py
+- id: 7813e5f1
+  symbol_path: []
+  type: function_call
+  value: main
+  stable_hash: 7813e5f1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\main.py
+- id: 44392b87
+  symbol_path:
+  - create_client
+  type: function_call
+  value: Path
+  stable_hash: 44392b87
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 8ac0c933
+  symbol_path:
+  - create_client
+  type: function_call
+  value: str
+  stable_hash: 8ac0c933
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 8dee55b5
+  symbol_path:
+  - create_client
+  type: return_statement
+  stable_hash: 8dee55b5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 4a489eb1
+  symbol_path:
+  - create_client
+  type: function_call
+  value: TelegramClient
+  stable_hash: 4a489eb1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 19bc252d
+  symbol_path:
+  - build_message_link
+  type: function_call
+  value: getattr
+  stable_hash: 19bc252d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 19bc252d
+  symbol_path:
+  - build_message_link
+  type: function_call
+  value: getattr
+  stable_hash: 19bc252d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 29993b70
+  symbol_path:
+  - build_message_link
+  type: return_statement
+  stable_hash: 29993b70
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 29993b70
+  symbol_path:
+  - build_message_link
+  type: return_statement
+  stable_hash: 29993b70
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 29993b70
+  symbol_path:
+  - build_message_link
+  type: return_statement
+  stable_hash: 29993b70
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 84cc16cb
+  symbol_path: []
+  type: function_call
+  value: filter
+  stable_hash: 84cc16cb
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: d6a6bdae
+  symbol_path: []
+  type: function_call
+  value: build_message_link
+  stable_hash: d6a6bdae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: dada2d8a
+  symbol_path: []
+  type: function_call
+  value: build_sender_tag
+  stable_hash: dada2d8a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: c033d44f
+  symbol_path: []
+  type: function_call
+  value: getattr
+  stable_hash: c033d44f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 24a5f95b
+  symbol_path: []
+  type: function_call
+  value: any
+  stable_hash: 24a5f95b
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 8b51069c
+  symbol_path: []
+  type: function_call
+  value: search_match
+  stable_hash: 8b51069c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: ea5cb5ea
+  symbol_path: []
+  type: function_call
+  value: forward_to_users
+  stable_hash: ea5cb5ea
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: e52a59a1
+  symbol_path: []
+  type: function_call
+  value: max
+  stable_hash: e52a59a1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 2606354e
+  symbol_path: []
+  type: return_statement
+  stable_hash: 2606354e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: a320c2ed
+  symbol_path: []
+  type: function_call
+  value: process_messages
+  stable_hash: a320c2ed
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: e52a59a1
+  symbol_path: []
+  type: function_call
+  value: max
+  stable_hash: e52a59a1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: e6e76893
+  symbol_path: []
+  type: function_call
+  value: len
+  stable_hash: e6e76893
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 320798bd
+  symbol_path: []
+  type: function_call
+  value: process_task
+  stable_hash: 320798bd
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 77e629bf
+  symbol_path: []
+  type: function_call
+  value: reschedule_task
+  stable_hash: 77e629bf
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 5e507825
+  symbol_path: []
+  type: function_call
+  value: list
+  stable_hash: 5e507825
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 85c515e8
+  symbol_path: []
+  type: function_call
+  value: Task
+  stable_hash: 85c515e8
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 307a7e39
+  symbol_path: []
+  type: function_call
+  value: process_and_reschedule
+  stable_hash: 307a7e39
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 7a2df039
+  symbol_path: []
+  type: function_call
+  value: start_client
+  stable_hash: 7a2df039
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: a2d91acf
+  symbol_path: []
+  type: function_call
+  value: main_loop
+  stable_hash: a2d91acf
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: a7923d6e
+  symbol_path:
+  - launcher
+  type: function_call
+  value: create_client
+  stable_hash: a7923d6e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 9a82babc
+  symbol_path:
+  - launcher
+  type: function_call
+  value: run_monitor
+  stable_hash: 9a82babc
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: f329952a
+  symbol_path: []
+  type: function_call
+  value: launcher
+  stable_hash: f329952a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
+- id: 9ecc8952
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: ConfigDict
+  stable_hash: 9ecc8952
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 9b2c343a
+  symbol_path:
+  - ChannelConfig
+  type: function_call
+  value: Field
+  stable_hash: 9b2c343a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: a640f845
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: ConfigDict
+  stable_hash: a640f845
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 6935ca94
+  symbol_path:
+  - ChannelDefaults
+  type: function_call
+  value: Field
+  stable_hash: 6935ca94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: ba37b54c
+  symbol_path:
+  - ChatsConfig
+  type: function_call
+  value: ConfigDict
+  stable_hash: ba37b54c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 1acc31e4
+  symbol_path:
+  - ChatsConfig
+  type: function_call
+  value: Field
+  stable_hash: 1acc31e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 1acc31e4
+  symbol_path:
+  - ChatsConfig
+  type: function_call
+  value: Field
+  stable_hash: 1acc31e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 1acc31e4
+  symbol_path:
+  - ChatsConfig
+  type: function_call
+  value: Field
+  stable_hash: 1acc31e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 1acc31e4
+  symbol_path:
+  - ChatsConfig
+  type: function_call
+  value: Field
+  stable_hash: 1acc31e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: '16210657'
+  symbol_path:
+  - ChatsConfig
+  - strip_defaults_from_channels
+  type: return_statement
+  stable_hash: '16210657'
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: 870df674
+  symbol_path:
+  - ChatsConfig
+  - strip_defaults_from_channels
+  type: function_call
+  value: model_validator
+  stable_hash: 870df674
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
+- id: f4f59bbe
+  symbol_path:
+  - resolve_path
+  type: function_call
+  value: Path
+  stable_hash: f4f59bbe
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 989d3ed8
+  symbol_path:
+  - resolve_path
+  type: return_statement
+  stable_hash: 989d3ed8
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 989d3ed8
+  symbol_path:
+  - resolve_path
+  type: return_statement
+  stable_hash: 989d3ed8
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: edc9eeea
+  symbol_path:
+  - _load_yaml
+  type: function_call
+  value: ConfigError
+  stable_hash: edc9eeea
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 4f2cbc92
+  symbol_path:
+  - _load_yaml
+  type: function_call
+  value: isinstance
+  stable_hash: 4f2cbc92
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: edc9eeea
+  symbol_path:
+  - _load_yaml
+  type: function_call
+  value: ConfigError
+  stable_hash: edc9eeea
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 09c8390c
+  symbol_path:
+  - _load_yaml
+  type: return_statement
+  stable_hash: 09c8390c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: edc9eeea
+  symbol_path:
+  - _load_yaml
+  type: function_call
+  value: ConfigError
+  stable_hash: edc9eeea
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: edc9eeea
+  symbol_path:
+  - _load_yaml
+  type: function_call
+  value: ConfigError
+  stable_hash: edc9eeea
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: d8e9012b
+  symbol_path:
+  - _merge_dicts
+  type: function_call
+  value: isinstance
+  stable_hash: d8e9012b
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: d8e9012b
+  symbol_path:
+  - _merge_dicts
+  type: function_call
+  value: isinstance
+  stable_hash: d8e9012b
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 599392e1
+  symbol_path:
+  - _merge_dicts
+  type: function_call
+  value: _merge_dicts
+  stable_hash: 599392e1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 6228a2d1
+  symbol_path:
+  - _merge_dicts
+  type: return_statement
+  stable_hash: 6228a2d1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 88f0ee18
+  symbol_path:
+  - TelepostConfigReader
+  - from_user_dir
+  type: return_statement
+  stable_hash: 88f0ee18
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: d5629726
+  symbol_path:
+  - TelepostConfigReader
+  - from_user_dir
+  type: function_call
+  value: cls
+  stable_hash: d5629726
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 9092978e
+  symbol_path:
+  - TelepostConfigReader
+  - validate_files
+  type: function_call
+  value: ConfigError
+  stable_hash: 9092978e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 9092978e
+  symbol_path:
+  - TelepostConfigReader
+  - validate_files
+  type: function_call
+  value: ConfigError
+  stable_hash: 9092978e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: f518cca4
+  symbol_path:
+  - TelepostConfigReader
+  - load
+  type: function_call
+  value: _load_yaml
+  stable_hash: f518cca4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: f518cca4
+  symbol_path:
+  - TelepostConfigReader
+  - load
+  type: function_call
+  value: _load_yaml
+  stable_hash: f518cca4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 482a705d
+  symbol_path:
+  - TelepostConfigReader
+  - load
+  type: function_call
+  value: _merge_dicts
+  stable_hash: 482a705d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: cfe1a221
+  symbol_path:
+  - TelepostConfigReader
+  - load
+  type: function_call
+  value: ConfigError
+  stable_hash: cfe1a221
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: f62db98d
+  symbol_path:
+  - TelepostConfigReader
+  - load
+  type: return_statement
+  stable_hash: f62db98d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 4cbe2d57
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: function_call
+  value: ConfigError
+  stable_hash: 4cbe2d57
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 01a79173
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: function_call
+  value: _load_yaml
+  stable_hash: 01a79173
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 70edaa94
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: function_call
+  value: isinstance
+  stable_hash: 70edaa94
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: c8b654b0
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: function_call
+  value: str
+  stable_hash: c8b654b0
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: e0591858
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: function_call
+  value: resolve_path
+  stable_hash: e0591858
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 9d574ca4
+  symbol_path:
+  - TelepostConfigReader
+  - load_logging_config
+  type: return_statement
+  stable_hash: 9d574ca4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: c49d1f3d
+  symbol_path:
+  - TelepostConfigReader
+  - settings
+  type: function_call
+  value: ConfigError
+  stable_hash: c49d1f3d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 9d27b610
+  symbol_path:
+  - TelepostConfigReader
+  - settings
+  type: return_statement
+  stable_hash: 9d27b610
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
+- id: 642f9f98
+  symbol_path:
+  - ConfigError
+  - __init__
+  type: function_call
+  value: super
+  stable_hash: 642f9f98
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\errors.py
+- id: 642f9f98
+  symbol_path:
+  - ConfigError
+  - __init__
+  type: function_call
+  value: super
+  stable_hash: 642f9f98
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\errors.py
+- id: b1cb340f
+  symbol_path:
+  - TelepostSettings
+  type: function_call
+  value: ConfigDict
+  stable_hash: b1cb340f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\models.py
+- id: 93f90011
+  symbol_path:
+  - TelepostSettings
+  type: function_call
+  value: Field
+  stable_hash: 93f90011
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\models.py
+- id: 93f90011
+  symbol_path:
+  - TelepostSettings
+  type: function_call
+  value: Field
+  stable_hash: 93f90011
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\models.py
+- id: 266b5121
+  symbol_path:
+  - PatternParser
+  - _tokenize
+  type: function_call
+  value: len
+  stable_hash: 266b5121
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 266b5121
+  symbol_path:
+  - PatternParser
+  - _tokenize
+  type: function_call
+  value: len
+  stable_hash: 266b5121
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 8b93674e
+  symbol_path:
+  - PatternParser
+  - _tokenize
+  type: return_statement
+  stable_hash: 8b93674e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: d912a03a
+  symbol_path:
+  - PatternParser
+  - _peek
+  type: return_statement
+  stable_hash: d912a03a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: faa5b5b2
+  symbol_path:
+  - PatternParser
+  - _peek
+  type: function_call
+  value: len
+  stable_hash: faa5b5b2
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c68d616a
+  symbol_path:
+  - PatternParser
+  - _consume
+  type: return_statement
+  stable_hash: c68d616a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c68d616a
+  symbol_path:
+  - PatternParser
+  - _consume
+  type: return_statement
+  stable_hash: c68d616a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: eea24adf
+  symbol_path:
+  - PatternParser
+  - parse
+  type: function_call
+  value: Exclusion
+  stable_hash: eea24adf
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: d798dd6a
+  symbol_path:
+  - PatternParser
+  - parse
+  type: return_statement
+  stable_hash: d798dd6a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 2d08b454
+  symbol_path:
+  - PatternParser
+  - _parse_or_expr
+  type: function_call
+  value: OrOperation
+  stable_hash: 2d08b454
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4503e4c3
+  symbol_path:
+  - PatternParser
+  - _parse_or_expr
+  type: return_statement
+  stable_hash: 4503e4c3
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 3297f0ff
+  symbol_path:
+  - PatternParser
+  - _parse_and_expr
+  type: function_call
+  value: len
+  stable_hash: 3297f0ff
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4208425e
+  symbol_path:
+  - PatternParser
+  - _parse_and_expr
+  type: return_statement
+  stable_hash: 4208425e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4208425e
+  symbol_path:
+  - PatternParser
+  - _parse_and_expr
+  type: return_statement
+  stable_hash: 4208425e
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 2bbfa714
+  symbol_path:
+  - PatternParser
+  - _parse_and_expr
+  type: function_call
+  value: Sequence
+  stable_hash: 2bbfa714
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4e0dbc2c
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: return_statement
+  stable_hash: 4e0dbc2c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4e0dbc2c
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: return_statement
+  stable_hash: 4e0dbc2c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: b02984f4
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: function_call
+  value: Wildcard
+  stable_hash: b02984f4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4e0dbc2c
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: return_statement
+  stable_hash: 4e0dbc2c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 21ebd2f9
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: function_call
+  value: ExactMatch
+  stable_hash: 21ebd2f9
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4e0dbc2c
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: return_statement
+  stable_hash: 4e0dbc2c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 4e0dbc2c
+  symbol_path:
+  - PatternParser
+  - _parse_term
+  type: return_statement
+  stable_hash: 4e0dbc2c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5c80955
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: isinstance
+  stable_hash: c5c80955
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 642e901a
+  symbol_path:
+  - ast_to_regex
+  type: return_statement
+  stable_hash: 642e901a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5c80955
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: isinstance
+  stable_hash: c5c80955
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 642e901a
+  symbol_path:
+  - ast_to_regex
+  type: return_statement
+  stable_hash: 642e901a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5c80955
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: isinstance
+  stable_hash: c5c80955
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: cb2fc890
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: ast_to_regex
+  stable_hash: cb2fc890
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: cb2fc890
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: ast_to_regex
+  stable_hash: cb2fc890
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 642e901a
+  symbol_path:
+  - ast_to_regex
+  type: return_statement
+  stable_hash: 642e901a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5c80955
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: isinstance
+  stable_hash: c5c80955
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 642e901a
+  symbol_path:
+  - ast_to_regex
+  type: return_statement
+  stable_hash: 642e901a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: cb2fc890
+  symbol_path:
+  - ast_to_regex
+  type: function_call
+  value: ast_to_regex
+  stable_hash: cb2fc890
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 642e901a
+  symbol_path:
+  - ast_to_regex
+  type: return_statement
+  stable_hash: 642e901a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: a8649e0c
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: isinstance
+  stable_hash: a8649e0c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 7788cd54
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: ast_to_regex
+  stable_hash: 7788cd54
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: a8649e0c
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: isinstance
+  stable_hash: a8649e0c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 7788cd54
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: ast_to_regex
+  stable_hash: 7788cd54
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: a8649e0c
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: isinstance
+  stable_hash: a8649e0c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 7788cd54
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: ast_to_regex
+  stable_hash: 7788cd54
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: a8649e0c
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: isinstance
+  stable_hash: a8649e0c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 459781d1
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: patterns_for_node
+  stable_hash: 459781d1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: a8649e0c
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: isinstance
+  stable_hash: a8649e0c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 459781d1
+  symbol_path:
+  - patterns_for_node
+  type: function_call
+  value: patterns_for_node
+  stable_hash: 459781d1
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 856ef3ad
+  symbol_path:
+  - patterns_for_node
+  type: return_statement
+  stable_hash: 856ef3ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 6a6a927b
+  symbol_path:
+  - search_match
+  type: function_call
+  value: PatternParser
+  stable_hash: 6a6a927b
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 516533b3
+  symbol_path:
+  - search_match
+  type: function_call
+  value: patterns_for_node
+  stable_hash: 516533b3
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 516533b3
+  symbol_path:
+  - search_match
+  type: function_call
+  value: patterns_for_node
+  stable_hash: 516533b3
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5e5cf4d
+  symbol_path:
+  - search_match
+  type: function_call
+  value: len
+  stable_hash: c5e5cf4d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: c5e5cf4d
+  symbol_path:
+  - search_match
+  type: function_call
+  value: len
+  stable_hash: c5e5cf4d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 165462c5
+  symbol_path:
+  - search_match
+  type: return_statement
+  stable_hash: 165462c5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
+- id: 1b2c54c7
+  symbol_path: []
+  type: function_call
+  value: Path
+  stable_hash: 1b2c54c7
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 1b2c54c7
+  symbol_path: []
+  type: function_call
+  value: Path
+  stable_hash: 1b2c54c7
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 6d3b50a8
+  symbol_path: []
+  type: function_call
+  value: user_config_dir
+  stable_hash: 6d3b50a8
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 1391c5c3
+  symbol_path:
+  - PathResolver
+  - resolve
+  type: function_call
+  value: Path
+  stable_hash: 1391c5c3
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 7105af43
+  symbol_path:
+  - PathResolver
+  - resolve
+  type: return_statement
+  stable_hash: 7105af43
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 5c96db1a
+  symbol_path:
+  - PathResolver
+  - ensure_dir
+  type: return_statement
+  stable_hash: 5c96db1a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 6ba88814
+  symbol_path:
+  - PathResolver
+  - ensure_file_parent
+  type: return_statement
+  stable_hash: 6ba88814
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 4b2a7a3c
+  symbol_path:
+  - AppPaths
+  type: function_call
+  value: ConfigDict
+  stable_hash: 4b2a7a3c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: ba5aeceb
+  symbol_path:
+  - AppPaths
+  - app_settings_dir
+  type: return_statement
+  stable_hash: ba5aeceb
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 2a7a1b38
+  symbol_path:
+  - AppPaths
+  - user_settings_dir
+  type: return_statement
+  stable_hash: 2a7a1b38
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 315f27ad
+  symbol_path:
+  - AppPaths
+  - state_dir
+  type: return_statement
+  stable_hash: 315f27ad
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 1eea5850
+  symbol_path:
+  - AppPaths
+  - session_dir
+  type: return_statement
+  stable_hash: 1eea5850
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: c5ae3239
+  symbol_path:
+  - AppPaths
+  - log_dir
+  type: return_statement
+  stable_hash: c5ae3239
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 70137b32
+  symbol_path:
+  - AppPaths
+  - config_file
+  type: return_statement
+  stable_hash: 70137b32
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: f560c742
+  symbol_path:
+  - AppPaths
+  - secrets_file
+  type: return_statement
+  stable_hash: f560c742
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 9d395cfa
+  symbol_path:
+  - AppPaths
+  - log_config_file
+  type: return_statement
+  stable_hash: 9d395cfa
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 887c867d
+  symbol_path: []
+  type: function_call
+  value: AppPaths
+  stable_hash: 887c867d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
+- id: 2b1c4327
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: ConfigDict
+  stable_hash: 2b1c4327
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: a3a02fae
+  symbol_path:
+  - ClientConfig
+  type: function_call
+  value: Field
+  stable_hash: a3a02fae
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: f0a9fc8f
+  symbol_path:
+  - ClientConfig
+  - validate_api_hash
+  type: function_call
+  value: ValueError
+  stable_hash: f0a9fc8f
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 2fee80f9
+  symbol_path:
+  - ClientConfig
+  - validate_api_hash
+  type: return_statement
+  stable_hash: 2fee80f9
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 95e07130
+  symbol_path:
+  - ClientConfig
+  - validate_api_hash
+  type: function_call
+  value: field_validator
+  stable_hash: 95e07130
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: c4225fbb
+  symbol_path:
+  - ClientConfig
+  - validate_not_placeholder
+  type: function_call
+  value: ValueError
+  stable_hash: c4225fbb
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 17f5de86
+  symbol_path:
+  - ClientConfig
+  - validate_not_placeholder
+  type: return_statement
+  stable_hash: 17f5de86
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: f3dbcb19
+  symbol_path:
+  - ClientConfig
+  - validate_not_placeholder
+  type: function_call
+  value: field_validator
+  stable_hash: f3dbcb19
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 9c28d4a9
+  symbol_path:
+  - ClientConfig
+  - validate_api_id
+  type: function_call
+  value: ValueError
+  stable_hash: 9c28d4a9
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 8d4f4d69
+  symbol_path:
+  - ClientConfig
+  - validate_api_id
+  type: return_statement
+  stable_hash: 8d4f4d69
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 73d93b4c
+  symbol_path:
+  - ClientConfig
+  - validate_api_id
+  type: function_call
+  value: field_validator
+  stable_hash: 73d93b4c
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: b6cc2e0a
+  symbol_path:
+  - TelethonConfig
+  type: function_call
+  value: ConfigDict
+  stable_hash: b6cc2e0a
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 08693774
+  symbol_path:
+  - TelethonConfig
+  type: function_call
+  value: Field
+  stable_hash: 08693774
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 08693774
+  symbol_path:
+  - TelethonConfig
+  type: function_call
+  value: Field
+  stable_hash: 08693774
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 08693774
+  symbol_path:
+  - TelethonConfig
+  type: function_call
+  value: Field
+  stable_hash: 08693774
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: dae612a9
+  symbol_path:
+  - TelethonConfig
+  - validate_phone_or_token
+  type: function_call
+  value: ValueError
+  stable_hash: dae612a9
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: b906b649
+  symbol_path:
+  - TelethonConfig
+  - validate_phone_or_token
+  type: return_statement
+  stable_hash: b906b649
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 632c0ab7
+  symbol_path:
+  - TelethonConfig
+  - validate_phone_or_token
+  type: function_call
+  value: field_validator
+  stable_hash: 632c0ab7
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
+- id: 265b8159
+  symbol_path:
+  - list_files_in_directory
+  type: function_call
+  value: Path
+  stable_hash: 265b8159
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 84689a36
+  symbol_path:
+  - list_files_in_directory
+  type: return_statement
+  stable_hash: 84689a36
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 84689a36
+  symbol_path:
+  - list_files_in_directory
+  type: return_statement
+  stable_hash: 84689a36
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: '97948994'
+  symbol_path:
+  - ensure_path_exists
+  type: return_statement
+  stable_hash: '97948994'
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 3f55547d
+  symbol_path:
+  - ensure_path_exists
+  type: function_call
+  value: ValueError
+  stable_hash: 3f55547d
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 585190a7
+  symbol_path:
+  - resolve_path
+  type: function_call
+  value: Path
+  stable_hash: 585190a7
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: a0db56de
+  symbol_path:
+  - resolve_path
+  type: return_statement
+  stable_hash: a0db56de
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 798ff711
+  symbol_path:
+  - resolve_path
+  type: function_call
+  value: ensure_path_exists
+  stable_hash: 798ff711
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: a0db56de
+  symbol_path:
+  - resolve_path
+  type: return_statement
+  stable_hash: a0db56de
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 585190a7
+  symbol_path:
+  - resolve_path
+  type: function_call
+  value: Path
+  stable_hash: 585190a7
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 798ff711
+  symbol_path:
+  - resolve_path
+  type: function_call
+  value: ensure_path_exists
+  stable_hash: 798ff711
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: a0db56de
+  symbol_path:
+  - resolve_path
+  type: return_statement
+  stable_hash: a0db56de
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 679d28e4
+  symbol_path:
+  - load_config
+  type: return_statement
+  stable_hash: 679d28e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 679d28e4
+  symbol_path:
+  - load_config
+  type: return_statement
+  stable_hash: 679d28e4
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 52ebd493
+  symbol_path:
+  - merge_dicts
+  type: function_call
+  value: isinstance
+  stable_hash: 52ebd493
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: 52ebd493
+  symbol_path:
+  - merge_dicts
+  type: function_call
+  value: isinstance
+  stable_hash: 52ebd493
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: be0a9813
+  symbol_path:
+  - merge_dicts
+  type: return_statement
+  stable_hash: be0a9813
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: d867d1e5
+  symbol_path:
+  - merge_dicts
+  type: function_call
+  value: merge_dicts
+  stable_hash: d867d1e5
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
+- id: be0a9813
+  symbol_path:
+  - merge_dicts
+  type: return_statement
+  stable_hash: be0a9813
+  file: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py

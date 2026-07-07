@@ -1,0 +1,41 @@
+id: task_020
+title: Initialize VK Video Downloader project structure
+
+priority: high
+
+description: >
+  Set up project structure with Poetry, create pyproject.toml with all required dependencies,
+  establish src/vkdownloader package with __init__.py files, configure ruff and mypy.
+
+goals:
+  - create pyproject.toml with playwright, aiohttp, pydantic, ffmpeg-python, typer, structlog
+  - create src/vkdownloader/ package with __init__.py files
+  - configure ruff.toml for linting and mypy.ini for type checking
+  - add .gitignore entries
+
+files:
+  - path: pyproject.toml
+    targets:
+      - type: file
+        name: pyproject.toml
+    semantic_anchors:
+      - action: create_file
+  - path: src/vkdownloader/__init__.py
+    targets:
+      - type: file
+        name: __init__.py
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: file
+        name: config.py
+  - path: ruff.toml
+    targets:
+      - type: file
+        name: ruff.toml
+
+acceptance_criteria:
+  - pyproject.toml created with all required dependencies
+  - src/vkdownloader/ package structure created
+  - ruff.toml configured
+  - mypy.ini configured
+  - project builds successfully with poetry

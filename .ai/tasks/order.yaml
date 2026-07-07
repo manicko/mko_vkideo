@@ -1,0 +1,84 @@
+tasks:
+  - id: task_020
+    depends_on: []
+
+  - id: task_021
+    depends_on:
+      - task_020
+
+  - id: task_022
+    depends_on:
+      - task_021
+
+  - id: task_023
+    depends_on:
+      - task_022
+
+  - id: task_024
+    depends_on:
+      - task_023
+
+  - id: task_030
+    depends_on:
+      - task_023
+
+  - id: task_031
+    depends_on:
+      - task_024
+
+  - id: task_025
+    depends_on:
+      - task_024
+      - task_031
+
+  - id: task_026
+    depends_on:
+      - task_025
+
+  - id: task_027
+    depends_on:
+      - task_026
+
+  - id: task_028
+    depends_on:
+      - task_027
+      - task_030
+
+  - id: task_029
+    depends_on:
+      - task_028
+
+  - id: task_032
+    depends_on:
+      - task_029
+
+  - id: task_033
+    depends_on:
+      - task_029
+
+metadata:
+  total_tasks: 13
+  project: vkdownloader
+  phases:
+    - name: "Phase 1: Foundation"
+      tasks:
+        - task_020
+        - task_021
+        - task_022
+    - name: "Phase 2: Infrastructure"
+      tasks:
+        - task_023
+        - task_024
+        - task_030
+        - task_031
+    - name: "Phase 3: Core Services"
+      tasks:
+        - task_025
+        - task_026
+        - task_027
+    - name: "Phase 4: Interface & Testing"
+      tasks:
+        - task_028
+        - task_029
+        - task_032
+        - task_033
