@@ -1,6 +1,7 @@
 """Network monitoring infrastructure for VK Video Downloader."""
 
 import re
+from typing import Any
 
 from playwright.async_api import Page
 from structlog import get_logger
@@ -13,7 +14,7 @@ class NetworkMonitor:
 
     M3U8_PATTERN = re.compile(r"https?://.*\.m3u8.*")
 
-    def __init__(self, page: Page):
+    def __init__(self, page: Page) -> None:
         """
         Initialize NetworkMonitor with a Playwright page.
 
@@ -29,7 +30,7 @@ class NetworkMonitor:
         logger.debug("setting_up_network_interceptors")
         self.page.on("response", self._intercept_response)
 
-    async def _intercept_response(self, response) -> None:
+    async def _intercept_response(self, response: Any) -> None:
         """
         Intercept network responses and capture m3u8 URLs.
 
@@ -49,7 +50,7 @@ class NetworkMonitor:
             except Exception:
                 pass
 
-    def _extract_urls_from_json(self, data: dict | list) -> None:
+    def _extract_urls_from_json(self, data: Any) -> None:
         """
         Recursively extract m3u8 URLs from JSON data.
 
