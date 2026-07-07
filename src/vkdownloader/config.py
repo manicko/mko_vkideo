@@ -23,6 +23,52 @@ class Settings(BaseSettings):
         description="VK API version",
     )
 
+    # Browser Automation settings
+    user_agent: str = Field(
+        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        description="User agent string for browser requests",
+    )
+    accept_language: str = Field(
+        default="ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        description="Accept-Language header for browser requests",
+    )
+    timezone: str = Field(
+        default="Europe/Moscow",
+        description="Timezone for browser stealth configuration",
+    )
+    locale: str = Field(
+        default="ru-RU",
+        description="Locale for browser stealth configuration",
+    )
+    request_delay_min: float = Field(
+        default=2.0,
+        ge=0,
+        description="Minimum request delay in seconds",
+    )
+    request_delay_max: float = Field(
+        default=5.0,
+        ge=0,
+        description="Maximum request delay in seconds",
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retry attempts for failed requests",
+    )
+    concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description="Concurrency level for downloads",
+    )
+    download_timeout: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Download timeout in seconds",
+    )
+
     # Download settings
     download_dir: Path = Field(
         default=Path.home() / "Downloads" / "vkdownloader",
