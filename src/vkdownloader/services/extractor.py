@@ -158,19 +158,11 @@ class VKVideoExtractor:
             page = await browser.create_stealth_page()
             monitor = NetworkMonitor(page)
 
-            # Navigate to video page
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            
-            # Wait for page to load, then simulate interaction
             await asyncio.sleep(5)
-            
-            # Simulate human-like interaction
             await self._simulate_video_interaction(page)
-            
-            # Wait for m3u8 URLs to be captured (network requests for video)
             await asyncio.sleep(8)
 
-            # Capture cookies from browser session for ffmpeg
             try:
                 cookies = await page.context.cookies()
                 cookies_str = self._format_cookies_for_ffmpeg(cookies)
@@ -179,7 +171,6 @@ class VKVideoExtractor:
 
             logger.debug("captured_m3u8_urls", urls=monitor.m3u8_urls)
 
-            # Use master m3u8 URL directly with ffmpeg (skip parsing for simplicity)
             if monitor.m3u8_urls:
                 stream = Stream(
                     url=HttpUrl(monitor.m3u8_urls[0]),

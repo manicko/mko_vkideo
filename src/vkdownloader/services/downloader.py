@@ -34,10 +34,8 @@ class HLSDownloader:
         Returns:
             List of command arguments for ffmpeg subprocess.
         """
-        # Build headers string with required \r\n line endings
-        headers = f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n"
-        if cookies:
-            headers += f"Cookie: {cookies}\r\n"
+        cookie_part = f"Cookie: {cookies}\r\n" if cookies else ""
+        headers = f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n{cookie_part}"
 
         cmd = [
             "ffmpeg",
@@ -48,7 +46,6 @@ class HLSDownloader:
             str(output_file),
         ]
 
-        logger.debug("built_ffmpeg_command", output=str(output_file))
         return cmd
 
     async def download_with_ffmpeg(

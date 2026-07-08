@@ -37,14 +37,15 @@ async def download_video(
     extractor = VKVideoExtractor(settings=settings)
     video_id = extractor.parse_video_id(url)[0] + "_" + extractor.parse_video_id(url)[1]
 
-    # Get available streams and qualities via yt-dlp (for quality selection)
+    # Get available streams and qualities
     video_data = await extractor.extract_streams(url)
     streams = video_data.streams
     cookies = None
+    browser_streams = []
 
-    # For ffmpeg method, get cookies from browser
+    # For ffmpeg method, get fresh m3u8 URL and cookies from visible browser
     if method == DownloadMethod.FFMPEG:
-        _, cookies = await extractor.extract_streams_with_cookies(url)
+        browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
 
     # Print available qualities
     if streams:
@@ -61,10 +62,11 @@ async def download_video(
 
     # Choose download method
     if method == DownloadMethod.FFMPEG:
-        # Use yt-dlp extracted stream URL with ffmpeg (cookies help with VK CDN)
         downloader = HLSDownloader(settings=settings)
-        result = await downloader.download_with_ffmpeg(str(stream.url), output_file, str(stream.quality), cookies)
-        # Fallback to yt-dlp if ffmpeg fails due to protection
+        # Use browser m3u8 URL (fresh token) if available
+        m3u8_url = browser_streams[0].url if browser_streams else stream.url
+        result = await downloader.download_with_ffmpeg(str(m3u8_url), output_file, str(stream.quality), cookies)
+        # Fallback to yt-dlp if ffmpeg fails
         if result is None:
             logger.info("ffmpeg_failed_fallback_to_ytdlp")
             result = await _download_with_ytdlp(url, output_file, str(stream.quality))
@@ -89,6 +91,10 @@ async def _download_with_ytdlp(video_url: str, output_file: Path, quality: str) 
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Referer": "https://vkvideo.ru/",
             },
+            "socket_timeout": 120,
+            "retries": 10,
+            "fragment_retries": 10,
+            "throttledratelimit": 0,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
