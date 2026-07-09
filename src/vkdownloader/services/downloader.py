@@ -151,20 +151,32 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
             segments = _parse_m3u8_segments(playlist_content)
             logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
 
-            # Download missing segments
-            for i in range(downloaded_count, len(segments)):
-                segment_url = segments[i]
-                if not segment_url.startswith("http"):
-                    segment_url = urljoin(request.m3u8_url, segment_url)
+            # Download missing segments concurrently
+            semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
 
-                segment_path = segments_dir / f"{i:05d}.ts"
-                if not segment_path.exists():
-                    success = await _download_segment(session, segment_url, segment_path, headers)
-                    if not success:
-                        return None
+            async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
+                """Download segment with semaphore rate limiting."""
+                async with semaphore:
+                    full_url = segment_url
+                    if not segment_url.startswith("http"):
+                        full_url = urljoin(request.m3u8_url, segment_url)
+                    segment_path = segments_dir / f"{idx:05d}.ts"
+                    if not segment_path.exists():
+                        return await _download_segment(session, full_url, segment_path, headers)
+                    return True
 
-                downloaded_count += 1
-                _save_downloaded_count(metadata_file, downloaded_count)
+            # Download all missing segments concurrently
+            tasks = [
+                download_segment_concurrent(i, seg)
+                for i, seg in enumerate(segments)
+                if not (segments_dir / f"{i:05d}.ts").exists()
+            ]
+            if tasks:
+                results = await asyncio.gather(*tasks)
+                if not all(results):
+                    return None
+            downloaded_count = len(segments)
+            _save_downloaded_count(metadata_file, downloaded_count)
 
             # All downloaded - merge in batches
             if downloaded_count == len(segments):
