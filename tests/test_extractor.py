@@ -1,10 +1,11 @@
 """Tests for VKVideoExtractor service."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
+from vkdownloader.models.enums import StreamFormat
 from vkdownloader.services.extractor import VKVideoExtractor
 
 
@@ -88,3 +89,65 @@ class TestExtractionErrors:
 
             with pytest.raises(ExtractionError, match="No video info extracted"):
                 await extractor._extract_with_ytdlp(url, "12345_67890")
+
+    @pytest.mark.asyncio
+    async def test_format_cookies_for_ffmpeg(self) -> None:
+        """Test _format_cookies_for_ffmpeg correctly formats cookies for ffmpeg header."""
+        extractor = VKVideoExtractor()
+
+        # Test with single cookie
+        cookies = [{"name": "session_id", "value": "abc123"}]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+        assert result == "session_id=abc123"
+
+        # Test with multiple cookies
+        cookies = [
+            {"name": "session_id", "value": "abc123"},
+            {"name": "user_token", "value": "xyz789"},
+        ]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+        assert "session_id=abc123" in result
+        assert "user_token=xyz789" in result
+        assert "; " in result
+
+        # Test with empty cookies list
+        result = extractor._format_cookies_for_ffmpeg([])
+        assert result == ""
+
+        # Test with cookies with empty name/value (includes them as-is)
+        cookies = [{"name": "", "value": "val"}, {"name": "name", "value": ""}]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+        assert "=val; name=" == result
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_success(self) -> None:
+        """Test extract_streams_with_cookies returns streams and formatted cookies."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor,
+            "_extract_with_browser",
+            return_value=([mock_stream], "session_id=abc123; user_token=xyz789"),
+        ):
+            streams, cookies = await extractor.extract_streams_with_cookies(url)
+
+            assert len(streams) == 1
+            assert streams[0].format == StreamFormat.HLS
+            assert "session_id=abc123" in cookies
+            assert "user_token=xyz789" in cookies
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_invalid_url(self) -> None:
+        """Test extract_streams raises ValueError for invalid URL format."""
+        extractor = VKVideoExtractor()
+        invalid_url = "https://example.com/invalid"
+
+        with pytest.raises(ValueError, match="Invalid VK video URL"):
+            await extractor.extract_streams(invalid_url)
+
+        with pytest.raises(ValueError, match="Invalid VK video URL"):
+            await extractor.extract_streams_with_cookies(invalid_url)
