@@ -300,10 +300,118 @@ None detected. All findings are consistent with Phase 01 (CLI-005, CLI-006) and 
 
 ## Required Fixes (from Validated Findings)
 
-- SRV-001: Remove unused `_parse_m3u8_playlist` method from extractor.py
-- SRV-002: Either integrate `AdaptiveThrottle` or remove from code and documentation
-- SRV-010: Add trailing newlines to all three service files
+**SRV-001:** Remove unused `_parse_m3u8_playlist` method from extractor.py - obsolete, superseded by yt-dlp and `_parse_m3u8_segments`
 
-## Advisory Recommendations (already covered)
+**SRV-002:** Either integrate `AdaptiveThrottle` or remove from code and documentation
 
-All other type annotation issues are consolidated under CFG-004 and CFG-005 in Phase 02. See those findings for complete details.
+**SRV-010:** Add trailing newlines to all three service files
+
+---
+
+## Research Addendum: `_parse_m3u8_playlist` and Resume Download Functionality (2026-07-09)
+
+### Research Context
+
+Investigation conducted on the `_parse_m3u8_playlist` dead code finding (SRV-001) and the `download_hls_with_resume` function implementation, focusing on requirements for bypassing bot protection, downloading large files, and supporting download resumption.
+
+### Key Findings
+
+#### 1. `_parse_m3u8_playlist` - Dead Code Assessment
+
+| Aspect | Finding | Confidence |
+|--------|---------|------------|
+| **Current Status** | Never called - confirmed dead code | HIGH |
+| **Replaced By** | NetworkMonitor.m3u8_urls for m3u8 capture | HIGH |
+| **Functionality Gap** | Extracts quality variants from m3u8 playlist content | HIGH |
+| **Current Implementation** | Uses yt-dlp for stream extraction (provides quality info) | HIGH |
+
+**Analysis:**
+- The method was designed to parse m3u8 playlists to extract individual quality variants (lines 218-281 in extractor.py)
+- The actual implementation uses `NetworkMonitor.m3u8_urls` to capture URLs directly from browser network traffic
+- For quality selection, the codebase uses yt-dlp's native format extraction which already provides quality metadata
+- The `_parse_m3u8_segments` function in downloader.py (line 177) exists for segment extraction but serves a different purpose (download resumption)
+
+**Conclusion:** `REMOVE` - the method is obsolete. yt-dlp handles m3u8 parsing for quality extraction, and `_parse_m3u8_segments` handles segment-level parsing for resume functionality.
+
+#### 2. Resume Download Functionality Assessment (`download_hls_with_resume`)
+
+| Aspect | Finding | Confidence |
+|--------|---------|------------|
+| **CRITICAL Bug** | DF-012: m3u8 URL passed to extractor expecting video URL | HIGH |
+| **DF-010 Risk** | Partial segments not cleaned up on failure | HIGH |
+| **Missing Parameter** | No `video_url` parameter for token refresh | HIGH |
+| **Type Safety** | Multiple mypy violations in function | MEDIUM |
+
+**Architecture Gap Analysis:**
+
+The current flow has a critical design flaw:
+
+```
+download_hls_with_resume(m3u8_url, ...) 
+    → _fetch_playlist_with_retry(m3u8_url, ...)
+        → extractor.extract_streams_with_cookies(m3u8_url)  # ❌ WRONG: m3u8 URL passed
+```
+
+The `extract_streams_with_cookies` method calls `parse_video_id(url)` which expects `video-(-?\d+)_(\d+)` pattern, but receives m3u8 URLs like `https://vkvdXXX.okcdn.ru/video.m3u8?expires=...`.
+
+**Required Fix:** Add `video_url: str` parameter and pass it through the call chain for proper token refresh on 403/410 responses.
+
+#### 3. Modern HLS Download Strategies (2026 Research)
+
+**Current Implementation Approach:**
+- Segment-level downloading with batched ffmpeg merging
+- Progress tracking via `.{stem}_progress.json` metadata files
+- 403/410 retry with token refresh
+
+**Modern Alternatives (from research):**
+
+1. **yt-dlp Native Features (Recommended Primary):**
+   - Built-in `--hls-prefer-native` flag for segment downloads
+   - Automatic fragment retries (`--fragment-retries 10`)
+   - Built-in resume support via `.part` files
+   - PO Token support (2025+) for bot detection bypass
+   - Multi-threaded download support
+
+2. **Hybrid Approach (Current Code Direction):**
+   - Browser automation (non-headless) for token/cookie capture
+   - ffmpeg for direct segment download to MP4
+   - Segment-level retry with batched merging
+
+3. **Cloudflare Bypass Techniques (Relevant for CDN):**
+   - TLS fingerprint masking (curl-cffi, Camoufox)
+   - Browser automation with stealth scripts (currently implemented)
+   - Proxy rotation for large-scale downloads
+
+#### 4. Security Considerations
+
+| Risk | Assessment | Source |
+|------|------------|--------|
+| Token expiration during long downloads | HIGH | VK tokens expire in 1-2 hours |
+| Non-headless browser requirement | MEDIUM | User interaction required, but bypasses bot detection |
+| CDN segment authentication | HIGH | Cookies required for segment access |
+
+#### 5. Recommendation
+
+1. **For SRV-001 (`_parse_m3u8_playlist`):** Remove entirely. The functionality is superseded by:
+   - yt-dlp's native m3u8 parsing for quality extraction
+   - `_parse_m3u8_segments` in downloader.py for resume logic
+
+2. **For Resume Functionality (DF-012):** Fix the architectural gap:
+   - Add `video_url: str` parameter to `download_hls_with_resume`
+   - Pass `video_url` to `_fetch_playlist_with_retry`
+   - Pass `video_url` to `extractor.extract_streams_with_cookies` for proper token refresh
+
+3. **Consider Simplification:**
+   - The current segment-based resume could be replaced by yt-dlp's native features
+   - yt-dlp handles token refresh, retry logic, and resume more robustly
+   - Would reduce code complexity while improving reliability
+
+### Evidence Summary
+
+- `extractor.py:218-281`: Dead `_parse_m3u8_playlist` method
+- `extractor.py:76-79`: Primary extraction uses yt-dlp
+- `extractor.py:152-184`: Browser extraction uses NetworkMonitor, not `_parse_m3u8_playlist`
+- `downloader.py:166`: DF-012 bug - m3u8 URL passed incorrectly for refresh
+- `downloader.py:177`: `_parse_m3u8_segments` - parallel functionality, actively used
+- `main.py:78-80, 148-149`: `download_hls_with_resume` called with correct URL in some paths, demonstrating the parameter naming confusion
+
