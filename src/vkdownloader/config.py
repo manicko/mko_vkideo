@@ -60,6 +60,24 @@ class Settings(BaseSettings):
         le=16,
         description="Maximum concurrent downloads",
     )
+    concurrent_fragments: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Concurrent HLS fragment downloads for yt-dlp (reduces throttling)",
+    )
+    throttled_rate: int = Field(
+        default=100000,
+        ge=50000,
+        le=1000000,
+        description="Minimum download rate in bytes/sec before throttling triggers re-extract",
+    )
+    http_chunk_size: int = Field(
+        default=10485760,
+        ge=1048576,
+        le=104857600,
+        description="HTTP chunk size in bytes for segment downloads",
+    )
     download_method: DownloadMethod = Field(
         default=DownloadMethod.AUTO,
         description="Download method: 'yt-dlp', 'ffmpeg', or 'auto'",
