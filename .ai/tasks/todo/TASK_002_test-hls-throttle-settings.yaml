@@ -1,0 +1,58 @@
+id: task_002_test_hls_throttle_settings
+title: Add tests for HLS throttle settings fields
+
+priority: medium
+
+depends_on:
+  - task_001_add_hls_throttle_settings
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 1 - Task 1.2: Write Tests for New Settings
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+source_blocks:
+  - "7.1 Automated Tests (to be added)"
+
+description: >
+  Add unit tests for the new HLS throttle settings fields in test_config.py.
+  Verify defaults and validation constraints for all three new fields.
+
+goals:
+  - test_concurrent_fragments_default verifies default is 4
+  - test_concurrent_fragments_validation verifies min/max constraints
+  - test_throttled_rate_default verifies default is 100000
+  - test_http_chunk_size_default verifies default is 10485760
+
+files:
+  - path: tests\test_config.py
+    targets:
+      - type: module
+        name: test_config
+
+changes:
+  - action: add_tests
+    description: >
+      Add test functions for validating the three new HLS throttle settings fields.
+
+    code_hint: |
+      def test_concurrent_fragments_default(test_settings: Settings) -> None:
+          assert test_settings.concurrent_fragments == 4
+
+      def test_concurrent_fragments_validation(test_settings: Settings) -> None:
+          test_settings = Settings(concurrent_fragments=1)
+          assert test_settings.concurrent_fragments == 1
+          with pytest.raises(ValidationError):
+              Settings(concurrent_fragments=0)  # Below minimum
+          with pytest.raises(ValidationError):
+              Settings(concurrent_fragments=17)  # Above maximum
+
+      def test_throttled_rate_default(test_settings: Settings) -> None:
+          assert test_settings.throttled_rate == 100000
+
+      def test_http_chunk_size_default(test_settings: Settings) -> None:
+          assert test_settings.http_chunk_size == 10485760
+
+acceptance_criteria:
+  - All new tests pass with Settings defaults
+  - Validation tests catch invalid range violations
+  - Tests follow existing test patterns in test_config.py

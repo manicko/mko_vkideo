@@ -1,0 +1,106 @@
+# Execution DAG - HLS Throttle Bypass Implementation
+
+```mermaid
+graph TD
+    T001[task_001: Add HLS throttle settings] --> T002[task_002: Test HLS throttle settings]
+    T001 --> T003[task_003: Add cookies-to-netscape helper]
+    
+    T003 --> T004[task_004: Update yt-dlp options]
+    T001 --> T004
+    
+    T004 --> T005[task_005: Update fallback signature]
+    T005 --> T006[task_006: Integrate browser cookies YTDLP]
+    
+    T001 --> T007[task_007: Parallelize segment download]
+    
+    T004 --> T008[task_008: Add downloader tests]
+    T007 --> T008
+    T008 --> T012[task_012: Verify implementation]
+    
+    T010[task_010: Research AdaptiveThrottle] --> T011[task_011: Integrate AdaptiveThrottle]
+    style T010 fill:#ffcccc,stroke:#ff0000
+    style T011 fill:#ffcccc,stroke:#ff0000
+```
+
+## Parallel Execution Groups
+
+### Group 1 (Can run immediately - no dependencies)
+- task_001: Add HLS throttle settings (config changes)
+
+### Group 2 (After Group 1)
+- task_002: Test HLS throttle settings
+- task_003: Add cookies-to-netscape helper
+
+### Group 3 (After Group 2 - sequential within downloader.py)
+- task_004: Update yt-dlp options
+- task_005: Update fallback signature
+- task_006: Integrate browser cookies YTDLP
+
+### Group 4 (Can run in parallel with Group 2)
+- task_007: Parallelize segment download (different function in same file - sequential due to file overlap rule)
+
+### Group 5 (After Group 3,4)
+- task_008: Add downloader tests
+
+### Group 6 (Blocked - pending research completion)
+- task_010: Research AdaptiveThrottle
+- task_011: Integrate AdaptiveThrottle (blocked by task_010)
+
+### Group 7 (Final verification)
+- task_012: Verify HLS throttle bypass implementation
+
+## File-Based Dependency Matrix
+
+| Task | Modified File | Depends On Same File |
+|------|---------------|---------------------|
+| task_001 | src\vkdownloader\config.py | No |
+| task_002 | tests\test_config.py | No |
+| task_003 | src\vkdownloader\services\downloader.py | No |
+| task_004 | src\vkdownloader\services\downloader.py | Yes (task_003) |
+| task_005 | src\vkdownloader\services\downloader.py | Yes (task_004) |
+| task_006 | src\vkdownloader\services\downloader.py | Yes (task_005) |
+| task_007 | src\vkdownloader\services\downloader.py | Yes (task_003 - file-based) |
+| task_008 | tests\test_hls_downloader.py | No |
+| task_010 | (research only) | No |
+| task_011 | src\vkdownloader\services\downloader.py | Yes (task_007) |
+| task_012 | (verification) | No |
+
+## Risk Summary
+
+| Task | Risk Level | Justification |
+|------|------------|---------------|
+| task_001 | Low | Adding new optional fields to Pydantic model |
+| task_002 | Low | Test additions only |
+| task_003 | Low | New helper function, no existing code changes |
+| task_004 | Medium | Changes throttling behavior, potential re-extraction |
+| task_005 | Low | Signature change is backward compatible |
+| task_006 | Medium | Changes core download flow for YTDLP method |
+| task_007 | Medium | Refactors download loop, affects concurrency |
+| task_008 | Low | Test additions only |
+| task_010 | High | Research task for integration impact |
+| task_011 | Medium | Rate limiting integration, blocked pending research |
+| task_012 | Low | Verification task for all changes |
+
+## Semantic Anchors Reference
+
+### Config.py - Settings class
+- Insert after: `max_concurrent_downloads` field (line 57-62)
+
+### downloader.py - Module level
+- Insert after: `MAX_RESUME_RETRIES` constant (line 22)
+- Function: `_cookies_to_netscape` (new)
+
+### downloader.py - _download_with_ytdlp function
+- Replace: ydl_opts dictionary (line 504-519)
+- Add: cookies file generation after ydl_opts creation
+
+### downloader.py - download_with_ytdlp_with_resume_fallback function
+- Modify: function signature (line 403)
+- Modify: call to _download_with_ytdlp (line 435)
+
+### downloader.py - perform_download function
+- Modify: DownloadMethod.YTDLP case (line 571-574)
+
+### downloader.py - download_hls_with_resume function
+- Replace: for loop segment download (line 137-150) - TASK_007
+- Integrate AdaptiveThrottle in parallel download (task_011)

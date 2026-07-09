@@ -1,146 +1,54 @@
-# Execution DAG / Rollout Order for Validated Findings
-# Generated from .ai/audit/99-validation/ files
-
 tasks:
-  # Phase 1: Security Risk Mitigation (HIGH/CRITICAL)
-  - id: TASK_001_add_ssl_verify_setting_to_settings
+  # Phase 1: Config changes (independent)
+  - id: task_001_add_hls_throttle_settings
     depends_on: []
 
-  - id: TASK_002_enable_ssl_verification_in_http_client
+  - id: task_002_test_hls_throttle_settings
     depends_on:
-      - TASK_001_add_ssl_verify_setting_to_settings
+      - task_001_add_hls_throttle_settings
 
-  - id: TASK_003_strip_auth_tokens_from_logged_urls
+  # Phase 2: yt-dlp options updates (depend on config)
+  - id: task_003_add_cookies_to_netscape_helper
     depends_on:
-      - TASK_002_enable_ssl_verification_in_http_client
+      - task_001_add_hls_throttle_settings
 
-  # Phase 2: Critical Bug Fix
-  - id: TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
+  - id: task_004_update_ytdlp_options
     depends_on:
-      - TASK_003_strip_auth_tokens_from_logged_urls
+      - task_001_add_hls_throttle_settings
+      - task_003_add_cookies_to_netscape_helper
 
-  - id: TASK_005_add_segment_cleanup_on_download_failure
+  - id: task_005_update_ytdlp_fallback_signature
     depends_on:
-      - TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
+      - task_004_update_ytdlp_options
 
-  # Phase 3: Remove Unused Code
-  - id: TASK_006_remove_unused_create_stealth_context_function
+  - id: task_006_integrate_browser_cookies_ytdlp
     depends_on:
-      - TASK_005_add_segment_cleanup_on_download_failure
+      - task_005_update_ytdlp_fallback_signature
 
-  - id: TASK_007_remove_dead_parse_m3u8_playlist_method
+  # Phase 3: Segment parallelization (depends on config for semaphore limit)
+  - id: task_007_parallelize_segment_download
     depends_on:
-      - TASK_006_remove_unused_create_stealth_context_function
+      - task_001_add_hls_throttle_settings
 
-  - id: TASK_008_remove_unused_config_fields_from_settings
+  # Phase 4: Downloader tests
+  - id: task_008_add_downloader_tests
     depends_on:
-      - TASK_007_remove_dead_parse_m3u8_playlist_method
+      - task_004_update_ytdlp_options
+      - task_007_parallelize_segment_download
 
-  # Phase 4: Type Safety Fixes
-  - id: TASK_009_add_type_annotations_to_downloader_functions
+  # Phase 5: AdaptiveThrottle integration (blocked - pending research)
+  - id: task_010_research_adaptive_throttle_integration
+    depends_on: []
+    status: blocked
+    blocked_by: None
+
+  - id: task_011_integrate_adaptive_throttle
     depends_on:
-      - TASK_008_remove_unused_config_fields_from_settings
+      - task_010_research_adaptive_throttle_integration
+    status: blocked
+    blocked_by: task_010_research_adaptive_throttle_integration
 
-  - id: TASK_010_add_type_annotations_to_extractor_methods
+# Verification task - validates all implemented changes
+  - id: task_012_verify_hls_throttle_bypass
     depends_on:
-      - TASK_009_add_type_annotations_to_downloader_functions
-
-  - id: TASK_011_change_download_method_to_enum
-    depends_on:
-      - TASK_010_add_type_annotations_to_extractor_methods
-
-  # Phase 5: Exception Handling & Path Validation
-  - id: TASK_012_add_exception_handling_to_cli_download
-    depends_on:
-      - TASK_011_change_download_method_to_enum
-
-  - id: TASK_013_add_keyboard_interrupt_handling_to_cli_commands
-    depends_on:
-      - TASK_012_add_exception_handling_to_cli_download
-
-  - id: TASK_014_add_output_path_validation
-    depends_on:
-      - TASK_013_add_keyboard_interrupt_handling_to_cli_commands
-
-  # Phase 6: Configuration Hardening
-  - id: TASK_015_change_settings_extra_to_forbid
-    depends_on:
-      - TASK_014_add_output_path_validation
-
-  # Phase 7: Documentation Update
-  - id: TASK_016_update_cli_reference_documentation
-    depends_on:
-      - TASK_015_change_settings_extra_to_forbid
-
-  # Phase 8: main.py Consolidation (CLI-004)
-  - id: TASK_017_port_main_py_to_typer_cli_or_remove
-    depends_on:
-      - TASK_016_update_cli_reference_documentation
-
-  - id: TASK_018_update_limitations_documentation
-    depends_on:
-      - TASK_017_port_main_py_to_typer_cli_or_remove
-
-  # Phase 9: Cleanup & Formatting
-  - id: TASK_019_update_gitignore_for_downloaded_content
-    depends_on:
-      - TASK_018_update_limitations_documentation
-
-  - id: TASK_020_remove_duplicate_test_class
-    depends_on:
-      - TASK_019_update_gitignore_for_downloaded_content
-
-  # Phase 10: Integrate Exception Classes
-  - id: TASK_021_integrate_unused_exception_classes
-    depends_on:
-      - TASK_020_remove_duplicate_test_class
-
-  # Phase 11: Test Coverage
-  - id: TASK_022_create_cli_tests
-    depends_on:
-      - TASK_021_integrate_unused_exception_classes
-
-  - id: TASK_023_create_downloader_resume_tests
-    depends_on:
-      - TASK_022_create_cli_tests
-
-  - id: TASK_024_create_extractor_async_tests
-    depends_on:
-      - TASK_023_create_downloader_resume_tests
-
-  # Phase 12: Structural Improvements
-  - id: TASK_025_create_hls_download_request_dataclass
-    depends_on:
-      - TASK_024_create_extractor_async_tests
-
-  - id: TASK_026_extract_merge_batch_segments_helper
-    depends_on:
-      - TASK_025_create_hls_download_request_dataclass
-
-  - id: TASK_027_extract_quality_selector_helpers
-    depends_on:
-      - TASK_026_extract_merge_batch_segments_helper
-
-  - id: TASK_028_extract_http_client_download_helpers
-    depends_on:
-      - TASK_027_extract_quality_selector_helpers
-
-  - id: TASK_029_apply_trailing_newlines_to_service_files
-    depends_on:
-      - TASK_028_extract_http_client_download_helpers
-
-  # Verification Task
-  - id: TASK_030_verification_full_suite
-    depends_on:
-      - TASK_029_apply_trailing_newlines_to_service_files
-
-# Removed/Rejected tasks (not included in rollout):
-# - CFG-006: Rejected - checklist mismatch
-# - SEC-006: Rejected - overlapping concern, minimal risk
-# - TST-005: Rejected - low ROI tautological tests
-# - TST-009: Rejected - low ROI trivial model
-# - QLT-011: Rejected - low ROI trivial model
-# - STR-002/STR-010: Rejected - dead code, remove instead of refactor
-# - INT-001-INT-008: Merged into earlier tasks
-# - SRV-003-SRV-010: Merged into consolidated tasks
-# - DF-001-DF-012: Integrated into implementation tasks where applicable
+      - task_008_add_downloader_tests

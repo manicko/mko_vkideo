@@ -1,0 +1,47 @@
+id: task_010_research_adaptive_throttle_integration
+title: Research adaptive throttle integration for segment downloads
+
+priority: high
+
+status: blocked
+
+blocked_by: None
+blocked_reason: >
+  AdaptiveThrottle integration requires research to identify all dependents,
+  assess impact on segment download flow, and evaluate alternatives before
+  implementation. The class exists but is not currently used anywhere.
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 5 - Integrate AdaptiveThrottle (Optional Enhancement)
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+source_blocks:
+  - "6.3 Segment-based Download Parallelization (downloader.py)"
+
+description: >
+  Research task to assess AdaptiveThrottle integration into segment download
+  flow. Identify all potential hidden consumers, evaluate impact of rate
+  limiting on concurrent downloads, and produce go/no-go recommendation.
+
+research_goals:
+  - identify all usages of AdaptiveThrottle class in codebase
+  - analyze how throttle would interact with concurrent segment downloads
+  - assess impact on download speed vs. throttling avoidance trade-off
+  - evaluate alternative rate limiting strategies
+  - document go/no-go recommendation with justification
+
+files_to_analyze:
+  - src\vkdownloader\infrastructure\adaptive_throttle.py
+  - src\vkdownloader\services\downloader.py
+  - any other files importing AdaptiveThrottle
+
+deliverables:
+  - RESEARCH_ADAPTIVE_THROTTLE.md with findings
+  - go/no-go recommendation with specific conditions if "go-with-changes"
+  - alternative implementation suggestions if "no-go"
+
+acceptance_criteria:
+  - All potential consumers of AdaptiveThrottle identified
+  - Impact on concurrent downloads assessed
+  - Recommendation documented with clear rationale
+  - Unblocks task_011 if "go" or "go-with-changes" returned

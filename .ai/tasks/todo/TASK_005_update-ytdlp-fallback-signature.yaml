@@ -1,0 +1,51 @@
+id: task_005_update_ytdlp_fallback_signature
+title: Add cookies parameter to download_with_ytdlp_with_resume_fallback
+
+priority: medium
+
+depends_on:
+  - task_004_update_ytdlp_options
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 2 - Task 2.4: Update download_with_ytdlp_with_resume_fallback
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+
+description: >
+  Add cookies parameter to download_with_ytdlp_with_resume_fallback function
+  signature and pass it through to _download_with_ytdlp calls. This enables
+  cookie-based authentication in the resume fallback flow.
+
+goals:
+  - add cookies: str | None = None parameter to function signature
+  - pass cookies to _download_with_ytdlp() calls
+  - preserve backward compatibility (cookies optional)
+
+files:
+  - path: src\vkdownloader\services\downloader.py
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+
+changes:
+  - action: modify_signature
+    description: >
+      Update function signature to accept optional cookies parameter and
+      forward it to _download_with_ytdlp calls.
+
+    code_hint: |
+      async def download_with_ytdlp_with_resume_fallback(
+          video_url: str,
+          m3u8_url: str,
+          output_file: Path,
+          quality: str,
+          extractor: VKVideoExtractor | None,
+          settings: Settings | None = None,
+          cookies: str | None = None,  # ADD parameter
+      ) -> Path | None:
+
+acceptance_criteria:
+  - Function signature accepts optional cookies parameter
+  - cookies passed to _download_with_ytdlp calls
+  - Function callable without cookies argument (backward compatible)
+  - type hints correct for str | None

@@ -1,0 +1,76 @@
+id: task_011_integrate_adaptive_throttle
+title: Integrate AdaptiveThrottle into segment download flow
+
+priority: medium
+
+status: blocked
+
+blocked_by: task_010_research_adaptive_throttle_integration
+blocked_reason: >
+  Implementation blocked pending research completion with go/no-go recommendation.
+  Research must confirm impact assessment and integration approach.
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 5 - Integrate AdaptiveThrottle (Optional Enhancement)
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+source_blocks:
+  - "10. Priority Implementation Order - Option 3"
+
+description: >
+  Integrate AdaptiveThrottle into the parallel segment download flow in
+  download_hls_with_resume. Apply rate limiting delays between segment
+  downloads to avoid triggering CDN throttling on 429 responses.
+
+risk_level: medium
+
+risk_factors:
+  - AdaptiveThrottle behavior with concurrent downloads not validated
+  - May reduce net download speed improvement from parallelization
+  - Requires coordination between parallel tasks and throttle
+
+files:
+  - path: src\vkdownloader\services\downloader.py
+    targets:
+      - type: function
+        name: download_hls_with_resume
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: _download_segment
+      insert_before:
+        type: return_statement
+        value: _merge_segments_batched
+
+changes:
+  - action: add_import
+    description: >
+      Import AdaptiveThrottle at module level.
+
+    code_hint: |
+      from ..infrastructure.adaptive_throttle import AdaptiveThrottle
+
+  - action: integrate_throttle
+    description: >
+      Modify segment download to use AdaptiveThrottle for rate limiting.
+      On 429 response, call throttle.on_rate_limited().
+
+    code_hint: |
+      # Inside download_segment_concurrent or _download_segment:
+      throttle = AdaptiveThrottle()
+      try:
+          async with session.get(segment_url, headers=headers) as response:
+              if response.status == 429:
+                  throttle.on_rate_limited()
+                  # Retry logic with backoff
+              ...
+      except Exception:
+          throttle.on_rate_limited()
+          ...
+
+acceptance_criteria:
+  - AdaptiveThrottle instantiated in download flow
+  - Rate limiting delays applied on 429 responses
+  - Successful downloads call throttle.on_success()
+  - Download speed still improved vs. original sequential

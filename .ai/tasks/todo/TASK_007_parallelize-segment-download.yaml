@@ -1,0 +1,82 @@
+id: task_007_parallelize_segment_download
+title: Parallelize segment download loop in download_hls_with_resume
+
+priority: high
+
+depends_on:
+  - task_001_add_hls_throttle_settings
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 4 - Task 4.1: Refactor Segment Download Loop
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+source_blocks:
+  - "6.3 Segment-based Download Parallelization (downloader.py)"
+
+description: >
+  Replace the sequential for loop in download_hls_with_resume with
+  concurrent downloads using asyncio.Semaphore. This enables parallel
+  segment downloads using max_concurrent_downloads setting, improving
+  download speed in fallback mode.
+
+risk_level: medium
+
+risk_factors:
+  - changes core download loop behavior
+  - affects progress tracking and resume logic
+  - concurrent error handling differs from sequential
+
+files:
+  - path: src\vkdownloader\services\downloader.py
+    targets:
+      - type: function
+        name: download_hls_with_resume
+
+    semantic_anchors:
+      insert_after:
+        type: variable_assignment
+        value: segments
+      insert_before:
+        type: function_call
+        value: _merge_segments_batched
+
+changes:
+  - action: refactor_loop
+    description: >
+      Replace sequential segment download loop with concurrent implementation
+      using semaphore for rate limiting based on settings.max_concurrent_downloads.
+
+    code_hint: |
+      # Download missing segments concurrently
+      semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+
+      async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
+          """Download segment with semaphore rate limiting."""
+          async with semaphore:
+              full_url = segment_url
+              if not segment_url.startswith("http"):
+                  full_url = urljoin(request.m3u8_url, segment_url)
+              segment_path = segments_dir / f"{idx:05d}.ts"
+              if not segment_path.exists():
+                  return await _download_segment(session, full_url, segment_path, headers)
+              return True
+
+      # Download all missing segments concurrently
+      tasks = [
+          download_segment_concurrent(i, seg)
+          for i, seg in enumerate(segments)
+          if not (segments_dir / f"{i:05d}.ts").exists()
+      ]
+      results = await asyncio.gather(*tasks)
+
+      if not all(results):
+          return None
+
+      downloaded_count = len(segments)
+
+acceptance_criteria:
+  - Segment downloads run concurrently (not sequentially)
+  - Semaphore limits concurrency to max_concurrent_downloads
+  - All missing segments downloaded correctly
+  - Error handling preserved (returns None if any fail)
+  - Progress tracking still works for resume

@@ -11,6 +11,8 @@ class QualityEnum(StrEnum):
     Q480 = "480"
     Q720 = "720"
     Q1080 = "1080"
+    Q1440 = "1440"
+    Q2160 = "2160"
     BEST = "best"
     WORST = "worst"
 

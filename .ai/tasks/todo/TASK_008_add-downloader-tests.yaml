@@ -1,0 +1,55 @@
+id: task_008_add_downloader_tests
+title: Add tests for yt-dlp throttling and parallel download
+
+priority: medium
+
+depends_on:
+  - task_004_update_ytdlp_options
+  - task_007_parallelize_segment_download
+
+# ── Plan/Audit report source ──
+source_reference: .ai\plans\hls-throttle-bypass-implementation.md
+source_section: Phase 6 - Testing Tasks
+source_file: .ai\research\HLS_THROTTLE_BYPASS_RESEARCH.md
+source_blocks:
+  - "7.1 Automated Tests (to be added)"
+
+description: >
+  Add tests in test_hls_downloader.py for:
+  1. Concurrent fragments parameter in yt-dlp options
+  2. Throttling rate configuration
+  3. Parallel segment download with semaphore
+  4. _cookies_to_netscape helper function
+  5. Browser cookies integration flow
+
+files:
+  - path: tests\test_hls_downloader.py
+    targets:
+      - type: module
+        name: test_hls_downloader
+
+changes:
+  - action: add_tests
+    description: >
+      Add test class for HLS throttling bypass functionality.
+
+    code_hint: |
+      class TestCookiesToNetscape:
+          def test_cookies_to_netscape_valid(self):
+              result = _cookies_to_netscape("vk=abc; session=xyz")
+              assert ".vkvideo.ru" in result
+              assert "vk" in result
+
+          def test_cookies_to_netscape_empty(self):
+              result = _cookies_to_netscape("")
+              assert "vk" not in result
+
+      @pytest.mark.asyncio
+      async def test_parallel_segments_download():
+          # Test that concurrent download uses semaphore
+          # Verify multiple segments download in parallel
+
+acceptance_criteria:
+  - All new tests pass
+  - Tests cover new functionality
+  - No regression in existing tests
