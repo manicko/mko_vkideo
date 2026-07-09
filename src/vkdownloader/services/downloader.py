@@ -424,6 +424,7 @@ async def download_with_ytdlp_with_resume_fallback(
     quality: str,
     extractor: VKVideoExtractor | None,
     settings: Settings | None = None,
+    cookies: str | None = None,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based resume on failure.
 
@@ -439,6 +440,7 @@ async def download_with_ytdlp_with_resume_fallback(
         quality: Quality string.
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
+        cookies: Optional cookies string for authenticated downloads.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -449,7 +451,7 @@ async def download_with_ytdlp_with_resume_fallback(
     retry_count = 0
 
     while retry_count <= MAX_RESUME_RETRIES:
-        result = await _download_with_ytdlp(video_url, output_file, quality, settings)
+        result = await _download_with_ytdlp(video_url, output_file, quality, settings, cookies)
 
         if result:
             if retry_count > 0:
@@ -511,7 +513,11 @@ async def download_with_ytdlp_with_resume_fallback(
 
 
 async def _download_with_ytdlp(
-    video_url: str, output_file: Path, quality: str, settings: Settings
+    video_url: str,
+    output_file: Path,
+    quality: str,
+    settings: Settings,
+    cookies: str | None = None,
 ) -> Path | None:
     """Download using yt-dlp."""
     quality_str = quality.replace("p", "") if quality else "720"
@@ -525,6 +531,9 @@ async def _download_with_ytdlp(
             "format": f"best[height<={quality_str}]",
             "nocheckcertificate": True,
             "hls_prefer_native": True,
+            "concurrent_fragments": settings.concurrent_fragments,
+            "throttledratelimit": settings.throttled_rate,
+            "http_chunk_size": settings.http_chunk_size,
             "http_headers": {
                 "User-Agent": user_agent,
                 "Referer": "https://vkvideo.ru/",
@@ -532,8 +541,14 @@ async def _download_with_ytdlp(
             "socket_timeout": 180,
             "retries": 10,
             "fragment_retries": 10,
-            "throttledratelimit": 0,
         }
+
+        # Add cookies file generation if cookies provided
+        if cookies:
+            cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
+            cookie_file.write_text(_cookies_to_netscape(cookies))
+            ydl_opts["cookiefile"] = str(cookie_file)
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
         return str(output_file)
