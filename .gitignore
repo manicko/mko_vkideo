@@ -8,3 +8,14 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Downloaded content
+*.mp4
+*.mkv
+*.avi
+
+# Temporary segment files
+*_segments/
+
+# Progress metadata files
+*_progress.json
