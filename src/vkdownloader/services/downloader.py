@@ -115,49 +115,55 @@ async def download_hls_with_resume(
 
     segments_dir.mkdir(parents=True, exist_ok=True)
 
-    downloaded_count = _load_downloaded_count(metadata_file)
-    headers: dict[str, str] = {
-        "User-Agent": settings.user_agent,
-        "Referer": "https://vkvideo.ru/",
-    }
-    if cookies:
-        headers["Cookie"] = cookies
+    try:
+        downloaded_count = _load_downloaded_count(metadata_file)
+        headers: dict[str, str] = {
+            "User-Agent": settings.user_agent,
+            "Referer": "https://vkvideo.ru/",
+        }
+        if cookies:
+            headers["Cookie"] = cookies
 
-    connector = aiohttp.TCPConnector(limit=10)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        playlist_content = await _fetch_playlist_with_retry(
-            session, video_url, m3u8_url, headers, extractor, settings
-        )
-        if not playlist_content:
-            return None
+        connector = aiohttp.TCPConnector(limit=10)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            playlist_content = await _fetch_playlist_with_retry(
+                session, video_url, m3u8_url, headers, extractor, settings
+            )
+            if not playlist_content:
+                return None
 
-        segments = _parse_m3u8_segments(playlist_content)
-        logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
+            segments = _parse_m3u8_segments(playlist_content)
+            logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
 
-        # Download missing segments
-        for i in range(downloaded_count, len(segments)):
-            segment_url = segments[i]
-            if not segment_url.startswith("http"):
-                segment_url = urljoin(m3u8_url, segment_url)
+            # Download missing segments
+            for i in range(downloaded_count, len(segments)):
+                segment_url = segments[i]
+                if not segment_url.startswith("http"):
+                    segment_url = urljoin(m3u8_url, segment_url)
 
-            segment_path = segments_dir / f"{i:05d}.ts"
-            if not segment_path.exists():
-                success = await _download_segment(session, segment_url, segment_path, headers)
-                if not success:
-                    return None
+                segment_path = segments_dir / f"{i:05d}.ts"
+                if not segment_path.exists():
+                    success = await _download_segment(session, segment_url, segment_path, headers)
+                    if not success:
+                        return None
 
-            downloaded_count += 1
-            _save_downloaded_count(metadata_file, downloaded_count)
+                downloaded_count += 1
+                _save_downloaded_count(metadata_file, downloaded_count)
 
-    # All downloaded - merge in batches
-    if downloaded_count == len(segments):
-        logger.info("merging_segments", count=downloaded_count)
-        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
-        if result:
+            # All downloaded - merge in batches
+            if downloaded_count == len(segments):
+                logger.info("merging_segments", count=downloaded_count)
+                result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+                if result:
+                    _cleanup_segments(segments_dir, metadata_file)
+                return result
+
+        return None
+    finally:
+        # Clean up on failure - only if segments_dir still exists
+        # (cleanup is done inside try block on success, so dir won't exist then)
+        if segments_dir.exists():
             _cleanup_segments(segments_dir, metadata_file)
-        return result
-
-    return None
 
 
 async def _fetch_playlist_with_retry(
@@ -320,9 +326,12 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
 def _load_downloaded_count(metadata_file: Path) -> int:
     """Load downloaded segment count from metadata."""
     if metadata_file.exists():
-        with open(metadata_file, encoding="utf-8") as f:
-            data: dict[str, int] = json.load(f)
-            return data.get("downloaded_count", 0)
+        try:
+            with open(metadata_file, encoding="utf-8") as f:
+                data: dict[str, int] = json.load(f)
+                return data.get("downloaded_count", 0)
+        except (json.JSONDecodeError, OSError):
+            return 0
     return 0
 
 
