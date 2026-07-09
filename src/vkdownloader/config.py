@@ -68,6 +68,10 @@ class Settings(BaseSettings):
         le=3600,
         description="Download timeout in seconds",
     )
+    ssl_verify: bool = Field(
+        default=True,
+        description="Verify SSL certificates for CDN connections",
+    )
 
     # Download settings
     download_dir: Path = Field(

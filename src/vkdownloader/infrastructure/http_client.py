@@ -45,12 +45,15 @@ class HttpClient:
             "Accept-Language": self.settings.accept_language,
         }
 
-        # Create SSL context that doesn't verify certificates (needed for VK CDN)
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        # Create SSL context based on settings
+        if self.settings.ssl_verify:
+            connector = aiohttp.TCPConnector()
+        else:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            logger.warning("ssl_verification_disabled", message="SSL certificate verification is disabled - connections may be insecure")
 
         self._session = aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector)
         return self
