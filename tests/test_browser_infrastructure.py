@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vkdownloader.config import Settings
-from vkdownloader.infrastructure.browser import BrowserManager, create_stealth_context
+from vkdownloader.infrastructure.browser import BrowserManager
 from vkdownloader.infrastructure.network_monitor import NetworkMonitor
 
 
@@ -54,50 +54,6 @@ class TestBrowserManager:
 
         mock_browser.close.assert_called_once()
         mock_playwright.stop.assert_called_once()
-
-
-class TestStealthContext:
-    """Tests for create_stealth_context function."""
-
-    def test_stealth_context_creation(self, test_settings: Settings) -> None:
-        """Test stealth context is created with correct parameters."""
-        mock_playwright = MagicMock()
-        mock_browser = MagicMock()
-        mock_playwright.chromium.launch_persistent_context.return_value = mock_browser
-
-        create_stealth_context(mock_playwright, test_settings)
-
-        mock_playwright.chromium.launch_persistent_context.assert_called_once()
-        call_kwargs = mock_playwright.chromium.launch_persistent_context.call_args[1]
-        assert call_kwargs["headless"] is False
-        assert call_kwargs["viewport"] == {"width": 1920, "height": 1080}
-        assert call_kwargs["user_agent"] == test_settings.user_agent
-        assert call_kwargs["locale"] == test_settings.locale
-        assert call_kwargs["timezone_id"] == test_settings.timezone
-
-    def test_stealth_context_with_user_data_dir(self, test_settings: Settings) -> None:
-        """Test stealth context with optional user data directory."""
-        mock_playwright = MagicMock()
-        mock_browser = MagicMock()
-        mock_playwright.chromium.launch_persistent_context.return_value = mock_browser
-
-        user_data_dir = "/tmp/user_data"
-        create_stealth_context(mock_playwright, test_settings, user_data_dir)
-
-        call_kwargs = mock_playwright.chromium.launch_persistent_context.call_args[1]
-        # user_data_dir is passed as keyword argument
-        assert call_kwargs["user_data_dir"] == user_data_dir
-
-    def test_stealth_context_automation_flags(self, test_settings: Settings) -> None:
-        """Test stealth context includes automation-controlled disable flag."""
-        mock_playwright = MagicMock()
-        mock_browser = MagicMock()
-        mock_playwright.chromium.launch_persistent_context.return_value = mock_browser
-
-        create_stealth_context(mock_playwright, test_settings)
-
-        call_kwargs = mock_playwright.chromium.launch_persistent_context.call_args[1]
-        assert "--disable-blink-features=AutomationControlled" in call_kwargs["args"]
 
 
 class TestNetworkMonitor:

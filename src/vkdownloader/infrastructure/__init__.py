@@ -1,7 +1,7 @@
 """Infrastructure package exports."""
 
 from .adaptive_throttle import AdaptiveThrottle
-from .browser import BrowserManager, create_stealth_context
+from .browser import BrowserManager
 from .http_client import HttpClient
 from .network_monitor import NetworkMonitor
 
@@ -10,5 +10,4 @@ __all__ = [
     "BrowserManager",
     "HttpClient",
     "NetworkMonitor",
-    "create_stealth_context",
 ]

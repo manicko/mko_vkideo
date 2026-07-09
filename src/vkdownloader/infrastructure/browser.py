@@ -2,39 +2,12 @@
 
 from pathlib import Path
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, Page, Playwright, async_playwright
 from structlog import get_logger
 
 from ..config import Settings
 
 logger = get_logger(__name__)
-
-
-def create_stealth_context(
-    playwright: Playwright,
-    settings: Settings,
-    user_data_dir: Path | None = None,
-) -> "BrowserContext":
-    """
-    Create a stealth browser context with timezone and locale settings.
-
-    Args:
-        playwright: Playwright instance.
-        settings: Application settings.
-        user_data_dir: Optional user data directory for persistent context.
-
-    Returns:
-        Configured browser context with stealth settings.
-    """
-    return playwright.chromium.launch_persistent_context(
-        user_data_dir=str(user_data_dir) if user_data_dir else "",
-        headless=False,
-        viewport={"width": 1920, "height": 1080},
-        user_agent=settings.user_agent,
-        locale=settings.locale,
-        timezone_id=settings.timezone,
-        args=["--disable-blink-features=AutomationControlled"],
-    )
 
 
 class BrowserManager:
