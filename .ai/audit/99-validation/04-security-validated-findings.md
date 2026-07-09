@@ -41,7 +41,15 @@ ssl_context.verify_mode = ssl.CERT_NONE
 > - **Action:** Validated
 > - **Detail:** The code evidence confirms SSL verification is disabled. The comment on line 48 states "needed for VK CDN" but this does not mitigate the MITM risk. VK's CDN should support valid certificates. No configuration option exists to enable verification. This is a confirmed SPEC-DEVIATION.
 
-**Recommendation:** Remove SSL verification bypass or make it configurable with a security warning. VK's CDN should work with valid certificates. If certificate errors occur, investigate specific CDN cert issues rather than disabling all verification. Effort: small. Priority: mandatory fix.
+**Recommendation:** Add `ssl_verify: bool` setting to Pydantic Settings with default `True`. Pass `ssl=settings.ssl_verify` to aiohttp's TCPConnector. If disabled, emit a security warning at startup. VK's CDN should work with valid certificates; if specific cert errors occur, investigate them individually rather than disabling all verification. Code:
+```python
+# In Settings model
+ssl_verify: bool = Field(default=True, description="Verify SSL certificates for CDN connections")
+
+# In HttpClient.__aenter__
+connector = aiohttp.TCPConnector(ssl=self.settings.ssl_verify)
+```
+Effort: small. Priority: mandatory fix (eliminates MITM vulnerability).
 
 ---
 
@@ -152,12 +160,19 @@ Effort: trivial. Priority: recommended.
 > - **Action:** Validated
 > - **Detail:** All three evidence locations were verified. The `Path` objects are created from user input without any validation. The default value is `"."` (current directory). No path sanitization exists in the codebase. This is a valid BEST-PRACTICE finding addressing a real security risk.
 
-**Recommendation:** Validate output paths to ensure they are within expected directories. Consider:
-1. Resolving the path to absolute and checking if it's within `Path.home()` or a designated download directory
-2. Rejecting paths containing `..` or that resolve to system directories
-3. Adding a warning when output is specified as the repository directory
-
-Effort: small. Priority: recommended.
+**Recommendation:** Create `security.py` module with `validate_output_path(path: Path, warning: bool = True) -> Path` function. Implementation:
+```python
+def validate_output_path(path: Path, warning: bool = True) -> Path:
+    path = path.resolve()
+    if ".." in str(path):
+        raise DownloadError("Path traversal not allowed")
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(path).startswith(str(repo_root)):
+        if warning:
+            logger.warning(f"Output directory inside repository: {path}")
+    return path
+```
+Apply at cli.py:48, main.py:57, and downloader.py:103. Uses CodeQL-recognized pattern for static analysis compatibility. Effort: small. Priority: recommended.
 
 ---
 

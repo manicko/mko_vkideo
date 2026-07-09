@@ -113,7 +113,7 @@ The command at lines 22-67 in cli.py has no exception catching around the async 
 - main.py uses `print()` statements (violating project rule #12) at lines 49, 52, 137, 155, 206, 207, 208, 209, 217, 218, 226, 227, 233, 235, 235
 - docs/11-guides/vkdownloader-limitations.md references main.py for recommended workarounds (lines 92, 101)
 
-**Recommendation:** Either remove `main.py` if it's truly unused, or fix the `print()` statements to use proper logging. Given that documentation references it for workarounds, consider either updating docs to use Typer CLI or making main.py compliant with project rules.
+**Recommendation:** Remove `main.py` entirely and consolidate into the registered Typer CLI (`cli.py`). Add `--method` option using the `DownloadMethod` enum to preserve the yt-dlp/ffmpeg/auto selection capability. Port `download_with_ytdlp_with_resume_fallback()` into the downloader service layer. Update `docs/11-guides/vkdownloader-limitations.md` to use `vkdownloader download --method ffmpeg URL` syntax. This eliminates the duplicate entry point while preserving documented workaround functionality. Effort: medium. Priority: mandatory (removes SPEC-DEVIATION and rule #12 violation).
 
 > **Validation Note:**
 > - **Action:** Reclassified

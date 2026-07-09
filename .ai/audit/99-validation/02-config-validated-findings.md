@@ -66,7 +66,12 @@ alwaysApply: false
 > - **New Type:** SPEC-DEVIATION (missing integration)
 > - **Detail:** These are NOT dead code. The fields are documented and used in tests. Per validation rules: "If the spec, models, or config reference the component → reject the 'dead code' label and reclassify as SPEC-DEVIATION (missing integration, not dead code)." The finding author incorrectly labeled these as dead code, but the underlying issue (missing integration) is valid.
 
-**Recommendation:** Integrate these fields into the service layer if the planned features are to be implemented, or remove them from both code and documentation to maintain consistency. Effort: variable. Priority: context-dependent.
+**Recommendation:** Remove all six unused configuration fields (`vk_api_url`, `vk_api_version`, `request_delay_min`, `request_delay_max`, `concurrency`, `timeout_seconds`) from `src/vkdownloader/config.py` since they are redundant or orphaned:
+- `vk_api_url`/`vk_api_version`: VK API integration was never implemented; project uses yt-dlp/Playwright instead
+- `concurrency`: Redundant with `max_concurrent_downloads` (default=4, actively used in cli.py:138)
+- `timeout_seconds`: Redundant with `download_timeout` (default=300, used in http_client.py:41)
+- `request_delay_min/max`: AdaptiveThrottle class exists but is never instantiated; integration would be new feature
+Update `tests/conftest.py` to remove these fields from test settings, and update `docs/01-tools/api-reference.md` to remove references. Effort: small. Priority: mandatory (removes SPEC-DEVIATION and configuration drift).
 
 ---
 
@@ -134,7 +139,7 @@ Effort: small. Priority: mandatory (mypy strict config violation).
 
 **Evidence:** `browser.py:17-37` shows synchronous function returning `BrowserContext` but mypy reports "Incompatible return value type (got Coroutine[Any, Any, BrowserContext], expected BrowserContext)". Tests pass because they mock the coroutine with MagicMock which doesn't enforce async behavior.
 
-**Recommendation:** Add `async` keyword to function and wrap in `typing.coroutine` or adjust return type. Effort: small. Priority: recommended.
+**Recommendation:** Remove the unused `create_stealth_context` function entirely. It is dead code (never called in production), has a critical async/sync mismatch (mypy error), and creates a security risk (undefined user_data_dir location). The `BrowserManager.create_stealth_page()` method already provides equivalent stealth context functionality using the correct async pattern. Remove from `browser.py`, its exports in `__init__.py`, and its tests in `test_browser_infrastructure.py`. Effort: trivial. Priority: mandatory (removes SPEC-DEVIATION and mypy error).
 
 ---
 

@@ -55,7 +55,7 @@ Return statements: 3 (lines 250, 289, 293)
 Function spans lines 208-293: 86 lines (excluding docstring)
 ```
 
-**Recommendation:** Split into `_merge_batch_segments(batch_files, output_path)` for the repeated batch merge logic and `_perform_final_merge(temp_files, output_file)` for the final merge orchestration. Extract the ffmpeg command building into `_build_ffmpeg_concat_command(input_file, output)`.
+**Recommendation:** Extract `_merge_batch_segments(batch_files: list[Path], temp_dir: Path) -> list[Path]` for batch merging logic (lines 214-253), returning list of merged temp files. Extract `_perform_final_merge(temp_files: list[Path], output_file: Path) -> bool` for final merge orchestration (lines 260-293). Extract `_build_ffmpeg_concat_command(input_files: list[Path]) -> list[str]` for command building. This reduces complexity from 14 to ~6 per function. Effort: medium. Priority: recommended.
 
 ---
 
@@ -140,7 +140,7 @@ Function spans lines 71-145: 75 lines (excluding docstring)
 Return statements: 2 (lines 117, 143/145 - early returns at 2 locations)
 ```
 
-**Recommendation:** Create a `DownloadJob` or `HLSDownloadRequest` data class to encapsulate related parameters. This improves testability and makes the function signature cleaner.
+**Recommendation:** Create `HLSDownloadRequest` dataclass with fields: `url: str, output_file: Path, quality: str, cookies: str | None, settings: Settings, extractor: VKVideoExtractor | None`. Modify function signature to `download_hls_with_resume(request: HLSDownloadRequest) -> Path | None`. This consolidates 6 parameters into 1 object and aligns with project rule #9 (Type Safety). Effort: small. Priority: recommended.
 
 ---
 
@@ -177,7 +177,7 @@ async def _fetch_playlist_with_retry(
 ) -> str | None:
 ```
 
-**Recommendation:** Group request-related parameters into a `RequestContext` dataclass or reduce parameter count by making settings provide headers and max_retries internally.
+**Recommendation:** Create `PlaylistRequest` dataclass with `session, m3u8_url, headers, extractor, settings` fields. Add `get_max_retries() -> int` method to `Settings` class. Modify signature to `_fetch_playlist_with_retry(request: PlaylistRequest, max_retries: int = 3) -> str | None`. This reduces parameters from 6 to 2 and aligns with project rule #4 (Single Responsibility). Effort: small. Priority: recommended.
 
 ---
 
@@ -253,7 +253,20 @@ Nesting analysis:
 Function spans lines 106-151: 46 lines (excluding docstring)
 ```
 
-**Recommendation:** Extract the chunk writing logic into `_write_chunks_to_file(response, output_path, callback, buffer_size)` to reduce nesting depth to 3.
+**Recommendation:** Extract `_write_chunk_to_file(chunk: bytes, file_handle) -> int` and `_update_progress(downloaded: int, total: int, callback) -> None` helpers. Rewrite as:
+```python
+async def download_file(...):
+    try:
+        async with self.session.get(url) as response:
+            if response.status == 200:
+                with output_path.open("wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        self._write_chunk(chunk, f)
+                        self._update_progress(downloaded, content_length, progress_callback)
+    finally:
+        # cleanup if needed
+```
+This reduces nesting depth from 6 to 2. Effort: small. Priority: recommended.
 
 ---
 
@@ -293,7 +306,24 @@ Nesting analysis:
 Function spans lines 68-86: 19 lines (excluding docstring)
 ```
 
-**Recommendation:** Refactor to use early returns and flatten conditionals. Consider `_process_dict_value(value)` and `_process_list_item(item)` helpers.
+**Recommendation:** Refactor using early returns to flatten control flow:
+```python
+def _extract_urls_from_json(self, data: dict | list) -> None:
+    if isinstance(data, dict):
+        for value in data.values():
+            self._process_value(value)
+        return
+    if isinstance(data, list):
+        for item in data:
+            self._extract_urls_from_json(item)
+
+def _process_value(self, value: Any) -> None:
+    if isinstance(value, str):
+        self._add_m3u8_url(value)
+    elif isinstance(value, (dict, list)):
+        self._extract_urls_from_json(value)
+```
+This reduces nesting depth from 4 to 2. Effort: small. Priority: recommended.
 
 ---
 
@@ -337,7 +367,20 @@ Nesting analysis:
 Function spans lines 148-174: 27 lines (excluding docstring)
 ```
 
-**Recommendation:** Extract `_handle_token_refresh(response, extractor, m3u8_url)` to flatten the retry logic and reduce nesting to 3 levels.
+**Recommendation:** Extract `_handle_token_refresh(response: aiohttp.ClientResponse, extractor, video_url: str) -> str | None` to handle 403/410 responses. Rewrite to reduce nesting:
+```python
+async def _fetch_playlist_with_retry(...):
+    for attempt in range(max_retries):
+        async with session.get(...) as response:
+            if response.status == 200:
+                return await response.text()
+            if response.status in (403, 410):
+                result = await self._handle_token_refresh(response, extractor, video_url)
+                if result:
+                    return result
+    return None
+```
+Note: `video_url` must be added as parameter to enable proper token refresh (see DF-012). Effort: small. Priority: mandatory (critical architectural fix).
 
 ---
 
@@ -377,7 +420,21 @@ Function spans lines 188-205: 18 lines (excluding docstring)
 Return statements: 3 (lines 200, 202, 205)
 ```
 
-**Recommendation:** Extract the success and error paths into `_save_segment_content(response, output_path)` and `_handle_segment_error(response)` to reduce nesting and improve testability.
+**Recommendation:** Extract `_save_segment_content(response: aiohttp.ClientResponse, output_path: Path) -> bool` for the success path and leave error handling inline. Rewrite:
+```python
+async def _download_segment(...):
+    async with session.get(segment_url, headers=headers) as response:
+        if response.status == 200:
+            return await self._save_segment_content(response, output_path)
+        return False
+
+async def _save_segment_content(...):
+    data = await response.read()
+    with open(output_path, "wb") as f:
+        f.write(data)
+    return True
+```
+This reduces nesting depth from 4 to 2 and improves testability. Effort: small. Priority: recommended.
 
 ---
 
@@ -476,10 +533,16 @@ domain = cookie.get("domain", "")  # assigned but never used
 
 The following modularization opportunities have high ROI per project rule #15 (small modules and functions):
 
-1. **STR-001**: Refactor `_merge_segments_batched` into smaller focused functions (nesting depth 5)
-2. **STR-003**: Group `download_hls_with_resume` parameters into a request dataclass
-3. **STR-004**: Reduce parameter count in `_fetch_playlist_with_retry` (6 parameters)
-4. **STR-005**: Extract quality matching logic in `QualitySelector.select` (nesting depth 4)
-5. **STR-006**: Extract chunk writing logic in `HttpClient.download_file` (nesting depth 6)
-6. **STR-007**: Flatten conditionals in `NetworkMonitor._extract_urls_from_json` (nesting depth 4)
-7. **STR-009**: Refactor `_download_segment` to reduce nesting depth from 4
+1. **STR-001**: Extract `_merge_batch_segments(batch_files: list[Path], temp_dir: Path) -> list[Path]` for batch merging logic, `_perform_final_merge(temp_files: list[Path], output_file: Path) -> bool` for final merge, and `_build_ffmpeg_concat_command(input_files: list[Path]) -> list[str]` for command building.
+
+2. **STR-003**: Create `HLSDownloadRequest` dataclass with fields: `url: str, output_file: Path, quality: str, cookies: str | None, settings: Settings, extractor: VKVideoExtractor | None`. Modify signature to `download_hls_with_resume(request: HLSDownloadRequest) -> Path | None`.
+
+3. **STR-004**: Create `PlaylistRequest` dataclass with session, m3u8_url, headers, extractor, settings. Add `get_max_retries() -> int` method to Settings. Note: video_url must be added for proper token refresh (see DF-012).
+
+4. **STR-005**: Extract `_find_quality_match(streams, quality_str)` and `_get_fallback_stream(streams)` helper methods to reduce nesting.
+
+5. **STR-006**: Extract `_write_chunk_to_file(chunk: bytes, file_handle) -> int` and `_update_progress(downloaded: int, total: int, callback) -> None` helpers to reduce nesting depth from 6 to 2.
+
+6. **STR-007**: Refactor `_extract_urls_from_json` using early returns. Extract `_process_value(value)` helper.
+
+7. **STR-009**: Extract `_save_segment_content(response, output_path) -> bool` for success path. Note: This function needs video_url parameter for proper token refresh (see DF-012).

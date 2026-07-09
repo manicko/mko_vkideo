@@ -228,7 +228,11 @@ alwaysApply: false
 - `docs/01-tools/api-reference.md:330-332` documents these as part of the exception hierarchy
 - The classes extend `VKDownloadError` and follow a planned hierarchy
 
-**Recommendation:** Either remove unused exception classes or integrate them into the service layer where appropriate (e.g., `VideoNotFoundError` when video not found, `ExtractionError` when extraction fails).
+**Recommendation:** Integrate these exception classes into the service layer:
+- `VideoNotFoundError`: Raise in `extractor.py:76-78` when video URL parsing fails or no streams found
+- `QualityNotAvailableError`: Raise in `quality.py:114-116` when no matching quality found for selection
+- `ExtractionError`: Raise in `extractor.py:152` when `_extract_with_ytdlp` or `_extract_with_browser` returns no streams
+This aligns the code with documented exception hierarchy. Effort: small. Priority: mandatory.
 
 ---
 

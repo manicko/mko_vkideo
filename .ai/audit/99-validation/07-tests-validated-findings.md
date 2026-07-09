@@ -48,7 +48,29 @@ alwaysApply: false
 
 **Evidence:** No test file exists for CLI (`test_cli.py` not found in tests directory). The file `tests/test_hls_downloader.py` contains 224 lines testing the downloader, but CLI has no dedicated tests.
 
-**Recommendation:** Create `tests/test_cli.py` with tests for the `download` command (success path, error path, exit code on failure) and `batch_download` command (URL file parsing, empty file error, concurrency with semaphore).
+**Recommendation:** Create `tests/test_cli.py` using `typer.testing.CliRunner()`:
+```python
+from typer.testing import CliRunner
+from vkdownloader.cli import app
+
+runner = CliRunner()
+
+def test_download_success():
+    result = runner.invoke(app, ["download", "https://vkvideo.ru/video-123_456"])
+    assert result.exit_code == 0
+    assert "Downloaded" in result.output
+
+def test_download_invalid_url():
+    result = runner.invoke(app, ["download", "invalid-url"])
+    assert result.exit_code != 0
+    assert "Invalid" in result.output
+
+def test_batch_empty_file():
+    result = runner.invoke(app, ["batch"], input="")
+    assert result.exit_code == 1
+    assert "empty" in result.output.lower()
+```
+Effort: small. Priority: mandatory.
 
 ---
 
@@ -71,12 +93,31 @@ alwaysApply: false
 
 **Evidence:** `grep` search for these function names in tests returns no results. The function `download_hls_with_resume` handles retry logic for 403/410 responses (token refresh), segment downloading with progress tracking, and batched ffmpeg merging - all untested.
 
-**Recommendation:** Add tests for: 
-1. `_parse_m3u8_segments` with valid playlist content
-2. `_download_segment` with success and failure cases  
-3. `_merge_segments_batched` with various segment counts
-4. `_load_downloaded_count` / `_save_downloaded_count` with metadata file roundtrip
-5. Integration test for `download_hls_with_resume` with mock aiohttp session
+**Recommendation:** Add tests using pytest-asyncio and aioresponses for async testing:
+```python
+# tests/test_downloader.py
+import pytest
+from pathlib import Path
+import tempfile
+
+async def test_parse_m3u8_segments_success():
+    content = "#EXTM3U\n#EXTINF:10.0\nhttps://example.com/seg1.ts\n"
+    segments = downloader._parse_m3u8_segments(content, "http://base.com/")
+    assert len(segments) == 1
+    assert "seg1.ts" in segments[0]
+
+async def test_download_segment_success(aioresponses_mock):
+    aioresponses_mock.get("https://example.com/seg.ts", payload=b"content")
+    result = await downloader._download_segment(session, "seg.ts", Path("out.ts"), {})
+    assert result is True
+
+async def test_merge_segments_batched():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test segment files
+        # Call _merge_segments_batched
+        # Verify merged output exists
+```
+Effort: small. Priority: mandatory.
 
 ---
 
@@ -98,7 +139,7 @@ alwaysApply: false
 
 **Evidence:** No tests reference `main.py`, `download_video`, `download_with_ytdlp_with_resume_fallback`, or `_download_with_ytdlp` functions. The print() calls are used for user output instead of proper logging.
 
-**Recommendation:** Add tests for `download_video` with different `DownloadMethod` enum values, and `download_with_ytdlp_with_resume_fallback` with partial file scenarios. Replace print() with structured logging.
+**Recommendation:** Per CLI-004 resolution, main.py should be removed. If kept temporarily, replace `print()` with `logger.info()` and add tests. However, the recommended path is to port functionality to cli.py and delete main.py. See CLI-004 for full resolution. Effort: defer to CLI-004 consolidation. Priority: superseded by CLI-004.
 
 ---
 
@@ -134,7 +175,25 @@ alwaysApply: false
 
 **Evidence:** `test_extractor.py` has 47 lines with 4 tests total. The test file contains no async tests, no mocking of `BrowserManager` or `yt_dlp`, and no tests for `_format_cookies_for_ffmpeg` (lines 186-195) which formats cookies for authentication headers.
 
-**Recommendation:** Add async tests for `extract_streams` with mocked yt-dlp response, `extract_streams_with_cookies` with mocked browser context, and `_format_cookies_for_ffmpeg` with sample cookie lists.
+**Recommendation:** Add pytest-asyncio async tests:
+```python
+# tests/test_extractor.py
+@pytest.mark.asyncio
+async def test_extract_streams_with_cookies_success():
+    with patch('vkdownloader.services.extractor.BrowserManager') as mock_browser:
+        mock_network = AsyncMock()
+        mock_network.m3u8_urls = ["https://cdn.video.m3u8"]
+        mock_browser.return_value.__aenter__.return_value.network_monitor = mock_network
+        # Test extract_streams_with_cookies returns streams
+
+@pytest.mark.asyncio
+async def test_format_cookies_for_ffmpeg():
+    result = extractor._format_cookies_for_ffmpeg([
+        {"name": "sid", "value": "abc123", "domain": ".vk.com"}
+    ])
+    assert "sid=abc123" in result
+```
+Note: Exclude `_parse_m3u8_playlist` (SRV-001 dead code). Effort: small. Priority: mandatory.
 
 ---
 
@@ -156,7 +215,7 @@ alwaysApply: false
 
 **Evidence:** No tests found for `AdaptiveThrottle`. The class contains `_calculate_base_delay` (line 26), `wait` (lines 30-34), `on_rate_limited` (lines 36-48), and `on_success` (lines 50-62) methods that all need verification.
 
-**Recommendation:** Add tests for throttle initialization, wait delay calculation, backoff behavior, and recovery behavior.
+**Recommendation:** Per CFG-005/CFG-005-resolution.md, `AdaptiveThrottle` should be removed as dead code. Testing unused code has negative ROI. If rate limiting is needed later, re-implement with proper integration. Effort: defer to CFG-005. Priority: superseded.
 
 ---
 
@@ -178,7 +237,24 @@ alwaysApply: false
 
 **Evidence:** `test_models.py` only tests `Video`, `Stream`, `VideoWithStreams`, `DownloadProgress`, and models in `video.py` and `enums.py`. No tests for `dtos.py` models.
 
-**Recommendation:** Add tests for `DownloadRequest` model validation (url, quality default, output_path default) and `DownloadResult` model with optional fields.
+**Recommendation:** Add tests in `tests/test_models.py`:
+```python
+def test_download_request_validation():
+    req = DownloadRequest(url="https://vkvideo.ru/video-1_2", quality="720p")
+    assert req.quality == "720p"
+    assert req.output_path == Path(".")
+
+def test_download_request_invalid_url():
+    with pytest.raises(ValidationError):
+        DownloadRequest(url="not-a-url")
+
+def test_download_result_optional_fields():
+    result = DownloadResult(file_path=Path("out.mp4"))
+    assert result.error_message is None
+    result2 = DownloadResult(error_message="Failed")
+    assert result2.file_path is None
+```
+Effort: trivial. Priority: advisory (low priority per validation note).
 
 ---
 

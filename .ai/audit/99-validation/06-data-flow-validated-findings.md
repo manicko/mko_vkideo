@@ -252,7 +252,21 @@ alwaysApply: false
 > - **Action:** Validated
 > - **Detail:** The evidence is verified. In `download_hls_with_resume` (lines 71-145), when `_download_segment` returns False at line 132, the function returns None immediately without cleanup. Partial segment files in `{output_file.stem}_segments/` and progress metadata `{output_file.stem}_progress.json` will remain on disk. This creates orphaned files that may confuse users and consume disk space.
 
-**Recommendation:** Add cleanup in the error path to remove partial segment files when download fails. Consider using try/finally to ensure cleanup. Effort: small.
+**Recommendation:** Wrap `download_hls_with_resume` in try/finally to ensure cleanup on partial completion:
+```python
+async def download_hls_with_resume(...):
+    try:
+        # existing download logic
+        result = await _fetch_playlist_with_retry(...)
+        # segment download and merge
+        return output_file
+    finally:
+        # Only preserve progress file if intentional resume planned
+        # Clean up partial segments if download failed
+        if not download_completed and segments_dir.exists():
+            _cleanup_segments(segments_dir, output_file.stem)
+```
+Add early cleanup in error paths (lines 132, 143). This prevents orphaned `.ts` files and progress metadata on failure. Effort: small. Priority: mandatory.
 
 ---
 
@@ -274,7 +288,15 @@ alwaysApply: false
 > - **Action:** Validated
 > - **Detail:** The evidence is verified. Line 138 creates a new `Settings()` instance inside `_run_batch_with_progress()` instead of reusing one. The `request_delay_min` and `request_delay_max` settings exist in config.py (lines 43-52) but are never referenced in cli.py. This represents missed opportunity for proper rate limiting.
 
-**Recommendation:** Create Settings once at the start of the command and use `AdaptiveThrottle` for rate limiting between requests. Effort: small.
+**Recommendation:** Create `Settings()` once at the start of `batch_download` command and pass it to `_run_batch_with_progress()`. Instantiate `AdaptiveThrottle` with `base_rpm=settings.max_concurrent_downloads` and call `throttle.wait()` before each download request with `on_success()` / `on_rate_limited()` callbacks. However, per CFG-005 resolution, `AdaptiveThrottle` is dead code and should be removed. For immediate fix, create Settings once and reuse it:
+```python
+@app.command()
+def batch(...):
+    settings = Settings()  # Create once
+    ...
+    semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)  # Reuse
+```
+Effort: small. Priority: advisory.
 
 ---
 
