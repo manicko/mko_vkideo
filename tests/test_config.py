@@ -72,3 +72,63 @@ def test_settings_rejects_multiple_unknown_keys() -> None:
 
     error = exc_info.value
     assert "Extra inputs are not permitted" in str(error)
+
+
+def test_concurrent_fragments_default(test_settings: Settings) -> None:
+    """Test concurrent_fragments default value is 4."""
+    assert test_settings.concurrent_fragments == 4
+
+
+def test_concurrent_fragments_validation(test_settings: Settings) -> None:
+    """Test concurrent_fragments accepts valid values and rejects invalid ones."""
+    test_settings = Settings(concurrent_fragments=1)
+    assert test_settings.concurrent_fragments == 1
+
+    test_settings = Settings(concurrent_fragments=16)
+    assert test_settings.concurrent_fragments == 16
+
+    with pytest.raises(ValidationError):
+        Settings(concurrent_fragments=0)  # Below minimum
+
+    with pytest.raises(ValidationError):
+        Settings(concurrent_fragments=17)  # Above maximum
+
+
+def test_throttled_rate_default(test_settings: Settings) -> None:
+    """Test throttled_rate default value is 100000."""
+    assert test_settings.throttled_rate == 100000
+
+
+def test_throttled_rate_validation(test_settings: Settings) -> None:
+    """Test throttled_rate accepts valid values and rejects invalid ones."""
+    test_settings = Settings(throttled_rate=50000)
+    assert test_settings.throttled_rate == 50000
+
+    test_settings = Settings(throttled_rate=1000000)
+    assert test_settings.throttled_rate == 1000000
+
+    with pytest.raises(ValidationError):
+        Settings(throttled_rate=49999)  # Below minimum
+
+    with pytest.raises(ValidationError):
+        Settings(throttled_rate=1000001)  # Above maximum
+
+
+def test_http_chunk_size_default(test_settings: Settings) -> None:
+    """Test http_chunk_size default value is 10485760."""
+    assert test_settings.http_chunk_size == 10485760
+
+
+def test_http_chunk_size_validation(test_settings: Settings) -> None:
+    """Test http_chunk_size accepts valid values and rejects invalid ones."""
+    test_settings = Settings(http_chunk_size=1048576)
+    assert test_settings.http_chunk_size == 1048576
+
+    test_settings = Settings(http_chunk_size=104857600)
+    assert test_settings.http_chunk_size == 104857600
+
+    with pytest.raises(ValidationError):
+        Settings(http_chunk_size=1048575)  # Below minimum
+
+    with pytest.raises(ValidationError):
+        Settings(http_chunk_size=104857601)  # Above maximum
