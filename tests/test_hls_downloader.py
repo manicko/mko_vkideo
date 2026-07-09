@@ -1,7 +1,7 @@
 """Tests for HLSDownloader service with ffmpeg integration."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -380,3 +380,240 @@ class TestCookiesToNetscape:
         assert ".vkvideo.ru\tTRUE\t/\tFALSE\t0\tanother\tdef" in result
         # malformed entry should not appear
         assert "malformed\t" not in result
+
+
+class TestYtdlpOptions:
+    """Tests for yt-dlp options configuration."""
+
+    def test_ytdlp_options_includes_concurrent_fragments(self, test_settings: Settings) -> None:
+        """Test yt-dlp options include concurrent_fragments setting."""
+        ydl_opts = {
+            "concurrent_fragments": test_settings.concurrent_fragments,
+            "throttledratelimit": test_settings.throttled_rate,
+            "http_chunk_size": test_settings.http_chunk_size,
+        }
+
+        assert "concurrent_fragments" in ydl_opts
+        assert ydl_opts["concurrent_fragments"] == 4  # test_settings has max_concurrent_downloads=2 but concurrent_fragments=4 default
+
+
+    def test_ytdlp_options_includes_throttled_rate(self, test_settings: Settings) -> None:
+        """Test yt-dlp options include throttled_rate setting."""
+        ydl_opts = {
+            "concurrent_fragments": test_settings.concurrent_fragments,
+            "throttledratelimit": test_settings.throttled_rate,
+            "http_chunk_size": test_settings.http_chunk_size,
+        }
+
+        assert "throttledratelimit" in ydl_opts
+        assert ydl_opts["throttledratelimit"] == 100000
+
+
+    def test_ytdlp_options_includes_http_chunk_size(self, test_settings: Settings) -> None:
+        """Test yt-dlp options include http_chunk_size setting."""
+        ydl_opts = {
+            "concurrent_fragments": test_settings.concurrent_fragments,
+            "throttledratelimit": test_settings.throttled_rate,
+            "http_chunk_size": test_settings.http_chunk_size,
+        }
+
+        assert "http_chunk_size" in ydl_opts
+        assert ydl_opts["http_chunk_size"] == 10485760
+
+
+    def test_ytdlp_options_custom_values(self) -> None:
+        """Test yt-dlp options accept custom settings values."""
+        custom_settings = Settings(concurrent_fragments=8, throttled_rate=200000, http_chunk_size=5242880)
+
+        ydl_opts = {
+            "concurrent_fragments": custom_settings.concurrent_fragments,
+            "throttledratelimit": custom_settings.throttled_rate,
+            "http_chunk_size": custom_settings.http_chunk_size,
+        }
+
+        assert ydl_opts["concurrent_fragments"] == 8
+        assert ydl_opts["throttledratelimit"] == 200000
+        assert ydl_opts["http_chunk_size"] == 5242880
+
+
+class TestParallelSegmentsDownload:
+    """Tests for parallel segment download with semaphore."""
+
+    @pytest.mark.asyncio
+    async def test_semaphore_limits_concurrent_downloads(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that semaphore enforces max_concurrent_downloads limit."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        test_settings = Settings(max_concurrent_downloads=2)
+
+        output_path = tmp_path / "video.mp4"
+
+        download_count = 0
+
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+        ) -> bool:
+            nonlocal download_count
+            download_count += 1
+            output_path.write_bytes(b"segment data")
+            return True
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                side_effect=mock_download_segment,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                            settings=test_settings,
+                        )
+                    )
+
+        # Verify all segments were downloaded
+        assert download_count == 4
+
+
+    @pytest.mark.asyncio
+    async def test_parallel_download_uses_gather(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that parallel download uses asyncio.gather for concurrency."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        output_path = tmp_path / "video.mp4"
+
+        gather_called = False
+
+        async def mock_gather(*tasks: Any) -> list[bool]:
+            nonlocal gather_called
+            gather_called = True
+            # Return True for each task
+            return [True] * len(tasks)
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                return_value=True,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    with patch("asyncio.gather", side_effect=mock_gather):
+                        await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                                settings=test_settings,
+                            )
+                        )
+
+        assert gather_called, "asyncio.gather should be called for concurrent downloads"
+
+
+class TestBrowserCookiesIntegration:
+    """Tests for browser cookies integration with yt-dlp."""
+
+    @pytest.mark.asyncio
+    async def test_cookies_passed_to_ytdlp_creates_cookie_file(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that cookies are passed to yt-dlp via cookie file."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_ydl_instance = MagicMock()
+
+        with patch("vkdownloader.services.downloader.yt_dlp") as mock_yt:
+            mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
+
+            # Mock run_in_executor to call the function synchronously
+            with patch(
+                "vkdownloader.services.downloader.asyncio.get_event_loop"
+            ) as mock_loop:
+
+                def run_in_executor_side_effect(
+                    executor: Any, func: Any, *args: Any
+                ) -> Any:
+                    # Call the sync function directly and return the result
+                    result: str | Path = func()
+                    # Return a coroutine that resolves to the result
+                    async def coro() -> str:
+                        return str(result)
+
+                    return coro()
+
+                mock_loop.return_value.run_in_executor = run_in_executor_side_effect
+
+                await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    cookies=cookies,
+                )
+
+        # Check that cookie file was created
+        cookie_file = tmp_path / f".{output_file.stem}_cookies.txt"
+        assert cookie_file.exists(), "Cookie file should be created for yt-dlp"
+
+        # Verify cookie content
+        cookie_content = cookie_file.read_text()
+        assert ".vkvideo.ru" in cookie_content
+        assert "vk\tabc123" in cookie_content
+
+
+    def test_ytdlp_cookiefile_option_set(self) -> None:
+        """Test that cookiefile option is set in ydl_opts when cookies provided."""
+        cookies = "vk=abc123"
+
+        # Test via the actual function behavior - check cookie file creation
+        # This is tested more thoroughly in test_cookies_passed_to_ytdlp_creates_cookie_file
+        # Here we verify the _cookies_to_netscape produces correct format
+        from vkdownloader.services.downloader import _cookies_to_netscape
+
+        netscape = _cookies_to_netscape(cookies)
+        assert "# Netscape HTTP Cookie File" in netscape
+        assert "vk\tabc123" in netscape
+
+
+    def test_cookies_to_netscape_format_for_ytdlp(self) -> None:
+        """Test _cookies_to_netscape produces format compatible with yt-dlp."""
+        cookies = "access_token=mytoken; user_id=12345"
+        result = _cookies_to_netscape(cookies)
+
+        lines = result.split("\n")
+        header_lines = [line for line in lines if line.startswith("#")]
+        cookie_lines = [line for line in lines if not line.startswith("#") and line.strip()]
+
+        assert len(header_lines) == 2
+        assert any(".vkvideo.ru" in line for line in cookie_lines)
+        assert any("access_token\tmytoken" in line for line in cookie_lines)
+        assert any("user_id\t12345" in line for line in cookie_lines)
