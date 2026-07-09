@@ -11,6 +11,7 @@ from .models.enums import QualityEnum
 from .services.downloader import HLSDownloader
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
+from .utils.security import validate_output_path
 
 app = typer.Typer(
     name="vkdownloader",
@@ -44,11 +45,14 @@ def download(
         selector = QualitySelector()
         stream = selector.select(video.streams, quality)
 
+        # Validate output directory to prevent path traversal
+        validated_output = validate_output_path(output, warning=False)
+
         # Ensure output directory exists
-        output.mkdir(parents=True, exist_ok=True)
+        validated_output.mkdir(parents=True, exist_ok=True)
 
         # Generate output filename
-        output_file = output / f"{video.id}_{stream.quality}.mp4"
+        output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
         downloader = HLSDownloader()
         result = await downloader.download_with_ffmpeg(
@@ -126,10 +130,13 @@ def batch_download(
             selector = QualitySelector()
             stream = selector.select(video.streams, quality)
 
-            # Ensure output directory exists
-            output.mkdir(parents=True, exist_ok=True)
+            # Validate output directory to prevent path traversal
+            validated_output = validate_output_path(output, warning=False)
 
-            output_file = output / f"{video.id}_{stream.quality}.mp4"
+            # Ensure output directory exists
+            validated_output.mkdir(parents=True, exist_ok=True)
+
+            output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
             downloader = HLSDownloader()
             result = await downloader.download_with_ffmpeg(

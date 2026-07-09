@@ -10,6 +10,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..services.extractor import VKVideoExtractor
+from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -109,6 +110,9 @@ async def download_hls_with_resume(
     """
     if settings is None:
         settings = Settings()
+
+    # Validate output path to prevent path traversal
+    output_file = validate_output_path(output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
     metadata_file = output_file.parent / f".{output_file.stem}_progress.json"

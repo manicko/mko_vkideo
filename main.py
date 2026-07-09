@@ -10,6 +10,7 @@ from vkdownloader.models.enums import DownloadMethod, QualityEnum
 from vkdownloader.services.downloader import HLSDownloader, download_hls_with_resume
 from vkdownloader.services.extractor import VKVideoExtractor
 from vkdownloader.services.quality import QualitySelector
+from vkdownloader.utils.security import validate_output_path
 
 logger = get_logger(__name__)
 
@@ -54,8 +55,10 @@ async def download_video(
     selector = QualitySelector()
     stream = selector.select(streams, quality)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{video_id}_{stream.quality}.mp4"
+    # Validate output directory to prevent path traversal
+    validated_output = validate_output_path(output_dir, warning=False)
+    validated_output.mkdir(parents=True, exist_ok=True)
+    output_file = validated_output / f"{video_id}_{stream.quality}.mp4"
 
     # Get m3u8 URL
     m3u8_url = str(stream.url)
