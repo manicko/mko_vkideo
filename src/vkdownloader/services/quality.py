@@ -2,6 +2,7 @@
 
 from structlog import get_logger
 
+from ..exceptions import QualityNotAvailableError
 from ..models.enums import QualityEnum
 from ..models.video import Stream
 
@@ -24,6 +25,7 @@ class QualitySelector:
 
         Raises:
             ValueError: If streams list is empty.
+            QualityNotAvailableError: If requested quality is not available.
         """
         if not streams:
             raise ValueError("Cannot select from empty streams list")
@@ -43,12 +45,10 @@ class QualitySelector:
                     if stream_quality == quality_str or stream.quality == quality_str:
                         logger.debug("selected_matching_quality", quality=stream.quality)
                         return stream
-                # Fallback to best available
-                result = max(streams, key=lambda s: s.height or 0)
-                logger.debug(
-                    "quality_not_found_fallback_to_best",
-                    requested=str(quality),
-                    fallback=result.quality,
+                # Quality not available - raise specific error
+                available_qualities = [s.quality for s in streams]
+                raise QualityNotAvailableError(
+                    f"Requested quality '{quality}' not available. Available: {available_qualities}"
                 )
 
         return result

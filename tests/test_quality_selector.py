@@ -2,6 +2,7 @@
 
 import pytest
 
+from vkdownloader.exceptions import QualityNotAvailableError
 from vkdownloader.models.enums import QualityEnum, StreamFormat
 from vkdownloader.models.video import Stream
 from vkdownloader.services.quality import QualitySelector
@@ -32,17 +33,17 @@ def test_select_worst_quality() -> None:
     assert result.quality == "240"
 
 
-def test_fallback_to_best() -> None:
-    """Test quality selector falls back to best when requested quality not found."""
+def test_quality_not_available_raises() -> None:
+    """Test quality selector raises QualityNotAvailableError when requested quality not found."""
     selector = QualitySelector()
     streams = [
         Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
         Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
     ]
 
-    # Request 480p which doesn't exist - should fall back to 1080p
-    result = selector.select(streams, QualityEnum.Q480)
-    assert result.quality == "1080"
+    # Request 480p which doesn't exist - should raise QualityNotAvailableError
+    with pytest.raises(QualityNotAvailableError, match="Requested quality '480' not available"):
+        selector.select(streams, QualityEnum.Q480)
 
 
 def test_select_specific_quality() -> None:

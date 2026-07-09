@@ -9,6 +9,7 @@ from pydantic import HttpUrl
 from structlog import get_logger
 
 from ..config import Settings
+from ..exceptions import ExtractionError, VideoNotFoundError
 from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import StreamFormat
@@ -66,6 +67,8 @@ class VKVideoExtractor:
 
         Raises:
             ValueError: If URL does not contain valid video identifier.
+            VideoNotFoundError: If no streams are found for the video.
+            ExtractionError: If extraction fails.
         """
         owner_id, video_id = self.parse_video_id(url)
         video_id_full = f"{owner_id}_{video_id}"
@@ -73,6 +76,9 @@ class VKVideoExtractor:
         logger.info("extracting_streams", video_id=video_id_full, url=_strip_auth_params(url))
 
         streams = await self._extract_with_ytdlp(url, video_id_full)
+
+        if not streams:
+            raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
 
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
 
@@ -90,6 +96,10 @@ class VKVideoExtractor:
 
         Returns:
             Tuple of (streams list, cookies string for ffmpeg headers).
+
+        Raises:
+            ValueError: If URL does not contain valid video identifier.
+            VideoNotFoundError: If no streams are found for the video.
         """
         owner_id, video_id = self.parse_video_id(url)
         video_id_full = f"{owner_id}_{video_id}"
@@ -97,6 +107,9 @@ class VKVideoExtractor:
         logger.info("extracting_streams_with_cookies", video_id=video_id_full)
 
         streams, cookies = await self._extract_with_browser(url, video_id_full)
+
+        if not streams:
+            raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
 
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
         return streams, cookies
@@ -116,7 +129,7 @@ class VKVideoExtractor:
                 try:
                     info = ydl.extract_info(url, download=False)
                     if not info:
-                        return found_streams
+                        raise ExtractionError(f"No video info extracted for video: {_strip_auth_params(url)}")
 
                     formats = info.get("formats", [])
                     for f in formats:
@@ -136,8 +149,11 @@ class VKVideoExtractor:
                                     resolution=f"{width}x{height}" if width and height else None,
                                 )
                                 found_streams.append(stream)
+                except ExtractionError:
+                    raise
                 except Exception as e:
                     logger.warning("ytdlp_extraction_error", error=str(e))
+                    raise ExtractionError(f"Failed to extract video data: {e}") from e
 
             return found_streams
 
