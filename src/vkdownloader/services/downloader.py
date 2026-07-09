@@ -1,14 +1,15 @@
 """HLS downloader service with segment-level resume support."""
 
 import asyncio
-import aiohttp
 import json
 from pathlib import Path
 from urllib.parse import urljoin
 
+import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
+from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ class HLSDownloader:
         self, m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None
     ) -> Path | None:
         """Download HLS stream to MP4 using ffmpeg."""
-        logger.info("starting_ffmpeg_download", url=m3u8_url, output=str(output_file), quality=quality, has_cookies=bool(cookies))
+        logger.info("starting_ffmpeg_download", url=_strip_auth_params(m3u8_url), output=str(output_file), quality=quality, has_cookies=bool(cookies))
 
         cmd = self._build_ffmpeg_cmd(m3u8_url, output_file, cookies)
 

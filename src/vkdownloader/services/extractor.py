@@ -2,7 +2,6 @@
 
 import asyncio
 import re
-from typing import Any
 
 import yt_dlp
 from playwright.async_api import Page
@@ -15,6 +14,7 @@ from ..infrastructure.http_client import HttpClient
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import StreamFormat
 from ..models.video import Stream, VideoWithStreams
+from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
@@ -48,9 +48,9 @@ class VKVideoExtractor:
         """
         match = self.VIDEO_ID_PATTERN.search(url)
         if not match:
-            raise ValueError(f"Invalid VK video URL: {url}")
+            raise ValueError(f"Invalid VK video URL: {_strip_auth_params(url)}")
         owner_id, video_id = match.group(1), match.group(2)
-        logger.debug("parsed_video_id", owner_id=owner_id, video_id=video_id, url=url)
+        logger.debug("parsed_video_id", owner_id=owner_id, video_id=video_id, url=_strip_auth_params(url))
         return owner_id, video_id
 
     async def extract_streams(self, url: str) -> VideoWithStreams:
@@ -71,7 +71,7 @@ class VKVideoExtractor:
         owner_id, video_id = self.parse_video_id(url)
         video_id_full = f"{owner_id}_{video_id}"
 
-        logger.info("extracting_streams", video_id=video_id_full, url=url)
+        logger.info("extracting_streams", video_id=video_id_full, url=_strip_auth_params(url))
 
         streams = await self._extract_with_ytdlp(url, video_id_full)
 
@@ -95,7 +95,7 @@ class VKVideoExtractor:
         owner_id, video_id = self.parse_video_id(url)
         video_id_full = f"{owner_id}_{video_id}"
 
-        logger.info("extracting_streams_with_cookies", video_id=video_id_full, url=url)
+        logger.info("extracting_streams_with_cookies", video_id=video_id_full)
 
         streams, cookies = await self._extract_with_browser(url, video_id_full)
 
@@ -169,7 +169,7 @@ class VKVideoExtractor:
             except Exception as e:
                 logger.debug("failed_to_capture_cookies", error=str(e))
 
-            logger.debug("captured_m3u8_urls", urls=monitor.m3u8_urls)
+            logger.debug("captured_m3u8_urls", urls=[_strip_auth_params(u) for u in monitor.m3u8_urls])
 
             if monitor.m3u8_urls:
                 stream = Stream(
@@ -189,7 +189,6 @@ class VKVideoExtractor:
         for cookie in cookies:
             name = cookie.get("name", "")
             value = cookie.get("value", "")
-            domain = cookie.get("domain", "")
             # Include all cookies - they may be needed for CDN authentication
             cookie_parts.append(f"{name}={value}")
         return "; ".join(cookie_parts[:20])  # Limit to avoid header size issues
@@ -225,7 +224,7 @@ class VKVideoExtractor:
         Returns:
             List of Stream objects with extracted quality information.
         """
-        logger.debug("parsing_m3u8_playlist", url=url)
+        logger.debug("parsing_m3u8_playlist", url=_strip_auth_params(url))
 
         async with HttpClient(self.settings) as http_client:
             content = await http_client.get(url)

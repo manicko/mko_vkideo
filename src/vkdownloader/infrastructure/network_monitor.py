@@ -6,6 +6,8 @@ from typing import Any
 from playwright.async_api import Page
 from structlog import get_logger
 
+from ..utils.url_sanitizer import _strip_auth_params
+
 logger = get_logger(__name__)
 
 
@@ -55,7 +57,7 @@ class NetworkMonitor:
             normalized = self._normalize_url(url)
             if normalized not in self.m3u8_urls:
                 self.m3u8_urls.append(normalized)
-            logger.debug("m3u8_url_captured", url=normalized)
+            logger.debug("m3u8_url_captured", url=_strip_auth_params(normalized))
 
         # Also check for XHR responses containing stream URLs
         if "video" in url and response.headers.get("content-type", "").startswith("application/json"):
@@ -78,7 +80,7 @@ class NetworkMonitor:
                     normalized = self._normalize_url(value)
                     if normalized not in self.m3u8_urls:
                         self.m3u8_urls.append(normalized)
-                        logger.debug("m3u8_url_found_in_json", url=normalized)
+                        logger.debug("m3u8_url_found_in_json", url=_strip_auth_params(normalized))
                 elif isinstance(value, (dict, list)):
                     self._extract_urls_from_json(value)
         elif isinstance(data, list):
