@@ -327,6 +327,7 @@ Application settings with defaults and environment variable support.
 | user_agent | Chrome 120 UA | User agent string for requests |
 | download_dir | ~/Downloads/vkdownloader | Directory for downloaded videos |
 | max_concurrent_downloads | 4 | Maximum concurrent downloads |
-| timeout_seconds | 30 | Request timeout in seconds |
-| request_delay_min | 2.0 | Minimum request delay |
-| request_delay_max | 5.0 | Maximum request delay |
+| download_timeout | 300 | Download timeout in seconds |
+| ssl_verify | True | Verify SSL certificates for CDN connections |
+
+

@@ -13,16 +13,6 @@ logger: structlog.BoundLogger = structlog.get_logger(__name__)
 class Settings(BaseSettings):
     """Application settings with defaults and environment variable support."""
 
-    # VK API settings
-    vk_api_url: str = Field(
-        default="https://api.vk.com/method",
-        description="VK API base URL",
-    )
-    vk_api_version: str = Field(
-        default="5.199",
-        description="VK API version",
-    )
-
     # Browser Automation settings
     user_agent: str = Field(
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -40,27 +30,11 @@ class Settings(BaseSettings):
         default="ru-RU",
         description="Locale for browser stealth configuration",
     )
-    request_delay_min: float = Field(
-        default=2.0,
-        ge=0,
-        description="Minimum request delay in seconds",
-    )
-    request_delay_max: float = Field(
-        default=5.0,
-        ge=0,
-        description="Maximum request delay in seconds",
-    )
     max_retries: int = Field(
         default=3,
         ge=1,
         le=10,
         description="Maximum retry attempts for failed requests",
-    )
-    concurrency: int = Field(
-        default=8,
-        ge=1,
-        le=32,
-        description="Concurrency level for downloads",
     )
     download_timeout: int = Field(
         default=300,
@@ -83,12 +57,6 @@ class Settings(BaseSettings):
         ge=1,
         le=16,
         description="Maximum concurrent downloads",
-    )
-    timeout_seconds: int = Field(
-        default=30,
-        ge=5,
-        le=300,
-        description="Request timeout in seconds",
     )
     download_method: str = Field(
         default="auto",

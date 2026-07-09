@@ -11,9 +11,7 @@ def test_settings() -> Settings:
     return Settings(
         download_dir=Settings.model_fields["download_dir"].default,
         max_concurrent_downloads=2,
-        timeout_seconds=10,
         max_retries=1,
-        concurrency=2,
     )
 
 
