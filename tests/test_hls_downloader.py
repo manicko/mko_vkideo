@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.services.downloader import (
     HLSDownloader,
     _cleanup_segments,
@@ -184,10 +185,12 @@ class TestDownloadHlsWithResume:
             return_value=None,
         ):
             result = await download_hls_with_resume(
-                video_url="https://vkvideo.ru/video-12345_67890",
-                m3u8_url="https://example.com/video.m3u8",
-                output_file=output_path,
-                settings=test_settings,
+                HLSDownloadRequest(
+                    video_url="https://vkvideo.ru/video-12345_67890",
+                    m3u8_url="https://example.com/video.m3u8",
+                    output_file=output_path,
+                    settings=test_settings,
+                )
             )
 
         assert result is None
@@ -217,10 +220,12 @@ class TestDownloadHlsWithResume:
                 return_value=False,
             ):
                 result = await download_hls_with_resume(
-                    video_url="https://vkvideo.ru/video-12345_67890",
-                    m3u8_url="https://example.com/video.m3u8",
-                    output_file=output_path,
-                    settings=test_settings,
+                    HLSDownloadRequest(
+                        video_url="https://vkvideo.ru/video-12345_67890",
+                        m3u8_url="https://example.com/video.m3u8",
+                        output_file=output_path,
+                        settings=test_settings,
+                    )
                 )
 
         assert result is None

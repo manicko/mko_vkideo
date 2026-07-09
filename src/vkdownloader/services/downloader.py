@@ -10,6 +10,7 @@ import yt_dlp
 from structlog import get_logger
 
 from ..config import Settings
+from ..models.dtos import HLSDownloadRequest
 from ..models.enums import DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
@@ -85,15 +86,7 @@ class HLSDownloader:
         return output_file
 
 
-async def download_hls_with_resume(
-    video_url: str,
-    m3u8_url: str,
-    output_file: Path,
-    quality: str = "best",
-    cookies: str | None = None,
-    settings: Settings | None = None,
-    extractor: VKVideoExtractor | None = None,
-) -> Path | None:
+async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
 
@@ -102,22 +95,18 @@ async def download_hls_with_resume(
     to handle large number of segments.
 
     Args:
-        video_url: Original VK video URL (for token refresh on 403/410).
-        m3u8_url: URL of the HLS m3u8 playlist.
-        output_file: Path where the output MP4 file will be saved.
-        quality: Quality identifier for logging purposes.
-        cookies: Optional cookies from browser session for authentication.
-        settings: Application settings.
-        extractor: Optional extractor for token refresh on retry.
+        request: HLSDownloadRequest containing all download parameters.
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.
     """
-    if settings is None:
+    if request.settings is None:
         settings = Settings()
+    else:
+        settings = request.settings
 
     # Validate output path to prevent path traversal
-    output_file = validate_output_path(output_file)
+    output_file = validate_output_path(request.output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
     metadata_file = output_file.parent / f".{output_file.stem}_progress.json"
@@ -130,13 +119,14 @@ async def download_hls_with_resume(
             "User-Agent": settings.user_agent,
             "Referer": "https://vkvideo.ru/",
         }
-        if cookies:
-            headers["Cookie"] = cookies
+        if request.cookies:
+            headers["Cookie"] = request.cookies
 
         connector = aiohttp.TCPConnector(limit=10)
         async with aiohttp.ClientSession(connector=connector) as session:
             playlist_content = await _fetch_playlist_with_retry(
-                session, video_url, m3u8_url, headers, extractor, settings
+                session, request.video_url, request.m3u8_url, headers,
+                request.extractor, settings
             )
             if not playlist_content:
                 return None
@@ -148,7 +138,7 @@ async def download_hls_with_resume(
             for i in range(downloaded_count, len(segments)):
                 segment_url = segments[i]
                 if not segment_url.startswith("http"):
-                    segment_url = urljoin(m3u8_url, segment_url)
+                    segment_url = urljoin(request.m3u8_url, segment_url)
 
                 segment_path = segments_dir / f"{i:05d}.ts"
                 if not segment_path.exists():
@@ -429,7 +419,15 @@ async def download_with_ytdlp_with_resume_fallback(
                         validated_output.unlink()
                         # Continue to segment download
                         segment_result = await download_hls_with_resume(
-                            video_url, m3u8_url, validated_output, quality, cookies, settings, extractor
+                            HLSDownloadRequest(
+                                video_url=video_url,
+                                m3u8_url=m3u8_url,
+                                output_file=validated_output,
+                                quality=quality,
+                                cookies=cookies,
+                                settings=settings,
+                                extractor=extractor,
+                            )
                         )
                         if segment_result:
                             return segment_result
@@ -537,7 +535,15 @@ async def perform_download(
             if result is None:
                 logger.info("ffmpeg_failed_fallback_to_segment_download")
                 result = await download_hls_with_resume(
-                    url, m3u8_url, output_file, quality, cookies, settings, extractor
+                    HLSDownloadRequest(
+                        video_url=url,
+                        m3u8_url=m3u8_url,
+                        output_file=output_file,
+                        quality=quality,
+                        cookies=cookies,
+                        settings=settings,
+                        extractor=extractor,
+                    )
                 )
             return result
         case DownloadMethod.AUTO:
