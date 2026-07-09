@@ -4,14 +4,17 @@ import asyncio
 from pathlib import Path
 
 import typer
+from structlog import get_logger
 from tqdm import tqdm
 
 from .config import Settings, setup_logging
-from .models.enums import QualityEnum
-from .services.downloader import HLSDownloader
+from .models.enums import DownloadMethod, QualityEnum
+from .services.downloader import perform_download
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
 from .utils.security import validate_output_path
+
+logger = get_logger(__name__)
 
 app = typer.Typer(
     name="vkdownloader",
@@ -29,6 +32,12 @@ def download(
         "-o",
         help="Output directory for downloaded video",
     ),
+    method: DownloadMethod = typer.Option(  # noqa: B008
+        DownloadMethod.AUTO,
+        "--method",
+        "-m",
+        help="Download method: yt-dlp, ffmpeg, or auto",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -39,8 +48,16 @@ def download(
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
-        extractor = VKVideoExtractor()
+        settings = Settings()
+        extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
+
+        # Print available qualities
+        if video.streams:
+            logger.info("available_streams", count=len(video.streams))
+            selector = QualitySelector()
+            available = selector.list_available_qualities(video.streams)
+            logger.info("available_qualities", qualities=available[:8])
 
         selector = QualitySelector()
         stream = selector.select(video.streams, quality)
@@ -54,13 +71,9 @@ def download(
         # Generate output filename
         output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
-        downloader = HLSDownloader()
-        result = await downloader.download_with_ffmpeg(
-            str(stream.url),
-            output_file,
-            quality=str(stream.quality),
+        return await perform_download(
+            url, str(stream.quality), output_file, method, extractor, settings
         )
-        return result
 
     try:
         result = asyncio.run(_download())
@@ -102,6 +115,12 @@ def batch_download(
         "-o",
         help="Output directory for downloaded videos",
     ),
+    method: DownloadMethod = typer.Option(  # noqa: B008
+        DownloadMethod.AUTO,
+        "--method",
+        "-m",
+        help="Download method: yt-dlp, ffmpeg, or auto",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
@@ -124,7 +143,8 @@ def batch_download(
     async def _download_single(url: str) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
-            extractor = VKVideoExtractor()
+            settings = Settings()
+            extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 
             selector = QualitySelector()
@@ -138,11 +158,8 @@ def batch_download(
 
             output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
-            downloader = HLSDownloader()
-            result = await downloader.download_with_ffmpeg(
-                str(stream.url),
-                output_file,
-                quality=str(stream.quality),
+            result = await perform_download(
+                url, str(stream.quality), output_file, method, extractor, settings
             )
 
             status = "success" if result else "failed"

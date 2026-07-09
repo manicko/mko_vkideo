@@ -89,7 +89,7 @@ https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 
 For fastest download (~1MB/s):
 ```bash
-python main.py "VIDEO_URL" QUALITY . ffmpeg
+vkdownloader download --method ffmpeg "VIDEO_URL"
 ```
 - Browser opens (user must wait for page load)
 - m3u8 URL captured with fresh token
@@ -98,7 +98,7 @@ python main.py "VIDEO_URL" QUALITY . ffmpeg
 
 For most reliable download (~100KB/s):
 ```bash
-python main.py "VIDEO_URL" QUALITY . yt-dlp
+vkdownloader download --method yt-dlp "VIDEO_URL"
 ```
 - Always works but significantly slower
 - yt-dlp handles all token management internally

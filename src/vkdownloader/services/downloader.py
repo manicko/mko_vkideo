@@ -6,14 +6,19 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import aiohttp
+import yt_dlp
 from structlog import get_logger
 
 from ..config import Settings
+from ..models.enums import DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
+
+# Maximum retry attempts for getting new token on resume failure
+MAX_RESUME_RETRIES = 3
 
 
 class HLSDownloader:
@@ -354,3 +359,192 @@ def _cleanup_segments(segments_dir: Path, metadata_file: Path) -> None:
     except OSError:
         pass
     metadata_file.unlink(missing_ok=True)
+
+
+async def download_with_ytdlp_with_resume_fallback(
+    video_url: str,
+    m3u8_url: str,
+    output_file: Path,
+    quality: str,
+    extractor: VKVideoExtractor | None,
+    settings: Settings | None = None,
+) -> Path | None:
+    """Download using yt-dlp with automatic segment-based resume on failure.
+
+    Flow:
+    1. Try yt-dlp download
+    2. On failure with partial file: get fresh token via browser + switch to segment download
+    3. Segment download resumes from last checkpoint
+
+    Args:
+        video_url: Original VK video URL.
+        m3u8_url: HLS playlist URL (may be stale).
+        output_file: Output file path.
+        quality: Quality string.
+        extractor: VKVideoExtractor for token refresh.
+        settings: Application settings.
+
+    Returns:
+        Path to downloaded file on success, None on failure.
+    """
+    if settings is None:
+        settings = Settings()
+
+    retry_count = 0
+
+    while retry_count <= MAX_RESUME_RETRIES:
+        result = await _download_with_ytdlp(video_url, output_file, quality, settings)
+
+        if result:
+            if retry_count > 0:
+                logger.info("download_completed_after_retries", retries=retry_count)
+            return result
+
+        retry_count += 1
+
+        # Check for partial file - switch to segment download with fresh token
+        validated_output = validate_output_path(output_file, warning=False)
+        if validated_output.exists() and validated_output.stat().st_size > 0:
+            logger.warning(
+                "download_interrupted_switching_to_segments",
+                path=str(validated_output),
+                size=validated_output.stat().st_size,
+                retry=retry_count,
+            )
+
+            # Get fresh m3u8 URL with new token via browser
+            if retry_count <= MAX_RESUME_RETRIES:
+                logger.info("attempting_segment_resume", retry=retry_count)
+
+                try:
+                    if extractor is None:
+                        extractor = VKVideoExtractor(settings=settings)
+                    browser_streams, cookies = await extractor.extract_streams_with_cookies(
+                        video_url
+                    )
+                    if browser_streams:
+                        m3u8_url = str(browser_streams[0].url)
+                        logger.info("fresh_token_obtained_for_resume")
+                        # Remove partial file to start clean segment download
+                        validated_output.unlink()
+                        # Continue to segment download
+                        segment_result = await download_hls_with_resume(
+                            video_url, m3u8_url, validated_output, quality, cookies, settings, extractor
+                        )
+                        if segment_result:
+                            return segment_result
+                except Exception as e:
+                    logger.warning("failed_to_refresh_token", error=str(e))
+            else:
+                logger.error("max_retries_exceeded")
+                return None
+        else:
+            # No partial file and no success - original failure, no point in segment download
+            return None
+
+    # All retries exhausted without success
+    return None
+
+
+async def _download_with_ytdlp(
+    video_url: str, output_file: Path, quality: str, settings: Settings
+) -> Path | None:
+    """Download using yt-dlp."""
+    quality_str = quality.replace("p", "") if quality else "720"
+    user_agent = settings.user_agent
+
+    def _download() -> str:
+        ydl_opts = {
+            "outtmpl": str(output_file),
+            "quiet": False,
+            "no_warnings": True,
+            "format": f"best[height<={quality_str}]",
+            "nocheckcertificate": True,
+            "hls_prefer_native": True,
+            "http_headers": {
+                "User-Agent": user_agent,
+                "Referer": "https://vkvideo.ru/",
+            },
+            "socket_timeout": 180,
+            "retries": 10,
+            "fragment_retries": 10,
+            "throttledratelimit": 0,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+        return str(output_file)
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, _download)
+        return Path(result)
+    except Exception as e:
+        logger.error("download_failed", error=str(e))
+        return None
+
+
+async def perform_download(
+    url: str,
+    quality: str,
+    output_file: Path,
+    method: DownloadMethod,
+    extractor: VKVideoExtractor | None = None,
+    settings: Settings | None = None,
+) -> Path | None:
+    """Perform video download using the specified method.
+
+    Args:
+        url: VK Video URL to download.
+        quality: Quality string (e.g., "720", "1080").
+        output_file: Output file path.
+        method: Download method (yt-dlp, ffmpeg, or auto).
+        extractor: Optional VKVideoExtractor for token refresh.
+        settings: Application settings.
+
+    Returns:
+        Path to downloaded file on success, None on failure.
+    """
+    if settings is None:
+        settings = Settings()
+
+    if extractor is None:
+        extractor = VKVideoExtractor(settings=settings)
+
+    # Get m3u8 URL via yt-dlp (most reliable for extraction)
+    video_data = await extractor.extract_streams(url)
+    streams = video_data.streams
+
+    if not streams:
+        logger.error("no_streams_found", url=_strip_auth_params(url))
+        return None
+
+    m3u8_url = str(streams[0].url)
+
+    match method:
+        case DownloadMethod.YTDLP:
+            return await download_with_ytdlp_with_resume_fallback(
+                url, m3u8_url, output_file, quality, extractor, settings
+            )
+        case DownloadMethod.FFMPEG:
+            # For ffmpeg: get cookies via browser first
+            browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+            if browser_streams:
+                m3u8_url = str(browser_streams[0].url)
+            downloader = HLSDownloader(settings=settings)
+            result = await downloader.download_with_ffmpeg(
+                m3u8_url, output_file, quality, cookies
+            )
+            if result is None:
+                logger.info("ffmpeg_failed_fallback_to_segment_download")
+                result = await download_hls_with_resume(
+                    url, m3u8_url, output_file, quality, cookies, settings, extractor
+                )
+            return result
+        case DownloadMethod.AUTO:
+            # Auto: try yt-dlp first (more reliable), segment download for resume
+            return await download_with_ytdlp_with_resume_fallback(
+                url, m3u8_url, output_file, quality, extractor, settings
+            )
+        case _:
+            logger.error("unknown_download_method", method=str(method))
+            return None
