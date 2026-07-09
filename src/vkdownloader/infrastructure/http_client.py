@@ -3,6 +3,7 @@
 import asyncio
 import ssl
 from collections.abc import Callable
+from io import BufferedWriter
 from pathlib import Path
 
 import aiohttp
@@ -106,6 +107,34 @@ class HttpClient:
 
         raise DownloadError(f"Failed to fetch {url} after {self.settings.max_retries} attempts") from last_error
 
+    @staticmethod
+    def _write_chunk_to_file(chunk: bytes, file_handle: BufferedWriter) -> int:
+        """
+        Write a chunk to file and return bytes written.
+
+        Args:
+            chunk: Bytes data to write.
+            file_handle: Open file handle for writing.
+
+        Returns:
+            Number of bytes written.
+        """
+        file_handle.write(chunk)
+        return len(chunk)
+
+    @staticmethod
+    def _update_progress(downloaded: int, total: int, callback: Callable[[int, int], None] | None) -> None:
+        """
+        Update progress via callback if provided.
+
+        Args:
+            downloaded: Bytes downloaded so far.
+            total: Total bytes to download.
+            callback: Optional progress callback function.
+        """
+        if callback is not None:
+            callback(downloaded, total)
+
     async def download_file(
         self,
         url: str,
@@ -139,11 +168,8 @@ class HttpClient:
 
                 with output_path.open("wb") as f:
                     async for chunk in response.content.iter_chunked(buffer_size):
-                        f.write(chunk)
-                        bytes_downloaded += len(chunk)
-
-                        if progress_callback is not None:
-                            progress_callback(bytes_downloaded, total_bytes)
+                        bytes_downloaded += self._write_chunk_to_file(chunk, f)
+                        self._update_progress(bytes_downloaded, total_bytes, progress_callback)
 
                 logger.info("download_completed", url=url, path=str(output_path))
 
