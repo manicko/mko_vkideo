@@ -4,7 +4,7 @@ import asyncio
 import re
 
 import yt_dlp
-from playwright.async_api import Page
+from playwright.async_api import Cookie, Page
 from pydantic import HttpUrl
 from structlog import get_logger
 
@@ -182,7 +182,7 @@ class VKVideoExtractor:
 
         return streams, cookies_str
 
-    def _format_cookies_for_ffmpeg(self, cookies: list[dict]) -> str:
+    def _format_cookies_for_ffmpeg(self, cookies: list[Cookie]) -> str:
         """Format cookies list for ffmpeg HTTP cookie header."""
         cookie_parts = []
         for cookie in cookies:
