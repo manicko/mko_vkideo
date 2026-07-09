@@ -10,7 +10,6 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..infrastructure.browser import BrowserManager
-from ..infrastructure.http_client import HttpClient
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import StreamFormat
 from ..models.video import Stream, VideoWithStreams
@@ -213,68 +212,3 @@ class VKVideoExtractor:
             logger.debug("clicked_video_player")
         except Exception:
             pass
-
-    async def _parse_m3u8_playlist(self, url: str) -> list[Stream]:
-        """
-        Download and parse m3u8 playlist to extract quality variants.
-
-        Args:
-            url: URL of m3u8 playlist to parse.
-
-        Returns:
-            List of Stream objects with extracted quality information.
-        """
-        logger.debug("parsing_m3u8_playlist", url=_strip_auth_params(url))
-
-        async with HttpClient(self.settings) as http_client:
-            content = await http_client.get(url)
-
-        streams = []
-        lines = content.split("\n")
-
-        from urllib.parse import urljoin
-
-        for i, line in enumerate(lines):
-            if line.startswith("#EXT-X-STREAM-INF"):
-                # Parse the stream info line
-                bandwidth_match = re.search(r"BANDWIDTH=(\d+)", line)
-                resolution_match = re.search(r"RESOLUTION=(\d+x\d+)", line)
-
-                # Get the URL from next line
-                if i + 1 < len(lines):
-                    stream_url = lines[i + 1]
-                    if stream_url and not stream_url.startswith("#"):
-                        # Resolve relative URLs
-                        if not stream_url.startswith("http"):
-                            stream_url = urljoin(url, stream_url)
-
-                        # Parse resolution
-                        width = None
-                        height = None
-                        if resolution_match:
-                            resolution = resolution_match.group(1)
-                            width, height = map(int, resolution.split("x"))
-
-                        stream = Stream(
-                            url=HttpUrl(stream_url),
-                            format=StreamFormat.HLS,
-                            quality=f"{height}p" if height else "unknown",
-                            bitrate=int(bandwidth_match.group(1)) if bandwidth_match else None,
-                            width=width,
-                            height=height,
-                        )
-                        streams.append(stream)
-
-        # Handle single stream (not a playlist)
-        if not streams:
-            if url.endswith(".m3u8"):
-                stream = Stream(
-                    url=HttpUrl(url),
-                    format=StreamFormat.HLS,
-                    quality="unknown",
-                    width=None,
-                    height=None,
-                )
-                streams.append(stream)
-
-        return streams
