@@ -162,16 +162,22 @@ def batch_download(
         pbar.close()
         return list(results)
 
-    results = asyncio.run(_run_batch_with_progress())
+    try:
+        results = asyncio.run(_run_batch_with_progress())
 
-    # Print results
-    for url, output_path, status in results:
-        typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))
+        # Print results
+        for url, output_path, status in results:
+            typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))
 
-    # Summary
-    successful = sum(1 for _, _, status in results if status == "success")
-    failed = len(results) - successful
-    typer.echo(f"\nCompleted: {successful} successful, {failed} failed")
+        # Summary
+        successful = sum(1 for _, _, status in results if status == "success")
+        failed = len(results) - successful
+        typer.echo(f"\nCompleted: {successful} successful, {failed} failed")
+
+    except KeyboardInterrupt:
+        pbar.close()
+        typer.echo("\nDownload cancelled", err=True)
+        raise typer.Exit(code=130) from None
 
 
 def cli() -> None:
