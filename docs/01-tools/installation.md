@@ -104,17 +104,23 @@ ruff check src/
 Create a `.env` file for custom settings:
 
 ```env
-# VK API
-VK_API_URL=https://api.vk.com/method
-VK_API_VERSION=5.199
+# Browser Automation settings
+USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+ACCEPT_LANGUAGE=ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+TIMEZONE=Europe/Moscow
+LOCALE=ru-RU
+MAX_RETRIES=3
+DOWNLOAD_TIMEOUT=300
+SSL_VERIFY=true
 
 # Download settings
 DOWNLOAD_DIR=~/Downloads/vkdownloader
 MAX_CONCURRENT_DOWNLOADS=4
-TIMEOUT_SECONDS=30
+DOWNLOAD_METHOD=auto
 
 # Logging
 LOG_LEVEL=INFO
+LOG_FILE=
 ```
 
 ## Verification

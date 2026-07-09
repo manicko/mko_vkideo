@@ -16,15 +16,17 @@ Async Python module to download videos from vkvideo.ru with quality selection su
 
 ## Purpose
 
-VK Video Downloader provides a programmatic and CLI interface for downloading videos from VK Video (vkvideo.ru). It uses browser automation to extract HLS streams and ffmpeg for direct download-to-MP4 conversion.
+VK Video Downloader provides a programmatic and CLI interface for downloading videos from VK Video (vkvideo.ru). It uses yt-dlp for stream extraction and ffmpeg for direct download-to-MP4 conversion, with segment-level resume support for handling token expiration.
 
 ## Features
 
-- Extract video streams from VK video URLs
+- Extract video streams from VK video URLs using yt-dlp or browser automation
 - Quality selection (240p, 360p, 480p, 720p, 1080p, best, worst)
+- Download method selection (yt-dlp, ffmpeg, auto)
+- Segment-level resume on token expiration
 - Batch download support via CLI
-- Stealth browser automation to bypass bot detection
-- Adaptive throttling for respectful downloading
+- Path traversal prevention for security
+- SSL verification enabled by default
 
 ## Installation
 
@@ -48,6 +50,16 @@ vkdownloader download "https://vkvideo.ru/video-123_456"
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720
 ```
 
+### Download with Specific Method
+
+```bash
+# Use ffmpeg for faster download (~1MB/s)
+vkdownloader download "https://vkvideo.ru/video-123_456" --method ffmpeg
+
+# Use yt-dlp for higher reliability (~100KB/s)
+vkdownloader download "https://vkvideo.ru/video-123_456" --method yt-dlp
+```
+
 ### Download to Specific Directory
 
 ```bash
@@ -67,27 +79,18 @@ vkdownloader batch ./urls.txt --quality best
 ```python
 import asyncio
 from pathlib import Path
-from vkdownloader.services.extractor import VKVideoExtractor
-from vkdownloader.services.quality import QualitySelector
-from vkdownloader.services.downloader import HLSDownloader
-from vkdownloader.models.enums import QualityEnum
+from vkdownloader.services.downloader import perform_download
+from vkdownloader.models.enums import DownloadMethod
 
 async def download_video():
-    # Extract available streams
-    extractor = VKVideoExtractor()
-    video = await extractor.extract_streams("https://vkvideo.ru/video-123_456")
-    
-    # Select quality
-    selector = QualitySelector()
-    stream = selector.select(video.streams, QualityEnum.Q720)
-    
-    # Download
-    downloader = HLSDownloader()
-    output_path = await downloader.download_with_ffmpeg(
-        str(stream.url),
-        Path("output.mp4"),
-        quality="720"
+    # Simple download with method selection
+    result = await perform_download(
+        url="https://vkvideo.ru/video-123_456",
+        quality="720",
+        output_file=Path("output.mp4"),
+        method=DownloadMethod.AUTO,
     )
+    return result
 
 asyncio.run(download_video())
 ```

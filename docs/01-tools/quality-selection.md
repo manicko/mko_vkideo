@@ -33,12 +33,19 @@ VK Video Downloader supports the following quality options:
 
 ### Stream Extraction
 
-When extracting streams from a VK video URL, the `VKVideoExtractor` parses the HLS playlist to identify available quality variants:
+When extracting streams from a VK video URL, the `VKVideoExtractor` uses yt-dlp as the primary extraction method (handles VK protections):
 
-1. Navigates to the video page with stealth browser
-2. Intercepts network responses to capture m3u8 URLs
-3. Parses the HLS playlist for `#EXT-X-STREAM-INF` entries
-4. Extracts bandwidth and resolution for each stream variant
+1. Uses yt-dlp to extract available formats
+2. Filters formats to include only video streams (skips audio-only)
+3. Extracts height, width, and bitrate for each stream variant
+4. Creates Stream objects with quality strings in `{height}p` format
+
+For ffmpeg download method, `extract_streams_with_cookies()` additionally:
+
+1. Opens video page in stealth browser
+2. Captures cookies for CDN authentication
+3. Simulates video interaction to trigger stream loading
+4. Captures m3u8 URLs from network traffic
 
 ### Selection Algorithm
 
@@ -46,13 +53,14 @@ The `QualitySelector` uses the following logic:
 
 1. **BEST**: Returns the stream with the highest `height` value
 2. **WORST**: Returns the stream with the lowest `height` value
-3. **Specific resolution** (e.g., `720`): Finds exact match first, falls back to BEST if not found
+3. **Specific resolution** (e.g., `720`): Finds exact match first, raises `QualityNotAvailableError` if not found
 
 ### Stream Matching
 
-Streams are matched by comparing the `quality` field extracted from the HLS playlist:
+Streams are matched by comparing the `quality` field:
 
 - Quality string format: `{height}p` (e.g., "720p")
+- Also supports numeric format (e.g., "720" matches "720p")
 - Streams without height are assigned "unknown" quality
 
 ## CLI Usage
@@ -77,6 +85,16 @@ vkdownloader download "https://vkvideo.ru/video-123_456" --quality best
 
 # Worst available (smallest file)
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality worst
+```
+
+### Download with Specific Method
+
+```bash
+# Use ffmpeg for faster download (~1MB/s)
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method ffmpeg
+
+# Use yt-dlp for higher reliability (~100KB/s)
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method yt-dlp
 ```
 
 ### Batch Download with Quality
@@ -110,37 +128,21 @@ stream = selector.select(video.streams, QualityEnum.Q720)
 stream = selector.select(video.streams, QualityEnum.WORST)
 ```
 
-### Complete Download Flow
+### Complete Download Flow with Method Selection
 
 ```python
 import asyncio
 from pathlib import Path
-from vkdownloader.services.extractor import VKVideoExtractor
-from vkdownloader.services.quality import QualitySelector
-from vkdownloader.services.downloader import HLSDownloader
-from vkdownloader.models.enums import QualityEnum
+from vkdownloader.services.downloader import perform_download
+from vkdownloader.models.enums import DownloadMethod
 
 async def download_quality_example():
-    # Step 1: Extract streams
-    extractor = VKVideoExtractor()
-    video = await extractor.extract_streams("https://vkvideo.ru/video-123_456")
-    
-    # Step 2: See available qualities
-    selector = QualitySelector()
-    qualities = selector.list_available_qualities(video.streams)
-    print(f"Available qualities: {qualities}")
-    
-    # Step 3: Select quality
-    stream = selector.select(video.streams, QualityEnum.Q720)
-    
-    # Step 4: Download
-    downloader = HLSDownloader()
-    result = await downloader.download_with_ffmpeg(
-        str(stream.url),
-        Path(f"{video.id}_{stream.quality}.mp4"),
-        quality=str(stream.quality)
+    result = await perform_download(
+        url="https://vkvideo.ru/video-123_456",
+        quality="720",
+        output_file=Path("video_720.mp4"),
+        method=DownloadMethod.AUTO,  # or DownloadMethod.FFMPEG
     )
-    
     return result
 
 asyncio.run(download_quality_example())
@@ -151,7 +153,7 @@ asyncio.run(download_quality_example())
 If a specific quality is requested but not available:
 
 1. The selector attempts to find an exact match
-2. If no match is found, it falls back to the best available quality
-3. A debug log entry is created: `"quality_not_found_fallback_to_best"`
+2. If no match is found, `QualityNotAvailableError` is raised with available options listed
+3. Error message includes: `"Requested quality 'X' not available. Available: [...]`
 
-This ensures downloads never fail due to unavailable quality options.
+This ensures users are informed when their quality preference cannot be met.

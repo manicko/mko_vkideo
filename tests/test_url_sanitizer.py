@@ -1,7 +1,5 @@
 """Tests for URL sanitization utilities."""
 
-import pytest
-
 from vkdownloader.utils.url_sanitizer import _strip_auth_params
 
 

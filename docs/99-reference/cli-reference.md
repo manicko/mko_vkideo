@@ -43,7 +43,7 @@ vkdownloader = "vkdownloader.cli:cli"
 
 ### 1. `download` — Download a single video
 
-Download a video from vkvideo.ru with quality selection support.
+Download a video from vkvideo.ru with quality and method selection support.
 
 **Source:** `vkdownloader/cli.py` → `download()`
 
@@ -63,6 +63,7 @@ vkdownloader download [OPTIONS] URL
 |------|-------|------|---------|-------------|
 | `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `best`, `worst` |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 
 **Behavior:**
 
@@ -86,8 +87,8 @@ vkdownloader download [OPTIONS] URL
 # Download a video with best quality
 vkdownloader download "https://vkvideo.ru/video-12345_67890"
 
-# Download with specific quality
-vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720
+# Download with specific quality and method
+vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method ffmpeg
 
 # Download to specific directory
 vkdownloader download "https://vkvideo.ru/video-12345_67890" -o "./videos"
@@ -117,6 +118,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 |------|-------|------|---------|-------------|
 | `--quality` | | str | `best` | Video quality selection for all downloads |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 
 **Behavior:**
 
@@ -148,6 +150,18 @@ vkdownloader batch urls.txt --quality 1080 -o "./downloads"
 # https://vkvideo.ru/video-23456_78901
 # # This is a comment and will be ignored
 ```
+
+---
+
+## Download Method Options
+
+Available method values for `--method` option:
+
+| Value | Description |
+|-------|-------------|
+| `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
+| `ffmpeg` | Direct ffmpeg download with browser-captured cookies |
+| `auto` | Tries yt-dlp first, falls back to segment download on failure (default) |
 
 ---
 
@@ -186,4 +200,5 @@ Supports: Bash, Zsh, Fish, and PowerShell.
 ## See Also
 
 - [Configuration Guide](../11-guides/configuration.md) — detailed configuration options.
-- [Specification](../../docs/SPEC.md) — project specification and architecture.
+- [Quality Selection Guide](../01-tools/quality-selection.md) — quality options and selection.
+- [VK Downloader Overview](../01-tools/vkdownloader-overview.md) — architecture overview.
