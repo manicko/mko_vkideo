@@ -7,6 +7,8 @@ import structlog
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from vkdownloader.models.enums import DownloadMethod
+
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
 
@@ -58,8 +60,8 @@ class Settings(BaseSettings):
         le=16,
         description="Maximum concurrent downloads",
     )
-    download_method: str = Field(
-        default="auto",
+    download_method: DownloadMethod = Field(
+        default=DownloadMethod.AUTO,
         description="Download method: 'yt-dlp', 'ffmpeg', or 'auto'",
     )
 
