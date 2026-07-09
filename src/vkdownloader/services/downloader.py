@@ -601,8 +601,13 @@ async def perform_download(
 
     match method:
         case DownloadMethod.YTDLP:
+            # Get fresh m3u8 URL and cookies via browser for authenticated downloads
+            browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+            if browser_streams:
+                m3u8_url = str(browser_streams[0].url)
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings
+                url, m3u8_url, output_file, quality, extractor, settings,
+                cookies=cookies
             )
         case DownloadMethod.FFMPEG:
             # For ffmpeg: get cookies via browser first
