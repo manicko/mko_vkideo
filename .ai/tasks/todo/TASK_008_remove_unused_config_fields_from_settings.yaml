@@ -1,0 +1,49 @@
+# Phase 02 Validation Sources: CFG-002 (HIGH)
+# Removes unused configuration fields that create drift
+
+id: TASK_008_remove_unused_config_fields_from_settings
+
+title: Remove unused configuration fields from Settings
+
+priority: high
+
+source_reference: .ai\audit\99-validation\02-config-validated-findings.md
+
+source_section: CFG-002
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+  - path: tests/conftest.py
+    targets:
+      - type: fixture
+        name: settings
+  - path: docs/01-tools/api-reference.md
+    targets:
+      - type: section
+        name: settings_fields
+
+changes:
+  - action: remove_code
+    description: >
+      Remove the following unused fields from Settings model:
+      - vk_api_url, vk_api_version (VK API integration never implemented)
+      - concurrency (redundant with max_concurrent_downloads)
+      - timeout_seconds (redundant with download_timeout)
+      - request_delay_min, request_delay_max (AdaptiveThrottle never instantiated)
+      Update tests/conftest.py to remove these fields.
+      Update docs/api-reference.md to remove references.
+goals:
+  - Remove configuration drift
+  - Align settings with actual implementation
+  - Remove redundant fields
+acceptance_criteria:
+  - vk_api_url, vk_api_version removed from Settings
+  - concurrency removed from Settings
+  - timeout_seconds removed from Settings
+  - request_delay_min, request_delay_max removed from Settings
+  - tests/conftest.py updated to remove unused fields
+  - docs/01-tools/api-reference.md updated
+  - mypy passes for config.py

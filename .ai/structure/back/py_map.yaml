@@ -1,202 +1,206 @@
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\cli.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.cli
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.cli
   layer: unknown
   imports:
-  - __future__
-  - importlib.metadata
   - pathlib
-  - rich.console
-  - rich.table
-  - mko_telebot.core.config_reader
-  - mko_telebot.core.errors
-  - mko_telebot.core.paths
-  - mko_telebot.logging_setup
-  - mko_telebot.monitor
+  - tqdm
+  - config
+  - models.enums
+  - services.downloader
+  - services.extractor
+  - services.quality
   classes: []
   functions:
-  - init
-  - validate
-  - run
-  - config
-  - version
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\logging_setup.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.logging_setup
+  - download
+  - batch_download
+  - cli
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.config
   layer: unknown
   imports:
-  - __future__
   - pathlib
-  - typing
-  - mko_telebot.core.config_reader
-  - mko_telebot.core.errors
-  - mko_telebot.core.paths
-  classes: []
+  - pydantic
+  - pydantic_settings
+  classes:
+  - Settings
   functions:
   - setup_logging
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\main.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.main
-  layer: unknown
-  imports:
-  - mko_telebot.cli
-  classes: []
-  functions:
-  - main
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\monitor.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.monitor
-  layer: unknown
-  imports:
-  - pathlib
-  - telethon
-  - telethon.errors
-  - mko_telebot.core
-  - mko_telebot.core.config_reader
-  - mko_telebot.core.errors
-  - mko_telebot.core.models
-  classes: []
-  functions:
-  - create_client
-  - build_message_link
-  - launcher
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\__init__.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.__init__
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\exceptions.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.exceptions
   layer: unknown
   imports: []
-  classes: []
+  classes:
+  - VKDownloadError
+  - VideoNotFoundError
+  - QualityNotAvailableError
+  - ExtractionError
+  - DownloadError
   functions: []
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\chats_config.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.chats_config
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\adaptive_throttle.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.adaptive_throttle
   layer: unknown
   imports:
-  - __future__
+  - structlog
+  classes:
+  - AdaptiveThrottle
+  functions:
+  - __init__
+  - _calculate_base_delay
+  - on_rate_limited
+  - on_success
+  - get_current_delay
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.browser
+  layer: unknown
+  imports:
+  - pathlib
+  - playwright.async_api
+  - structlog
+  - config
+  classes:
+  - BrowserManager
+  functions:
+  - create_stealth_context
+  - __init__
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\http_client.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.http_client
+  layer: unknown
+  imports:
+  - collections.abc
+  - pathlib
+  - structlog
+  - config
+  - exceptions
+  classes:
+  - HttpClient
+  functions:
+  - __init__
+  - session
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.network_monitor
+  layer: unknown
+  imports:
+  - typing
+  - playwright.async_api
+  - structlog
+  classes:
+  - NetworkMonitor
+  functions:
+  - __init__
+  - _setup_interceptors
+  - _normalize_url
+  - _extract_urls_from_json
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\__init__.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.__init__
+  layer: unknown
+  imports:
+  - adaptive_throttle
+  - browser
+  - http_client
+  - network_monitor
+  classes: []
+  functions: []
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\dtos.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.dtos
+  layer: unknown
+  imports:
+  - pydantic
+  - enums
+  - video
+  classes:
+  - DownloadRequest
+  - DownloadResult
+  functions: []
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\enums.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.enums
+  layer: unknown
+  imports:
   - enum
-  - pydantic
   classes:
-  - LogLevel
-  - ChannelConfig
-  - ChannelDefaults
-  - ChatsConfig
-  functions:
-  - strip_defaults_from_channels
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\config_reader.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.config_reader
-  layer: unknown
-  imports:
-  - __future__
-  - pathlib
-  - typing
-  - mko_telebot.core.errors
-  - mko_telebot.core.models
-  - mko_telebot.core.paths
-  classes:
-  - TelepostConfigReader
-  functions:
-  - resolve_path
-  - _load_yaml
-  - _merge_dicts
-  - __init__
-  - from_user_dir
-  - validate_files
-  - load
-  - load_logging_config
-  - settings
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\errors.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.errors
-  layer: unknown
-  imports:
-  - __future__
-  - pathlib
-  classes:
-  - MkoTelebotError
-  - ConfigError
-  - TelegramAuthError
-  - TelegramServiceError
-  - StateError
-  functions:
-  - __init__
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\models.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.models
-  layer: unknown
-  imports:
-  - __future__
-  - pydantic
-  - chats_config
-  - telethon_models
-  classes:
-  - TelepostSettings
+  - QualityEnum
+  - StreamFormat
+  - DownloadStatus
+  - DownloadMethod
   functions: []
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\parser.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.parser
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\video.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.video
   layer: unknown
   imports:
-  - dataclasses
-  classes:
-  - ASTNode
-  - ExactMatch
-  - OrOperation
-  - Sequence
-  - Wildcard
-  - Exclusion
-  - PatternParser
-  functions:
-  - __init__
-  - _tokenize
-  - _peek
-  - _consume
-  - parse
-  - _parse_or_expr
-  - _parse_and_expr
-  - _parse_term
-  - ast_to_regex
-  - patterns_for_node
-  - search_match
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\paths.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.paths
-  layer: unknown
-  imports:
-  - __future__
-  - pathlib
-  - platformdirs
   - pydantic
+  - enums
   classes:
-  - PathResolver
-  - AppPaths
-  functions:
-  - __init__
-  - resolve
-  - ensure_dir
-  - ensure_file_parent
-  - app_settings_dir
-  - user_settings_dir
-  - state_dir
-  - session_dir
-  - log_dir
-  - config_file
-  - secrets_file
-  - log_config_file
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\telethon_models.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.telethon_models
+  - Video
+  - Stream
+  - VideoWithStreams
+  - DownloadProgress
+  - StreamWithCookies
+  functions: []
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\__init__.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.__init__
   layer: unknown
   imports:
-  - __future__
-  - pydantic
-  classes:
-  - ClientConfig
-  - TelethonConfig
-  functions:
-  - validate_api_hash
-  - validate_not_placeholder
-  - validate_api_id
-  - validate_phone_or_token
-- path: C:\py_dev\mko_telebot\.ai\builders\..\..\src\mko_telebot\core\utils.py
-  module: C:_dev.mko_telebot..ai.builders.......src.mko_telebot.core.utils
-  layer: unknown
-  imports:
-  - os
-  - pathlib
-  - typing
+  - dtos
+  - enums
+  - video
   classes: []
+  functions: []
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader
+  layer: unknown
+  imports:
+  - pathlib
+  - urllib.parse
+  - structlog
+  - config
+  classes:
+  - HLSDownloader
   functions:
-  - list_files_in_directory
-  - ensure_path_exists
-  - resolve_path
-  - load_config
-  - merge_dicts
+  - __init__
+  - _build_ffmpeg_cmd
+  - _parse_m3u8_segments
+  - _load_downloaded_count
+  - _save_downloaded_count
+  - _cleanup_segments
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.extractor
+  layer: unknown
+  imports:
+  - typing
+  - playwright.async_api
+  - pydantic
+  - structlog
+  - config
+  - infrastructure.browser
+  - infrastructure.http_client
+  - infrastructure.network_monitor
+  - models.enums
+  - models.video
+  - urllib.parse
+  classes:
+  - VKVideoExtractor
+  functions:
+  - __init__
+  - parse_video_id
+  - _sync_extract
+  - _format_cookies_for_ffmpeg
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.quality
+  layer: unknown
+  imports:
+  - structlog
+  - models.enums
+  - models.video
+  classes:
+  - QualitySelector
+  functions:
+  - select
+  - list_available_qualities
+  - sort_key
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\__init__.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.__init__
+  layer: unknown
+  imports:
+  - downloader
+  - quality
+  classes: []
+  functions: []

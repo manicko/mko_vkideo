@@ -1,0 +1,39 @@
+# Phase 07 Validation Sources: TST-003 (HIGH, mandatory)
+# Creates tests for download_hls_with_resume and helper functions
+
+id: TASK_023_create_downloader_resume_tests
+
+title: Create tests for download_hls_with_resume and segment helpers
+
+priority: high
+
+depends_on:
+  - TASK_022_create_cli_tests
+
+source_reference: .ai\audit\99-validation\07-tests-validated-findings.md
+
+source_section: TST-003
+
+files:
+  - path: tests/test_downloader.py
+    targets: []
+
+changes:
+  - action: add_code
+    description: >
+      Add pytest-asyncio async tests using aioresponses for mocking:
+      - test_parse_m3u8_segments_success: Test segment parsing
+      - test_download_segment_success: Test segment download with mocking
+      - test_merge_segments_batched: Test ffmpeg merge logic
+      - test_load_save_downloaded_count: Test progress tracking
+      - test_cleanup_segments: Test cleanup on failure
+goals:
+  - Test segment parsing logic
+  - Test download_hls_with_resume core functionality
+  - Test cleanup behavior
+  - Catch DF-012 bug (m3u8 URL vs video URL)
+acceptance_criteria:
+  - tests/test_downloader.py created with async tests
+  - All tests pass
+  - Tests use pytest-asyncio and aioresponses
+  - Coverage for critical resume functionality

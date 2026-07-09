@@ -1,0 +1,33 @@
+# Phase 01 Validation Sources: CLI-004 (mandatory)
+# Updates documentation to remove main.py workaround references
+
+id: TASK_018_update_limitations_documentation
+
+title: Update vkdownloader-limitations.md to reference CLI instead of main.py
+
+priority: medium
+
+depends_on:
+  - TASK_017_port_main_py_to_typer_cli_or_remove
+
+source_reference: .ai\audit\99-validation\01-cli-validated-findings.md
+
+source_section: CLI-004
+
+files:
+  - path: docs/11-guides/vkdownloader-limitations.md
+
+changes:
+  - action: modify
+    description: >
+      Update documentation to reference `vkdownloader download --method ffmpeg URL` syntax
+      instead of using main.py for workarounds. Remove references to main.py as
+      the recommended workaround.
+goals:
+  - Remove main.py references from documentation
+  - Update to use CLI --method option
+  - Ensure documentation matches actual CLI
+acceptance_criteria:
+  - docs/11-guides/vkdownloader-limitations.md uses CLI syntax
+  - No references to main.py workarounds
+  - Documentation aligns with CLI capabilities

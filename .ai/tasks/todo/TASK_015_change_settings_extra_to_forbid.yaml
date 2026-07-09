@@ -1,0 +1,35 @@
+# Phase 02 Validation Sources: CFG-003 (MEDIUM, mandatory)
+# Changes Settings model to reject unknown configuration keys
+
+id: TASK_015_change_settings_extra_to_forbid
+
+title: Change Settings model extra mode to forbid unknown keys
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\02-config-validated-findings.md
+
+source_section: CFG-003
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+      - type: config
+        name: model_config
+
+changes:
+  - action: modify
+    description: >
+      Change model_config from "extra": "ignore" to "extra": "forbid".
+      This will catch configuration typos and undocumented fields at validation time.
+goals:
+  - Catch configuration typos
+  - Reject unknown configuration keys
+  - Improve configuration reliability
+acceptance_criteria:
+  - Settings with unknown keys raises ValidationError
+  - model_config extra changed to "forbid"
+  - Existing valid configurations still work
+  - Tests updated to handle rejection of unknown keys

@@ -1,0 +1,38 @@
+# Phase 02 Validation Sources: CFG-001 (mandatory)
+# Changes download_method field from str to DownloadMethod StrEnum
+
+id: TASK_011_change_download_method_to_enum
+
+title: Change download_method field to use DownloadMethod StrEnum
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\02-config-validated-findings.md
+
+source_section: CFG-001
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: field
+        name: download_method
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: class
+        name: DownloadMethod
+
+changes:
+  - action: modify
+    description: >
+      Change download_method field type from str to DownloadMethod in Settings model.
+      Update import to use DownloadMethod from models.enums.
+      This enforces valid values at the Pydantic validation level.
+goals:
+  - Enforce download_method validation at Pydantic level
+  - Prevent configuration typos with invalid method names
+  - Use existing DownloadMethod enum (YTDLP, FFMPEG, AUTO)
+acceptance_criteria:
+  - download_method field uses DownloadMethod type
+  - Settings(download_method='invalid') raises validation error
+  - mypy passes for config.py
+  - Existing tests pass

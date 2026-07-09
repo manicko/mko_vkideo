@@ -1,0 +1,35 @@
+# Phase 02 Validation Sources: CFG-001, SEC-001
+# Adds ssl_verify boolean field to Settings model
+
+id: TASK_001_add_ssl_verify_setting_to_settings
+
+title: Add ssl_verify setting to Settings model
+
+priority: high
+
+source_reference: .ai\audit\99-validation\04-security-validated-findings.md
+
+source_section: SEC-001
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+    semantic_anchors:
+      - insert_after:
+          type: field
+          value: download_timeout
+    changes:
+      - action: modify
+        description: >
+          Add ssl_verify: bool = Field(default=True, description="Verify SSL certificates for CDN connections")
+          to Settings model for secure-by-default configuration
+goals:
+  - Add ssl_verify field with default True
+  - Enable secure-by-default behavior
+  - Allow configuration override for edge cases
+acceptance_criteria:
+  - Field added to Settings class
+  - mypy passes for config.py
+  - Default value is True

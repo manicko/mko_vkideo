@@ -1,0 +1,45 @@
+# Phase 04 Validation Sources: SEC-002
+# Strips query parameters from logged URLs containing auth tokens
+
+id: TASK_003_strip_auth_tokens_from_logged_urls
+
+title: Strip authentication tokens from logged URLs
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\04-security-validated-findings.md
+
+source_section: SEC-002
+
+files:
+  - path: src/vkdownloader/infrastructure/network_monitor.py
+    targets:
+      - type: method
+        name: _normalize_url
+    semantic_anchors:
+      - insert_after:
+          type: function_call
+          value: urlparse
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: method
+        name: _sync_extract
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_hls_with_resume
+
+changes:
+  - action: modify
+    description: >
+      Create _strip_auth_params(url: str) -> str helper to remove query parameters
+      before logging. Apply to all URL logging statements in network_monitor.py,
+      extractor.py, and downloader.py.
+goals:
+  - Remove token/expire query parameters from URL logs
+  - Maintain full URLs for actual HTTP requests
+  - Improve security hygiene
+acceptance_criteria:
+  - Auth token parameters stripped from log output
+  - Original URLs preserved for requests
+  - Tests pass with new logging behavior

@@ -1,0 +1,38 @@
+# Phase 09 Validation Sources: STR-006 (extract HttpClient download helpers)
+# Extracts helpers from HttpClient.download_file
+
+id: TASK_028_extract_http_client_download_helpers
+
+title: Extract download helpers from HttpClient.download_file
+
+priority: medium
+
+depends_on:
+  - TASK_027_extract_quality_selector_helpers
+
+source_reference: .ai\audit\99-validation\09-structural-quality-validated-findings.md
+
+source_section: STR-006
+
+files:
+  - path: src/vkdownloader/infrastructure/http_client.py
+    targets:
+      - type: method
+        name: download_file
+
+changes:
+  - action: add_code
+    description: >
+      Extract _write_chunk_to_file(chunk: bytes, file_handle) -> int for chunk writing.
+      Extract _update_progress(downloaded: int, total: int, callback) -> None for progress.
+      Rewrite download_file to reduce nesting depth from 6 to 2-3.
+goals:
+  - Reduce nesting depth in download_file
+  - Improve error handling path clarity
+  - Follow project rule #15
+acceptance_criteria:
+  - _write_chunk_to_file function created
+  - _update_progress function created
+  - download_file refactored
+  - All http_client tests pass
+  - radon cc shows reduced nesting

@@ -1,0 +1,40 @@
+# Phase 02 Validation Sources: CFG-004 (mypy strict violations)
+# Phase 03 Validation Sources: SRV-003, SRV-004, SRV-005 (MERGED)
+# Phase 05 Validation Sources: INT-002, INT-005, INT-006 (MERGED)
+# Phase 08 Validation Sources: QLT-002, QLT-003, QLT-011 (MERGED)
+
+id: TASK_010_add_type_annotations_to_extractor_methods
+
+title: Add type annotations to extractor.py methods
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\02-config-validated-findings.md
+
+source_section: CFG-004
+
+files:
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: method
+        name: _format_cookies_for_ffmpeg
+
+changes:
+  - action: modify
+    description: >
+      Add type annotations to fix mypy violations in extractor.py:
+      - _format_cookies_for_ffmpeg: Accept list[Cookie] instead of list[dict], or cast
+      - Remove unused typing.Any import (line 5)
+      - Remove unused domain variable (line 192)
+      - Add trailing newline to file
+goals:
+  - Fix mypy arg-type error for _format_cookies_for_ffmpeg
+  - Remove unused Any import
+  - Remove unused domain variable
+  - Pass strict mypy mode
+acceptance_criteria:
+  - mypy passes with strict mode for extractor.py
+  - No arg-type errors for Cookie vs dict
+  - No unused import warnings
+  - No unused variable warnings
+  - Trailing newline added

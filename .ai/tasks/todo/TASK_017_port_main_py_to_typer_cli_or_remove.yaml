@@ -1,0 +1,55 @@
+# Phase 01 Validation Sources: CLI-004 (mandatory)
+# Phase 06 Validation Sources: DF-009 (print statements)
+# Phase 07 Validation Sources: TST-004 (main.py testing)
+# Phase 08 Validation Sources: QLT-010 (hardcoded User-Agent)
+# Removes main.py and consolidates into Typer CLI
+
+id: TASK_017_port_main_py_to_typer_cli_or_remove
+
+title: Remove main.py and consolidate into Typer CLI
+
+priority: medium
+
+depends_on:
+  - TASK_016_update_cli_reference_documentation
+
+source_reference: .ai\audit\99-validation\01-cli-validated-findings.md
+
+source_section: CLI-004
+
+files:
+  - path: main.py
+    targets:
+      - type: function
+        name: download_video
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+      - type: function
+        name: _download_with_ytdlp
+      - type: function
+        name: main
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: batch_download
+
+changes:
+  - action: remove_code
+    description: >
+      Options: (1) Remove main.py entirely and port functionality to cli.py, or
+      (2) Update main.py to comply with project rules (#12 no print, #9 type safety).
+      Option (1) is recommended per CLI-004. Add --method option to CLI using DownloadMethod enum.
+      Port download_with_ytdlp_with_resume_fallback into downloader service layer.
+goals:
+  - Remove duplicate entry point
+  - Replace print() with logger calls (if keeping main.py)
+  - Add --method option to CLI using DownloadMethod enum
+  - Port yt-dlp segment fallback logic to service layer
+acceptance_criteria:
+  - main.py removed OR print() replaced with logging
+  - --method option added to vkdownloader download command
+  - All functionality preserved via CLI
+  - mypy passes for remaining code
+  - ruff passes for remaining code

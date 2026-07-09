@@ -34,6 +34,9 @@ dev = [
     "mypy>=1.10.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pyyaml>=6.0.0",
+    "black>=24.0.0",
+    "isort>=6.0.0",
 ]
 
 [project.scripts]
@@ -91,3 +94,8 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = "vkdownloader.cli"
 disallow_untyped_decorators = false
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0.3",
+]

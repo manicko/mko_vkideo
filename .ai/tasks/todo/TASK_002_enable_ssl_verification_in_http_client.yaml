@@ -1,0 +1,47 @@
+# Phase 02 Validation Sources: CFG-001, SEC-001
+# Phase 01 Validation Sources: CFG-004
+# Phase 03 Validation Sources: CFG-004
+
+id: TASK_002_enable_ssl_verification_in_http_client
+
+title: Enable SSL verification in HttpClient with settings propagation
+
+priority: high
+
+blocked_by_risk: no
+
+depends_on:
+  - TASK_001_add_ssl_verify_setting_to_settings
+
+source_reference:
+  - .ai\audit\99-validation\04-security-validated-findings.md
+  - .ai\audit\99-validation\02-config-validated-findings.md
+
+source_section:
+  - SEC-001
+
+files:
+  - path: src/vkdownloader/infrastructure/http_client.py
+    targets:
+      - type: class
+        name: HttpClient
+      - type: method
+        name: __aenter__
+    semantic_anchors:
+      - insert_after:
+          type: function_call
+          value: TCPConnector
+    changes:
+      - action: modify
+        description: >
+          Change TCPConnector to use ssl=self.settings.ssl_verify instead of disabled verification.
+          Remove ssl_context manipulation that disables certificate verification.
+goals:
+  - Pass ssl verify setting from Settings to TCPConnector
+  - Remove insecure ssl.CERT_NONE configuration
+  - Emit security warning if ssl_verify is False
+acceptance_criteria:
+  - SSL verification enabled by default (ssl=True in TCPConnector)
+  - Security warning logged when ssl_verify=False
+  - No mypy errors
+  - HttpClient tests pass

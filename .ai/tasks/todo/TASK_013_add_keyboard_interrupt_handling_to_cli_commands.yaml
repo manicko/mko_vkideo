@@ -1,0 +1,36 @@
+# Phase 01 Validation Sources: CLI-002 (MEDIUM, advisory)
+# Adds KeyboardInterrupt handling for graceful Ctrl+C
+
+id: TASK_013_add_keyboard_interrupt_handling_to_cli_commands
+
+title: Add KeyboardInterrupt handling to download and batch_download commands
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\01-cli-validated-findings.md
+
+source_section: CLI-002
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: batch_download
+
+changes:
+  - action: modify
+    description: >
+      Add try-except KeyboardInterrupt blocks to both download and batch_download commands.
+      Print clean message "Download cancelled" on Ctrl+C.
+      Exit with code 0 or 130 (standard for SIGINT).
+goals:
+  - Graceful interruption without stack traces
+  - Clean user-facing message on Ctrl+C
+  - Proper exit code handling
+acceptance_criteria:
+  - KeyboardInterrupt caught in download command
+  - KeyboardInterrupt caught in batch_download command
+  - Clean "Download cancelled" message displayed
+  - Exit code 130 or 0 on interruption

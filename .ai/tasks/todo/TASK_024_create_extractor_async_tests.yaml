@@ -1,0 +1,38 @@
+# Phase 07 Validation Sources: TST-006 (HIGH)
+# Creates async tests for VKVideoExtractor methods
+
+id: TASK_024_create_extractor_async_tests
+
+title: Create async tests for VKVideoExtractor extraction methods
+
+priority: high
+
+depends_on:
+  - TASK_023_create_downloader_resume_tests
+
+source_reference: .ai\audit\99-validation\07-tests-validated-findings.md
+
+source_section: TST-006
+
+files:
+  - path: tests/test_extractor.py
+    targets:
+      - type: method
+        name: _format_cookies_for_ffmpeg
+
+changes:
+  - action: add_code
+    description: >
+      Add pytest-asyncio async tests with mocking:
+      - test_extract_streams_with_cookies_success: Mock BrowserManager and NetworkMonitor
+      - test_format_cookies_for_ffmpeg: Test cookie formatting for ffmpeg header
+      - test_extract_streams_invalid_url: Test error handling for bad URLs
+goals:
+  - Test async extraction methods
+  - Test cookie handling for ffmpeg
+  - Test error paths
+acceptance_criteria:
+  - tests/test_extractor.py extended with async tests
+  - All extractor tests pass
+  - Tests mock BrowserManager and NetworkMonitor appropriately
+  - _parse_m3u8_playlist tests excluded (dead code)

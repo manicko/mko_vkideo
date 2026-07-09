@@ -1,0 +1,49 @@
+# Phase 08 Validation Sources: QLT-010 (mandatory)
+# Integrates unused exception classes into service layer
+
+id: TASK_021_integrate_unused_exception_classes
+
+title: Integrate unused exception classes into service layer
+
+priority: medium
+
+source_reference: .ai\audit\99-validation\08-quality-validated-findings.md
+
+source_section: QLT-010
+
+files:
+  - path: src/vkdownloader/exceptions.py
+    targets:
+      - type: class
+        name: VideoNotFoundError
+      - type: class
+        name: QualityNotAvailableError
+      - type: class
+        name: ExtractionError
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: method
+        name: _sync_extract
+  - path: src/vkdownloader/services/quality.py
+    targets:
+      - type: method
+        name: select
+
+changes:
+  - action: modify
+    description: >
+      Integrate VideoNotFoundError in extractor.py:76-78 when video URL parsing fails
+      or no streams found. Integrate QualityNotAvailableError in quality.py:114-116 when
+      no matching quality is found. Integrate ExtractionError in extractor.py:152 when
+      _extract_with_ytdlp or _extract_with_browser returns no streams.
+goals:
+  - Raise VideoNotFoundError on video URL parse failure
+  - Raise QualityNotAvailableError on quality selection failure
+  - Raise ExtractionError on extraction failure
+  - Align code with documented exception hierarchy
+acceptance_criteria:
+  - VideoNotFoundError raised appropriately in extractor.py
+  - QualityNotAvailableError raised appropriately in quality.py
+  - ExtractionError raised appropriately in extractor.py
+  - Exception imports added to service files
+  - Tests verify exception raising behavior

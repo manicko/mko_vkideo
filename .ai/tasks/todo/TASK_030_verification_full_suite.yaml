@@ -1,0 +1,54 @@
+id: TASK_030_verification_full_suite
+
+title: Verify full implementation suite
+
+type: verification
+
+status: pending
+
+depends_on:
+  - TASK_029_apply_trailing_newlines_to_service_files
+
+verifies:
+  - TASK_001_add_ssl_verify_setting_to_settings
+  - TASK_002_enable_ssl_verification_in_http_client
+  - TASK_003_strip_auth_tokens_from_logged_urls
+  - TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
+  - TASK_005_add_segment_cleanup_on_download_failure
+  - TASK_006_remove_unused_create_stealth_context_function
+  - TASK_007_remove_dead_parse_m3u8_playlist_method
+  - TASK_008_remove_unused_config_fields_from_settings
+  - TASK_009_add_type_annotations_to_downloader_functions
+  - TASK_010_add_type_annotations_to_extractor_methods
+  - TASK_011_change_download_method_to_enum
+  - TASK_012_add_exception_handling_to_cli_download
+  - TASK_013_add_keyboard_interrupt_handling_to_cli_commands
+  - TASK_014_add_output_path_validation
+  - TASK_015_change_settings_extra_to_forbid
+  - TASK_016_update_cli_reference_documentation
+  - TASK_017_port_main_py_to_typer_cli_or_remove
+  - TASK_018_update_limitations_documentation
+  - TASK_019_update_gitignore_for_downloaded_content
+  - TASK_020_remove_duplicate_test_class
+  - TASK_021_integrate_unused_exception_classes
+  - TASK_022_create_cli_tests
+  - TASK_023_create_downloader_resume_tests
+  - TASK_024_create_extractor_async_tests
+  - TASK_025_create_hls_download_request_dataclass
+  - TASK_026_extract_merge_batch_segments_helper
+  - TASK_027_extract_quality_selector_helpers
+  - TASK_028_extract_http_client_download_helpers
+  - TASK_029_apply_trailing_newlines_to_service_files
+
+verification_steps:
+  - build: ruff check src/vkdownloader tests
+  - test: pytest tests -v
+  - smoke_check: vkdownloader --help && vkdownloader download --help
+
+pass_criteria:
+  - ruff check passes with no errors
+  - All 53+ tests pass
+  - CLI help commands work
+  - mypy passes in strict mode
+
+failure_action: return to rework tasks with failures

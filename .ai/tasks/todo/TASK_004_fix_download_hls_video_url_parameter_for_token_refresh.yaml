@@ -1,0 +1,46 @@
+# Phase 06 Validation Sources: DF-012 (CRITICAL)
+# Phase 03 Validation Sources: SRV-001 (Research Addendum)
+# Fixes architectural gap: m3u8_url passed to extractor expecting video_url
+
+id: TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
+
+title: Add video_url parameter to download_hls_with_resume for proper token refresh
+
+priority: critical
+
+source_reference: .ai\audit\99-validation\06-data-flow-validated-findings.md
+
+source_section: DF-012
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_hls_with_resume
+      - type: method
+        name: _fetch_playlist_with_retry
+    semantic_anchors:
+      - insert_after:
+          type: function_signature
+          value: download_hls_with_resume
+      - insert_after:
+          type: function_signature
+          value: _fetch_playlist_with_retry
+
+changes:
+  - action: modify
+    description: >
+      Add video_url: str parameter to download_hls_with_resume function signature.
+      Pass video_url through to _fetch_playlist_with_retry.
+      Pass video_url to extractor.extract_streams_with_cookies in token refresh path.
+goals:
+  - Add video_url parameter to download_hls_with_resume
+  - Pass video_url through the call chain
+  - Enable proper token refresh on 403/410 responses
+  - Fix crash when token refresh is triggered
+acceptance_criteria:
+  - video_url parameter added to download_hls_with_resume
+  - video_url passed to _fetch_playlist_with_retry
+  - video_url used in extractor.extract_streams_with_cookies call
+  - No ValueError on 403/410 token refresh
+  - mypy passes

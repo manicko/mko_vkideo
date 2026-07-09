@@ -1,49 +1,146 @@
+# Execution DAG / Rollout Order for Validated Findings
+# Generated from .ai/audit/99-validation/ files
+
 tasks:
-  - id: TASK_001_rename_logging_setup
+  # Phase 1: Security Risk Mitigation (HIGH/CRITICAL)
+  - id: TASK_001_add_ssl_verify_setting_to_settings
     depends_on: []
 
-  - id: TASK_002_rename_telethon_models
-    depends_on: []
-
-  - id: TASK_003_rename_channels_file_and_class
-    depends_on: []
-
-  - id: TASK_004_rename_config_reader
-    depends_on: []
-
-  - id: TASK_005_documentation_update
-    depends_on: []
-
-  - id: TASK_006_update_cli_imports
+  - id: TASK_002_enable_ssl_verification_in_http_client
     depends_on:
-      - TASK_001_rename_logging_setup
-      - TASK_004_rename_config_reader
+      - TASK_001_add_ssl_verify_setting_to_settings
 
-  - id: TASK_007_update_core_init_imports
+  - id: TASK_003_strip_auth_tokens_from_logged_urls
     depends_on:
-      - TASK_002_rename_telethon_models
-      - TASK_003_rename_channels_file_and_class
-      - TASK_004_rename_config_reader
+      - TASK_002_enable_ssl_verification_in_http_client
 
-  - id: TASK_008_update_core_models
+  # Phase 2: Critical Bug Fix
+  - id: TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
     depends_on:
-      - TASK_002_rename_telethon_models
-      - TASK_003_rename_channels_file_and_class
+      - TASK_003_strip_auth_tokens_from_logged_urls
 
-  - id: TASK_009_update_test_imports
+  - id: TASK_005_add_segment_cleanup_on_download_failure
     depends_on:
-      - TASK_004_rename_config_reader
-      - TASK_008_update_core_models
+      - TASK_004_fix_download_hls_video_url_parameter_for_token_refresh
 
-  - id: TASK_010_update_yaml_templates
+  # Phase 3: Remove Unused Code
+  - id: TASK_006_remove_unused_create_stealth_context_function
     depends_on:
-      - TASK_003_rename_channels_file_and_class
+      - TASK_005_add_segment_cleanup_on_download_failure
 
-  - id: TASK_011_verification
+  - id: TASK_007_remove_dead_parse_m3u8_playlist_method
     depends_on:
-      - TASK_005_documentation_update
-      - TASK_006_update_cli_imports
-      - TASK_007_update_core_init_imports
-      - TASK_008_update_core_models
-      - TASK_009_update_test_imports
-      - TASK_010_update_yaml_templates
+      - TASK_006_remove_unused_create_stealth_context_function
+
+  - id: TASK_008_remove_unused_config_fields_from_settings
+    depends_on:
+      - TASK_007_remove_dead_parse_m3u8_playlist_method
+
+  # Phase 4: Type Safety Fixes
+  - id: TASK_009_add_type_annotations_to_downloader_functions
+    depends_on:
+      - TASK_008_remove_unused_config_fields_from_settings
+
+  - id: TASK_010_add_type_annotations_to_extractor_methods
+    depends_on:
+      - TASK_009_add_type_annotations_to_downloader_functions
+
+  - id: TASK_011_change_download_method_to_enum
+    depends_on:
+      - TASK_010_add_type_annotations_to_extractor_methods
+
+  # Phase 5: Exception Handling & Path Validation
+  - id: TASK_012_add_exception_handling_to_cli_download
+    depends_on:
+      - TASK_011_change_download_method_to_enum
+
+  - id: TASK_013_add_keyboard_interrupt_handling_to_cli_commands
+    depends_on:
+      - TASK_012_add_exception_handling_to_cli_download
+
+  - id: TASK_014_add_output_path_validation
+    depends_on:
+      - TASK_013_add_keyboard_interrupt_handling_to_cli_commands
+
+  # Phase 6: Configuration Hardening
+  - id: TASK_015_change_settings_extra_to_forbid
+    depends_on:
+      - TASK_014_add_output_path_validation
+
+  # Phase 7: Documentation Update
+  - id: TASK_016_update_cli_reference_documentation
+    depends_on:
+      - TASK_015_change_settings_extra_to_forbid
+
+  # Phase 8: main.py Consolidation (CLI-004)
+  - id: TASK_017_port_main_py_to_typer_cli_or_remove
+    depends_on:
+      - TASK_016_update_cli_reference_documentation
+
+  - id: TASK_018_update_limitations_documentation
+    depends_on:
+      - TASK_017_port_main_py_to_typer_cli_or_remove
+
+  # Phase 9: Cleanup & Formatting
+  - id: TASK_019_update_gitignore_for_downloaded_content
+    depends_on:
+      - TASK_018_update_limitations_documentation
+
+  - id: TASK_020_remove_duplicate_test_class
+    depends_on:
+      - TASK_019_update_gitignore_for_downloaded_content
+
+  # Phase 10: Integrate Exception Classes
+  - id: TASK_021_integrate_unused_exception_classes
+    depends_on:
+      - TASK_020_remove_duplicate_test_class
+
+  # Phase 11: Test Coverage
+  - id: TASK_022_create_cli_tests
+    depends_on:
+      - TASK_021_integrate_unused_exception_classes
+
+  - id: TASK_023_create_downloader_resume_tests
+    depends_on:
+      - TASK_022_create_cli_tests
+
+  - id: TASK_024_create_extractor_async_tests
+    depends_on:
+      - TASK_023_create_downloader_resume_tests
+
+  # Phase 12: Structural Improvements
+  - id: TASK_025_create_hls_download_request_dataclass
+    depends_on:
+      - TASK_024_create_extractor_async_tests
+
+  - id: TASK_026_extract_merge_batch_segments_helper
+    depends_on:
+      - TASK_025_create_hls_download_request_dataclass
+
+  - id: TASK_027_extract_quality_selector_helpers
+    depends_on:
+      - TASK_026_extract_merge_batch_segments_helper
+
+  - id: TASK_028_extract_http_client_download_helpers
+    depends_on:
+      - TASK_027_extract_quality_selector_helpers
+
+  - id: TASK_029_apply_trailing_newlines_to_service_files
+    depends_on:
+      - TASK_028_extract_http_client_download_helpers
+
+  # Verification Task
+  - id: TASK_030_verification_full_suite
+    depends_on:
+      - TASK_029_apply_trailing_newlines_to_service_files
+
+# Removed/Rejected tasks (not included in rollout):
+# - CFG-006: Rejected - checklist mismatch
+# - SEC-006: Rejected - overlapping concern, minimal risk
+# - TST-005: Rejected - low ROI tautological tests
+# - TST-009: Rejected - low ROI trivial model
+# - QLT-011: Rejected - low ROI trivial model
+# - STR-002/STR-010: Rejected - dead code, remove instead of refactor
+# - INT-001-INT-008: Merged into earlier tasks
+# - SRV-003-SRV-010: Merged into consolidated tasks
+# - DF-001-DF-012: Integrated into implementation tasks where applicable

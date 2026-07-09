@@ -1,0 +1,43 @@
+# Phase 09 Validation Sources: STR-003 (download_hls_with_resume has 6 parameters)
+# Creates HLSDownloadRequest dataclass to consolidate parameters
+
+id: TASK_025_create_hls_download_request_dataclass
+
+title: Create HLSDownloadRequest dataclass for download_hls_with_resume
+
+priority: medium
+
+depends_on:
+  - TASK_024_create_extractor_async_tests
+
+source_reference: .ai\audit\99-validation\09-structural-quality-validated-findings.md
+
+source_section: STR-003
+
+files:
+  - path: src/vkdownloader/models/dtos.py
+    targets:
+      - type: class
+        name: DownloadRequest
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_hls_with_resume
+
+changes:
+  - action: add_code
+    description: >
+      Create HLSDownloadRequest dataclass in dtos.py with fields:
+      url: str, output_file: Path, quality: str, cookies: str | None,
+      settings: Settings, extractor: VKVideoExtractor | None.
+      Modify download_hls_with_resume signature to accept single request object.
+goals:
+  - Reduce parameters from 6 to 1 object
+  - Improve type safety
+  - Follow project rule #9 (Type Safety Everywhere)
+acceptance_criteria:
+  - HLSDownloadRequest dataclass created
+  - download_hls_with_resume accepts HLSDownloadRequest
+  - Type annotations complete
+  - mypy passes
+  - Tests updated for new signature

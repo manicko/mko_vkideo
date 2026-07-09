@@ -1,0 +1,39 @@
+# Phase 07 Validation Sources: TST-002 (HIGH, mandatory)
+# Creates tests for CLI command invocation and error handling
+
+id: TASK_022_create_cli_tests
+
+title: Create CLI tests for download and batch commands
+
+priority: high
+
+depends_on:
+  - TASK_021_integrate_unused_exception_classes
+
+source_reference: .ai\audit\99-validation\07-tests-validated-findings.md
+
+source_section: TST-002
+
+files:
+  - path: tests/test_cli.py
+    targets: []
+
+changes:
+  - action: add_code
+    description: >
+      Create tests/test_cli.py using typer.testing.CliRunner():
+      - test_download_success: Verify successful invocation
+      - test_download_invalid_url: Check error handling for bad URLs
+      - test_batch_empty_file: Check handling of empty batch input
+      - test_invalid_quality_option: Check quality enum validation
+      - test_invalid_method_option: Check method enum validation
+goals:
+  - Test CLI command invocation
+  - Test argument parsing
+  - Test error output handling
+  - Test exit codes on failure
+acceptance_criteria:
+  - tests/test_cli.py created with at least 5 tests
+  - All CLI tests pass
+  - Tests use CliRunner from typer.testing
+  - Coverage for both download and batch commands
