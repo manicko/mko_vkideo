@@ -7,9 +7,9 @@ from structlog import get_logger
 
 from vkdownloader.config import Settings, setup_logging
 from vkdownloader.models.enums import DownloadMethod, QualityEnum
+from vkdownloader.services.downloader import HLSDownloader, download_hls_with_resume
 from vkdownloader.services.extractor import VKVideoExtractor
 from vkdownloader.services.quality import QualitySelector
-from vkdownloader.services.downloader import download_hls_with_resume, HLSDownloader
 
 logger = get_logger(__name__)
 
@@ -72,11 +72,13 @@ async def download_video(
         browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
         m3u8_url = str(browser_streams[0].url) if browser_streams else m3u8_url
         downloader = HLSDownloader(settings=settings)
-        result = await downloader.download_with_ffmpeg(m3u8_url, output_file, str(stream.quality), cookies)
+        result = await downloader.download_with_ffmpeg(
+            m3u8_url, output_file, str(stream.quality), cookies
+        )
         if result is None:
             logger.info("ffmpeg_failed_fallback_to_segment_download")
             result = await download_hls_with_resume(
-                m3u8_url, output_file, str(stream.quality), cookies, settings, extractor
+                url, m3u8_url, output_file, str(stream.quality), cookies, settings, extractor
             )
         return result
     else:
@@ -134,11 +136,15 @@ async def download_with_ytdlp_with_resume_fallback(
             )
 
             if retry_count <= MAX_RESUME_RETRIES:
-                print(f"Download interrupted. Switching to segment-based resume ({retry_count}/{MAX_RESUME_RETRIES})...")
+                print(
+                    f"Download interrupted. Switching to segment-based resume ({retry_count}/{MAX_RESUME_RETRIES})..."
+                )
 
                 # Get fresh m3u8 URL with new token via browser
                 try:
-                    browser_streams, cookies = await extractor.extract_streams_with_cookies(video_url)
+                    browser_streams, cookies = await extractor.extract_streams_with_cookies(
+                        video_url
+                    )
                     if browser_streams:
                         m3u8_url = str(browser_streams[0].url)
                         logger.info("fresh_token_obtained_for_resume")
@@ -146,13 +152,16 @@ async def download_with_ytdlp_with_resume_fallback(
                         output_file.unlink()
                         # Continue to segment download
                         return await download_hls_with_resume(
-                            m3u8_url, output_file, quality, cookies, settings, extractor
+                            video_url, m3u8_url, output_file, quality, cookies, settings, extractor
                         )
                 except Exception as e:
                     logger.warning("failed_to_refresh_token", error=str(e))
             else:
                 logger.error("max_retries_exceeded")
-                print(f"Failed to download after {MAX_RESUME_RETRIES} attempts. Stopping.", file=sys.stderr)
+                print(
+                    f"Failed to download after {MAX_RESUME_RETRIES} attempts. Stopping.",
+                    file=sys.stderr,
+                )
                 return None
         else:
             # No partial file and no success - original failure, no point in segment download
@@ -163,7 +172,9 @@ async def download_with_ytdlp_with_resume_fallback(
         output_file.unlink()
 
     logger.info("final_fallback_to_segment_download")
-    return await download_hls_with_resume(m3u8_url, output_file, quality, None, settings, extractor)
+    return await download_hls_with_resume(
+        video_url, m3u8_url, output_file, quality, None, settings, extractor
+    )
 
 
 async def _download_with_ytdlp(video_url: str, output_file: Path, quality: str) -> Path | None:

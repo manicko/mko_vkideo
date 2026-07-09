@@ -9,6 +9,7 @@ import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
+from ..services.extractor import VKVideoExtractor
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -36,9 +37,12 @@ class HLSDownloader:
         cmd = [
             "ffmpeg",
             "-y",
-            "-headers", headers,
-            "-i", m3u8_url,
-            "-c", "copy",
+            "-headers",
+            headers,
+            "-i",
+            m3u8_url,
+            "-c",
+            "copy",
             str(output_file),
         ]
 
@@ -48,7 +52,13 @@ class HLSDownloader:
         self, m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None
     ) -> Path | None:
         """Download HLS stream to MP4 using ffmpeg."""
-        logger.info("starting_ffmpeg_download", url=_strip_auth_params(m3u8_url), output=str(output_file), quality=quality, has_cookies=bool(cookies))
+        logger.info(
+            "starting_ffmpeg_download",
+            url=_strip_auth_params(m3u8_url),
+            output=str(output_file),
+            quality=quality,
+            has_cookies=bool(cookies),
+        )
 
         cmd = self._build_ffmpeg_cmd(m3u8_url, output_file, cookies)
 
@@ -70,12 +80,13 @@ class HLSDownloader:
 
 
 async def download_hls_with_resume(
+    video_url: str,
     m3u8_url: str,
     output_file: Path,
     quality: str = "best",
     cookies: str | None = None,
     settings: Settings | None = None,
-    extractor=None,
+    extractor: VKVideoExtractor | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -85,6 +96,7 @@ async def download_hls_with_resume(
     to handle large number of segments.
 
     Args:
+        video_url: Original VK video URL (for token refresh on 403/410).
         m3u8_url: URL of the HLS m3u8 playlist.
         output_file: Path where the output MP4 file will be saved.
         quality: Quality identifier for logging purposes.
@@ -104,7 +116,7 @@ async def download_hls_with_resume(
     segments_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded_count = _load_downloaded_count(metadata_file)
-    headers = {
+    headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
         "Referer": "https://vkvideo.ru/",
     }
@@ -113,7 +125,9 @@ async def download_hls_with_resume(
 
     connector = aiohttp.TCPConnector(limit=10)
     async with aiohttp.ClientSession(connector=connector) as session:
-        playlist_content = await _fetch_playlist_with_retry(session, m3u8_url, headers, extractor, settings)
+        playlist_content = await _fetch_playlist_with_retry(
+            session, video_url, m3u8_url, headers, extractor, settings
+        )
         if not playlist_content:
             return None
 
@@ -148,9 +162,10 @@ async def download_hls_with_resume(
 
 async def _fetch_playlist_with_retry(
     session: aiohttp.ClientSession,
+    video_url: str,
     m3u8_url: str,
-    headers: dict,
-    extractor,
+    headers: dict[str, str],
+    extractor: VKVideoExtractor | None,
     settings: Settings,
     max_retries: int = 3,
 ) -> str | None:
@@ -164,7 +179,7 @@ async def _fetch_playlist_with_retry(
                     return await response.text()
                 if response.status in (403, 410) and extractor:
                     logger.info("token_expired_fetching_new", attempt=attempt + 1)
-                    streams, new_cookies = await extractor.extract_streams_with_cookies(m3u8_url)
+                    streams, new_cookies = await extractor.extract_streams_with_cookies(video_url)
                     if streams:
                         current_url = str(streams[0].url)
                         headers["Cookie"] = new_cookies or ""
@@ -190,7 +205,7 @@ async def _download_segment(
     session: aiohttp.ClientSession,
     segment_url: str,
     output_path: Path,
-    headers: dict,
+    headers: dict[str, str],
 ) -> bool:
     """Download a single HLS segment."""
     try:
@@ -230,10 +245,14 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
         cmd = [
             "ffmpeg",
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(file_list_path),
-            "-c", "copy",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(file_list_path),
+            "-c",
+            "copy",
             str(batch_output),
         ]
 
@@ -267,10 +286,14 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
         cmd = [
             "ffmpeg",
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(final_list_path),
-            "-c", "copy",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(final_list_path),
+            "-c",
+            "copy",
             str(output_file),
         ]
 
@@ -298,7 +321,7 @@ def _load_downloaded_count(metadata_file: Path) -> int:
     """Load downloaded segment count from metadata."""
     if metadata_file.exists():
         with open(metadata_file, encoding="utf-8") as f:
-            data = json.load(f)
+            data: dict[str, int] = json.load(f)
             return data.get("downloaded_count", 0)
     return 0
 
