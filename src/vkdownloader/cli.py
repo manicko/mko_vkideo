@@ -58,13 +58,27 @@ def download(
         )
         return result
 
-    result = asyncio.run(_download())
+    try:
+        result = asyncio.run(_download())
 
-    if result:
-        typer.echo(f"Downloaded: {result}")
-    else:
-        typer.echo("Download failed", err=True)
-        raise typer.Exit(code=1)
+        if result:
+            typer.echo(f"Downloaded: {result}")
+        else:
+            typer.echo("Download failed", err=True)
+            raise typer.Exit(code=1)
+
+    except ValueError:
+        typer.echo(
+            "Invalid URL format. Expected format: https://vkvideo.ru/video-{owner_id}_{video_id}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        typer.echo("\nDownload cancelled", err=True)
+        raise typer.Exit(code=130) from None
+    except Exception:
+        typer.echo("An error occurred during download", err=True)
+        raise typer.Exit(code=1) from None
 
 
 @app.command("batch")
