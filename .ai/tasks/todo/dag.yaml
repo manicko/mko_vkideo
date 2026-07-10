@@ -17,9 +17,8 @@ graph TD
     T007 --> T008
     T008 --> T012[task_012: Verify implementation]
     
-    T010[task_010: Research AdaptiveThrottle] --> T011[task_011: Integrate AdaptiveThrottle]
-    style T010 fill:#ffcccc,stroke:#ff0000
-    style T011 fill:#ffcccc,stroke:#ff0000
+    T010[task_010: Research AdaptiveThrottle NO-GO]
+    style T010 fill:#cccccc,stroke:#666666,stroke-dasharray: 5 5
 ```
 
 ## Parallel Execution Groups
@@ -42,9 +41,9 @@ graph TD
 ### Group 5 (After Group 3,4)
 - task_008: Add downloader tests
 
-### Group 6 (Blocked - pending research completion)
-- task_010: Research AdaptiveThrottle
-- task_011: Integrate AdaptiveThrottle (blocked by task_010)
+### Group 6 (Research complete - NO-GO)
+- task_010: Research AdaptiveThrottle (completed - NO-GO)
+- task_011: Integrate AdaptiveThrottle (cancelled - NO-GO from research)
 
 ### Group 7 (Final verification)
 - task_012: Verify HLS throttle bypass implementation
@@ -77,8 +76,8 @@ graph TD
 | task_006 | Medium | Changes core download flow for YTDLP method |
 | task_007 | Medium | Refactors download loop, affects concurrency |
 | task_008 | Low | Test additions only |
-| task_010 | High | Research task for integration impact |
-| task_011 | Medium | Rate limiting integration, blocked pending research |
+| task_010 | High | Research task completed - NO-GO for integration |
+| task_011 | Cancelled | NO-GO recommendation from research |
 | task_012 | Low | Verification task for all changes |
 
 ## Semantic Anchors Reference

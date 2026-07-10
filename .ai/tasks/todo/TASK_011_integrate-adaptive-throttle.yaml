@@ -1,14 +1,15 @@
 id: task_011_integrate_adaptive_throttle
 title: Integrate AdaptiveThrottle into segment download flow
 
-priority: medium
+priority: cancelled
 
-status: blocked
+status: cancelled
 
 blocked_by: task_010_research_adaptive_throttle_integration
+
 blocked_reason: >
-  Implementation blocked pending research completion with go/no-go recommendation.
-  Research must confirm impact assessment and integration approach.
+  CANCELLED - Research (RESEARCH_ADAPTIVE_THROTTLE.md) determined AdaptiveThrottle
+  is unsuitable for concurrent segment downloads. See research for details.
 
 # ── Plan/Audit report source ──
 source_reference: .ai\plans\hls-throttle-bypass-implementation.md

@@ -36,16 +36,16 @@ tasks:
       - task_004_update_ytdlp_options
       - task_007_parallelize_segment_download
 
-  # Phase 5: AdaptiveThrottle integration (blocked - pending research)
+# Phase 5: AdaptiveThrottle integration (research complete - NO-GO)
   - id: task_010_research_adaptive_throttle_integration
     depends_on: []
-    status: blocked
-    blocked_by: None
+    status: no-go  # Research completed: AdaptiveThrottle unsuitable for concurrent segment downloads
 
+  # Task 011 cancelled: NO-GO recommendation from research
   - id: task_011_integrate_adaptive_throttle
     depends_on:
       - task_010_research_adaptive_throttle_integration
-    status: blocked
+    status: cancelled
     blocked_by: task_010_research_adaptive_throttle_integration
 
 # Verification task - validates all implemented changes
