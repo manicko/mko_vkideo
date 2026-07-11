@@ -617,3 +617,231 @@ class TestBrowserCookiesIntegration:
         assert any(".vkvideo.ru" in line for line in cookie_lines)
         assert any("access_token\tmytoken" in line for line in cookie_lines)
         assert any("user_id\t12345" in line for line in cookie_lines)
+
+
+class TestFfmpegProgress:
+    """Tests for FfmpegProgress dataclass."""
+
+    def test_ffmpeg_progress_default_values(self) -> None:
+        """Test FfmpegProgress default values are None."""
+        from vkdownloader.services.downloader import FfmpegProgress
+
+        progress = FfmpegProgress()
+
+        assert progress.frame is None
+        assert progress.fps is None
+        assert progress.speed is None
+        assert progress.total_size is None
+        assert progress.out_time_us is None
+        assert progress.out_time_ms is None
+        assert progress.out_time is None
+        assert progress.progress is None
+
+    def test_ffmpeg_progress_custom_values(self) -> None:
+        """Test FfmpegProgress accepts custom values."""
+        from vkdownloader.services.downloader import FfmpegProgress
+
+        progress = FfmpegProgress(
+            frame=120,
+            fps=30.0,
+            speed=1.5,
+            total_size=1024,
+            out_time_us=5000000,
+            out_time_ms=5000,
+            out_time="00:00:05.000000",
+            progress="continue",
+        )
+
+        assert progress.frame == 120
+        assert progress.fps == 30.0
+        assert progress.speed == 1.5
+        assert progress.total_size == 1024
+        assert progress.out_time_us == 5000000
+        assert progress.out_time_ms == 5000
+        assert progress.out_time == "00:00:05.000000"
+        assert progress.progress == "continue"
+
+
+class TestProgressParser:
+    """Tests for ProgressParser class."""
+
+    def test_parse_line_valid_format(self) -> None:
+        """Test parsing valid KEY=VALUE format."""
+        from vkdownloader.services.downloader import ProgressParser
+
+        result = ProgressParser.parse_line("frame=120")
+
+        assert result == ("frame", "120")
+
+    def test_parse_line_with_spaces(self) -> None:
+        """Test parsing line that needs stripping."""
+        from vkdownloader.services.downloader import ProgressParser
+
+        result = ProgressParser.parse_line("  frame=120  ")
+
+        assert result == ("frame", "120")
+
+    def test_parse_line_no_equals(self) -> None:
+        """Test parsing line without equals sign returns None."""
+        from vkdownloader.services.downloader import ProgressParser
+
+        result = ProgressParser.parse_line("invalid line")
+
+        assert result is None
+
+    def test_parse_line_value_with_equals(self) -> None:
+        """Test parsing line where value contains equals sign."""
+        from vkdownloader.services.downloader import ProgressParser
+
+        result = ProgressParser.parse_line("out_time=00:00:05.000000")
+
+        assert result == ("out_time", "00:00:05.000000")
+
+    def test_parse_line_speed_format(self) -> None:
+        """Test parsing speed value with x suffix."""
+        from vkdownloader.services.downloader import ProgressParser
+
+        result = ProgressParser.parse_line("speed=1.2x")
+
+        assert result == ("speed", "1.2x")
+
+
+class TestReadProgress:
+    """Tests for read_progress async generator."""
+
+    @pytest.mark.asyncio
+    async def test_read_progress_yields_progress(self) -> None:
+        """Test read_progress yields FfmpegProgress on progress key."""
+        import asyncio
+
+        from vkdownloader.services.downloader import read_progress
+
+        # Create mock StreamReader with progress output
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(
+            side_effect=[
+                b"frame=100\n",
+                b"speed=1.5x\n",
+                b"progress=continue\n",
+                b"",
+            ]
+        )
+
+        results = []
+        async for prog in read_progress(mock_stream):
+            results.append(prog)
+
+        assert len(results) == 1
+        assert results[0].frame == 100
+        assert results[0].speed == 1.5
+        assert results[0].progress == "continue"
+
+    @pytest.mark.asyncio
+    async def test_read_progress_handles_na_values(self) -> None:
+        """Test read_progress handles N/A values gracefully."""
+        import asyncio
+
+        from vkdownloader.services.downloader import read_progress
+
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(
+            side_effect=[
+                b"frame=N/A\n",
+                b"speed=N/A\n",
+                b"progress=continue\n",
+                b"",
+            ]
+        )
+
+        results = []
+        async for prog in read_progress(mock_stream):
+            results.append(prog)
+
+        assert len(results) == 1
+        assert results[0].frame is None
+        assert results[0].speed is None
+
+    @pytest.mark.asyncio
+    async def test_read_progress_resets_on_continue(self) -> None:
+        """Test read_progress resets progress object after yield."""
+        import asyncio
+
+        from vkdownloader.services.downloader import read_progress
+
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(
+            side_effect=[
+                b"frame=100\n",
+                b"progress=continue\n",
+                b"frame=200\n",
+                b"progress=continue\n",
+                b"",
+            ]
+        )
+
+        results = []
+        async for prog in read_progress(mock_stream):
+            results.append(prog)
+
+        assert len(results) == 2
+        assert results[0].frame == 100
+        assert results[1].frame == 200
+
+    @pytest.mark.asyncio
+    async def test_read_progress_stops_on_end(self) -> None:
+        """Test read_progress stops on progress=end."""
+        import asyncio
+
+        from vkdownloader.services.downloader import read_progress
+
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(
+            side_effect=[
+                b"frame=100\n",
+                b"progress=end\n",
+                b"frame=200\n",  # This should not be read
+            ]
+        )
+
+        results = []
+        async for prog in read_progress(mock_stream):
+            results.append(prog)
+
+        assert len(results) == 1
+        assert results[0].frame == 100
+        assert results[0].progress == "end"
+
+    @pytest.mark.asyncio
+    async def test_read_progress_parses_all_fields(self) -> None:
+        """Test read_progress parses all expected fields."""
+        import asyncio
+
+        from vkdownloader.services.downloader import read_progress
+
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(
+            side_effect=[
+                b"frame=150\n",
+                b"fps=30.02\n",
+                b"speed=1.2x\n",
+                b"total_size=2048\n",
+                b"out_time_us=3000000\n",
+                b"out_time_ms=3000\n",
+                b"out_time=00:00:03.000000\n",
+                b"progress=continue\n",
+                b"",
+            ]
+        )
+
+        results = []
+        async for prog in read_progress(mock_stream):
+            results.append(prog)
+
+        assert len(results) == 1
+        assert results[0].frame == 150
+        assert results[0].fps == 30.02
+        assert results[0].speed == 1.2
+        assert results[0].total_size == 2048
+        assert results[0].out_time_us == 3000000
+        assert results[0].out_time_ms == 3000
+        assert results[0].out_time == "00:00:03.000000"

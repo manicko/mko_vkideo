@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -20,6 +22,83 @@ logger = get_logger(__name__)
 
 # Maximum retry attempts for getting new token on resume failure
 MAX_RESUME_RETRIES = 3
+
+
+@dataclass
+class FfmpegProgress:
+    """Progress state from ffmpeg -progress pipe output."""
+
+    frame: int | None = None
+    fps: float | None = None
+    speed: float | None = None
+    total_size: int | None = None
+    out_time_us: int | None = None
+    out_time_ms: int | None = None
+    out_time: str | None = None
+    progress: str | None = None
+
+
+class ProgressParser:
+    """Parser for ffmpeg KEY=VALUE progress output."""
+
+    @staticmethod
+    def parse_line(line: str) -> tuple[str, str] | None:
+        """Parse a single progress line in KEY=VALUE format.
+
+        Args:
+            line: Raw line from ffmpeg stderr.
+
+        Returns:
+            Tuple of (key, value) if valid format, None otherwise.
+        """
+        if "=" in line:
+            key, value = line.strip().split("=", 1)
+            return key, value
+        return None
+
+
+async def read_progress(
+    stderr: asyncio.StreamReader,
+    duration_ms: int | None = None,
+) -> AsyncIterator[FfmpegProgress]:
+    """Read ffmpeg progress output in real-time.
+
+    Args:
+        stderr: StreamReader from ffmpeg process stderr.
+        duration_ms: Optional video duration in milliseconds for percentage calculation.
+
+    Yields:
+        FfmpegProgress objects as they are parsed.
+    """
+    progress = FfmpegProgress()
+    while True:
+        line = await stderr.readline()
+        if not line:
+            break
+        parsed = ProgressParser.parse_line(line.decode())
+        if parsed:
+            key, value = parsed
+            if key == "frame":
+                progress.frame = int(value) if value != "N/A" else None
+            elif key == "fps":
+                progress.fps = float(value) if value != "N/A" else None
+            elif key == "speed":
+                # Parse "1.2x" -> 1.2
+                progress.speed = float(value.rstrip("x")) if value != "N/A" else None
+            elif key == "total_size":
+                progress.total_size = int(value) if value != "N/A" else None
+            elif key == "out_time_us":
+                progress.out_time_us = int(value) if value != "N/A" else None
+            elif key == "out_time_ms":
+                progress.out_time_ms = int(value) if value != "N/A" else None
+            elif key == "out_time":
+                progress.out_time = value if value != "N/A" else None
+            elif key == "progress":
+                progress.progress = value
+                yield progress
+                if value == "end":
+                    break
+                progress = FfmpegProgress()  # Reset for next block
 
 
 def _cookies_to_netscape(cookies_str: str) -> str:
