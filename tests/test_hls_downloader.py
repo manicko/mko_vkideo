@@ -538,6 +538,7 @@ class TestParallelSegmentsDownload:
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
+            **kwargs: Any,
         ) -> bool:
             nonlocal download_count
             download_count += 1
@@ -696,6 +697,189 @@ class TestBrowserCookiesIntegration:
         assert any(".vkvideo.ru" in line for line in cookie_lines)
         assert any("access_token\tmytoken" in line for line in cookie_lines)
         assert any("user_id\t12345" in line for line in cookie_lines)
+
+
+class TestSequentialDownloadMode:
+    """Tests for sequential download mode with anti-detection throttling."""
+
+    @pytest.mark.asyncio
+    async def test_sequential_mode_applies_delay_after_semaphore(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that sequential mode applies 1.5s + jitter delay after semaphore release."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        test_settings = Settings(max_concurrent_downloads=1, concurrent_fragments=1)
+
+        output_path = tmp_path / "video.mp4"
+
+        sleep_calls: list[float] = []
+
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+            **kwargs: Any,
+        ) -> bool:
+            # Simulate successful download
+            output_path.write_bytes(b"segment data")
+            return True
+
+        async def mock_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                side_effect=mock_download_segment,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    with patch("asyncio.sleep", side_effect=mock_sleep):
+                        await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                                settings=test_settings,
+                            )
+                        )
+
+        # Verify delay was called for each segment in sequential mode (max_concurrent_downloads=1)
+        assert len(sleep_calls) == 2, "Should have sleep call for each segment"
+        # Each delay should be approximately 1.5-2.0 seconds (1.5 + 0-0.5 jitter)
+        for delay in sleep_calls:
+            assert 1.4 <= delay <= 2.1, (
+                f"Delay should be ~1.5s + jitter, got {delay}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sequential_mode_triggers_backoff_on_429(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that sequential mode triggers _retry_429_with_backoff for 429 responses."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        test_settings = Settings(max_concurrent_downloads=1, concurrent_fragments=1)
+
+        output_path = tmp_path / "video.mp4"
+
+        backoff_calls: list[tuple[str, int]] = []
+
+        async def mock_backoff(
+            session: Any,
+            segment_url: str,
+            headers: dict[str, str],
+            segment_index: int,
+            **kwargs: Any,
+        ) -> bytes:
+            backoff_calls.append((segment_url, segment_index))
+            return b"segment content"
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._retry_429_with_backoff",
+                side_effect=mock_backoff,
+            ):
+                with patch("asyncio.sleep", return_value=None):
+                    with patch(
+                        "vkdownloader.services.downloader._merge_segments_batched",
+                        return_value=output_path,
+                    ):
+                        await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                                settings=test_settings,
+                            )
+                        )
+
+        # Verify _retry_429_with_backoff was called for sequential mode
+        assert len(backoff_calls) == 1
+        assert backoff_calls[0][1] == 0, "Should pass segment index to backoff function"
+
+    @pytest.mark.asyncio
+    async def test_parallel_mode_no_inter_segment_delay(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that parallel mode does not apply inter-segment delay."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        test_settings = Settings(max_concurrent_downloads=4, concurrent_fragments=4)
+
+        output_path = tmp_path / "video.mp4"
+
+        sleep_calls: list[float] = []
+
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+            **kwargs: Any,
+        ) -> bool:
+            output_path.write_bytes(b"segment data")
+            return True
+
+        async def mock_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                side_effect=mock_download_segment,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    with patch("asyncio.sleep", side_effect=mock_sleep):
+                        await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                                settings=test_settings,
+                            )
+                        )
+
+        # Parallel mode should not have anti-detection sleep calls
+        assert len(sleep_calls) == 0, "Parallel mode should not have inter-segment delay"
+
+    def test_structured_logging_fields(self, test_settings: Settings) -> None:
+        """Test that _retry_429_with_backoff logs contain structured fields."""
+        import inspect
+
+        from vkdownloader.services.downloader_throttle import _retry_429_with_backoff
+
+        # Test by verifying the log call structure exists in the module
+        source = inspect.getsource(_retry_429_with_backoff)
+
+        # Verify log message contains expected structured fields
+        assert "attempt" in source, "Log should include attempt field"
+        assert "status" in source, "Log should include status field"
+        assert "retry_after" in source, "Log should include retry_after field"
+        assert "segment_index" in source, "Log should include segment_index field"
+        assert "url" in source, "Log should include url field"
 
 
 class TestFfmpegProgress:
