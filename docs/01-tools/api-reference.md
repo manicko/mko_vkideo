@@ -180,7 +180,7 @@ Initialize HLSDownloader with optional settings.
 |------|------|---------|-------------|
 | settings | Settings \| None | None | Application settings. Uses global settings if not provided. |
 
-#### `download_with_ffmpeg(m3u8_url: str, output_file: Path, quality: str = "best") -> Path | None`
+#### `download_with_ffmpeg(m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None, progress_callback: Callable[[FfmpegProgress], None] | None = None) -> Path | None`
 
 Download HLS stream to MP4 using ffmpeg.
 
@@ -190,6 +190,8 @@ Download HLS stream to MP4 using ffmpeg.
 | m3u8_url | str | Required | URL of the HLS m3u8 playlist to download. |
 | output_file | Path | Required | Path where the output MP4 file will be saved. |
 | quality | str | "best" | Quality identifier for logging purposes. |
+| cookies | str \| None | None | Cookies string for authenticated downloads. |
+| progress_callback | Callable[[FfmpegProgress], None] \| None | None | Optional callback for real-time progress updates. |
 
 **Returns:** Path to downloaded MP4 file on success, None on failure.
 
@@ -201,6 +203,146 @@ result = await downloader.download_with_ffmpeg(
     quality="720"
 )
 ```
+
+---
+
+### DownloaderThrottle
+
+Location: `vkdownloader.services.downloader_throttle`
+
+Rate limiting utilities with AWS Full Jitter exponential backoff for handling VK's anti-bot protection.
+
+#### `_retry_429_with_backoff(session: aiohttp.ClientSession, segment_url: str, headers: dict[str, str], segment_index: int, max_retries: int = 3) -> bytes | None`
+
+Download segment with AWS Full Jitter backoff for 429/5xx errors.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| session | aiohttp.ClientSession | Required | aiohttp session for HTTP requests. |
+| segment_url | str | Required | URL of the segment to download. |
+| headers | dict[str, str] | Required | Request headers to use. |
+| segment_index | int | Required | Index of the segment being downloaded (for logging). |
+| max_retries | int | 3 | Maximum number of retry attempts. |
+
+**Returns:** Bytes content on success, None on permanent failure.
+
+**Behavior:**
+- Uses exponential backoff: random(0, base_delay * 2^attempt)
+- Base delay: 1s for 429, 0.05s for 5xx errors
+- Honors Retry-After header when present
+- Max delay capped at 30 seconds
+- Retries on: 429, 500, 502, 503, 504
+
+---
+
+### FfmpegProgress
+
+Location: `vkdownloader.services.downloader`
+
+Progress state from ffmpeg -progress pipe output.
+
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| frame | int \| None | Frame count |
+| fps | float \| None | Frames per second |
+| speed | float \| None | Speed multiplier (e.g., 1.5 = 1.5x) |
+| total_size | int \| None | Total bytes |
+| out_time_us | int \| None | Output time in microseconds |
+| out_time_ms | int \| None | Output time in milliseconds |
+| out_time | str \| None | Output time as string |
+| progress | str \| None | Progress state ("continue" or "end") |
+
+---
+
+### ProgressParser
+
+Location: `vkdownloader.services.downloader`
+
+Parser for ffmpeg KEY=VALUE progress output.
+
+#### `parse_line(line: str) -> tuple[str, str] | None`
+
+Parse a single progress line in KEY=VALUE format.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| line | str | Raw line from ffmpeg stderr. |
+
+**Returns:** Tuple of (key, value) if valid format, None otherwise.
+
+---
+
+### read_progress
+
+Location: `vkdownloader.services.downloader`
+
+Async generator reading ffmpeg progress output in real-time.
+
+```python
+async def read_progress(
+    stderr: asyncio.StreamReader,
+    duration_ms: int | None = None,
+    stderr_collector: list[bytes] | None = None,
+) -> AsyncIterator[FfmpegProgress]:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| stderr | asyncio.StreamReader | Required | StreamReader from ffmpeg process stderr. |
+| duration_ms | int \| None | None | Optional video duration in milliseconds for percentage calculation. |
+| stderr_collector | list[bytes] \| None | None | Optional list to collect raw stderr lines for error handling. |
+
+**Yields:** FfmpegProgress objects as they are parsed from stdout.
+
+---
+
+### get_video_duration
+
+Location: `vkdownloader.services.downloader`
+
+Get video duration in milliseconds using ffprobe for ETA calculation.
+
+```python
+async def get_video_duration(m3u8_url: str) -> int | None:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| m3u8_url | str | HLS playlist URL or input URL for ffprobe. |
+
+**Returns:** Duration in milliseconds if available, None if ffprobe unavailable or fails.
+
+**Behavior:**
+- Uses `ffprobe -show_entries format=duration` for accurate timing
+- Gracefully handles missing ffprobe with warning log, returns None
+- Enables percentage calculation for progress display
+
+---
+
+### _parse_target_duration
+
+Location: `vkdownloader.services.downloader`
+
+Parse #EXT-X-TARGETDURATION from m3u8 content as fallback duration source.
+
+```python
+def _parse_target_duration(content: str) -> int | None:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| content | str | Raw m3u8 playlist content. |
+
+**Returns:** Target duration in milliseconds if found, None otherwise.
 
 ---
 
@@ -367,6 +509,9 @@ Tracks download progress for a video.
 | `total_bytes` | int \| None | Total bytes (if known). |
 | `segments_downloaded` | int | Number of segments downloaded. |
 | `segments_total` | int | Total segments. |
+| `speed` | float \| None | Download speed in bytes/sec. |
+| `eta_seconds` | int \| None | Estimated time to completion in seconds. |
+| `percent` | float \| None | Percentage completion (when duration known). |
 | `status` | DownloadStatus | Current download status. |
 | `error` | str \| None | Error message if any. |
 
@@ -421,6 +566,8 @@ Video quality options for stream selection.
 | `Q480` | "480" |
 | `Q720` | "720" |
 | `Q1080` | "1080" |
+| `Q1440` | "1440" |
+| `Q2160` | "2160" |
 | `BEST` | "best" |
 | `WORST` | "worst" |
 
@@ -613,7 +760,7 @@ Application settings with defaults and environment variable support.
 **Key Attributes:**
 | Name | Default | Description |
 |------|---------|-------------|
-| user_agent | Chrome 120 UA | User agent string for requests |
+| user_agent | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
 | download_dir | ~/Downloads/vkdownloader | Directory for downloaded videos |
 | max_concurrent_downloads | 4 | Maximum concurrent downloads |
 | download_timeout | 300 | Download timeout in seconds |

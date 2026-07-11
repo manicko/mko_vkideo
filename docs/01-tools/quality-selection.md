@@ -28,6 +28,8 @@ VK Video Downloader supports the following quality options:
 | 480p | `480` | 480p resolution (if available) |
 | 720p | `720` | 720p resolution (if available) |
 | 1080p | `1080` | 1080p resolution (if available) |
+| 1440p | `1440` | 1440p resolution (if available) |
+| 2160p | `2160` | 2160p resolution (if available) |
 
 ## How Quality Selection Works
 

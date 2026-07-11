@@ -70,6 +70,15 @@ https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 | yt-dlp direct | ~100KB/s | High | Handles token refresh automatically |
 | ffmpeg + m3u8 URL | ~1MB/s | Medium | Token expiration risk, needs cookies |
 | ffmpeg + cookies | ~1MB/s | Medium-High | Best with fresh non-headless browser |
+| Segment download | Variable | High | Has retry backoff and anti-detection delay |
+
+### Segment Download Throttling
+
+When `max_concurrent_downloads=1` (sequential mode), the downloader applies:
+
+- **Anti-detection delay**: 1.5s + random(0, 0.5s) between segment requests
+- **Retry backoff**: AWS Full Jitter on 429/5xx errors (1s base for 429, 0.05s for 5xx)
+- **Delay placement**: After semaphore release to avoid blocking concurrency mechanism
 
 ## What Works
 
