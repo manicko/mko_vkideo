@@ -206,7 +206,7 @@ class TestExtractionErrors:
             assert cookies is None  # No cookies for FILE mode (placeholder)
 
     @pytest.mark.asyncio
-    async def test_extract_streams_invalid_url(self) -> None:
+    async def test_extract_streams_with_cookies_invalid_url(self) -> None:
         """Test extract_streams raises ValueError for invalid URL format."""
         extractor = VKVideoExtractor()
         invalid_url = "https://example.com/invalid"
@@ -216,3 +216,37 @@ class TestExtractionErrors:
 
         with pytest.raises(ValueError, match="Invalid VK video URL"):
             await extractor.extract_streams_with_cookies(invalid_url)
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_none_mode(self) -> None:
+        """Test that browser is not launched when cookie_source=NONE."""
+        settings = Settings(cookie_source=CookieSource.NONE)
+        extractor = VKVideoExtractor(settings=settings)
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor, "_extract_with_ytdlp", return_value=[mock_stream]
+        ) as mock_extract:
+            streams, cookies = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+
+            mock_extract.assert_called_once()
+            assert cookies is None
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_browser_mode(self) -> None:
+        """Test that browser is launched when cookie_source=BROWSER."""
+        settings = Settings(cookie_source=CookieSource.BROWSER)
+        extractor = VKVideoExtractor(settings=settings)
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor, "_extract_with_browser", return_value=([mock_stream], "cookies")
+        ) as mock_browser:
+            streams, cookies = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+
+            mock_browser.assert_called_once()
+            assert cookies == "cookies"

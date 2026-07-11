@@ -80,6 +80,21 @@ def test_cookie_source_default() -> None:
     assert settings.cookie_source == CookieSource.NONE
 
 
+def test_cookie_source_validation() -> None:
+    """Test cookie_source accepts all enum values."""
+    # Test BROWSER mode
+    settings = Settings(cookie_source=CookieSource.BROWSER)
+    assert settings.cookie_source == CookieSource.BROWSER
+
+    # Test FILE mode
+    settings = Settings(cookie_source=CookieSource.FILE)
+    assert settings.cookie_source == CookieSource.FILE
+
+    # Test NONE mode (default)
+    settings = Settings(cookie_source=CookieSource.NONE)
+    assert settings.cookie_source == CookieSource.NONE
+
+
 def test_cookie_source_from_env() -> None:
     """Test cookie_source can be set via COOKIE_SOURCE environment variable."""
     import os

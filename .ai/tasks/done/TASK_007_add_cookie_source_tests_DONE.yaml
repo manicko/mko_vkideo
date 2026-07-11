@@ -1,0 +1,43 @@
+# Add tests for cookie_source configuration and extractor behavior
+
+id: TASK_007_add_cookie_source_tests
+title: Add tests for cookie_source configuration
+priority: completed
+type: implementation
+
+status: completed
+
+depends_on:
+  - TASK_006_add_cli_cookie_source_option
+
+description: |
+  Add tests to test_config.py for cookie_source default value and validation.
+  Add tests to test_extractor.py for extract_streams_with_cookies behavior.
+
+goals:
+  - Test cookie_source default is CookieSource.NONE
+  - Test cookie_source accepts all enum values
+  - Test extract_streams_with_cookies returns no cookies when NONE
+  - Test extract_streams_with_cookies launches browser when BROWSER
+
+files:
+  - path: tests/test_config.py
+    targets:
+      - type: test
+        name: test_cookie_source_default
+      - type: test
+        name: test_cookie_source_validation
+  - path: tests/test_extractor.py
+    targets:
+      - type: test
+        name: test_extract_streams_with_cookies_none_mode
+      - type: test
+        name: test_extract_streams_with_cookies_browser_mode
+
+changes: []
+
+acceptance_criteria:
+  - All new tests pass
+  - Tests validate all enum values
+  - Tests mock browser appropriately for NONE case
+  - Tests verify browser launch for BROWSER case
