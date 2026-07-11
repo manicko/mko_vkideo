@@ -1,0 +1,38 @@
+id: task_007_verify_ffmpeg_progress_implementation
+title: Verify FFmpeg progress implementation
+
+priority: high
+
+type: verification
+
+depends_on:
+  - task_002_modify_ffmpeg_cmd_for_progress
+  - task_003_create_ffmpeg_progress_parser
+  - task_004_integrate_realtime_progress_reading
+  - task_005_enhance_download_progress_model
+  - task_006_add_video_duration_extraction
+
+verification_steps:
+  - build: pytest --collect-only
+  - test: pytest tests/ -v -k "download"
+  - smoke_check: >
+      Run single download with verbose logging to verify progress output
+      appears during download instead of only after completion
+
+pass_criteria:
+  - All existing tests pass without modification
+  - New progress fields in model validate correctly
+  - FFmpeg command includes progress flags
+  - Progress parsing works with mock ffmpeg output
+  - No regressions in download_with_ffmpeg behavior
+  - Stderr reading does not block or deadlock
+
+failure_action: return affected tasks to rework
+
+notes: >
+  This verification task validates the complete FFmpeg progress
+  implementation. Must verify:
+  - Backward compatibility for callers without progress_callback
+  - Progress updates emitted during download (not after)
+  - No deadlock from streaming stderr reading
+  - Optional ffprobe dependency does not break when missing

@@ -103,6 +103,19 @@ class TestFFmpegCommand:
 
         assert str(output_path) in cmd
 
+    def test_ffmpeg_command_includes_progress_flags(self, test_settings: Settings) -> None:
+        """Test ffmpeg command includes -progress pipe:2 for real-time progress."""
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = Path("/tmp/output.mp4")
+        m3u8_url = "https://example.com/video.m3u8"
+
+        cmd = downloader._build_ffmpeg_cmd(m3u8_url, output_path)
+
+        assert "-progress" in cmd
+        progress_index = cmd.index("-progress")
+        assert cmd[progress_index + 1] == "pipe:2"
+        assert "-nostats" in cmd
+
 
 class TestHLSDownloaderDownload:
     """Tests for HLSDownloader download functionality."""
