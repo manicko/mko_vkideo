@@ -12,7 +12,7 @@ from ..config import Settings
 from ..exceptions import ExtractionError, VideoNotFoundError
 from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
-from ..models.enums import StreamFormat
+from ..models.enums import CookieSource, StreamFormat
 from ..models.video import Stream, VideoWithStreams
 from ..utils.url_sanitizer import _strip_auth_params
 
@@ -87,12 +87,15 @@ class VKVideoExtractor:
             streams=streams,
         )
 
-    async def extract_streams_with_cookies(self, url: str) -> tuple[list[Stream], str | None]:
+    async def extract_streams_with_cookies(
+        self, url: str, force_browser: bool = False
+    ) -> tuple[list[Stream], str | None]:
         """
         Extract streams using browser automation to capture cookies for ffmpeg.
 
         Args:
             url: VK video URL to extract streams from.
+            force_browser: Force browser launch even when cookie_source=NONE (for token refresh).
 
         Returns:
             Tuple of (streams list, cookies string for ffmpeg headers).
@@ -106,6 +109,25 @@ class VKVideoExtractor:
 
         logger.info("extracting_streams_with_cookies", video_id=video_id_full)
 
+        # Check cookie source setting first (unless forced)
+        if not force_browser and self.settings.cookie_source == CookieSource.NONE:
+            # Skip browser, use yt-dlp only - no cookies
+            streams = await self._extract_with_ytdlp(url, video_id_full)
+            if not streams:
+                raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
+            logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
+            return streams, None
+
+        if not force_browser and self.settings.cookie_source == CookieSource.FILE:
+            # Future: Load cookies from file
+            # For now, return streams without cookies (placeholder)
+            streams = await self._extract_with_ytdlp(url, video_id_full)
+            if not streams:
+                raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
+            logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
+            return streams, None
+
+        # Existing browser launch logic for BROWSER mode or forced
         streams, cookies = await self._extract_with_browser(url, video_id_full)
 
         if not streams:

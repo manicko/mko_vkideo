@@ -4,8 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
-from vkdownloader.models.enums import StreamFormat
+from vkdownloader.models.enums import CookieSource, StreamFormat
 from vkdownloader.services.extractor import VKVideoExtractor
 
 
@@ -68,7 +69,9 @@ class TestExtractionErrors:
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_no_streams_raises_video_not_found(self) -> None:
         """Test extract_streams_with_cookies raises VideoNotFoundError when no streams found."""
-        extractor = VKVideoExtractor()
+        # Use BROWSER cookie_source to test browser extraction path
+        settings = Settings(cookie_source=CookieSource.BROWSER)
+        extractor = VKVideoExtractor(settings=settings)
 
         with patch.object(
             extractor, "_extract_with_browser", return_value=([], None)
@@ -122,7 +125,9 @@ class TestExtractionErrors:
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_success(self) -> None:
         """Test extract_streams_with_cookies returns streams and formatted cookies."""
-        extractor = VKVideoExtractor()
+        # Use BROWSER cookie_source to test browser extraction path
+        settings = Settings(cookie_source=CookieSource.BROWSER)
+        extractor = VKVideoExtractor(settings=settings)
         url = "https://vkvideo.ru/video-12345_67890"
 
         mock_stream = MagicMock()
@@ -139,6 +144,66 @@ class TestExtractionErrors:
             assert streams[0].format == StreamFormat.HLS
             assert "session_id=abc123" in cookies
             assert "user_token=xyz789" in cookies
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_none_skips_browser(self) -> None:
+        """Test extract_streams_with_cookies skips browser when cookie_source=NONE."""
+        # Default cookie_source is NONE
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor,
+            "_extract_with_ytdlp",
+            return_value=[mock_stream],
+        ):
+            streams, cookies = await extractor.extract_streams_with_cookies(url)
+
+            assert len(streams) == 1
+            assert cookies is None  # No cookies when cookie_source=NONE
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_force_browser(self) -> None:
+        """Test extract_streams_with_cookies forces browser launch with force_browser=True."""
+        settings = Settings(cookie_source=CookieSource.NONE)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor,
+            "_extract_with_browser",
+            return_value=([mock_stream], "forced_cookies"),
+        ):
+            streams, cookies = await extractor.extract_streams_with_cookies(url, force_browser=True)
+
+            assert len(streams) == 1
+            assert cookies == "forced_cookies"  # Cookies returned when forced
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_with_cookies_file_mode(self) -> None:
+        """Test extract_streams_with_cookies returns streams without cookies for FILE mode."""
+        settings = Settings(cookie_source=CookieSource.FILE)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        mock_stream = MagicMock()
+        mock_stream.format = StreamFormat.HLS
+
+        with patch.object(
+            extractor,
+            "_extract_with_ytdlp",
+            return_value=[mock_stream],
+        ):
+            streams, cookies = await extractor.extract_streams_with_cookies(url)
+
+            assert len(streams) == 1
+            assert cookies is None  # No cookies for FILE mode (placeholder)
 
     @pytest.mark.asyncio
     async def test_extract_streams_invalid_url(self) -> None:

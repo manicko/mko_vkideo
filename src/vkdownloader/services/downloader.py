@@ -252,6 +252,8 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
     Returns:
         Path to downloaded MP4 file on success, None on failure.
     """
+    logger.info("starting_segment_download", url=_strip_auth_params(request.video_url), output=str(request.output_file), quality=request.quality)
+
     if request.settings is None:
         settings = Settings()
     else:
@@ -359,7 +361,10 @@ async def _fetch_playlist_with_retry(
                     return await response.text()
                 if response.status in (403, 410) and extractor:
                     logger.info("token_expired_fetching_new", attempt=attempt + 1)
-                    streams, new_cookies = await extractor.extract_streams_with_cookies(video_url)
+                    # Force browser for token refresh (recovery scenario)
+                    streams, new_cookies = await extractor.extract_streams_with_cookies(
+                        video_url, force_browser=True
+                    )
                     if streams:
                         current_url = str(streams[0].url)
                         headers["Cookie"] = new_cookies or ""
@@ -707,8 +712,9 @@ async def download_with_ytdlp_with_resume_fallback(
                 try:
                     if extractor is None:
                         extractor = VKVideoExtractor(settings=settings)
+                    # Force browser for token refresh during resume (recovery scenario)
                     browser_streams, cookies = await extractor.extract_streams_with_cookies(
-                        video_url
+                        video_url, force_browser=True
                     )
                     if browser_streams:
                         m3u8_url = str(browser_streams[0].url)
@@ -750,6 +756,7 @@ async def _download_with_ytdlp(
     cookies: str | None = None,
 ) -> Path | None:
     """Download using yt-dlp."""
+    logger.info("starting_ytdlp_download", url=_strip_auth_params(video_url), output=str(output_file), quality=quality)
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
 
@@ -813,6 +820,8 @@ async def perform_download(
     Returns:
         Path to downloaded file on success, None on failure.
     """
+    logger.info("starting_download", method=str(method), url=_strip_auth_params(url), quality=quality, output=str(output_file))
+
     if settings is None:
         settings = Settings()
 
