@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -296,12 +297,19 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                         full_url = urljoin(request.m3u8_url, segment_url)
                     segment_path = segments_dir / f"{idx:05d}.ts"
                     if not segment_path.exists():
-                        return await _download_segment(
+                        result = await _download_segment(
                             session, full_url, segment_path, headers,
                             max_concurrent_downloads=settings.max_concurrent_downloads,
                             segment_index=idx,
                         )
-                    return True
+                    else:
+                        result = True
+                # Anti-detection delay AFTER semaphore release (outside context block)
+                # Delay only in sequential mode (max_concurrent_downloads == 1)
+                if result and settings.max_concurrent_downloads == 1:
+                    delay = 1.5 + random.uniform(0, 0.5)
+                    await asyncio.sleep(delay)
+                return result
 
             # Download all missing segments concurrently
             tasks = [
