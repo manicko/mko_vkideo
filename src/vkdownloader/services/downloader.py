@@ -17,6 +17,7 @@ from ..models.enums import DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
+from .downloader_throttle import _retry_429_with_backoff
 
 logger = get_logger(__name__)
 
@@ -295,7 +296,11 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                         full_url = urljoin(request.m3u8_url, segment_url)
                     segment_path = segments_dir / f"{idx:05d}.ts"
                     if not segment_path.exists():
-                        return await _download_segment(session, full_url, segment_path, headers)
+                        return await _download_segment(
+                            session, full_url, segment_path, headers,
+                            max_concurrent_downloads=settings.max_concurrent_downloads,
+                            segment_index=idx,
+                        )
                     return True
 
             # Download all missing segments concurrently
@@ -373,8 +378,33 @@ async def _download_segment(
     segment_url: str,
     output_path: Path,
     headers: dict[str, str],
+    max_concurrent_downloads: int = 1,
+    segment_index: int = 0,
 ) -> bool:
-    """Download a single HLS segment."""
+    """Download a single HLS segment.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        segment_url: URL of the segment to download.
+        output_path: Path to save the downloaded segment.
+        headers: Request headers to use.
+        max_concurrent_downloads: Maximum concurrent downloads. When 1, uses retry with backoff.
+        segment_index: Index of the segment being downloaded (for logging).
+
+    Returns:
+        True on success, False on failure.
+    """
+    if max_concurrent_downloads == 1:
+        content = await _retry_429_with_backoff(
+            session, segment_url, headers, segment_index
+        )
+        if content is not None:
+            with open(output_path, "wb") as f:
+                f.write(content)
+            return True
+        return False
+
+    # Existing logic for parallel mode
     try:
         async with session.get(segment_url, headers=headers) as response:
             if response.status == 200:
