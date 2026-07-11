@@ -1,0 +1,45 @@
+# Add CookieSource StrEnum for cookie acquisition strategies
+
+id: TASK_001_add_cookie_source_enum
+title: Add CookieSource enum for cookie acquisition strategies
+priority: high
+type: implementation
+
+description: |
+  Add CookieSource StrEnum to models/enums.py with three values: NONE, BROWSER, FILE.
+  This enum controls whether browser is launched for cookie extraction during video downloads.
+
+goals:
+  - Create CookieSource enum extending StrEnum
+  - Include NONE (no cookies), BROWSER (launch browser), FILE (external file)
+  - Follow existing enum patterns in codebase (QualityEnum, DownloadMethod, StreamFormat)
+
+files:
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: enum
+        name: CookieSource
+    semantic_anchors:
+      insert_after:
+        type: enum
+        name: DownloadMethod
+
+changes:
+  - action: add_code
+    description: |
+      Add CookieSource enum after DownloadMethod enum with values NONE, BROWSER, FILE
+
+    code_hint: |
+      class CookieSource(StrEnum):
+          """Cookie acquisition strategy for video downloads."""
+
+          NONE = "none"
+          BROWSER = "browser"
+          FILE = "file"
+
+acceptance_criteria:
+  - CookieSource enum exists in enums.py after DownloadMethod
+  - Has NONE = "none" value
+  - Has BROWSER = "browser" value
+  - Has FILE = "file" value
+  - All enum values are lowercase strings matching StrEnum pattern

@@ -40,3 +40,11 @@ class DownloadMethod(StrEnum):
     YTDLP = "yt-dlp"
     FFMPEG = "ffmpeg"
     AUTO = "auto"
+
+
+class CookieSource(StrEnum):
+    """Cookie acquisition strategy for video downloads."""
+
+    NONE = "none"
+    BROWSER = "browser"
+    FILE = "file"

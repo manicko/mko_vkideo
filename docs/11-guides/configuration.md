@@ -32,9 +32,29 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `concurrent_fragments` | `CONCURRENT_FRAGMENTS` | 4 | Concurrent HLS fragments for yt-dlp (reduces throttling) |
 | `throttled_rate` | `THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec before throttling triggers re-extract |
 | `http_chunk_size` | `HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
-| `download_method` | `DOWNLOAD_METHOD` | auto | Download method: yt-dlp, ffmpeg, auto |
+| `download_method` | `DOWNLOAD_METHOD` | auto | Download method: yt-dlp, ffmpeg, or auto |
+| `cookie_source` | `COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser, or file |
 | `log_level` | `LOG_LEVEL` | INFO | Logging level |
 | `log_file` | `LOG_FILE` | None | Optional log file path |
+
+## Cookie Source Settings
+
+### cookie_source
+
+Controls how cookies are acquired for authenticated video downloads:
+
+- **`none`** (default) — No browser launch, fastest downloads for public videos only
+- **`browser`** — Launch browser to extract real cookies for authenticated content
+- **`file`** — Load cookies from a file (future enhancement)
+
+**Example .env configuration:**
+```env
+# For public videos (no authentication needed)
+COOKIE_SOURCE=none
+
+# For private/authenticated videos
+COOKIE_SOURCE=browser
+```
 
 ## Example .env File
 
@@ -48,6 +68,7 @@ SSL_VERIFY=true
 DOWNLOAD_DIR=~/Downloads/vkdownloader
 MAX_CONCURRENT_DOWNLOADS=4
 DOWNLOAD_METHOD=auto
+COOKIE_SOURCE=none
 
 # Logging
 LOG_LEVEL=INFO

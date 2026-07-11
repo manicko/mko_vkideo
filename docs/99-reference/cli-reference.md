@@ -64,6 +64,7 @@ vkdownloader download [OPTIONS] URL
 | `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `1440`, `2160`, `best`, `worst` |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
+| `--cookie-source` | | str | `none` | Cookie strategy: `none`, `browser`, or `file` |
 
 **Behavior:**
 
@@ -119,6 +120,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--quality` | | str | `best` | Video quality selection for all downloads |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
+| `--cookie-source` | | str | `none` | Cookie strategy: `none`, `browser`, or `file` |
 
 **Behavior:**
 
@@ -162,6 +164,18 @@ Available method values for `--method` option:
 | `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
 | `ffmpeg` | Direct ffmpeg download with browser-captured cookies |
 | `auto` | Tries yt-dlp first, falls back to segment download on failure (default) |
+
+---
+
+## Cookie Source Options
+
+Available cookie source values for `--cookie-source` option:
+
+| Value | Description |
+|-------|-------------|
+| `none` | No browser launch, fastest for public videos (default) |
+| `browser` | Launch browser to extract real cookies for authenticated content |
+| `file` | Load cookies from external file (future enhancement) |
 
 ---
 
