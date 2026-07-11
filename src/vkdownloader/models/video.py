@@ -44,6 +44,9 @@ class DownloadProgress(BaseModel):
     total_bytes: int | None = None
     segments_downloaded: int
     segments_total: int
+    speed: float | None = None  # bytes/sec
+    eta_seconds: int | None = None
+    percent: float | None = None
     status: DownloadStatus
     error: str | None = None
 
