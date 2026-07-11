@@ -388,6 +388,53 @@ async def _download_segment(
         return False
 
 
+async def get_video_duration(m3u8_url: str) -> int | None:
+    """Get duration in milliseconds using ffprobe.
+
+    Args:
+        m3u8_url: HLS playlist URL or input URL for ffprobe.
+
+    Returns:
+        Duration in milliseconds if available, None if ffprobe unavailable or fails.
+    """
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            m3u8_url
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if stdout:
+            return int(float(stdout.decode()) * 1000)
+    except FileNotFoundError:
+        logger.warning("ffprobe_not_found", fallback_to_manual=True)
+    return None
+
+
+def _parse_target_duration(content: str) -> int | None:
+    """Parse #EXT-X-TARGETDURATION from m3u8 content.
+
+    Args:
+        content: Raw m3u8 playlist content.
+
+    Returns:
+        Target duration in milliseconds if found, None otherwise.
+    """
+    for line in content.splitlines():
+        if line.startswith("#EXT-X-TARGETDURATION:"):
+            try:
+                return int(line.split(":")[1]) * 1000
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
 def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> list[str]:
     """Build ffmpeg concat command for merging files.
 
