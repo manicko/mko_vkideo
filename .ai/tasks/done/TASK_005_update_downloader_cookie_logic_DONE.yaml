@@ -1,0 +1,82 @@
+# Update downloader to respect cookie_source setting for both methods
+
+id: TASK_005_update_downloader_cookie_logic
+title: Update downloader to respect cookie_source setting
+priority: high
+type: implementation
+status: done
+
+depends_on:
+  - TASK_004_update_extractor_cookie_logic
+
+description: |
+  Modify perform_download() in downloader.py to conditionally call extract_streams_with_cookies()
+  based on cookie_source setting. For YTDLP and FFMPEG methods, check setting before calling.
+  Also update _fetch_playlist_with_retry to handle token refresh appropriately.
+
+goals:
+  - Check cookie_source in YTDLP branch of perform_download()
+  - Check cookie_source in FFMPEG branch of perform_download()
+  - Maintain AUTO method behavior (no browser)
+  - Handle token refresh in _fetch_playlist_with_retry gracefully
+  - Pass cookies to download functions when available
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: perform_download
+      - type: function
+        name: _fetch_playlist_with_retry
+    semantic_anchors:
+      insert_after:
+        type: match_case
+        value: DownloadMethod.YTDLP
+
+changes:
+  - action: modify_code
+    description: |
+      Update YTDLP branch (lines 838-846):
+        - Only call extract_streams_with_cookies when cookie_source == BROWSER
+        - Otherwise use the already-extracted streams and cookies=None
+
+      Update FFMPEG branch (lines 847-869):
+        - Same conditional logic for cookie extraction
+
+      Update _fetch_playlist_with_retry:
+        - On 403/401, check if cookie_source allows browser use
+        - If not (NONE mode), log warning and return None (cannot refresh without browser)
+
+    code_hint: |
+      # YTDLP branch - conditional cookie extraction
+      if settings.cookie_source == CookieSource.BROWSER:
+          browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+          if browser_streams:
+              m3u8_url = str(browser_streams[0].url)
+      else:
+          browser_streams = None
+          cookies = None
+          # Use existing m3u8_url from extractor
+
+      # FFMPEG branch - similar conditional logic
+      if settings.cookie_source == CookieSource.BROWSER:
+          browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+          if browser_streams:
+              m3u8_url = str(browser_streams[0].url)
+      else:
+          browser_streams = None
+          cookies = None
+
+      # _fetch_playlist_with_retry - handle token refresh gracefully
+      if response.status in (403, 410) and extractor:
+          if settings.cookie_source == CookieSource.BROWSER:
+              # Can refresh token
+          else:
+              # Cannot refresh without browser, return None or continue without cookies
+
+acceptance_criteria:
+  - YTDLP method respects cookie_source setting
+  - FFMPEG method respects cookie_source setting
+  - AUTO method unchanged (no browser)
+  - Token refresh handled appropriately without cookie_source
+  - All download paths work without cookies when NONE

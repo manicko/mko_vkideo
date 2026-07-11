@@ -14,7 +14,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..models.dtos import HLSDownloadRequest
-from ..models.enums import DownloadMethod
+from ..models.enums import CookieSource, DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
@@ -351,7 +351,7 @@ async def _fetch_playlist_with_retry(
     settings: Settings,
     max_retries: int = 3,
 ) -> str | None:
-    """Fetch m3u8 playlist with token refresh on 403/401."""
+    """Fetch m3u8 playlist with token refresh on 403/410."""
     current_url = m3u8_url
 
     for attempt in range(max_retries):
@@ -361,14 +361,24 @@ async def _fetch_playlist_with_retry(
                     return await response.text()
                 if response.status in (403, 410) and extractor:
                     logger.info("token_expired_fetching_new", attempt=attempt + 1)
-                    # Force browser for token refresh (recovery scenario)
-                    streams, new_cookies = await extractor.extract_streams_with_cookies(
-                        video_url, force_browser=True
-                    )
-                    if streams:
-                        current_url = str(streams[0].url)
-                        headers["Cookie"] = new_cookies or ""
-                        continue
+                    # Check if cookie_source allows browser use for token refresh
+                    if settings.cookie_source == CookieSource.BROWSER:
+                        # Can refresh token via browser (recovery scenario)
+                        streams, new_cookies = await extractor.extract_streams_with_cookies(
+                            video_url, force_browser=True
+                        )
+                        if streams:
+                            current_url = str(streams[0].url)
+                            headers["Cookie"] = new_cookies or ""
+                            continue
+                    else:
+                        # Cannot refresh without browser, log warning and return None
+                        logger.warning(
+                            "token_refresh_failed_cookie_source",
+                            cookie_source=str(settings.cookie_source),
+                            reason="Cannot refresh token without browser access",
+                        )
+                        return None
         except Exception as e:
             logger.warning("playlist_fetch_failed", error=str(e))
 
@@ -840,19 +850,27 @@ async def perform_download(
 
     match method:
         case DownloadMethod.YTDLP:
-            # Get fresh m3u8 URL and cookies via browser for authenticated downloads
-            browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
-            if browser_streams:
-                m3u8_url = str(browser_streams[0].url)
+            # Conditionally get cookies based on cookie_source setting
+            if settings.cookie_source == CookieSource.BROWSER:
+                browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+                if browser_streams:
+                    m3u8_url = str(browser_streams[0].url)
+            else:
+                browser_streams = None
+                cookies = None
             return await download_with_ytdlp_with_resume_fallback(
                 url, m3u8_url, output_file, quality, extractor, settings,
                 cookies=cookies
             )
         case DownloadMethod.FFMPEG:
-            # For ffmpeg: get cookies via browser first
-            browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
-            if browser_streams:
-                m3u8_url = str(browser_streams[0].url)
+            # Conditionally get cookies based on cookie_source setting
+            if settings.cookie_source == CookieSource.BROWSER:
+                browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+                if browser_streams:
+                    m3u8_url = str(browser_streams[0].url)
+            else:
+                browser_streams = None
+                cookies = None
             downloader = HLSDownloader(settings=settings)
             result = await downloader.download_with_ffmpeg(
                 m3u8_url, output_file, quality, cookies
