@@ -96,15 +96,15 @@ def test_cookie_source_validation() -> None:
 
 
 def test_cookie_source_from_env() -> None:
-    """Test cookie_source can be set via COOKIE_SOURCE environment variable."""
+    """Test cookie_source can be set via VKDOWNLOADER_COOKIE_SOURCE environment variable."""
     import os
 
-    os.environ["COOKIE_SOURCE"] = "browser"
+    os.environ["VKDOWNLOADER_COOKIE_SOURCE"] = "browser"
     try:
         settings = Settings()
         assert settings.cookie_source == CookieSource.BROWSER
     finally:
-        del os.environ["COOKIE_SOURCE"]
+        del os.environ["VKDOWNLOADER_COOKIE_SOURCE"]
 
 
 def test_concurrent_fragments_default(test_settings: Settings) -> None:

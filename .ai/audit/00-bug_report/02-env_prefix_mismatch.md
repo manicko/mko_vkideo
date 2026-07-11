@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-11
 **Severity:** High
-**Affected Files:** `src\vkdownloader/config.py`, `.env`
+**Status:** Fixed (TASK_008)
+**Affected Files:** `src\vkdownloader/config.py`, `tests/test_config.py`
 
 ## Problem Description
 
