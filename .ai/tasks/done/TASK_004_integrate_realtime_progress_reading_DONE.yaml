@@ -1,0 +1,79 @@
+id: task_004_integrate_realtime_progress_reading
+title: Integrate real-time progress reading in download_with_ffmpeg
+
+priority: high
+
+depends_on:
+  - task_003_create_ffmpeg_progress_parser
+
+type: implementation
+
+source_reference: .ai\plans\progress_implementation_hints.md
+source_section: 3. Integration with Tqdm
+
+description: >
+  Replace blocking process.communicate() with concurrent task that reads stderr
+  in real-time while monitoring progress. Integrate with optional progress callback
+  for tqdm display.
+
+objectives:
+  - Replace process.communicate() with real-time stderr reading
+  - Implement concurrent process.wait() and read_progress() gathering
+  - Add optional progress_callback parameter to download_with_ffmpeg
+  - Preserve error handling and return behavior
+  - Maintain backward compatibility for callers without callback
+
+files:
+  - path: src\vkdownloader\services\downloader.py
+    targets:
+      - type: method
+        name: download_with_ffmpeg
+        class: HLSDownloader
+
+    semantic_anchors:
+      modify:
+        type: function
+        name: download_with_ffmpeg
+
+changes:
+  - action: modify_function_signature
+    description: >
+      Add optional progress_callback parameter to download_with_ffmpeg
+
+    code_hint: |
+      async def download_with_ffmpeg(
+          self,
+          m3u8_url: str,
+          output_file: Path,
+          quality: str = "best",
+          cookies: str | None = None,
+          progress_callback: Callable[[FfmpegProgress], None] | None = None,
+      ) -> Path | None:
+
+  - action: replace_subprocess_handling
+    description: >
+      Replace blocking communicate() with concurrent gather for process.wait()
+      and real-time stderr reading
+
+    code_hint: |
+      # Run both concurrently
+      process_task = asyncio.create_task(process.wait())
+      progress_task = asyncio.create_task(
+          read_progress(process.stderr, progress_callback)
+      ) if progress_callback else None
+
+      await process_task
+      if progress_task:
+          await progress_task
+
+acceptance_criteria:
+  - process.communicate() replaced with real-time reading
+  - progress_callback optional and backward compatible
+  - Progress updates emitted during download
+  - Error handling preserved
+  - Return behavior unchanged on success/failure
+
+risks:
+  - This is a medium-risk change modifying core subprocess handling
+  - Must verify no deadlock with stderr buffering
+  - Must handle progress_callback being None (streaming mode disabled)

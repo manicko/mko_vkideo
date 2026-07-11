@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin
@@ -60,12 +60,14 @@ class ProgressParser:
 async def read_progress(
     stderr: asyncio.StreamReader,
     duration_ms: int | None = None,
+    stderr_collector: list[bytes] | None = None,
 ) -> AsyncIterator[FfmpegProgress]:
     """Read ffmpeg progress output in real-time.
 
     Args:
         stderr: StreamReader from ffmpeg process stderr.
         duration_ms: Optional video duration in milliseconds for percentage calculation.
+        stderr_collector: Optional list to collect raw stderr lines for error handling.
 
     Yields:
         FfmpegProgress objects as they are parsed.
@@ -75,6 +77,8 @@ async def read_progress(
         line = await stderr.readline()
         if not line:
             break
+        if stderr_collector is not None:
+            stderr_collector.append(line)
         parsed = ProgressParser.parse_line(line.decode())
         if parsed:
             key, value = parsed
@@ -149,14 +153,30 @@ class HLSDownloader:
             "-c",
             "copy",
             str(output_file),
-        ]
+]
 
         return cmd
 
     async def download_with_ffmpeg(
-        self, m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None
+        self,
+        m3u8_url: str,
+        output_file: Path,
+        quality: str = "best",
+        cookies: str | None = None,
+        progress_callback: Callable[[FfmpegProgress], None] | None = None,
     ) -> Path | None:
-        """Download HLS stream to MP4 using ffmpeg."""
+        """Download HLS stream to MP4 using ffmpeg.
+
+        Args:
+            m3u8_url: HLS playlist URL.
+            output_file: Output file path.
+            quality: Quality string (e.g., "720", "1080").
+            cookies: Optional cookies string for authenticated downloads.
+            progress_callback: Optional callback for real-time progress updates.
+
+        Returns:
+            Path to output file on success, None on failure.
+        """
         logger.info(
             "starting_ffmpeg_download",
             url=_strip_auth_params(m3u8_url),
@@ -173,10 +193,42 @@ class HLSDownloader:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate()
+        stderr_chunks: list[bytes] = []
+
+        async def _monitor_progress() -> None:
+            """Read progress and call callback, while collecting stderr for error handling."""
+            assert process.stderr is not None
+            async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
+                if progress_callback:
+                    progress_callback(progress)
+
+        async def _drain_stderr() -> None:
+            """Drain stderr to prevent buffer deadlock when no callback is provided."""
+            assert process.stderr is not None
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                stderr_chunks.append(line)
+
+        # Run both process wait and stderr reading concurrently
+        if progress_callback:
+            process_task = asyncio.create_task(process.wait())
+            monitor_task = asyncio.create_task(_monitor_progress())
+            await process_task
+            await monitor_task
+        else:
+            process_task = asyncio.create_task(process.wait())
+            drain_task = asyncio.create_task(_drain_stderr())
+            await process_task
+            await drain_task
+
+        stderr_data = (
+            b"".join(stderr_chunks) if stderr_chunks else b""
+        )
 
         if process.returncode != 0:
-            error_msg = stderr.decode() if stderr else "Unknown ffmpeg error"
+            error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
             logger.error("ffmpeg_download_failed", returncode=process.returncode, error=error_msg)
             return None
 

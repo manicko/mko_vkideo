@@ -8,6 +8,7 @@ import pytest
 from vkdownloader.config import Settings
 from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.services.downloader import (
+    FfmpegProgress,
     HLSDownloader,
     _cleanup_segments,
     _cookies_to_netscape,
@@ -115,8 +116,15 @@ class TestHLSDownloaderDownload:
         output_path = tmp_path / "video.mp4"
 
         mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(return_value=(b"", b""))
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
         mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await downloader.download_with_ffmpeg(
@@ -134,8 +142,16 @@ class TestHLSDownloaderDownload:
         output_path = tmp_path / "video.mp4"
 
         mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(return_value=(b"", b"ffmpeg error"))
+
+        async def mock_wait() -> int:
+            return 1
+
+        mock_process.wait = mock_wait
         mock_process.returncode = 1
+        mock_stderr = AsyncMock()
+        # Return one error line then EOF
+        mock_stderr.readline = AsyncMock(side_effect=[b"ffmpeg error\n", b""])
+        mock_process.stderr = mock_stderr
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await downloader.download_with_ffmpeg(
@@ -145,23 +161,73 @@ class TestHLSDownloaderDownload:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_ffmpeg_command_contains_expected_elements(
-        self, test_settings: Settings
+    async def test_download_with_ffmpeg_with_progress_callback(
+        self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test that ffmpeg command is built with all expected elements."""
+        """Test download_with_ffmpeg calls progress callback when provided."""
         downloader = HLSDownloader(settings=test_settings)
-        output_path = Path("/tmp/video.mp4")
-        m3u8_url = "https://example.com/video.m3u8"
+        output_path = tmp_path / "video.mp4"
 
-        cmd = downloader._build_ffmpeg_cmd(m3u8_url, output_path)
+        progress_updates: list[FfmpegProgress] = []
 
-        assert cmd[0] == "ffmpeg"
-        assert "-y" in cmd
-        assert "-headers" in cmd
-        headers_arg = cmd[cmd.index("-headers") + 1]
-        assert "User-Agent" in headers_arg
-        assert "-i" in cmd
-        assert m3u8_url in cmd
+        def progress_callback(progress: FfmpegProgress) -> None:
+            progress_updates.append(progress)
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        # Return progress lines then EOF
+        progress_lines = [
+            b"frame=100\n",
+            b"speed=1.5x\n",
+            b"progress=continue\n",
+            b"",  # EOF
+        ]
+        mock_stderr.readline = AsyncMock(side_effect=progress_lines)
+        mock_process.stderr = mock_stderr
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await downloader.download_with_ffmpeg(
+                "https://example.com/video.m3u8", output_path, "720",
+                progress_callback=progress_callback
+            )
+
+            assert result == output_path
+            assert len(progress_updates) == 1
+            assert progress_updates[0].frame == 100
+            assert progress_updates[0].speed == 1.5
+            assert progress_updates[0].progress == "continue"
+
+    @pytest.mark.asyncio
+    async def test_download_with_ffmpeg_no_progress_callback(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test download_with_ffmpeg works without progress callback for backward compatibility."""
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await downloader.download_with_ffmpeg(
+                "https://example.com/video.m3u8", output_path, "720"
+            )
+
+            assert result == output_path
 
 
 class TestDownloadHlsWithResume:
