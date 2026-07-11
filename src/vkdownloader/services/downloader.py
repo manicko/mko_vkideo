@@ -61,6 +61,8 @@ class HLSDownloader:
         cmd = [
             "ffmpeg",
             "-y",
+            "-progress", "pipe:2",
+            "-nostats",
             "-headers",
             headers,
             "-i",

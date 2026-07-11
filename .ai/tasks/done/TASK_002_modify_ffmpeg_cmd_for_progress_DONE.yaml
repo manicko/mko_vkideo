@@ -1,0 +1,58 @@
+id: task_002_modify_ffmpeg_cmd_for_progress
+title: Modify ffmpeg command to output progress
+
+priority: high
+
+depends_on:
+  - task_001_research_ffmpeg_progress_architecture
+
+type: implementation
+
+source_reference: .ai\plans\progress_implementation_hints.md
+source_section: 1. FFmpeg Command Modification
+
+description: >
+  Add -progress pipe:2 and -nostats flags to ffmpeg command in _build_ffmpeg_cmd
+  method to enable real-time progress output to stderr for parsing.
+
+objectives:
+  - Add -progress pipe:2 flag to write progress to stderr
+  - Add -nostats flag to keep stdout clean
+  - Preserve existing headers configuration for authentication
+
+files:
+  - path: src\vkdownloader\services\downloader.py
+    targets:
+      - type: method
+        name: _build_ffmpeg_cmd
+        class: HLSDownloader
+
+    semantic_anchors:
+      modify:
+        type: function
+        name: _build_ffmpeg_cmd
+
+changes:
+  - action: add_cli_flags
+    description: Add -progress pipe:2 and -nostats to ffmpeg command
+
+    code_hint: |
+      cmd = [
+          "ffmpeg",
+          "-y",
+          "-progress", "pipe:2",  # Progress to stderr
+          "-nostats",             # No stats to stdout (keep clean)
+          "-headers",
+          headers,
+          "-i",
+          m3u8_url,
+          "-c",
+          "copy",
+          str(output_file),
+      ]
+
+acceptance_criteria:
+  - ffmpeg command includes -progress pipe:2 flag
+  - ffmpeg command includes -nostats flag
+  - Existing authentication headers preserved
+  - Function signature unchanged
