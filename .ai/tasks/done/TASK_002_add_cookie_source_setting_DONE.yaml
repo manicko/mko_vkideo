@@ -1,0 +1,49 @@
+# Add cookie_source setting to Settings class with CookieSource.NONE default
+
+id: TASK_002_add_cookie_source_setting
+title: Add cookie_source setting to Settings class
+priority: high
+type: implementation
+
+depends_on:
+  - TASK_001_add_cookie_source_enum
+
+description: |
+  Add cookie_source field to Settings class in config.py with CookieSource.NONE default.
+  This enables environment variable COOKIE_SOURCE support.
+
+goals:
+  - Add cookie_source field with CookieSource type
+  - Default to CookieSource.NONE for backward compatibility (original behavior)
+  - Add proper description and Field configuration
+  - Import CookieSource from models.enums
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+    semantic_anchors:
+      insert_after:
+        type: field
+        name: download_method
+
+changes:
+  - action: add_code
+    description: |
+      Add cookie_source field after download_method field in Settings class
+
+    code_hint: |
+      from .models.enums import DownloadMethod, CookieSource
+
+      # In Settings class, after download_method:
+      cookie_source: CookieSource = Field(
+          default=CookieSource.NONE,
+          description="Cookie acquisition strategy: none, browser, or file",
+      )
+
+acceptance_criteria:
+  - Settings.cookie_source field exists
+  - Default value is CookieSource.NONE
+  - Environment variable COOKIE_SOURCE works
+  - Settings validation tests pass

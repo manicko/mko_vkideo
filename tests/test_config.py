@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from vkdownloader.config import Settings
-from vkdownloader.models.enums import DownloadMethod
+from vkdownloader.models.enums import CookieSource, DownloadMethod
 
 
 def test_settings_creates_with_defaults() -> None:
@@ -72,6 +72,24 @@ def test_settings_rejects_multiple_unknown_keys() -> None:
 
     error = exc_info.value
     assert "Extra inputs are not permitted" in str(error)
+
+
+def test_cookie_source_default() -> None:
+    """Test cookie_source default value is CookieSource.NONE."""
+    settings = Settings()
+    assert settings.cookie_source == CookieSource.NONE
+
+
+def test_cookie_source_from_env() -> None:
+    """Test cookie_source can be set via COOKIE_SOURCE environment variable."""
+    import os
+
+    os.environ["COOKIE_SOURCE"] = "browser"
+    try:
+        settings = Settings()
+        assert settings.cookie_source == CookieSource.BROWSER
+    finally:
+        del os.environ["COOKIE_SOURCE"]
 
 
 def test_concurrent_fragments_default(test_settings: Settings) -> None:

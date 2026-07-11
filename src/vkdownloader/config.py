@@ -7,7 +7,7 @@ import structlog
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from vkdownloader.models.enums import DownloadMethod
+from vkdownloader.models.enums import CookieSource, DownloadMethod
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     download_method: DownloadMethod = Field(
         default=DownloadMethod.AUTO,
         description="Download method: 'yt-dlp', 'ffmpeg', or 'auto'",
+    )
+    cookie_source: CookieSource = Field(
+        default=CookieSource.NONE,
+        description="Cookie acquisition strategy: none, browser, or file",
     )
 
     # Logging settings
