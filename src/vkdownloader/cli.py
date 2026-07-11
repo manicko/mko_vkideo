@@ -8,7 +8,7 @@ from structlog import get_logger
 from tqdm import tqdm
 
 from .config import Settings, setup_logging
-from .models.enums import DownloadMethod, QualityEnum
+from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .services.downloader import perform_download
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
@@ -38,6 +38,12 @@ def download(
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
+    cookie_source: CookieSource = typer.Option(  # noqa: B008
+        CookieSource.NONE,
+        "--cookie-source",
+        "-c",
+        help="Cookie source: none, browser, or file",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -48,7 +54,7 @@ def download(
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
-        settings = Settings()
+        settings = Settings(cookie_source=cookie_source)
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
@@ -121,6 +127,12 @@ def batch_download(
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
+    cookie_source: CookieSource = typer.Option(  # noqa: B008
+        CookieSource.NONE,
+        "--cookie-source",
+        "-c",
+        help="Cookie source: none, browser, or file",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
@@ -143,7 +155,7 @@ def batch_download(
     async def _download_single(url: str) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
-            settings = Settings()
+            settings = Settings(cookie_source=cookie_source)
             extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 

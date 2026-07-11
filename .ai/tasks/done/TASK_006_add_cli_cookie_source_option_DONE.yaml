@@ -1,0 +1,68 @@
+# Add --cookie-source CLI option to download and batch commands
+
+id: TASK_006_add_cli_cookie_source_option
+title: Add --cookie-source CLI option to download and batch commands
+priority: medium
+type: implementation
+
+depends_on:
+  - TASK_005_update_downloader_cookie_logic
+
+description: |
+  Add --cookie-source option to CLI commands in cli.py. Map to CookieSource enum values.
+  Support environment variable precedence via Settings.
+
+goals:
+  - Add --cookie-source option to download command
+  - Add --cookie-source option to batch command
+  - Use CookieSource type with Typer Option
+  - Default to CookieSource.NONE
+  - Import CookieSource enum
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: batch_download
+    semantic_anchors:
+      insert_after:
+        type: parameter
+        name: method
+
+changes:
+  - action: add_code
+    description: |
+      Add cookie_source parameter to both CLI commands after method parameter
+
+    code_hint: |
+      from .models.enums import DownloadMethod, QualityEnum, CookieSource
+
+      # In download command:
+      @app.command()
+      def download(
+          url: str = typer.Argument(...),
+          quality: QualityEnum = typer.Option(QualityEnum.BEST),
+          output: Path = typer.Option("."),
+          method: DownloadMethod = typer.Option(DownloadMethod.AUTO),
+          cookie_source: CookieSource = typer.Option(CookieSource.NONE),
+      ) -> None:
+          settings = Settings(cookie_source=cookie_source, ...)
+
+      # In batch command:
+      @app.command("batch")
+      def batch_download(
+          urls_file: Path = typer.Argument(...),
+          quality: QualityEnum = typer.Option(QualityEnum.BEST),
+          output: Path = typer.Option("."),
+          method: DownloadMethod = typer.Option(DownloadMethod.AUTO),
+          cookie_source: CookieSource = typer.Option(CookieSource.NONE),
+      ) -> None:
+          settings = Settings(cookie_source=cookie_source, ...)
+
+acceptance_criteria:
+  - CLI accepts --cookie-source option
+  - All three values (none, browser, file) accepted
+  - Environment variable COOKIE_SOURCE works as fallback
+  - CLI help shows new option with correct description
