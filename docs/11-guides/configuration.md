@@ -47,6 +47,16 @@ Controls how cookies are acquired for authenticated video downloads:
 - **`browser`** — Launch browser to extract real cookies for authenticated content
 - **`file`** — Load cookies from a file (future enhancement)
 
+**Download Method Behavior:**
+| Method | cookie_source=NONE | cookie_source=BROWSER |
+|--------|-------------------|-------------------|
+| `yt-dlp` | Uses yt-dlp, no cookies passed | Uses yt-dlp with browser cookies |
+| `ffmpeg` | Direct download without cookies | Captures cookies for ffmpeg headers |
+| `auto` | No browser involvement | No browser involvement |
+
+**Recovery Scenarios:**
+When token refresh is needed (segment download on 403/410), the system forces browser launch regardless of `cookie_source` setting to recover from expired tokens.
+
 **Example .env configuration:**
 ```env
 # For public videos (no authentication needed)

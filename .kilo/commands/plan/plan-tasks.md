@@ -1,4 +1,4 @@
----
+З---
 name: plan-tasks
 description: Build dependency-aware rollout plans and generate semantic implementation-ready task specifications using stable symbol-level targeting
 agent: planner

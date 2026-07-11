@@ -1,6 +1,7 @@
 """Tests for HLSDownloader service with ffmpeg integration."""
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -880,6 +881,185 @@ class TestSequentialDownloadMode:
         assert "retry_after" in source, "Log should include retry_after field"
         assert "segment_index" in source, "Log should include segment_index field"
         assert "url" in source, "Log should include url field"
+
+
+class TestDownloadMethodLogging:
+    """Tests for download method logging."""
+
+    @pytest.mark.asyncio
+    async def test_perform_download_logs_method(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that perform_download logs the download method."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        # Capture log messages
+        log_messages: list[dict] = []
+
+        def capture_log(msg: str, **kwargs: Any) -> None:
+            log_messages.append({"message": msg, "kwargs": kwargs})
+
+        output_file = tmp_path / "video_720p.mp4"
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=MagicMock(streams=[MagicMock(url="https://example.com/video.m3u8", quality="720")]),
+        ):
+            with patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
+                return_value=([MagicMock(url="https://example.com/video.m3u8", quality="720")], "cookies"),
+            ):
+                with patch(
+                    "vkdownloader.services.downloader.download_with_ytdlp_with_resume_fallback",
+                    return_value=output_file,
+                ):
+                    with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                        result = await perform_download(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "720",
+                            output_file,
+                            DownloadMethod.YTDLP,
+                            settings=test_settings,
+                        )
+
+        assert result == output_file
+        # Check that starting_download was logged with method
+        starting_logs = [m for m in log_messages if m["kwargs"].get("method") == "yt-dlp"]
+        assert len(starting_logs) >= 1, "Should log starting_download with method=yt-dlp"
+
+    @pytest.mark.asyncio
+    async def test_download_hls_with_resume_logs_segment_method(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that download_hls_with_resume logs the segment download method."""
+        log_messages: list[dict] = []
+
+        def capture_log(msg: str, **kwargs: Any) -> None:
+            log_messages.append({"message": msg, "kwargs": kwargs})
+
+        output_file = tmp_path / "video.mp4"
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                return_value=True,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_file,
+                ):
+                    with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                        result = await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_file,
+                                settings=test_settings,
+                            )
+                        )
+
+        assert result == output_file
+        # Check that starting_segment_download was logged
+        starting_logs = [m for m in log_messages if "starting_segment_download" in m["message"]]
+        assert len(starting_logs) >= 1, "Should log starting_segment_download"
+
+    @pytest.mark.asyncio
+    async def test_download_with_ytdlp_logs_download_start(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that _download_with_ytdlp logs starting_ytdlp_download."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        log_messages: list[dict] = []
+
+        def capture_log(msg: str, **kwargs: Any) -> None:
+            log_messages.append({"message": msg, "kwargs": kwargs})
+
+        output_file = tmp_path / "video.mp4"
+
+        mock_ydl_instance = MagicMock()
+
+        with patch("vkdownloader.services.downloader.yt_dlp") as mock_yt:
+            mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
+
+            with patch(
+                "vkdownloader.services.downloader.asyncio.get_event_loop"
+            ) as mock_loop:
+                def run_in_executor_side_effect(
+                    executor: Any, func: Any, *args: Any
+                ) -> Any:
+                    async def coro() -> str:
+                        return str(output_file)
+                    return coro()
+
+                mock_loop.return_value.run_in_executor = run_in_executor_side_effect
+
+                with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                    )
+
+        # Check that starting_ytdlp_download was logged
+        starting_logs = [m for m in log_messages if "starting_ytdlp_download" in m["message"]]
+        assert len(starting_logs) >= 1, "Should log starting_ytdlp_download"
+        # Verify quality is in the log
+        assert starting_logs[0]["kwargs"].get("quality") == "720"
+
+    @pytest.mark.asyncio
+    async def test_perform_download_logs_ffmpeg_method(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that perform_download logs the ffmpeg download method."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        log_messages: list[dict] = []
+
+        def capture_log(msg: str, **kwargs: Any) -> None:
+            log_messages.append({"message": msg, "kwargs": kwargs})
+
+        output_file = tmp_path / "video_720p.mp4"
+
+        # Mock for ffmpeg method
+        mock_process = AsyncMock()
+        async def mock_wait() -> int:
+            return 0
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=MagicMock(streams=[MagicMock(url="https://example.com/video.m3u8", quality="720")]),
+        ):
+            with patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
+                return_value=([MagicMock(url="https://example.com/video.m3u8", quality="720")], "cookies"),
+            ):
+                with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+                    with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                        result = await perform_download(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "720",
+                            output_file,
+                            DownloadMethod.FFMPEG,
+                            settings=test_settings,
+                        )
+
+        assert result == output_file
+        # Check that starting_download was logged with ffmpeg method
+        starting_logs = [m for m in log_messages if "starting_download" in m["message"]]
+        assert len(starting_logs) >= 1, "Should log starting_download"
+        assert starting_logs[0]["kwargs"].get("method") == "ffmpeg"
 
 
 class TestFfmpegProgress:

@@ -96,18 +96,30 @@ When `max_concurrent_downloads=1` (sequential mode), the downloader applies:
 
 ## Recommended Usage
 
-For fastest download (~1MB/s):
+For public videos (fastest download, no authentication needed):
 ```bash
-vkdownloader download --method ffmpeg "VIDEO_URL"
+vkdownloader download --cookie-source none "VIDEO_URL"
+```
+- No browser launch, fastest execution
+- Uses yt-dlp or ffmpeg without cookies
+
+For authenticated content:
+```bash
+vkdownloader download --cookie-source browser "VIDEO_URL"
 ```
 - Browser opens (user must wait for page load)
 - m3u8 URL captured with fresh token
-- ffmpeg downloads with cookies
+- ffmpeg downloads with cookies for authenticated content
 - Falls back to yt-dlp if needed
+
+For fastest download with authentication (~1MB/s):
+```bash
+vkdownloader download --method ffmpeg --cookie-source browser "VIDEO_URL"
+```
 
 For most reliable download (~100KB/s):
 ```bash
-vkdownloader download --method yt-dlp "VIDEO_URL"
+vkdownloader download --method yt-dlp --cookie-source browser "VIDEO_URL"
 ```
 - Always works but significantly slower
 - yt-dlp handles all token management internally

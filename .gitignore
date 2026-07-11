@@ -19,3 +19,6 @@ wheels/
 
 # Progress metadata files
 *_progress.json
+
+# Environment configuration
+.env

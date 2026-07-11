@@ -8,6 +8,7 @@ tags:
 related:
   - vkdownloader-overview
   - vkdownloader-installation
+  - vkdownloader-quality-selection
 ---
 # API Reference
 
@@ -80,16 +81,23 @@ for stream in video.streams:
     print(f"{stream.quality}: {stream.url}")
 ```
 
-#### `extract_streams_with_cookies(url: str) -> tuple[list[Stream], str | None]`
+#### `extract_streams_with_cookies(url: str, force_browser: bool = False) -> tuple[list[Stream], str | None]`
 
 Extract streams using browser automation to capture cookies for ffmpeg authentication.
 
 **Parameters:**
-| Name | Type | Description |
-|------|------|-------------|
-| url | str | VK video URL to extract streams from. |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| url | str | Required | VK video URL to extract streams from. |
+| force_browser | bool | False | Force browser launch even when cookie_source=NONE (for token refresh scenarios). |
 
 **Returns:** Tuple of (streams list, cookies string) for ffmpeg headers.
+
+**Behavior:**
+- When `cookie_source=NONE` and `force_browser=False`: Returns streams without cookies via yt-dlp
+- When `cookie_source=BROWSER`: Launches browser, captures cookies from active session
+- When `cookie_source=FILE`: Placeholder returns streams without cookies
+- When `force_browser=True`: Forces browser launch regardless of cookie_source setting
 
 **Raises:** `ValueError` if URL does not contain valid video identifier.
 `VideoNotFoundError` if no streams are found.
@@ -212,6 +220,11 @@ Location: `vkdownloader.services.downloader_throttle`
 
 Rate limiting utilities with AWS Full Jitter exponential backoff for handling VK's anti-bot protection.
 
+**Constants:**
+| Name | Value | Description |
+|------|-------|-------------|
+| `RETRYABLE_STATUS_CODES` | {429, 500, 502, 503, 504} | HTTP status codes that trigger retry with backoff |
+
 #### `_retry_429_with_backoff(session: aiohttp.ClientSession, segment_url: str, headers: dict[str, str], segment_index: int, max_retries: int = 3) -> bytes | None`
 
 Download segment with AWS Full Jitter backoff for 429/5xx errors.
@@ -326,6 +339,70 @@ async def get_video_duration(m3u8_url: str) -> int | None:
 
 ---
 
+### _parse_retry_after
+
+Location: `vkdownloader.services.downloader_throttle`
+
+Parse Retry-After header from HTTP response for delay calculation.
+
+```python
+def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| response | aiohttp.ClientResponse | Response with Retry-After header. |
+
+**Returns:** Seconds to wait, or None if header not present or invalid.
+
+**Behavior:**
+- Handles integer seconds format (e.g., "120")
+- Handles HTTP date format (e.g., "Fri, 31 Dec 1999 23:59:59 GMT")
+- Returns None for missing or unparseable headers
+
+---
+
+### _fetch_playlist_with_retry
+
+Location: `vkdownloader.services.downloader`
+
+Fetch m3u8 playlist with automatic token refresh on 403/410 responses.
+
+```python
+async def _fetch_playlist_with_retry(
+    session: aiohttp.ClientSession,
+    video_url: str,
+    m3u8_url: str,
+    headers: dict[str, str],
+    extractor: VKVideoExtractor | None,
+    settings: Settings,
+    max_retries: int = 3,
+) -> str | None:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| session | aiohttp.ClientSession | Required | aiohttp session for HTTP requests. |
+| video_url | str | Required | Original VK video URL for token refresh. |
+| m3u8_url | str | Required | HLS playlist URL to fetch. |
+| headers | dict[str, str] | Required | Request headers to use. |
+| extractor | VKVideoExtractor \| None | Required | Extractor for token refresh. |
+| settings | Settings | Required | Application settings. |
+| max_retries | int | 3 | Maximum retry attempts. |
+
+**Returns:** Playlist content on success, None on failure.
+
+**Behavior:**
+- On 200 response: Returns playlist content
+- On 403/410 with cookie_source=BROWSER: Refreshes token via browser
+- On 403/410 with cookie_source=NONE: Logs warning, returns None (cannot refresh)
+
+---
+
 ### _parse_target_duration
 
 Location: `vkdownloader.services.downloader`
@@ -408,8 +485,45 @@ result = await download_hls_with_resume(request)
 **Features:**
 - Downloads segments individually with progress tracking
 - Resumes from last downloaded segment on interruption
-- Refreshes expired m3u8 tokens via browser automation
+- Refreshes expired m3u8 tokens via browser automation (when cookie_source=BROWSER)
+- Applies anti-detection delay in sequential mode (max_concurrent_downloads=1)
 - Cleans up partial downloads on failure
+
+---
+
+### _download_segment
+
+Location: `vkdownloader.services.downloader`
+
+Download a single HLS segment with optional retry backoff for sequential mode.
+
+```python
+async def _download_segment(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    max_concurrent_downloads: int = 1,
+    segment_index: int = 0,
+) -> bool:
+    ...
+```
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| session | aiohttp.ClientSession | Required | aiohttp session for HTTP requests. |
+| segment_url | str | Required | URL of the segment to download. |
+| output_path | Path | Required | Path to save the downloaded segment. |
+| headers | dict[str, str] | Required | Request headers to use. |
+| max_concurrent_downloads | int | 1 | Maximum concurrent downloads; when 1, uses retry with backoff. |
+| segment_index | int | 0 | Index of the segment being downloaded (for logging). |
+
+**Returns:** True on success, False on failure.
+
+**Behavior:**
+- When `max_concurrent_downloads=1`: Uses `_retry_429_with_backoff` for rate-limited downloads
+- When `max_concurrent_downloads>1`: Uses direct download without retry backoff
 
 ---
 
@@ -421,8 +535,10 @@ Download using yt-dlp with automatic segment-based resume fallback on failure.
 
 **Flow:**
 1. Try yt-dlp download
-2. On failure with partial file: get fresh token via browser + switch to segment download
+2. On failure with partial file: get fresh token via browser (forced) + switch to segment download
 3. Segment download resumes from last checkpoint
+
+**Note:** Token refresh during resume always forces browser launch, regardless of `cookie_source` setting.
 
 ---
 
@@ -614,6 +730,18 @@ result = await perform_download(
 
 ---
 
+### CookieSource
+
+Location: `vkdownloader.models.enums`
+
+Cookie acquisition strategy for video downloads. Controls whether browser is launched for cookie extraction.
+
+| Value | Description |
+|-------|-------------|
+| `NONE` | "none" — No browser launch, fastest for public videos only (default) |
+| `BROWSER` | "browser" — Launch browser to extract real cookies for authenticated content |
+| `FILE` | "file" — Load cookies from external file (placeholder for future enhancement) |
+
 ### DownloadStatus
 
 Location: `vkdownloader.models.enums`
@@ -766,5 +894,6 @@ Application settings with defaults and environment variable support.
 | download_timeout | 300 | Download timeout in seconds |
 | ssl_verify | True | Verify SSL certificates for CDN connections |
 | download_method | AUTO | Download method: yt-dlp, ffmpeg, or auto |
+| cookie_source | NONE | Cookie acquisition strategy: none, browser, or file |
 
 

@@ -7,6 +7,7 @@ tags:
 related:
   - vkdownloader-installation
   - vkdownloader-api-reference
+  - configuration-guide
 ---
 # VK Downloader Overview
 
@@ -41,6 +42,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | HttpClient | `infrastructure/http_client.py` | Async HTTP requests with retry logic and browser-like headers |
 | BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management |
 | NetworkMonitor | `infrastructure/network_monitor.py` | Captures m3u8 URLs from browser network traffic |
+| **_retry_429_with_backoff** | `services/downloader_throttle.py` | AWS Full Jitter backoff for rate-limited segment downloads |
 
 ### Models
 
@@ -63,6 +65,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `StreamFormat` | `models/enums.py` | Stream format types (HLS, DASH, MP4) |
 | `DownloadStatus` | `models/enums.py` | Download state tracking (pending, downloading, completed, failed) |
 | `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
+| `CookieSource` | `models/enums.py` | Cookie acquisition strategy (none, browser, file) |
 
 ### Exceptions
 
