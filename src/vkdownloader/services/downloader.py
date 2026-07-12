@@ -816,12 +816,12 @@ def setup_signal_handlers() -> None:
             except NotImplementedError:
                 # Windows doesn't support loop.add_signal_handler in some Python versions
                 # Use signal.signal as fallback
-                signal.signal(sig, lambda s, f: _handle_signal())  # type: ignore
+                signal.signal(sig, lambda s, f: _handle_signal())
                 _signal_handlers_setup = True
     else:
         # Fallback for non-async context
         for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda s, f: _handle_signal())  # type: ignore
+            signal.signal(sig, lambda s, f: _handle_signal())
             _signal_handlers_setup = True
 
 
