@@ -31,14 +31,14 @@ Execute validated semantic development tasks safely while:
 ## Step 1 — Study  Task Goals
 
 Take the first task-file by execution order from:
-- `.ai\tasks\todo`
+- `.ai/tasks/todo`
 
 
 ## Step 2 — Preparation
 
 Before implementation study:
-- IMPORTANT: `.ai\context\commands.md`
-- Semantic structure: `.ai\structure\*`
+- IMPORTANT: `.ai/context/commands.md`
+- Semantic structure: `.ai/structure/*`
 - `AGENTS.md`
 - project architecture
 - existing module patterns
@@ -124,14 +124,14 @@ Do not degrade architecture to satisfy outdated tests.
 
 ## Step 7 — Completion
 - Mark task file name as done (`*_DONE.yaml`)
-- Move file to `.ai\tasks\done`
-- Ensure the file is no more presented in `.ai\tasks\todo`
+- Move file to `.ai/tasks/done`
+- Ensure the file is no more presented in `.ai/tasks/todo`
 
 ---
 
 ## Step 8 — If unrelated problems are discovered
 
-1. Check `.ai\audit\problems\`
+1. Check `.ai/audit/problems/`
 2. If matching problem exists extend/update existing problem description if needed
 3. If problem does NOT exist create a new detailed problem report
 
@@ -197,8 +197,8 @@ Result must include:
 - passing relevant lint/type checks
 - preserved architecture consistency
 - Mark task file name as done (`*_DONE.yaml`)
-- Ensure file task in `.ai\tasks\done`
-- Ensure the file is no more presented in `.ai\tasks\todo`
+- Ensure file task in `.ai/tasks/done`
+- Ensure the file is no more presented in `.ai/tasks/todo`
 - Git commit created (conventional commit format)
 
 Result must NOT include:

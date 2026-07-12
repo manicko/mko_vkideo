@@ -14,6 +14,17 @@ logger = get_logger(__name__)
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+# Global shutdown event for graceful cancellation
+_shutdown_event: asyncio.Event | None = None
+
+
+def get_shutdown_event() -> asyncio.Event:
+    """Get or create the global shutdown event."""
+    global _shutdown_event
+    if _shutdown_event is None:
+        _shutdown_event = asyncio.Event()
+    return _shutdown_event
+
 
 async def _retry_429_with_backoff(
     session: aiohttp.ClientSession,
@@ -38,8 +49,14 @@ async def _retry_429_with_backoff(
         Bytes content on success, None on permanent failure.
     """
     sanitized_url = _strip_auth_params(segment_url)
+    shutdown_event = get_shutdown_event()
 
     for attempt in range(max_retries):
+        # Check for shutdown signal before each attempt
+        if shutdown_event.is_set():
+            logger.info("download_cancelled", segment_index=segment_index, url=sanitized_url)
+            return None
+
         try:
             async with session.get(segment_url, headers=headers) as response:
                 if response.status == 200:
@@ -80,8 +97,19 @@ async def _retry_429_with_backoff(
                     url=sanitized_url,
                 )
 
-                await asyncio.sleep(delay)
+                # Use asyncio.wait_for to allow interruption during sleep
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+                    # If wait completes (shutdown was triggered), return None
+                    logger.info("download_cancelled", segment_index=segment_index, url=sanitized_url)
+                    return None
+                except asyncio.TimeoutError:
+                    # Normal timeout - continue with retry
+                    pass
 
+        except asyncio.CancelledError:
+            logger.info("segment_download_cancelled", segment_index=segment_index, url=sanitized_url)
+            raise
         except Exception as e:
             logger.error(
                 "segment_download_error",

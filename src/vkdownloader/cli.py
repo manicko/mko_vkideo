@@ -5,11 +5,11 @@ from pathlib import Path
 
 import typer
 from structlog import get_logger
-from tqdm import tqdm
 
 from .config import Settings, setup_logging
+from .exceptions import QualityNotAvailableError
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
-from .services.downloader import perform_download
+from .services.downloader import perform_download, setup_signal_handlers
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
 from .utils.security import validate_output_path
@@ -54,6 +54,8 @@ def download(
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
+        # Setup signal handlers inside async context
+        setup_signal_handlers()
         settings = Settings(cookie_source=cookie_source)
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
@@ -96,9 +98,21 @@ def download(
             err=True,
         )
         raise typer.Exit(code=1) from None
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
+    except QualityNotAvailableError as e:
+        # Parse the available qualities from the error message for a clearer output
+        error_str = str(e)
+        requested = error_str.split("'")[1] if "'" in error_str else "unknown"
+        available_str = error_str.split("Available: ")[-1] if "Available: " in error_str else ""
+        available_qualities = available_str.replace("'", "").replace("[", "").replace("]", "")
+        typer.echo(
+            f"\nRequested quality '{requested}p' is not available for this video.",
+            err=True,
+        )
+        typer.echo(f"Available qualities: {available_qualities}", err=True)
+        raise typer.Exit(code=1) from None
     except Exception:
         typer.echo("An error occurred during download", err=True)
         raise typer.Exit(code=1) from None
@@ -177,26 +191,50 @@ def batch_download(
             status = "success" if result else "failed"
             return (url, str(output_file) if result else "", status)
 
+        except asyncio.CancelledError:
+            # Re-raise CancelledError to allow batch cancellation
+            raise
         except Exception as e:
             return (url, "", f"error: {e}")
 
-    # Initialize progress bar
-    pbar = tqdm(urls, desc="Downloading videos", unit="video")
-
     async def _run_batch_with_progress() -> list[tuple[str, str, str]]:
-        """Run batch download with tqdm progress callback."""
+        """Run batch download with progress tracking."""
+        # Setup signal handlers inside async context
+        setup_signal_handlers()
         semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
 
         async def _limited_download(url: str) -> tuple[str, str, str]:
             async with semaphore:
-                result = await _download_single(url)
-                pbar.update(1)
-                return result
+                return await _download_single(url)
 
         tasks = [_limited_download(url) for url in urls]
-        results = await asyncio.gather(*tasks)
-        pbar.close()
-        return list(results)
+        done_count = 0
+        total = len(tasks)
+
+        # Manual progress tracking
+        print(f"Downloading videos: 0/{total} completed", end="\r", flush=True)
+
+        for coro in asyncio.as_completed(tasks):
+            try:
+                await coro
+            except asyncio.CancelledError:
+                # Cancel remaining tasks on interrupt
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                # Wait for cancellation to propagate
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            done_count += 1
+            print(f"Downloading videos: {done_count}/{total} completed", end="\r", flush=True)
+
+        print()  # New line after progress
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Filter out CancelledError results
+        return [
+            r if isinstance(r, tuple) else (urls[i], "", "cancelled")
+            for i, r in enumerate(results)
+        ]
 
     try:
         results = asyncio.run(_run_batch_with_progress())
@@ -210,8 +248,7 @@ def batch_download(
         failed = len(results) - successful
         typer.echo(f"\nCompleted: {successful} successful, {failed} failed")
 
-    except KeyboardInterrupt:
-        pbar.close()
+    except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
 

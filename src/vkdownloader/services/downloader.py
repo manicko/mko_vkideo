@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import signal
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,12 +19,15 @@ from ..models.enums import CookieSource, DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
-from .downloader_throttle import _retry_429_with_backoff
+from .downloader_throttle import _retry_429_with_backoff, get_shutdown_event
 
 logger = get_logger(__name__)
 
 # Maximum retry attempts for getting new token on resume failure
 MAX_RESUME_RETRIES = 3
+
+# Track active ffmpeg processes for cleanup
+_active_processes: set[asyncio.subprocess.Process] = set()
 
 
 @dataclass
@@ -195,12 +199,35 @@ class HLSDownloader:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        # Track process for cleanup on shutdown
+        _active_processes.add(process)
+
         stderr_chunks: list[bytes] = []
+
+        async def _cancel_ffmpeg() -> None:
+            """Cancel ffmpeg process on shutdown."""
+            logger.info("cancelling_ffmpeg_process", pid=process.pid)
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            except ProcessLookupError:
+                pass  # Process already exited
+            except Exception as e:
+                logger.warning("ffmpeg_cancel_error", error=str(e))
+
+        shutdown_event = get_shutdown_event()
 
         async def _monitor_progress() -> None:
             """Read progress and call callback, while collecting stderr for error handling."""
             assert process.stderr is not None
             async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
+                if shutdown_event.is_set():
+                    await _cancel_ffmpeg()
+                    break
                 if progress_callback:
                     progress_callback(progress)
 
@@ -208,34 +235,62 @@ class HLSDownloader:
             """Drain stderr to prevent buffer deadlock when no callback is provided."""
             assert process.stderr is not None
             while True:
+                if shutdown_event.is_set():
+                    await _cancel_ffmpeg()
+                    break
                 line = await process.stderr.readline()
                 if not line:
                     break
                 stderr_chunks.append(line)
 
-        # Run both process wait and stderr reading concurrently
-        if progress_callback:
-            process_task = asyncio.create_task(process.wait())
-            monitor_task = asyncio.create_task(_monitor_progress())
-            await process_task
-            await monitor_task
-        else:
-            process_task = asyncio.create_task(process.wait())
-            drain_task = asyncio.create_task(_drain_stderr())
-            await process_task
-            await drain_task
+        try:
+            # Run both process wait and stderr reading concurrently
+            if progress_callback:
+                process_task = asyncio.create_task(process.wait())
+                monitor_task = asyncio.create_task(_monitor_progress())
+                done, pending = await asyncio.wait(
+                    [process_task, monitor_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                process_task = asyncio.create_task(process.wait())
+                drain_task = asyncio.create_task(_drain_stderr())
+                done, pending = await asyncio.wait(
+                    [process_task, drain_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
-        stderr_data = (
-            b"".join(stderr_chunks) if stderr_chunks else b""
-        )
+            stderr_data = (
+                b"".join(stderr_chunks) if stderr_chunks else b""
+            )
 
-        if process.returncode != 0:
-            error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
-            logger.error("ffmpeg_download_failed", returncode=process.returncode, error=error_msg)
-            return None
+            if shutdown_event.is_set():
+                await _cancel_ffmpeg()
+                return None
 
-        logger.info("ffmpeg_download_completed", output=str(output_file))
-        return output_file
+            if process.returncode != 0:
+                error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
+                logger.error("ffmpeg_download_failed", returncode=process.returncode, error=error_msg)
+                return None
+
+            logger.info("ffmpeg_download_completed", output=str(output_file))
+            return output_file
+        finally:
+            _active_processes.discard(process)
 
 
 async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
@@ -266,6 +321,7 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
     metadata_file = output_file.parent / f".{output_file.stem}_progress.json"
 
     segments_dir.mkdir(parents=True, exist_ok=True)
+    shutdown_event = get_shutdown_event()
 
     try:
         downloaded_count = _load_downloaded_count(metadata_file)
@@ -293,7 +349,13 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
 
             async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
                 """Download segment with semaphore rate limiting."""
+                # Check for shutdown before starting - raise CancelledError to interrupt gather
+                if shutdown_event.is_set():
+                    raise asyncio.CancelledError("Download cancelled by user")
                 async with semaphore:
+                    # Check for shutdown after acquiring semaphore
+                    if shutdown_event.is_set():
+                        raise asyncio.CancelledError("Download cancelled by user")
                     full_url = segment_url
                     if not segment_url.startswith("http"):
                         full_url = urljoin(request.m3u8_url, segment_url)
@@ -309,21 +371,38 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                 # Anti-detection delay AFTER semaphore release (outside context block)
                 # Delay only in sequential mode (max_concurrent_downloads == 1)
                 if result and settings.max_concurrent_downloads == 1:
+                    # Check for shutdown in delay loop - raise to interrupt gather
+                    if shutdown_event.is_set():
+                        raise asyncio.CancelledError("Download cancelled by user")
                     delay = 1.5 + random.uniform(0, 0.5)
-                    await asyncio.sleep(delay)
+                    try:
+                        # Allow interruption during delay
+                        await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+                        raise asyncio.CancelledError("Download cancelled by user")
+                    except asyncio.TimeoutError:
+                        pass  # Normal completion
                 return result
 
             # Download all missing segments concurrently
             tasks = [
-                download_segment_concurrent(i, seg)
+                asyncio.create_task(download_segment_concurrent(i, seg))
                 for i, seg in enumerate(segments)
                 if not (segments_dir / f"{i:05d}.ts").exists()
             ]
             if tasks:
-                results = await asyncio.gather(*tasks)
-                if not all(results):
+                try:
+                    # Wait for all tasks to complete, but allow shutdown interruption
+                    results = await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    # Cancel any still-running tasks on interruption
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    # Wait for cancellation to complete, ignoring results
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    logger.info("download_cancelled", reason="shutdown_requested")
                     return None
-            downloaded_count = len(segments)
+                downloaded_count = len(segments)
             _save_downloaded_count(metadata_file, downloaded_count)
 
             # All downloaded - merge in batches
@@ -662,6 +741,67 @@ def _cleanup_segments(segments_dir: Path, metadata_file: Path) -> None:
     metadata_file.unlink(missing_ok=True)
 
 
+async def _cancel_all_downloads() -> None:
+    """Cancel all active downloads and processes."""
+    logger.info("cancelling_all_downloads", active_processes=len(_active_processes))
+
+    # Cancel all tracked ffmpeg processes
+    for process in list(_active_processes):
+        try:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning("process_cancel_error", error=str(e))
+
+    _active_processes.clear()
+
+
+# Track if signal handlers already setup to prevent duplicate registration
+_signal_handlers_setup = False
+
+
+def setup_signal_handlers() -> None:
+    """Setup signal handlers for graceful shutdown on SIGINT/SIGTERM."""
+    global _signal_handlers_setup
+    if _signal_handlers_setup:
+        return
+
+    shutdown_event = get_shutdown_event()
+
+    def _handle_signal() -> None:
+        """Signal handler to trigger graceful shutdown."""
+        if not shutdown_event.is_set():
+            logger.info("shutdown_signal_received")
+            shutdown_event.set()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _handle_signal)
+                _signal_handlers_setup = True
+            except NotImplementedError:
+                # Windows doesn't support loop.add_signal_handler in some Python versions
+                # Use signal.signal as fallback
+                signal.signal(sig, lambda s, f: _handle_signal())  # type: ignore
+                _signal_handlers_setup = True
+    else:
+        # Fallback for non-async context
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda s, f: _handle_signal())  # type: ignore
+            _signal_handlers_setup = True
+
+
 async def download_with_ytdlp_with_resume_fallback(
     video_url: str,
     m3u8_url: str,
@@ -769,8 +909,13 @@ async def _download_with_ytdlp(
     logger.info("starting_ytdlp_download", url=_strip_auth_params(video_url), output=str(output_file), quality=quality)
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
+    shutdown_event = get_shutdown_event()
 
     def _download() -> str:
+        # Check shutdown before starting download
+        if shutdown_event.is_set():
+            raise RuntimeError("Download cancelled")
+
         ydl_opts = {
             "outtmpl": str(output_file),
             "quiet": False,
@@ -796,14 +941,33 @@ async def _download_with_ytdlp(
             cookie_file.write_text(_cookies_to_netscape(cookies))
             ydl_opts["cookiefile"] = str(cookie_file)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
-        return str(output_file)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+            return str(output_file)
+        except Exception as e:
+            # Re-raise as DownloadError to distinguish from cancellation
+            if "cancelled" in str(e).lower() or shutdown_event.is_set():
+                raise RuntimeError("Download cancelled") from e
+            raise
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
+
+    # Create task for the executor to allow cancellation
+    download_task = asyncio.ensure_future(
+        loop.run_in_executor(None, _download)
+    )
+
     try:
-        result = await loop.run_in_executor(None, _download)
+        result = await download_task
         return Path(result)
+    except asyncio.CancelledError:
+        logger.info("yt_dlp_download_cancelled")
+        # Cancel the executor task (though the thread will continue, it will be
+        # cleaned up when the process exits or on subsequent runs)
+        if not download_task.done():
+            download_task.cancel()
+        raise
     except Exception as e:
         logger.error("download_failed", error=str(e))
         return None

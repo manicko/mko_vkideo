@@ -29,14 +29,14 @@ Stop and wait for the response.
 ## 1. Preparation
 Load {MAIN_CONTEXT} from:
 
-docs\SPEC.md
-docs\*
+docs/SPEC.md
+docs/*
 
 Summarize it and keep as {MAIN_CONTEXT} 
 
 ## 2. Ensure Decisions Directory Exists and Load DECISION_*.md files
 
-Load List of files and their numbers from `.ai\problems\decisions\*`
+Load List of files and their numbers from `.ai/problems/decisions/*`
 
 keep only mentioned by user {file_numbers} (step 0)
 
@@ -52,7 +52,7 @@ keep only mentioned by user {file_numbers} (step 0)
 ### 3.3 Handle Research
 
 Check for existing research with the same file number:
-`.ai\researches\RESEARCH_{file_number}.md`
+`.ai/researches/RESEARCH_{file_number}.md`
 {file_number} - from previous steps 
 
 **If RESEARCH.md exists**
@@ -99,7 +99,7 @@ Answer: "What do I need to know to PLAN this phase well?"
 
 <output>
 IMPORTANT: 
-Write research findings to: .ai\researches\RESEARCH_{file_number}.md
+Write research findings to: .ai/researches/RESEARCH_{file_number}.md
 </output>
 ```
 
@@ -225,7 +225,7 @@ VALIDATE PLANS
 ```
 
 Read plan for the checker {PLAN_CONTENT}:
-.ai\plans\PLAN_{file_number}.md
+.ai/plans/PLAN_{file_number}.md
 
 Fill checker prompt with inlined content and spawn:
 

@@ -19,9 +19,9 @@ Audit tasks must remain focused on their intended audit scope while becoming mor
 
 Study the following project documentation:
 
-* `docs\SPEC.md`
-* `docs\STRUCT.md`
-* `docs\**`
+* `docs/SPEC.md`
+* `docs/STRUCT.md`
+* `docs/**`
 
 Build a clear understanding of:
 
@@ -41,7 +41,7 @@ Build a clear understanding of:
 
 Process all audit task files:
 
-`.kilo\commands\audit\*.md`
+`.kilo/commands/audit/*.md`
 
 ---
 

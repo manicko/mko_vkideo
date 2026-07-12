@@ -28,11 +28,11 @@ Transform validated findings into dependency-aware rollout plans with semantic t
 5. **Build execution DAG** — isolated implementation blocks, dependency-aware task graph, rollout sequencing, parallel execution groups.
 6. **Establish file-based dependencies** — tasks modifying the same file must execute sequentially with explicit `depends_on_previous_task_in_chain`, even if only one file overlaps.
 7. **Define semantic targets** per task — affected files, symbol targets, anchors, insertion zones. Never use line numbers.
-7. **Generate task specifications** using `.ai\tasks\templates\task_template.yaml`. 
+7. **Generate task specifications** using `.ai/tasks/templates/task_template.yaml`. 
 8. **Assess risk** — for potentially disruptive tasks (config changes, test infra, schema changes, hidden consumers), mark as blocked and create prerequisite research tasks.
 9. **Insert test tasks** — only for non-trivial features. Tests must validate user-visible behavior, exercise workflows, detect regressions.
 10. **Insert verification tasks** — inline verification for simple tasks; dedicated verification tasks for multi-stage/high-risk changes.
-11. **Generate execution ordering** using `.ai\tasks\templates\order_template.yaml`. Numbering must match rollout order. No circular dependencies.
+11. **Generate execution ordering** using `.ai/tasks/templates/order_template.yaml`. Numbering must match rollout order. No circular dependencies.
 
 ## Task Naming
 

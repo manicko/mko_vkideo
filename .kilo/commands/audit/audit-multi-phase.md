@@ -30,8 +30,8 @@ Set variables:
 - `{BASE_CONTEXT}` = summary of the above files
 - `{REPORT_TEMPLATE_PATH}` = `.ai/audit/templates/audit-findings.md`
 - `{TASK_FILES}` = list of files in `.kilo/commands/audit/phases/`
-- {auditor} - model from `.ai\models\lookup_table.md`
-- {VALIDATOR} -  model from `.ai\models\lookup_table.md`
+- {auditor} - model from `.ai/models/lookup_table.md`
+- {VALIDATOR} -  model from `.ai/models/lookup_table.md`
 
 *DO NOT*
 - Read executor role or executor tasks and templates, just provide links

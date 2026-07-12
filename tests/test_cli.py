@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from vkdownloader.cli import app
+from vkdownloader.exceptions import QualityNotAvailableError
 
 runner = CliRunner()
 
@@ -156,6 +157,46 @@ class TestBatchCommand:
 
 class TestQualityOptionValidation:
     """Tests for quality enum validation in CLI."""
+
+    def test_quality_not_available_error(self, tmp_path: Path, sample_video_url: str) -> None:
+        """Check that requesting unavailable quality shows helpful error message."""
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/1080p.m3u8",
+                quality="1080",
+                height=1080,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.cli.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080", "720"]
+            mock_selector.select.side_effect = QualityNotAvailableError(
+                "Requested quality '1440' not available. Available: ['1080', '720', '480', '360', '240', '144']"
+            )
+            mock_selector_cls.return_value = mock_selector
+
+            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings"):
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url, "--quality", "1440"],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 1
+        assert "Requested quality '1440p' is not available" in result.output
+        assert "Available qualities:" in result.output
 
     def test_invalid_quality_option(self, tmp_path: Path) -> None:
         """Check quality enum validation rejects invalid values."""

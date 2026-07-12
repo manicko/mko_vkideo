@@ -31,15 +31,15 @@ Follow the process below step by step
 ## 2. Load and Summarize Project Context
 
 - `AGENTS.md`
-- `docs\SPEC.md`
+- `docs/SPEC.md`
 
 Summarize into `{MAIN_CONTEXT}`
 
 
 ## 3. Prepare Execution Loop
 
-- Read execution order: `.ai\tasks\todo\order.yaml` to understand the dependencies 
-- List task-files in `.ai\tasks\todo\*`
+- Read execution order: `.ai/tasks/todo/order.yaml` to understand the dependencies 
+- List task-files in `.ai/tasks/todo/*`
 - Select up to `{MAX_TASKS}` files as `{TASKS_FILES_TO_IMPLEMENT}`, preserving execution order.
 
 
@@ -53,11 +53,11 @@ For each task file in `{TASKS_FILES_TO_IMPLEMENT}` one at a time:
 
 ## What To Do
 1. Read the task file {TASK_FILE_ABS_PATH}. Understand scope, affected files, acceptance criteria.
-2. Read `docs\99-reference\ast-editor.md` for proper tools usage. Always use replace_function  to avoid indentation errors.
+2. Read `docs/99-reference/ast-editor.md` for proper tools usage. Always use replace_function  to avoid indentation errors.
 2. Validate preconditions: semantic targets exist, depends_on tasks are done.
   If already implemented: rename to *_DONE.yaml, move to done/, return IMPLEMENTATION_COMPLETE.
 3. Implement: edit only required files.  
-4. If found a bug or any problem not relates to the task - don't solve, but create the new file with report to .ai\audit\00-bug_report\ХХ-report.md
+4. If found a bug or any problem not relates to the task - don't solve, but create the new file with report to .ai/audit/00-bug_report/ХХ-report.md
 XX - free number.
 5. Validate:
   - Python: uv run ruff check <files>, uv run mypy <files>, uv run pytest <paths>
@@ -69,7 +69,7 @@ XX - free number.
     -- remove obsolete tests
   -Do NOT degrade architecture for outdated tests.
 
-6. Finalize: rename task file to *_DONE.yaml, move to .ai\tasks\done/.
+6. Finalize: rename task file to *_DONE.yaml, move to .ai/tasks/done/.
 If you see changes in files not related to the task it is normal - other agents are doing their task in parallel.
 
 Output:
