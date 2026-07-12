@@ -207,7 +207,7 @@ def batch_download(
             async with semaphore:
                 return await _download_single(url)
 
-        tasks = [_limited_download(url) for url in urls]
+        tasks = [asyncio.create_task(_limited_download(url)) for url in urls]
         done_count = 0
         total = len(tasks)
 
