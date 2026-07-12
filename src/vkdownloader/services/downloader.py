@@ -916,12 +916,15 @@ async def _download_with_ytdlp(
         if shutdown_event.is_set():
             raise RuntimeError("Download cancelled")
 
+        if not settings.ssl_verify:
+            logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
+
         ydl_opts = {
             "outtmpl": str(output_file),
             "quiet": False,
             "no_warnings": True,
             "format": f"best[height<={quality_str}]",
-            "nocheckcertificate": True,
+            "nocheckcertificate": not settings.ssl_verify,
             "hls_prefer_native": True,
             "concurrent_fragments": settings.concurrent_fragments,
             "throttledratelimit": settings.throttled_rate,
