@@ -113,6 +113,34 @@ async def read_progress(
                 progress = FfmpegProgress()  # Reset for next block
 
 
+async def cancel_ffmpeg_process(
+    process: asyncio.subprocess.Process,
+    *,
+    timeout: float = 5.0,
+) -> bool:
+    """Cancel and terminate an ffmpeg process gracefully.
+
+    Args:
+        process: The ffmpeg process to cancel.
+        timeout: Seconds to wait for graceful termination before force kill.
+
+    Returns:
+        True if process was cancelled, False if process was already gone.
+    """
+    logger.info("cancelling_ffmpeg_process", pid=process.pid)
+    try:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+            return True
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return True
+    except ProcessLookupError:
+        return False
+
+
 def _cookies_to_netscape(cookies_str: str) -> str:
     """Convert cookies string to Netscape HTTP Cookie File format for yt-dlp."""
     lines = [
@@ -206,21 +234,6 @@ class HLSDownloader:
 
         stderr_chunks: list[bytes] = []
 
-        async def _cancel_ffmpeg() -> None:
-            """Cancel ffmpeg process on shutdown."""
-            logger.info("cancelling_ffmpeg_process", pid=process.pid)
-            try:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
-            except ProcessLookupError:
-                pass  # Process already exited
-            except Exception as e:
-                logger.warning("ffmpeg_cancel_error", error=str(e))
-
         shutdown_event = get_shutdown_event()
 
         async def _monitor_progress() -> None:
@@ -228,7 +241,7 @@ class HLSDownloader:
             assert process.stderr is not None
             async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
                 if shutdown_event.is_set():
-                    await _cancel_ffmpeg()
+                    await cancel_ffmpeg_process(process)
                     break
                 if progress_callback:
                     progress_callback(progress)
@@ -238,7 +251,7 @@ class HLSDownloader:
             assert process.stderr is not None
             while True:
                 if shutdown_event.is_set():
-                    await _cancel_ffmpeg()
+                    await cancel_ffmpeg_process(process)
                     break
                 line = await process.stderr.readline()
                 if not line:
@@ -281,7 +294,7 @@ class HLSDownloader:
             )
 
             if shutdown_event.is_set():
-                await _cancel_ffmpeg()
+                await cancel_ffmpeg_process(process)
                 return None
 
             if process.returncode != 0:
@@ -389,7 +402,7 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                         # Allow interruption during delay
                         await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
                         raise asyncio.CancelledError("Download cancelled by user")
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         pass  # Normal completion
                 return result
 
@@ -761,7 +774,7 @@ async def _cancel_all_downloads() -> None:
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), timeout=3.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 await process.wait()
         except ProcessLookupError:
