@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 
 import structlog
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-from vkdownloader.models.enums import CookieSource, DownloadMethod
+from vkdownloader.models.enums import CookieSource, DownloadMethod, LogLevel
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -88,14 +88,21 @@ class Settings(BaseSettings):
     )
 
     # Logging settings
-    log_level: str = Field(
-        default="INFO",
-        description="Logging level",
+    log_level: LogLevel = Field(
+        default=LogLevel.INFO,
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
     log_file: Path | None = Field(
         default=None,
         description="Optional log file path",
     )
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, v: str | LogLevel) -> LogLevel:
+        if isinstance(v, LogLevel):
+            return v
+        return LogLevel(v.upper())
 
     model_config = {
         "env_file": ".env",
@@ -119,7 +126,7 @@ def setup_logging(settings: Settings | None = None) -> None:
             else structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelName(settings.log_level)
+            logging.getLevelName(settings.log_level.value)
         ),
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,

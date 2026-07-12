@@ -25,6 +25,16 @@ class StreamFormat(StrEnum):
     MP4 = "mp4"
 
 
+class LogLevel(StrEnum):
+    """Standard logging level options."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
 class DownloadStatus(StrEnum):
     """Download status states."""
 

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from vkdownloader.config import Settings
-from vkdownloader.models.enums import CookieSource, DownloadMethod
+from vkdownloader.models.enums import CookieSource, DownloadMethod, LogLevel
 
 
 def test_settings_creates_with_defaults() -> None:
@@ -20,7 +20,7 @@ def test_settings_creates_with_defaults() -> None:
     assert settings.ssl_verify is True
     assert settings.max_concurrent_downloads == 4
     assert settings.download_method == DownloadMethod.AUTO
-    assert settings.log_level == "INFO"
+    assert settings.log_level == LogLevel.INFO
     assert settings.log_file is None
 
 
@@ -48,7 +48,7 @@ def test_settings_accepts_valid_fields() -> None:
     assert settings.ssl_verify is False
     assert settings.max_concurrent_downloads == 8
     assert settings.download_method == DownloadMethod.YTDLP
-    assert settings.log_level == "DEBUG"
+    assert settings.log_level == LogLevel.DEBUG
 
 
 def test_settings_rejects_unknown_keys() -> None:
@@ -165,3 +165,20 @@ def test_http_chunk_size_validation(test_settings: Settings) -> None:
 
     with pytest.raises(ValidationError):
         Settings(http_chunk_size=104857601)  # Above maximum
+
+
+def test_log_level_validation() -> None:
+    """Test log_level rejects invalid values and accepts valid ones."""
+    # Valid log levels - case insensitive
+    for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+        s = Settings(log_level=level)
+        assert s.log_level == LogLevel[level]
+
+    # Lowercase input also works
+    s = Settings(log_level="info")
+    assert s.log_level == LogLevel.INFO
+
+    # Invalid log level raises ValidationError
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(log_level="INVALID")
+    assert "log_level" in str(exc_info.value)
