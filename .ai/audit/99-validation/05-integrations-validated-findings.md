@@ -93,44 +93,13 @@ validated: yes
 
 ---
 
-### INT-006: Inconsistent SSL verification handling between integrations
+### INT-006: ~~Inconsistent SSL verification handling between integrations~~ [MERGED INTO INT-SSL]
 
-| Field | Value |
-|-------|-------|
-| **ID** | INT-006 |
-| **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `src/vkdownloader/infrastructure/http_client.py` |
-| **Classification** | advisory |
+> **Merged into:** INT-SSL (see Merged Findings section)
 
-**Description:** ffmpeg and yt-dlp integrations bypass the `ssl_verify` configuration setting, creating inconsistent security posture.
+### INT-007: ~~yt-dlp `nocheckcertificate` ignores user SSL verification preference~~ [MERGED INTO INT-SSL]
 
-**Evidence:**
-- `http_client.py` lines 50-57: SSL verification properly handled with configurable `ssl_verify` setting
-- `downloader.py` line 924: `"nocheckcertificate": True` hardcoded in yt-dlp options - ignores `settings.ssl_verify`
-- ffmpeg commands in `downloader.py`: No SSL verification options passed
-
-**Recommendation:** Pass SSL verification settings to yt-dlp (`nocheckcertificate` should respect `settings.ssl_verify`) and consider SSL options for ffmpeg when appropriate.
-
----
-
-### INT-007: yt-dlp `nocheckcertificate` ignores user SSL verification preference
-
-| Field | Value |
-|-------|-------|
-| **ID** | INT-007 |
-| **Severity** | MEDIUM |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py` |
-| **Classification** | advisory |
-
-**Description:** The `Settings.ssl_verify` field exists and is used in `HttpClient`, but yt-dlp configuration hardcodes certificate verification as disabled regardless of user preference.
-
-**Evidence:**
-- `config.py` line 47-50: `ssl_verify: bool = Field(default=True, ...)` setting exists
-- `downloader.py` line 924: `"nocheckcertificate": True` hardcoded in `_download_with_ytdlp`
-
-**Recommendation:** Set `nocheckcertificate` based on `settings.ssl_verify` to respect user's security preference.
+> **Merged into:** INT-SSL (see Merged Findings section)
 
 ---
 
@@ -138,9 +107,9 @@ validated: yes
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 5 | INT-003, INT-004, INT-005, INT-006, INT-007 |
+| Validated (unchanged) | 3 | INT-003, INT-004, INT-005 |
 | Reclassified | 0 | — |
-| Merged | 0 | — |
+| Merged | 2 | INT-006 + INT-007 → INT-SSL |
 | Rejected | 2 | INT-001, INT-002 |
 
 ### Rejected Findings
@@ -154,7 +123,7 @@ validated: yes
 
 | Original ID | Merged Into | Rationale |
 |-------------|-------------|----------|
-| — | — | — |
+| INT-006, INT-007 | INT-SSL | Both addressed the same SSL verification inconsistency; ffmpeg needs no changes (HTTPS input uses system verification by default) |
 
 ### Reclassified Findings
 
@@ -172,8 +141,8 @@ validated: yes
 
 ## Advisory Recommendations
 
-1. INT-006: Align SSL verification behavior across all external integrations
-2. INT-007: Respect SSL verification setting in yt-dlp configuration
+1. INT-SSL: Fix yt-dlp SSL verification to respect `settings.ssl_verify` - change line 924 from `"nocheckcertificate": True` to `"nocheckcertificate": not settings.ssl_verify`
+2. No ffmpeg changes needed - HTTPS input uses system certificate verification by default
 
 ---
 
@@ -184,3 +153,94 @@ The project integrates with:
 2. **ffmpeg/ffprobe** (`src/vkdownloader/services/downloader.py`) - HLS stream processing and merging
 3. **Playwright** (`src/vkdownloader/infrastructure/browser.py`, `src/vkdownloader/services/extractor.py`) - Browser automation for token/cookie capture
 4. **aiohttp** (`src/vkdownloader/infrastructure/http_client.py`, `src/vkdownloader/services/downloader.py`) - HTTP client with retry logic
+
+---
+
+## SSL Verification Deep Dive (Research)
+
+### Analysis of HttpClient SSL Handling (http_client.py:50-57)
+
+```python
+if self.settings.ssl_verify:
+    connector = aiohttp.TCPConnector()
+else:
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    logger.warning("ssl_verification_disabled", message="SSL certificate verification is disabled - connections may be insecure")
+```
+
+**Behavior:**
+- When `ssl_verify=True` (default): Uses default SSL context with verification enabled
+- When `ssl_verify=False`: Creates SSL context with `CERT_NONE` mode, skips hostname verification
+
+### Analysis of yt-dlp SSL Handling (downloader.py:919-936)
+
+```python
+ydl_opts = {
+    ...
+    "nocheckcertificate": True,  # Line 924 - HARDCODED
+    ...
+}
+```
+
+**Problem:** The `nocheckcertificate` option is hardcoded to `True`, ignoring `settings.ssl_verify`.
+
+**yt-dlp Documentation:**
+- `nocheckcertificate` (or `no_check_certificate` in older docs) corresponds to `--no-check-certificate`
+- When `True`: Disables SSL certificate verification
+- When `False`/omitted: Uses system certificate store for verification (default secure behavior)
+
+### FFmpeg SSL Verification Analysis
+
+**Research Findings (ffmpeg.org official documentation):**
+
+1. **TLS Protocol Options:** FFmpeg supports `-tls_verify` and `-tls_ca_file` options for the `tls://` protocol (used for RTMPS/RTSPS)
+2. **HTTPS Input:** For HLS streams accessed via `https://` URLs, FFmpeg relies on the underlying TLS library (OpenSSL/GnuTLS)
+3. **Default Behavior:** Modern FFmpeg builds enable certificate verification by default for HTTPS input
+4. **No `-tls_verify` for HTTPS:** The `-tls_verify` option is specifically for the `tls://` protocol, not `https://` URLs
+5. **CA Certificate Handling:** FFmpeg uses system CA bundle on Linux (`/etc/ssl/certs/ca-certificates.crt`) and Windows certificate store
+
+**Conclusion for ffmpeg:** No SSL options are needed or appropriate. FFmpeg's HTTPS input handling uses system certificates and modern builds verify by default.
+
+### Specific Recommendation
+
+**Merge INT-006 and INT-007 into a single targeted fix for yt-dlp only.**
+
+#### Exact Code Change Required
+
+**File:** `src/vkdownloader/services/downloader.py`  
+**Line:** 924
+
+**Change:**
+```python
+# BEFORE
+"nocheckcertificate": True,
+
+# AFTER
+"nocheckcertificate": not settings.ssl_verify,
+```
+
+This single-line change ensures:
+- When `ssl_verify=True` (default): `nocheckcertificate=False` → certificate verification enabled
+- When `ssl_verify=False`: `nocheckcertificate=True` → certificate verification disabled
+
+#### Why ffmpeg Needs NO Changes
+
+1. **No `-tls_verify` support for HTTPS input:** The option applies to `tls://` protocol (RTMPS), not HLS over HTTPS
+2. **Default secure behavior:** Modern FFmpeg builds verify HTTPS certificates by default
+3. **System CA integration:** FFmpeg uses OS certificate store - no configuration needed
+4. **Use case mismatch:** The `-tls_verify` option is for RTSPS/RTMPS, not HLS segment fetching
+
+#### Updated Advisory Recommendation
+
+**Merged Recommendation (INT-006 + INT-007):** Fix yt-dlp SSL verification to respect `settings.ssl_verify`
+
+| Field | Value |
+|-------|-------|
+| **ID** | INT-SSL |
+| **Priority** | HIGH (for spec deviation) |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` line 924 |
+| **Required Change** | Change `"nocheckcertificate": True` to `"nocheckcertificate": not settings.ssl_verify` |
+| **ffmpeg Action** | NO ACTION NEEDED - uses system certificates with default verification |

@@ -1,6 +1,7 @@
 """Throttle utilities for VK Video Downloader with retry logic for rate limiting."""
 
 import asyncio
+import contextvars
 import random
 from datetime import datetime
 
@@ -14,16 +15,25 @@ logger = get_logger(__name__)
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
-# Global shutdown event for graceful cancellation
-_shutdown_event: asyncio.Event | None = None
+# ContextVar for shutdown event - provides loop-safe event per asyncio context
+_shutdown_event_ctx: contextvars.ContextVar[asyncio.Event] = contextvars.ContextVar(
+    "shutdown_event"
+)
 
 
 def get_shutdown_event() -> asyncio.Event:
-    """Get or create the global shutdown event."""
-    global _shutdown_event
-    if _shutdown_event is None:
-        _shutdown_event = asyncio.Event()
-    return _shutdown_event
+    """Get the shutdown event for the current asyncio context.
+
+    Creates a new Event if one doesn't exist in the current context.
+    This ensures each event loop gets its own Event, avoiding the
+    'bound to a different event loop' error.
+    """
+    try:
+        return _shutdown_event_ctx.get()
+    except LookupError:
+        event = asyncio.Event()
+        _shutdown_event_ctx.set(event)
+        return event
 
 
 async def _retry_429_with_backoff(
@@ -103,7 +113,7 @@ async def _retry_429_with_backoff(
                     # If wait completes (shutdown was triggered), return None
                     logger.info("download_cancelled", segment_index=segment_index, url=sanitized_url)
                     return None
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Normal timeout - continue with retry
                     pass
 
