@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import signal
+import ssl
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -332,7 +333,15 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
         if request.cookies:
             headers["Cookie"] = request.cookies
 
-        connector = aiohttp.TCPConnector(limit=10)
+        if settings.ssl_verify:
+            connector = aiohttp.TCPConnector(limit=10)
+        else:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connector = aiohttp.TCPConnector(ssl=ssl_context, limit=10)
+            logger.warning("ssl_verification_disabled", url=_strip_auth_params(request.video_url))
+
         async with aiohttp.ClientSession(connector=connector) as session:
             playlist_content = await _fetch_playlist_with_retry(
                 session, request.video_url, request.m3u8_url, headers,
