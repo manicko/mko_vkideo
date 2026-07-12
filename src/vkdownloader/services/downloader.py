@@ -411,7 +411,7 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                     await asyncio.gather(*tasks, return_exceptions=True)
                     logger.info("download_cancelled", reason="shutdown_requested")
                     return None
-                downloaded_count = len(segments)
+                downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in results if r)
             _save_downloaded_count(metadata_file, downloaded_count)
 
             # All downloaded - merge in batches
