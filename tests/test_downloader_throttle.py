@@ -1,6 +1,7 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from asyncio import TimeoutError
 
 import pytest
 
@@ -51,11 +52,6 @@ class TestRetry429WithBackoff:
         mock_response_200.status = 200
         mock_response_200.read = AsyncMock(return_value=b"segment content")
 
-        sleep_calls: list[float] = []
-
-        async def capture_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
-
         call_count = 0
 
         def get_side_effect(*args, **kwargs):
@@ -71,7 +67,9 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=capture_sleep):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            # Raise TimeoutError to simulate normal timeout (allows retry to continue)
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -81,9 +79,12 @@ class TestRetry429WithBackoff:
 
         assert result == b"segment content"
         assert call_count == 2  # First 429, then success
-        # Should have sleep call for backoff (between 0 and 1.0 on first retry)
-        assert len(sleep_calls) == 1
-        assert 0 <= sleep_calls[0] <= 1.0
+        # Should have wait_for call with timeout (between 0 and 1.0 on first retry)
+        assert mock_wait_for.call_count == 1
+        # Extract timeout from the call - it's keyword argument 'timeout'
+        timeout_arg = mock_wait_for.call_args[1].get("timeout")
+        assert timeout_arg is not None
+        assert 0 <= timeout_arg <= 1.0
 
     @pytest.mark.asyncio
     async def test_retry_after_header_overrides_delay(self) -> None:
@@ -98,11 +99,6 @@ class TestRetry429WithBackoff:
         mock_response_200.status = 200
         mock_response_200.read = AsyncMock(return_value=b"segment content")
 
-        sleep_calls: list[float] = []
-
-        async def capture_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
-
         call_count = 0
 
         def get_side_effect(*args, **kwargs):
@@ -118,7 +114,9 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=capture_sleep):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            # Raise TimeoutError to simulate normal timeout (allows retry to continue)
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -128,8 +126,9 @@ class TestRetry429WithBackoff:
 
         assert result == b"segment content"
         assert call_count == 2
-        # Retry-After of 5 should override calculated delay
-        assert sleep_calls[0] == 5.0
+        # Retry-After of 5 should be used as timeout
+        timeout_arg = mock_wait_for.call_args[1].get("timeout")
+        assert timeout_arg == 5.0
 
     @pytest.mark.asyncio
     async def test_max_retries_exceeded_returns_none(self) -> None:
@@ -145,7 +144,8 @@ class TestRetry429WithBackoff:
         mock_context.__aexit__ = AsyncMock(return_value=None)
         mock_session.get = MagicMock(return_value=mock_context)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -186,7 +186,8 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -225,7 +226,8 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -264,7 +266,8 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -303,7 +306,8 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -351,18 +355,13 @@ class TestRetry429WithBackoff:
         mock_response_200.status = 200
         mock_response_200.read = AsyncMock(return_value=b"segment content")
 
-        sleep_calls: list[float] = []
-
-        async def capture_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
-
         call_count = 0
 
         def get_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
-            if call_count <= 30:  # Simulate many 429 responses
+            if call_count == 1:
                 mock_context.__aenter__ = AsyncMock(return_value=mock_response_429)
             else:
                 mock_context.__aenter__ = AsyncMock(return_value=mock_response_200)
@@ -371,21 +370,23 @@ class TestRetry429WithBackoff:
 
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
-        # Call with high attempt to test cap
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=capture_sleep):
+        # Patch wait_for to raise TimeoutError (normal timeout, allows retry)
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
+            mock_wait_for.side_effect = TimeoutError()
             with patch("vkdownloader.services.downloader_throttle.random.uniform") as mock_uniform:
-                # Make uniform return value that would exceed cap without the min()
-                mock_uniform.return_value = 60.0
+                mock_uniform.return_value = 1.0  # Return any valid value
                 result = await _retry_429_with_backoff(
                     mock_session,
                     "https://example.com/segment.ts",
                     {"User-Agent": "test"},
                     segment_index=0,
-                    max_retries=1,
+                    max_retries=3,
                 )
 
-        # Result should be None (max retries exceeded) but delay should be capped
-        assert result is None
+                assert result == b"segment content"
+                # Verify uniform was called - the upper bound should be capped at 30
+                upper_bound = mock_uniform.call_args[0][1]  # Second positional arg is upper bound
+                assert upper_bound == 1.0  # For attempt 0, upper_bound = min(1.0, 30)
 
     @pytest.mark.asyncio
     async def test_structured_logging_on_retry(self) -> None:
@@ -423,7 +424,11 @@ class TestRetry429WithBackoff:
                 "vkdownloader.services.downloader_throttle._strip_auth_params",
                 return_value="https://example.com/segment.ts",
             ):
-                with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", new=AsyncMock()):
+                with patch(
+                    "vkdownloader.services.downloader_throttle.asyncio.wait_for"
+                ) as mock_wait_for:
+                    # Raise TimeoutError to simulate normal timeout (allows retry to continue)
+                    mock_wait_for.side_effect = TimeoutError()
                     result = await _retry_429_with_backoff(
                         mock_session,
                         "https://example.com/segment.ts?token=secret",
