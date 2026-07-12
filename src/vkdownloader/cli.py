@@ -212,7 +212,7 @@ def batch_download(
         total = len(tasks)
 
         # Manual progress tracking
-        print(f"Downloading videos: 0/{total} completed", end="\r", flush=True)
+        typer.echo(f"Downloading videos: 0/{total} completed", nl=False)
 
         for coro in asyncio.as_completed(tasks):
             try:
@@ -226,9 +226,9 @@ def batch_download(
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
             done_count += 1
-            print(f"Downloading videos: {done_count}/{total} completed", end="\r", flush=True)
+            typer.echo(f"Downloading videos: {done_count}/{total} completed", nl=False)
 
-        print()  # New line after progress
+        typer.echo()
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # Filter out CancelledError results
         return [
