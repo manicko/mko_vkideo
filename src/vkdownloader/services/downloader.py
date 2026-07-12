@@ -15,6 +15,7 @@ import yt_dlp
 from structlog import get_logger
 
 from ..config import Settings
+from ..exceptions import ExtractionError
 from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, DownloadMethod
 from ..services.extractor import VKVideoExtractor
@@ -467,7 +468,7 @@ async def _fetch_playlist_with_retry(
                             reason="Cannot refresh token without browser access",
                         )
                         return None
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.CancelledError) as e:
             logger.warning("playlist_fetch_failed", error=str(e))
 
     return None
@@ -524,7 +525,7 @@ async def _download_segment(
                 return True
             logger.warning("segment_download_failed", status=response.status)
             return False
-    except Exception as e:
+    except aiohttp.ClientError as e:
         logger.error("segment_download_error", error=str(e))
         return False
 
@@ -894,7 +895,7 @@ async def download_with_ytdlp_with_resume_fallback(
                         )
                         if segment_result:
                             return segment_result
-                except Exception as e:
+                except (ExtractionError, OSError, ValueError) as e:
                     logger.warning("failed_to_refresh_token", error=str(e))
             else:
                 logger.error("max_retries_exceeded")
