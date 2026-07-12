@@ -1011,6 +1011,7 @@ class TestDownloadMethodLogging:
         assert len(starting_logs) >= 1, "Should log starting_ytdlp_download"
         # Verify quality is in the log
         assert starting_logs[0]["kwargs"].get("quality") == "720"
+        assert result == output_file
 
     @pytest.mark.asyncio
     async def test_perform_download_logs_ffmpeg_method(

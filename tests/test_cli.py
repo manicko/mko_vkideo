@@ -171,7 +171,7 @@ class TestQualityOptionValidation:
         with (
             patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
             patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.cli.perform_download"),
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
@@ -322,4 +322,3 @@ class TestCliHelp:
 
         assert result.exit_code == 0
         assert "download" in result.output or "vkdownloader" in result.output.lower()
-
