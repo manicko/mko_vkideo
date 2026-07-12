@@ -11,6 +11,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import DownloadError
+from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
@@ -97,7 +98,7 @@ class HttpClient:
                 last_error = e
                 logger.warning(
                     "http_request_failed",
-                    url=url,
+                    url=_strip_auth_params(url),
                     attempt=attempt + 1,
                     max_retries=self.settings.max_retries,
                     error=str(e),
@@ -171,10 +172,10 @@ class HttpClient:
                         bytes_downloaded += self._write_chunk_to_file(chunk, f)
                         self._update_progress(bytes_downloaded, total_bytes, progress_callback)
 
-                logger.info("download_completed", url=url, path=str(output_path))
+                logger.info("download_completed", url=_strip_auth_params(url), path=str(output_path))
 
         except aiohttp.ClientError as e:
-            logger.error("download_failed", url=url, path=str(output_path), error=str(e))
+            logger.error("download_failed", url=_strip_auth_params(url), path=str(output_path), error=str(e))
             if output_path.exists():
                 output_path.unlink()
             raise DownloadError(f"Failed to download {url}") from e
