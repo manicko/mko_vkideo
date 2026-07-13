@@ -11,15 +11,15 @@ from .config import Settings, setup_logging
 from .exceptions import QualityNotAvailableError
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .services.downloader import perform_download, setup_signal_handlers
-from .services.downloader_throttle import URLBackoffCoordinator
+from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
 from .utils.security import validate_output_path
 
 logger = get_logger(__name__)
 
-# Module-level progress state for per-URL progress tracking
-_progress_state: dict[int, tuple[int, int]] = {}
+# Module-level progress manager for thread-safe per-URL progress tracking
+_progress_manager = ProgressManager()
 
 
 def _sanitize_title(title: str) -> str:
@@ -44,12 +44,13 @@ def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]
     """
     def callback(video_id: str, downloaded: int, total: int) -> None:
         # Non-blocking - just update shared state
-        _progress_state[url_index] = (downloaded, total)
+        # Note: tuple assignment is atomic in CPython GIL
+        _progress_manager._state[url_index] = (downloaded, total)
 
     return callback
 
 
-def _format_progress(url_count: int) -> str:
+async def _format_progress(url_count: int) -> str:
     """Format progress state as per-URL segment format.
 
     Args:
@@ -58,11 +59,7 @@ def _format_progress(url_count: int) -> str:
     Returns:
         Formatted string like "video_1: 25/100, video_2: 45/150".
     """
-    progress_lines = [
-        f"video_{i}: {_progress_state.get(i, (0, 0))[0]}/{_progress_state.get(i, (0, 0))[1]}"
-        for i in range(url_count)
-    ]
-    return ", ".join(progress_lines)
+    return await _progress_manager.get_formatted_progress(url_count)
 
 
 app = typer.Typer(
@@ -279,7 +276,7 @@ def batch_download(
         backoff_coordinator = URLBackoffCoordinator()
 
         # Clear progress state for this batch
-        _progress_state.clear()
+        await _progress_manager.clear()
 
         # Create progress callbacks for each URL
         callbacks = [_create_progress_callback(i) for i in range(len(urls))]
@@ -293,7 +290,7 @@ def batch_download(
         total = len(urls)
 
         # Initial progress display in per-URL format
-        typer.echo(f"\r{_format_progress(total)}", nl=False)
+        typer.echo(f"\r{await _format_progress(total)}", nl=False)
 
         for coro in asyncio.as_completed(tasks):
             try:
@@ -307,7 +304,7 @@ def batch_download(
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
             # Update progress display with \r overwrite
-            typer.echo(f"\r{_format_progress(total)}", nl=False)
+            typer.echo(f"\r{await _format_progress(total)}", nl=False)
 
         typer.echo()
         results = await asyncio.gather(*tasks, return_exceptions=True)

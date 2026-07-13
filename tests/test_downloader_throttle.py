@@ -637,3 +637,68 @@ class TestRetryableStatusCodes:
         assert 200 not in RETRYABLE_STATUS_CODES
         assert 403 not in RETRYABLE_STATUS_CODES
         assert 404 not in RETRYABLE_STATUS_CODES
+
+
+class TestProgressManager:
+    """Tests for ProgressManager class."""
+
+    @pytest.mark.asyncio
+    async def test_update_stores_progress(self) -> None:
+        """Test that update stores progress for a URL index."""
+        from vkdownloader.services.downloader_throttle import ProgressManager
+
+        manager = ProgressManager()
+        await manager.update(0, 25, 100)
+
+        result = await manager.get_formatted_progress(1)
+        assert "video_0: 25/100" in result
+
+    @pytest.mark.asyncio
+    async def test_update_multiple_urls(self) -> None:
+        """Test that update handles multiple URLs independently."""
+        from vkdownloader.services.downloader_throttle import ProgressManager
+
+        manager = ProgressManager()
+        await manager.update(0, 25, 100)
+        await manager.update(1, 50, 200)
+
+        result = await manager.get_formatted_progress(2)
+        assert "video_0: 25/100" in result
+        assert "video_1: 50/200" in result
+
+    @pytest.mark.asyncio
+    async def test_get_formatted_progress_defaults_to_zero(self) -> None:
+        """Test that get_formatted_progress returns 0/0 for unset URLs."""
+        from vkdownloader.services.downloader_throttle import ProgressManager
+
+        manager = ProgressManager()
+        result = await manager.get_formatted_progress(3)
+
+        assert "video_0: 0/0" in result
+        assert "video_1: 0/0" in result
+        assert "video_2: 0/0" in result
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_all_progress(self) -> None:
+        """Test that clear removes all stored progress."""
+        from vkdownloader.services.downloader_throttle import ProgressManager
+
+        manager = ProgressManager()
+        await manager.update(0, 50, 100)
+        await manager.clear()
+
+        result = await manager.get_formatted_progress(1)
+        assert "video_0: 0/0" in result
+
+    @pytest.mark.asyncio
+    async def test_overwrites_existing_progress(self) -> None:
+        """Test that update overwrites existing progress for same index."""
+        from vkdownloader.services.downloader_throttle import ProgressManager
+
+        manager = ProgressManager()
+        await manager.update(0, 25, 100)
+        await manager.update(0, 75, 100)
+
+        result = await manager.get_formatted_progress(1)
+        assert "video_0: 75/100" in result
+        assert "25" not in result
