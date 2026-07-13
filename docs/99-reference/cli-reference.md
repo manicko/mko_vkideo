@@ -117,18 +117,36 @@ vkdownloader batch [OPTIONS] URLS_FILE
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
+| `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--quality` | | str | `best` | Video quality selection for all downloads |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 | `--cookie-source` | | str | `none` | Cookie strategy: `none`, `browser`, or `file` |
 
+**Environment Variables:**
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `VKDOWNLOADER_MAX_RETRIES` | int | `3` | Maximum retry attempts for failed segment downloads (1-10) |
+
 **Behavior:**
 
 1. Reads video URLs from the provided file (one URL per line)
 2. Skips empty lines and lines starting with `#`
-3. Downloads each video concurrently (up to 4 parallel downloads)
-4. Shows a progress bar during download
-5. Prints summary of successful and failed downloads
+3. Downloads each video concurrently with dynamic thread distribution (up to 4 parallel downloads)
+4. Uses shared semaphore for segment-level concurrency control
+5. Shows per-URL segment progress during download
+6. Prints summary of successful and failed downloads
+
+**Progress Format:**
+
+Per-URL segment progress displays download status for each video:
+
+```
+video_0: 25/100, video_1: 45/150, video_2: 0/80
+```
+
+Each entry shows `video_{index}: {downloaded_segments}/{total_segments}` for real-time progress tracking.
 
 **Exit codes:**
 
