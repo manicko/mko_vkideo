@@ -8,6 +8,7 @@ import ssl
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin
 
 import aiohttp
@@ -21,7 +22,7 @@ from ..models.enums import CookieSource, DownloadMethod
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
-from .downloader_throttle import _retry_429_with_backoff, get_shutdown_event
+from .downloader_throttle import RETRYABLE_STATUS_CODES, _retry_429_with_backoff, get_shutdown_event
 
 logger = get_logger(__name__)
 
@@ -396,6 +397,8 @@ async def download_hls_with_resume(
                             session, full_url, segment_path, headers,
                             max_concurrent_downloads=settings.max_concurrent_downloads,
                             segment_index=idx,
+                            backoff_coordinator=request.backoff_coordinator,
+                            video_url=request.video_url,
                         )
                     else:
                         result = True
@@ -514,6 +517,8 @@ async def _download_segment(
     headers: dict[str, str],
     max_concurrent_downloads: int = 1,
     segment_index: int = 0,
+    backoff_coordinator: Any | None = None,
+    video_url: str | None = None,
 ) -> bool:
     """Download a single HLS segment.
 
@@ -524,6 +529,8 @@ async def _download_segment(
         headers: Request headers to use.
         max_concurrent_downloads: Maximum concurrent downloads. When 1, uses retry with backoff.
         segment_index: Index of the segment being downloaded (for logging).
+        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
+        video_url: Original video URL for coordinator keying (required if coordinator provided).
 
     Returns:
         True on success, False on failure.
@@ -538,7 +545,15 @@ async def _download_segment(
             return True
         return False
 
-    # Existing logic for parallel mode
+    # Existing logic for parallel mode with shared backoff support
+    shutdown_event = get_shutdown_event()
+
+    # Check for shared backoff before download attempt
+    if backoff_coordinator and video_url:
+        was_paused = await backoff_coordinator.wait_if_paused(video_url)
+        if was_paused and shutdown_event.is_set():
+            return False
+
     try:
         async with session.get(segment_url, headers=headers) as response:
             if response.status == 200:
@@ -546,6 +561,9 @@ async def _download_segment(
                     f.write(await response.read())
                 return True
             logger.warning("segment_download_failed", status=response.status)
+            # Notify coordinator of rate limit for shared backoff
+            if backoff_coordinator and video_url and response.status in RETRYABLE_STATUS_CODES:
+                await backoff_coordinator.pause(video_url, 10.0)
             return False
     except aiohttp.ClientError as e:
         logger.error("segment_download_error", error=str(e))
