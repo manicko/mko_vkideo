@@ -20,22 +20,22 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 
 | Setting | Environment Variable | Default | Description |
 |---------|---------------------|---------|-------------|
-| `user_agent` | `USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for browser requests |
-| `accept_language` | `ACCEPT_LANGUAGE` | ru-RU,... | Accept-Language header for browser |
-| `timezone` | `TIMEZONE` | Europe/Moscow | Timezone for stealth configuration |
-| `locale` | `LOCALE` | ru-RU | Locale for browser stealth |
-| `max_retries` | `MAX_RETRIES` | 3 | Maximum retry attempts (1-10) |
-| `download_timeout` | `DOWNLOAD_TIMEOUT` | 300 | Download timeout in seconds (30-3600) |
-| `ssl_verify` | `SSL_VERIFY` | true | Verify SSL certificates |
-| `download_dir` | `DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
-| `max_concurrent_downloads` | `MAX_CONCURRENT_DOWNLOADS` | 4 | Concurrent downloads (1-16); 1 enables anti-detection delay |
-| `concurrent_fragments` | `CONCURRENT_FRAGMENTS` | 4 | Concurrent HLS fragments for yt-dlp (reduces throttling) |
-| `throttled_rate` | `THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec before throttling triggers re-extract |
-| `http_chunk_size` | `HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
-| `download_method` | `DOWNLOAD_METHOD` | auto | Download method: yt-dlp, ffmpeg, or auto |
-| `cookie_source` | `COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser, or file |
-| `log_level` | `LOG_LEVEL` | INFO | Logging level |
-| `log_file` | `LOG_FILE` | None | Optional log file path |
+| `user_agent` | `VKDOWNLOADER_USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for browser requests |
+| `accept_language` | `VKDOWNLOADER_ACCEPT_LANGUAGE` | ru-RU,... | Accept-Language header for browser |
+| `timezone` | `VKDOWNLOADER_TIMEZONE` | Europe/Moscow | Timezone for stealth configuration |
+| `locale` | `VKDOWNLOADER_LOCALE` | ru-RU | Locale for browser stealth |
+| `max_retries` | `VKDOWNLOADER_MAX_RETRIES` | 3 | Maximum retry attempts for failed segment downloads during batch processing (1-10) |
+| `download_timeout` | `VKDOWNLOADER_DOWNLOAD_TIMEOUT` | 300 | Download timeout in seconds (30-3600) |
+| `ssl_verify` | `VKDOWNLOADER_SSL_VERIFY` | true | Verify SSL certificates |
+| `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
+| `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Segment-level concurrency limit shared across all batch URLs (1-16); 1 enables anti-detection delay |
+| `concurrent_fragments` | `VKDOWNLOADER_CONCURRENT_FRAGMENTS` | 4 | Concurrent HLS fragments for yt-dlp (reduces throttling) |
+| `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec before throttling triggers re-extract |
+| `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
+| `download_method` | `VKDOWNLOADER_DOWNLOAD_METHOD` | auto | Download method: yt-dlp, ffmpeg, or auto |
+| `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser, or file |
+| `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
+| `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
 
 ## Cookie Source Settings
 
@@ -60,28 +60,59 @@ When token refresh is needed (segment download on 403/410), the system forces br
 **Example .env configuration:**
 ```env
 # For public videos (no authentication needed)
-COOKIE_SOURCE=none
+VKDOWNLOADER_COOKIE_SOURCE=none
 
 # For private/authenticated videos
-COOKIE_SOURCE=browser
+VKDOWNLOADER_COOKIE_SOURCE=browser
 ```
 
 ## Example .env File
 
 ```env
 # Browser settings
-USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-DOWNLOAD_TIMEOUT=300
-SSL_VERIFY=true
+VKDOWNLOADER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+VKDOWNLOADER_DOWNLOAD_TIMEOUT=300
+VKDOWNLOADER_SSL_VERIFY=true
 
 # Download settings
-DOWNLOAD_DIR=~/Downloads/vkdownloader
-MAX_CONCURRENT_DOWNLOADS=4
-DOWNLOAD_METHOD=auto
-COOKIE_SOURCE=none
+VKDOWNLOADER_DOWNLOAD_DIR=~/Downloads/vkdownloader
+VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS=4
+VKDOWNLOADER_DOWNLOAD_METHOD=auto
+VKDOWNLOADER_COOKIE_SOURCE=none
 
 # Logging
-LOG_LEVEL=INFO
+VKDOWNLOADER_LOG_LEVEL=INFO
+```
+
+## Batch Download Configuration
+
+### max_retries
+
+Controls retry behavior for failed segment downloads during batch processing.
+
+- **CLI Flag:** `--max-retries` / `-r`
+- **Environment Variable:** `VKDOWNLOADER_MAX_RETRIES`
+- **Default:** `3` (range: 1-10)
+- **Description:** Maximum retry attempts for failed segment downloads. When a segment download fails (e.g., due to 403/410 errors), the system will automatically retry up to this number of attempts before marking the download as failed.
+
+**Example:**
+```env
+VKDOWNLOADER_MAX_RETRIES=5
+```
+
+### max_concurrent_downloads
+
+Controls segment-level concurrency shared across all batch URLs.
+
+- **CLI Flag:** Not available (use environment variable)
+- **Environment Variable:** `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS`
+- **Default:** `4` (range: 1-16)
+- **Description:** The semaphore limit that controls how many concurrent segment downloads can run across all URLs in a batch. Setting this to `1` enables anti-detection delay between segments. This is a shared limit across the entire batch, not per-URL.
+
+**Example for batch downloads:**
+```env
+VKDOWNLOADER_MAX_RETRIES=5
+VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS=8
 ```
 
 ## Security Settings
@@ -105,7 +136,7 @@ Controls the verbosity of application logging output.
 
 **Example:**
 ```env
-LOG_LEVEL=DEBUG
+VKDOWNLOADER_LOG_LEVEL=DEBUG
 ```
 
 ### log_file
@@ -114,7 +145,7 @@ Optional path to a file for structured JSON log output. When set, logs are writt
 
 **Example:**
 ```env
-LOG_FILE=/var/log/vkdownloader.log
+VKDOWNLOADER_LOG_FILE=/var/log/vkdownloader.log
 ```
 
 ### download_dir
