@@ -308,7 +308,10 @@ class HLSDownloader:
             _active_processes.discard(process)
 
 
-async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
+async def download_hls_with_resume(
+    request: HLSDownloadRequest,
+    semaphore: asyncio.Semaphore | None = None,
+) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
 
@@ -318,6 +321,8 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
 
     Args:
         request: HLSDownloadRequest containing all download parameters.
+        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
+            When None, creates a local semaphore based on settings.max_concurrent_downloads.
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.
@@ -368,14 +373,17 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
             logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
 
             # Download missing segments concurrently
-            semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+            # Use shared semaphore if provided, otherwise create local one based on settings
+            semaphore_to_use = semaphore if semaphore is not None else asyncio.Semaphore(
+                settings.max_concurrent_downloads
+            )
 
             async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
                 """Download segment with semaphore rate limiting."""
                 # Check for shutdown before starting - raise CancelledError to interrupt gather
                 if shutdown_event.is_set():
                     raise asyncio.CancelledError("Download cancelled by user")
-                async with semaphore:
+                async with semaphore_to_use:
                     # Check for shutdown after acquiring semaphore
                     if shutdown_event.is_set():
                         raise asyncio.CancelledError("Download cancelled by user")
@@ -392,8 +400,9 @@ async def download_hls_with_resume(request: HLSDownloadRequest) -> Path | None:
                     else:
                         result = True
                 # Anti-detection delay AFTER semaphore release (outside context block)
-                # Delay only in sequential mode (max_concurrent_downloads == 1)
-                if result and settings.max_concurrent_downloads == 1:
+                # Delay only applies in sequential mode (max_concurrent_downloads == 1)
+                # Skip when shared semaphore is provided (work-stealing context)
+                if result and semaphore is None and settings.max_concurrent_downloads == 1:
                     # Check for shutdown in delay loop - raise to interrupt gather
                     if shutdown_event.is_set():
                         raise asyncio.CancelledError("Download cancelled by user")

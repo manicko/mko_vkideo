@@ -614,6 +614,62 @@ class TestParallelSegmentsDownload:
 
         assert gather_called, "asyncio.gather should be called for concurrent downloads"
 
+    @pytest.mark.asyncio
+    async def test_shared_semaphore_parameter(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that download_hls_with_resume accepts and uses shared semaphore parameter."""
+        import asyncio
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        test_settings = Settings(max_concurrent_downloads=4)
+
+        output_path = tmp_path / "video.mp4"
+
+        # Create a shared semaphore with different limit
+        shared_semaphore = asyncio.Semaphore(2)
+
+        download_count = 0
+
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+            **kwargs: Any,
+        ) -> bool:
+            nonlocal download_count
+            download_count += 1
+            output_path.write_bytes(b"segment data")
+            return True
+
+        with patch(
+            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+        ):
+            with patch(
+                "vkdownloader.services.downloader._download_segment",
+                side_effect=mock_download_segment,
+            ):
+                with patch(
+                    "vkdownloader.services.downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    # Call with shared semaphore parameter
+                    result = await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                            settings=test_settings,
+                        ),
+                        semaphore=shared_semaphore,
+                    )
+
+        assert result == output_path
+        assert download_count == 2
+
 
 class TestBrowserCookiesIntegration:
     """Tests for browser cookies integration with yt-dlp."""
