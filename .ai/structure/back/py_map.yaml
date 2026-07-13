@@ -3,12 +3,14 @@
   layer: unknown
   imports:
   - pathlib
-  - tqdm
+  - structlog
   - config
+  - exceptions
   - models.enums
   - services.downloader
   - services.extractor
   - services.quality
+  - utils.security
   classes: []
   functions:
   - download
@@ -21,6 +23,7 @@
   - pathlib
   - pydantic
   - pydantic_settings
+  - vkdownloader.models.enums
   classes:
   - Settings
   functions:
@@ -60,13 +63,13 @@
   classes:
   - BrowserManager
   functions:
-  - create_stealth_context
   - __init__
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\http_client.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.http_client
   layer: unknown
   imports:
   - collections.abc
+  - io
   - pathlib
   - structlog
   - config
@@ -76,6 +79,8 @@
   functions:
   - __init__
   - session
+  - _write_chunk_to_file
+  - _update_progress
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.network_monitor
   layer: unknown
@@ -83,6 +88,7 @@
   - typing
   - playwright.async_api
   - structlog
+  - utils.url_sanitizer
   classes:
   - NetworkMonitor
   functions:
@@ -104,11 +110,15 @@
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.dtos
   layer: unknown
   imports:
+  - __future__
+  - pathlib
+  - typing
   - pydantic
   - enums
   - video
   classes:
   - DownloadRequest
+  - HLSDownloadRequest
   - DownloadResult
   functions: []
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\enums.py
@@ -121,6 +131,7 @@
   - StreamFormat
   - DownloadStatus
   - DownloadMethod
+  - CookieSource
   functions: []
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\video.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.video
@@ -148,34 +159,61 @@
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader
   layer: unknown
   imports:
+  - collections.abc
+  - dataclasses
   - pathlib
   - urllib.parse
   - structlog
   - config
+  - models.dtos
+  - models.enums
+  - services.extractor
+  - utils.security
+  - utils.url_sanitizer
+  - downloader_throttle
   classes:
+  - FfmpegProgress
+  - ProgressParser
   - HLSDownloader
   functions:
+  - parse_line
+  - _cookies_to_netscape
   - __init__
   - _build_ffmpeg_cmd
   - _parse_m3u8_segments
+  - _parse_target_duration
+  - _build_ffmpeg_concat_command
   - _load_downloaded_count
   - _save_downloaded_count
   - _cleanup_segments
+  - setup_signal_handlers
+  - _handle_signal
+  - _download
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader_throttle
+  layer: unknown
+  imports:
+  - datetime
+  - structlog
+  - utils.url_sanitizer
+  classes: []
+  functions:
+  - get_shutdown_event
+  - _parse_retry_after
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.extractor
   layer: unknown
   imports:
-  - typing
   - playwright.async_api
   - pydantic
   - structlog
   - config
+  - exceptions
   - infrastructure.browser
-  - infrastructure.http_client
   - infrastructure.network_monitor
   - models.enums
   - models.video
-  - urllib.parse
+  - utils.url_sanitizer
   classes:
   - VKVideoExtractor
   functions:
@@ -188,11 +226,14 @@
   layer: unknown
   imports:
   - structlog
+  - exceptions
   - models.enums
   - models.video
   classes:
   - QualitySelector
   functions:
+  - _find_quality_match
+  - _get_fallback_stream
   - select
   - list_available_qualities
   - sort_key
@@ -202,5 +243,31 @@
   imports:
   - downloader
   - quality
+  classes: []
+  functions: []
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.security
+  layer: unknown
+  imports:
+  - pathlib
+  - structlog
+  - exceptions
+  classes: []
+  functions:
+  - validate_output_path
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.url_sanitizer
+  layer: unknown
+  imports:
+  - urllib.parse
+  classes: []
+  functions:
+  - _strip_auth_params
+- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\__init__.py
+  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.__init__
+  layer: unknown
+  imports:
+  - security
+  - url_sanitizer
   classes: []
   functions: []

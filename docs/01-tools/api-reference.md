@@ -701,6 +701,28 @@ Stream format types.
 | `DASH` | "dash" |
 | `MP4` | "mp4" |
 
+### LogLevel
+
+Location: `vkdownloader.models.enums`
+
+Standard logging level options for configuring application logging output.
+
+| Value | Description |
+|-------|-------------|
+| `DEBUG` | "DEBUG" — Detailed debugging information |
+| `INFO` | "INFO" — Confirmation of normal operation (default) |
+| `WARNING` | "WARNING" — Indication something unexpected happened |
+| `ERROR` | "ERROR" — Error event occurred, application continues |
+| `CRITICAL` | "CRITICAL" — Serious error, application may not continue |
+
+**Usage:**
+```python
+from vkdownloader.config import Settings
+from vkdownloader.models.enums import LogLevel
+
+settings = Settings(log_level=LogLevel.DEBUG)
+```
+
 ---
 
 ### DownloadMethod
@@ -883,17 +905,26 @@ Raised when video download fails.
 
 Location: `vkdownloader.config`
 
-Application settings with defaults and environment variable support.
+Application settings with defaults and environment variable support. Uses Pydantic BaseSettings for validation.
 
 **Key Attributes:**
 | Name | Default | Description |
 |------|---------|-------------|
-| user_agent | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
-| download_dir | ~/Downloads/vkdownloader | Directory for downloaded videos |
-| max_concurrent_downloads | 4 | Maximum concurrent downloads |
-| download_timeout | 300 | Download timeout in seconds |
-| ssl_verify | True | Verify SSL certificates for CDN connections |
-| download_method | AUTO | Download method: yt-dlp, ffmpeg, or auto |
-| cookie_source | NONE | Cookie acquisition strategy: none, browser, or file |
+| `user_agent` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
+| `accept_language` | `ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7` | Accept-Language header for browser requests |
+| `timezone` | `Europe/Moscow` | Timezone for stealth configuration |
+| `locale` | `ru-RU` | Locale for browser stealth |
+| `max_retries` | `3` | Maximum retry attempts (1-10) |
+| `download_timeout` | `300` | Download timeout in seconds (30-3600) |
+| `ssl_verify` | `True` | Verify SSL certificates for CDN connections |
+| `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
+| `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
+| `concurrent_fragments` | `4` | Concurrent HLS fragments for yt-dlp (reduces throttling) |
+| `throttled_rate` | `100000` | Minimum bytes/sec before throttling triggers re-extract |
+| `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
+| `download_method` | `AUTO` | Download method: yt-dlp, ffmpeg, or auto |
+| `cookie_source` | `NONE` | Cookie acquisition strategy: none, browser, or file |
+| `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+| `log_file` | `None` | Optional log file path for file output |
 
 

@@ -93,6 +93,31 @@ Controls SSL certificate verification for CDN connections.
 - **Default: `true`** — Secure by default
 - **Setting to `false`** — Logs a security warning; use only for edge cases
 
+### log_level
+
+Controls the verbosity of application logging output.
+
+- **Default: `INFO`** — Standard operational logging
+- **`DEBUG`** — Detailed debugging information including HTTP requests
+- **`WARNING`** — Warnings and errors only
+- **`ERROR`** — Errors only
+- **`CRITICAL`** — Critical errors only
+
+**Example:**
+```env
+LOG_LEVEL=DEBUG
+```
+
+### log_file
+
+Optional path to a file for structured JSON log output. When set, logs are written to this file instead of console.
+
+**Example:**
+```env
+LOG_FILE=/var/log/vkdownloader.log
+```
+
 ### download_dir
 
 Output directory for downloaded videos. Paths are validated to prevent path traversal attacks.
+

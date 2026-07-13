@@ -716,7 +716,7 @@ class TestSequentialDownloadMode:
 
         output_path = tmp_path / "video.mp4"
 
-        sleep_calls: list[float] = []
+        wait_for_calls: list[float] = []
 
         async def mock_download_segment(
             session: Any,
@@ -729,8 +729,10 @@ class TestSequentialDownloadMode:
             output_path.write_bytes(b"segment data")
             return True
 
-        async def mock_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
+        async def mock_wait_for(coro: Any, timeout: float) -> None:
+            """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
+            wait_for_calls.append(timeout)
+            raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
             "vkdownloader.services.downloader._fetch_playlist_with_retry",
@@ -744,7 +746,7 @@ class TestSequentialDownloadMode:
                     "vkdownloader.services.downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    with patch("asyncio.sleep", side_effect=mock_sleep):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
                         await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
@@ -755,9 +757,9 @@ class TestSequentialDownloadMode:
                         )
 
         # Verify delay was called for each segment in sequential mode (max_concurrent_downloads=1)
-        assert len(sleep_calls) == 2, "Should have sleep call for each segment"
+        assert len(wait_for_calls) == 2, "Should have wait_for call for each segment"
         # Each delay should be approximately 1.5-2.0 seconds (1.5 + 0-0.5 jitter)
-        for delay in sleep_calls:
+        for delay in wait_for_calls:
             assert 1.4 <= delay <= 2.1, (
                 f"Delay should be ~1.5s + jitter, got {delay}"
             )
@@ -826,7 +828,7 @@ class TestSequentialDownloadMode:
 
         output_path = tmp_path / "video.mp4"
 
-        sleep_calls: list[float] = []
+        wait_for_calls: list[float] = []
 
         async def mock_download_segment(
             session: Any,
@@ -838,8 +840,10 @@ class TestSequentialDownloadMode:
             output_path.write_bytes(b"segment data")
             return True
 
-        async def mock_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
+        async def mock_wait_for(coro: Any, timeout: float) -> None:
+            """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
+            wait_for_calls.append(timeout)
+            raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
             "vkdownloader.services.downloader._fetch_playlist_with_retry",
@@ -853,7 +857,7 @@ class TestSequentialDownloadMode:
                     "vkdownloader.services.downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    with patch("asyncio.sleep", side_effect=mock_sleep):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
                         await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
@@ -863,8 +867,8 @@ class TestSequentialDownloadMode:
                             )
                         )
 
-        # Parallel mode should not have anti-detection sleep calls
-        assert len(sleep_calls) == 0, "Parallel mode should not have inter-segment delay"
+        # Parallel mode should not have anti-detection wait_for calls
+        assert len(wait_for_calls) == 0, "Parallel mode should not have inter-segment delay"
 
     def test_structured_logging_fields(self, test_settings: Settings) -> None:
         """Test that _retry_429_with_backoff logs contain structured fields."""

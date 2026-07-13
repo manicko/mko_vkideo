@@ -97,5 +97,6 @@ disallow_untyped_decorators = false
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.39.9",
     "pyyaml>=6.0.3",
 ]
