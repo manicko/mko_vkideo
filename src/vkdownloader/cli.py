@@ -16,6 +16,18 @@ from .utils.security import validate_output_path
 
 logger = get_logger(__name__)
 
+
+def _sanitize_title(title: str) -> str:
+    """Sanitize title for filesystem safety.
+
+    Replaces characters that are invalid on Windows/Unix filesystems with underscores,
+    strips whitespace, and limits length to 100 characters.
+    """
+    for char in '/\\:*?"<>|':
+        title = title.replace(char, "_")
+    return title.strip()[:100]
+
+
 app = typer.Typer(
     name="vkdownloader",
     help="Download videos from vkvideo.ru with quality selection support",
@@ -76,8 +88,12 @@ def download(
         # Ensure output directory exists
         validated_output.mkdir(parents=True, exist_ok=True)
 
-        # Generate output filename
-        output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
+        # Generate output filename with sanitized title
+        safe_title = _sanitize_title(video.title) if video.title else None
+        if safe_title:
+            output_file = validated_output / f"{safe_title}_{video.id}.mp4"
+        else:
+            output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
         return await perform_download(
             url, str(stream.quality), output_file, method, extractor, settings
@@ -172,7 +188,9 @@ def batch_download(
         typer.echo(f"No URLs found in {urls_file}", err=True)
         raise typer.Exit(code=1)
 
-    async def _download_single(url: str) -> tuple[str, str, str]:
+    async def _download_single(
+        url: str, index: int
+    ) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
             settings = Settings(cookie_source=cookie_source, max_retries=max_retries)
@@ -188,7 +206,12 @@ def batch_download(
             # Ensure output directory exists
             validated_output.mkdir(parents=True, exist_ok=True)
 
-            output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
+            # Generate output filename with sanitized title
+            safe_title = _sanitize_title(video.title) if video.title else None
+            if safe_title:
+                output_file = validated_output / f"{safe_title}_{video.id}.mp4"
+            else:
+                output_file = validated_output / f"{index}_{video.id}.mp4"
 
             result = await perform_download(
                 url, str(stream.quality), output_file, method, extractor, settings
@@ -209,11 +232,13 @@ def batch_download(
         setup_signal_handlers()
         semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
 
-        async def _limited_download(url: str) -> tuple[str, str, str]:
+        async def _limited_download(url: str, index: int) -> tuple[str, str, str]:
             async with semaphore:
-                return await _download_single(url)
+                return await _download_single(url, index)
 
-        tasks = [asyncio.create_task(_limited_download(url)) for url in urls]
+        tasks = [
+            asyncio.create_task(_limited_download(url, i)) for i, url in enumerate(urls)
+        ]
         done_count = 0
         total = len(tasks)
 
