@@ -1,6 +1,7 @@
 """CLI interface for VK Video Downloader using Typer."""
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -17,6 +18,9 @@ from .utils.security import validate_output_path
 
 logger = get_logger(__name__)
 
+# Module-level progress state for per-URL progress tracking
+_progress_state: dict[int, tuple[int, int]] = {}
+
 
 def _sanitize_title(title: str) -> str:
     """Sanitize title for filesystem safety.
@@ -27,6 +31,38 @@ def _sanitize_title(title: str) -> str:
     for char in '/\\:*?"<>|':
         title = title.replace(char, "_")
     return title.strip()[:100]
+
+
+def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]:
+    """Create fire-and-forget progress callback for a URL index.
+
+    Args:
+        url_index: Index of the URL in the batch for tracking.
+
+    Returns:
+        Callback function that updates shared progress state.
+    """
+    def callback(video_id: str, downloaded: int, total: int) -> None:
+        # Non-blocking - just update shared state
+        _progress_state[url_index] = (downloaded, total)
+
+    return callback
+
+
+def _format_progress(url_count: int) -> str:
+    """Format progress state as per-URL segment format.
+
+    Args:
+        url_count: Total number of URLs in the batch.
+
+    Returns:
+        Formatted string like "video_1: 25/100, video_2: 45/150".
+    """
+    progress_lines = [
+        f"video_{i}: {_progress_state.get(i, (0, 0))[0]}/{_progress_state.get(i, (0, 0))[1]}"
+        for i in range(url_count)
+    ]
+    return ", ".join(progress_lines)
 
 
 app = typer.Typer(
@@ -194,6 +230,7 @@ def batch_download(
         index: int,
         shared_semaphore: asyncio.Semaphore | None = None,
         backoff_coordinator: URLBackoffCoordinator | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
@@ -221,6 +258,7 @@ def batch_download(
                 url, str(stream.quality), output_file, method, extractor, settings,
                 backoff_coordinator=backoff_coordinator,
                 semaphore=shared_semaphore,
+                progress_callback=progress_callback,
             )
 
             status = "success" if result else "failed"
@@ -240,17 +278,22 @@ def batch_download(
         shared_semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
         backoff_coordinator = URLBackoffCoordinator()
 
+        # Clear progress state for this batch
+        _progress_state.clear()
+
+        # Create progress callbacks for each URL
+        callbacks = [_create_progress_callback(i) for i in range(len(urls))]
+
         tasks = [
             asyncio.create_task(
-                _download_single(url, i, shared_semaphore, backoff_coordinator)
+                _download_single(url, i, shared_semaphore, backoff_coordinator, callbacks[i])
             )
             for i, url in enumerate(urls)
         ]
-        done_count = 0
-        total = len(tasks)
+        total = len(urls)
 
-        # Manual progress tracking
-        typer.echo(f"Downloading videos: 0/{total} completed", nl=False)
+        # Initial progress display in per-URL format
+        typer.echo(f"\r{_format_progress(total)}", nl=False)
 
         for coro in asyncio.as_completed(tasks):
             try:
@@ -263,8 +306,8 @@ def batch_download(
                 # Wait for cancellation to propagate
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
-            done_count += 1
-            typer.echo(f"Downloading videos: {done_count}/{total} completed", nl=False)
+            # Update progress display with \r overwrite
+            typer.echo(f"\r{_format_progress(total)}", nl=False)
 
         typer.echo()
         results = await asyncio.gather(*tasks, return_exceptions=True)

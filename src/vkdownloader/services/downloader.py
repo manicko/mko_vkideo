@@ -418,7 +418,7 @@ async def download_hls_with_resume(
                         pass  # Normal completion
                 return result
 
-            # Download all missing segments concurrently
+# Download all missing segments concurrently
             tasks = [
                 asyncio.create_task(download_segment_concurrent(i, seg))
                 for i, seg in enumerate(segments)
@@ -433,22 +433,27 @@ async def download_hls_with_resume(
                     for task in tasks:
                         if not task.done():
                             task.cancel()
-                    # Wait for cancellation to complete, ignoring results
+                    # Wait for cancellation to propagate
                     await asyncio.gather(*tasks, return_exceptions=True)
                     logger.info("download_cancelled", reason="shutdown_requested")
                     return None
                 downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in results if r)
-            _save_downloaded_count(metadata_file, downloaded_count)
+                _save_downloaded_count(metadata_file, downloaded_count)
 
-            # All downloaded - merge in batches
-            if downloaded_count == len(segments):
-                logger.info("merging_segments", count=downloaded_count)
-                result = await _merge_segments_batched(segments_dir, output_file, len(segments))
-                if result:
-                    _cleanup_segments(segments_dir, metadata_file)
-                return result
+                # Call progress callback for per-URL segment updates
+                if request.progress_callback:
+                    video_id = request.video_url.split("_")[-1] if "_" in request.video_url else request.video_url
+                    request.progress_callback(video_id, downloaded_count, len(segments))
 
-        return None
+                # All downloaded - merge in batches
+                if downloaded_count == len(segments):
+                    logger.info("merging_segments", count=downloaded_count)
+                    result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+                    if result:
+                        _cleanup_segments(segments_dir, metadata_file)
+                    return result
+
+            return None
     finally:
         # Clean up on failure - only if segments_dir still exists
         # (cleanup is done inside try block on success, so dir won't exist then)
@@ -1035,6 +1040,7 @@ async def perform_download(
     settings: Settings | None = None,
     backoff_coordinator: Any | None = None,
     semaphore: asyncio.Semaphore | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -1047,6 +1053,7 @@ async def perform_download(
         settings: Application settings.
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
         semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
+        progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -1109,6 +1116,7 @@ async def perform_download(
                         extractor=extractor,
                         backoff_coordinator=backoff_coordinator,
                         semaphore=semaphore,
+                        progress_callback=progress_callback,
                     )
                 )
             return result
