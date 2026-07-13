@@ -327,7 +327,20 @@ def batch_download(
         # Summary
         successful = sum(1 for _, _, status in results if status == "success")
         failed = len(results) - successful
-        typer.echo(f"\nCompleted: {successful} successful, {failed} failed")
+        max_concurrent = Settings().max_concurrent_downloads
+
+        typer.echo("\n\nDownload Summary:")
+        typer.echo(f"  Total connections: {len(results)}")
+        typer.echo(f"  Peak concurrency: {max_concurrent}")
+        typer.echo(f"  Successful: {successful}")
+        typer.echo(f"  Failed: {failed}")
+
+        # Show failed URLs with error reasons
+        failed_urls = [(url, status) for url, _, status in results if status != "success"]
+        if failed_urls:
+            typer.echo("  Failed URLs:")
+            for url, status in failed_urls:
+                typer.echo(f"    - {url}: {status}")
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)

@@ -154,6 +154,54 @@ class TestBatchCommand:
         assert result.exit_code == 1
         assert "No URLs found" in result.output
 
+    def test_batch_statistics_summary(self, tmp_path: Path) -> None:
+        """Check that batch download summary includes failed URLs with error reasons."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-1_1\nhttps://vkvideo.ru/video-2_2\n")
+
+        call_count = [0]
+
+        def mock_extract_side_effect(*args: object) -> MagicMock:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return MagicMock(id="video1", streams=[])
+            raise Exception("Network error")
+
+        with (
+            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.cli.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(side_effect=mock_extract_side_effect)
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video1.mp4"
+
+            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                    )
+
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert "Download Summary:" in result.output
+        assert "Total connections:" in result.output
+        assert "Peak concurrency:" in result.output
+        assert "Successful:" in result.output
+        assert "Failed:" in result.output
+
 
 class TestQualityOptionValidation:
     """Tests for quality enum validation in CLI."""
