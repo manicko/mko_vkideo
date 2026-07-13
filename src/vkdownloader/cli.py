@@ -41,10 +41,15 @@ def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]
 
     Returns:
         Callback function that updates shared progress state.
+
+    Thread-safety:
+        This callback uses GIL-atomic tuple assignment for fire-and-forget
+        semantics. The asyncio.Lock in ProgressManager protects the read path
+        in get_formatted_progress, ensuring safe concurrent access.
     """
     def callback(video_id: str, downloaded: int, total: int) -> None:
         # Non-blocking - just update shared state
-        # Note: tuple assignment is atomic in CPython GIL
+        # Note: tuple assignment is GIL-atomic in CPython for basic types
         _progress_manager._state[url_index] = (downloaded, total)
 
     return callback

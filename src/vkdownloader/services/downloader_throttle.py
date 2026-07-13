@@ -80,6 +80,14 @@ class ProgressManager:
 
     Encapsulates progress state and asyncio.Lock for safe concurrent access
     across multiple download tasks.
+
+    Thread-safety notes:
+        - The `_state` dict is accessed both via async methods (update, clear) with lock
+          protection, and via direct assignment from sync callbacks in _create_progress_callback.
+        - Direct tuple assignment to `_state[url_index]` is GIL-atomic in CPython, providing
+          safe fire-and-forget semantics for progress callbacks invoked from async tasks.
+        - The async lock protects the read path in get_formatted_progress, ensuring consistent
+          reads while callbacks may write concurrently.
     """
 
     def __init__(self) -> None:
