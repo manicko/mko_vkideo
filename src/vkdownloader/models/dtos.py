@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,12 +37,14 @@ class HLSDownloadRequest(BaseModel):
     # Type checkers understand these as the correct types via forward references
     settings: Any | None = None
     extractor: Any | None = None
-    # Runtime type: URLBackoffCoordinator | None
+    # Runtime type: URLBackoffCoordinator | None for shared rate limiting across URLs
     # Using Any to avoid circular import issues at module load time
     backoff_coordinator: Any | None = None
     # Progress callback receives (video_id, downloaded, total) for per-URL progress tracking.
     # Fire-and-forget mechanism - non-blocking, called from download tasks.
     progress_callback: Callable[[str, int, int], None] | None = None
+    # Shared semaphore for work-stealing concurrency across batch downloads
+    semaphore: asyncio.Semaphore | None = None
 
 
 class DownloadResult(BaseModel):

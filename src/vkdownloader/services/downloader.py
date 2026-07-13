@@ -1033,6 +1033,8 @@ async def perform_download(
     method: DownloadMethod,
     extractor: VKVideoExtractor | None = None,
     settings: Settings | None = None,
+    backoff_coordinator: Any | None = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -1043,6 +1045,8 @@ async def perform_download(
         method: Download method (yt-dlp, ffmpeg, or auto).
         extractor: Optional VKVideoExtractor for token refresh.
         settings: Application settings.
+        backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
+        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -1103,6 +1107,8 @@ async def perform_download(
                         cookies=cookies,
                         settings=settings,
                         extractor=extractor,
+                        backoff_coordinator=backoff_coordinator,
+                        semaphore=semaphore,
                     )
                 )
             return result

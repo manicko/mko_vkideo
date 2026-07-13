@@ -10,6 +10,7 @@ from .config import Settings, setup_logging
 from .exceptions import QualityNotAvailableError
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .services.downloader import perform_download, setup_signal_handlers
+from .services.downloader_throttle import URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
 from .utils.security import validate_output_path
@@ -189,7 +190,10 @@ def batch_download(
         raise typer.Exit(code=1)
 
     async def _download_single(
-        url: str, index: int
+        url: str,
+        index: int,
+        shared_semaphore: asyncio.Semaphore | None = None,
+        backoff_coordinator: URLBackoffCoordinator | None = None,
     ) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
@@ -214,7 +218,9 @@ def batch_download(
                 output_file = validated_output / f"{index}_{video.id}.mp4"
 
             result = await perform_download(
-                url, str(stream.quality), output_file, method, extractor, settings
+                url, str(stream.quality), output_file, method, extractor, settings,
+                backoff_coordinator=backoff_coordinator,
+                semaphore=shared_semaphore,
             )
 
             status = "success" if result else "failed"
@@ -230,14 +236,15 @@ def batch_download(
         """Run batch download with progress tracking."""
         # Setup signal handlers inside async context
         setup_signal_handlers()
-        semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
-
-        async def _limited_download(url: str, index: int) -> tuple[str, str, str]:
-            async with semaphore:
-                return await _download_single(url, index)
+        # Create shared semaphore and backoff coordinator at batch level
+        shared_semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
+        backoff_coordinator = URLBackoffCoordinator()
 
         tasks = [
-            asyncio.create_task(_limited_download(url, i)) for i, url in enumerate(urls)
+            asyncio.create_task(
+                _download_single(url, i, shared_semaphore, backoff_coordinator)
+            )
+            for i, url in enumerate(urls)
         ]
         done_count = 0
         total = len(tasks)
