@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,9 @@ class HLSDownloadRequest(BaseModel):
     # Runtime type: URLBackoffCoordinator | None
     # Using Any to avoid circular import issues at module load time
     backoff_coordinator: Any | None = None
+    # Progress callback receives (video_id, downloaded, total) for per-URL progress tracking.
+    # Fire-and-forget mechanism - non-blocking, called from download tasks.
+    progress_callback: Callable[[str, int, int], None] | None = None
 
 
 class DownloadResult(BaseModel):
