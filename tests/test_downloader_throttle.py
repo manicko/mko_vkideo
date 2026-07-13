@@ -1,12 +1,14 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
+import builtins
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
-from asyncio import TimeoutError
 
 import pytest
 
 from vkdownloader.services.downloader_throttle import (
     RETRYABLE_STATUS_CODES,
+    URLBackoffCoordinator,
     _parse_retry_after,
     _retry_429_with_backoff,
 )
@@ -69,7 +71,7 @@ class TestRetry429WithBackoff:
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
             # Raise TimeoutError to simulate normal timeout (allows retry to continue)
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -116,7 +118,7 @@ class TestRetry429WithBackoff:
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
             # Raise TimeoutError to simulate normal timeout (allows retry to continue)
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -145,7 +147,7 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(return_value=mock_context)
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -187,7 +189,7 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -227,7 +229,7 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -267,7 +269,7 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -307,7 +309,7 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(side_effect=get_side_effect)
 
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -372,7 +374,7 @@ class TestRetry429WithBackoff:
 
         # Patch wait_for to raise TimeoutError (normal timeout, allows retry)
         with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+            mock_wait_for.side_effect = builtins.TimeoutError()
             with patch("vkdownloader.services.downloader_throttle.random.uniform") as mock_uniform:
                 mock_uniform.return_value = 1.0  # Return any valid value
                 result = await _retry_429_with_backoff(
@@ -428,7 +430,7 @@ class TestRetry429WithBackoff:
                     "vkdownloader.services.downloader_throttle.asyncio.wait_for"
                 ) as mock_wait_for:
                     # Raise TimeoutError to simulate normal timeout (allows retry to continue)
-                    mock_wait_for.side_effect = TimeoutError()
+                    mock_wait_for.side_effect = builtins.TimeoutError()
                     result = await _retry_429_with_backoff(
                         mock_session,
                         "https://example.com/segment.ts?token=secret",
@@ -481,6 +483,99 @@ class TestRetry429WithBackoff:
         assert call_kwargs["status"] == 403
         assert call_kwargs["segment_index"] == 3
         assert "url" in call_kwargs
+
+
+class TestURLBackoffCoordinator:
+    """Tests for URLBackoffCoordinator class."""
+
+    @pytest.mark.asyncio
+    async def test_is_paused_returns_false_for_unknown_url(self) -> None:
+        """Test is_paused returns False when URL not in backoff state."""
+        coordinator = URLBackoffCoordinator()
+        result = await coordinator.is_paused("https://example.com/video1")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_is_paused_returns_true_during_backoff(self) -> None:
+        """Test is_paused returns True when URL is in backoff period."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 10.0)
+
+        # Immediately check - should be paused
+        result = await coordinator.is_paused("https://example.com/video1")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_is_paused_returns_false_after_backoff_expires(self) -> None:
+        """Test is_paused returns False after backoff period expires."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 0.01)
+
+        # Wait for backoff to expire
+        time.sleep(0.02)
+
+        result = await coordinator.is_paused("https://example.com/video1")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_wait_if_paused_returns_false_when_not_paused(self) -> None:
+        """Test wait_if_paused returns False when URL is not paused."""
+        coordinator = URLBackoffCoordinator()
+        result = await coordinator.wait_if_paused("https://example.com/video1")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_wait_if_paused_waits_until_backoff_expires(self) -> None:
+        """Test wait_if_paused blocks until backoff expires."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 0.01)
+
+        result = await coordinator.wait_if_paused("https://example.com/video1")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_wait_if_paused_returns_on_shutdown(self) -> None:
+        """Test wait_if_paused respects shutdown event and returns early."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 100.0)
+
+        # Mock shutdown event that is already set
+        mock_event = MagicMock()
+        mock_event.is_set.return_value = True
+        mock_event.wait = AsyncMock()
+
+        with patch(
+            "vkdownloader.services.downloader_throttle.get_shutdown_event",
+            return_value=mock_event,
+        ):
+            result = await coordinator.wait_if_paused("https://example.com/video1")
+
+        # Should return True when shutdown is triggered
+        assert result is True
+        mock_event.wait.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multiple_urls_have_independent_backoff(self) -> None:
+        """Test that different URLs have independent backoff states."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 10.0)
+
+        # video2 should not be paused
+        result = await coordinator.is_paused("https://example.com/video2")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_pause_overwrites_existing_backoff(self) -> None:
+        """Test that pause overwrites existing backoff for same URL."""
+        coordinator = URLBackoffCoordinator()
+        await coordinator.pause("https://example.com/video1", 1.0)
+
+        # Wait a bit then set a new backoff
+        time.sleep(0.02)
+        await coordinator.pause("https://example.com/video1", 10.0)
+
+        result = await coordinator.is_paused("https://example.com/video1")
+        assert result is True
 
 
 class TestParseRetryAfter:

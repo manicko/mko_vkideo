@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import random
+import time
 from datetime import datetime
 
 import aiohttp
@@ -34,6 +35,44 @@ def get_shutdown_event() -> asyncio.Event:
         event = asyncio.Event()
         _shutdown_event_ctx.set(event)
         return event
+
+
+class URLBackoffCoordinator:
+    """Manages shared backoff state per URL for coordinated rate limiting.
+
+    When a 429 response occurs on any segment of a URL, all segments
+    of that URL pause to avoid cascading rate limit violations.
+    """
+
+    def __init__(self) -> None:
+        self._backoff_state: dict[str, float] = {}
+        self._lock = asyncio.Lock()
+
+    async def is_paused(self, video_url: str) -> bool:
+        """Check if URL is currently in backoff."""
+        async with self._lock:
+            timestamp = self._backoff_state.get(video_url, 0)
+            return time.time() < timestamp
+
+    async def pause(self, video_url: str, duration_seconds: float) -> None:
+        """Set backoff duration for URL."""
+        async with self._lock:
+            self._backoff_state[video_url] = time.time() + duration_seconds
+
+    async def wait_if_paused(self, video_url: str) -> bool:
+        """Block until backoff expires for URL. Returns True if was paused."""
+        async with self._lock:
+            timestamp = self._backoff_state.get(video_url, 0)
+        if time.time() >= timestamp:
+            return False
+
+        delay = timestamp - time.time()
+        try:
+            shutdown_event = get_shutdown_event()
+            await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+            return True  # Shutdown triggered
+        except TimeoutError:
+            return True  # Backoff completed normally
 
 
 async def _retry_429_with_backoff(
