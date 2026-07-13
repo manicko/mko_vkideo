@@ -9,10 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Downloaded content
+# Downloaded content and temporary download files
 *.mp4
 *.mkv
 *.avi
+*.part
 
 # Temporary segment files
 *_segments/
