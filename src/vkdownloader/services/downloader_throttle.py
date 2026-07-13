@@ -75,6 +75,50 @@ class URLBackoffCoordinator:
             return True  # Backoff completed normally
 
 
+class ProgressManager:
+    """Thread-safe progress state manager for concurrent batch downloads.
+
+    Encapsulates progress state and asyncio.Lock for safe concurrent access
+    across multiple download tasks.
+    """
+
+    def __init__(self) -> None:
+        self._state: dict[int, tuple[int, int]] = {}
+        self._lock = asyncio.Lock()
+
+    async def update(self, url_index: int, downloaded: int, total: int) -> None:
+        """Update progress for a URL in thread-safe manner.
+
+        Args:
+            url_index: Index of the URL in the batch for tracking.
+            downloaded: Number of bytes downloaded so far.
+            total: Total bytes to download.
+        """
+        async with self._lock:
+            self._state[url_index] = (downloaded, total)
+
+    async def get_formatted_progress(self, url_count: int) -> str:
+        """Get formatted progress string for all URLs.
+
+        Args:
+            url_count: Total number of URLs in the batch.
+
+        Returns:
+            Formatted string like "video_0: 25/100, video_1: 45/150".
+        """
+        async with self._lock:
+            progress_lines = [
+                f"video_{i}: {self._state.get(i, (0, 0))[0]}/{self._state.get(i, (0, 0))[1]}"
+                for i in range(url_count)
+            ]
+            return ", ".join(progress_lines)
+
+    async def clear(self) -> None:
+        """Clear progress state for new batch."""
+        async with self._lock:
+            self._state.clear()
+
+
 async def _retry_429_with_backoff(
     session: aiohttp.ClientSession,
     segment_url: str,
