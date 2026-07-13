@@ -147,6 +147,12 @@ def batch_download(
         "-c",
         help="Cookie source: none, browser, or file",
     ),
+    max_retries: int = typer.Option(
+        Settings().max_retries,
+        "--max-retries",
+        "-r",
+        help="Maximum retry attempts for failed segment downloads",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
@@ -169,7 +175,7 @@ def batch_download(
     async def _download_single(url: str) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
-            settings = Settings(cookie_source=cookie_source)
+            settings = Settings(cookie_source=cookie_source, max_retries=max_retries)
             extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 
