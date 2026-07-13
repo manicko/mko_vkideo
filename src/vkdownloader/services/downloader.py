@@ -981,7 +981,7 @@ async def _download_with_ytdlp(
             "format": f"best[height<={quality_str}]",
             "nocheckcertificate": not settings.ssl_verify,
             "hls_prefer_native": True,
-            "concurrent_fragments": settings.concurrent_fragments,
+            "concurrent_fragments": settings.max_concurrent_downloads,
             "throttledratelimit": settings.throttled_rate,
             "http_chunk_size": settings.http_chunk_size,
             "http_headers": {

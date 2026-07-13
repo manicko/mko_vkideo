@@ -465,22 +465,9 @@ class TestCookiesToNetscape:
 class TestYtdlpOptions:
     """Tests for yt-dlp options configuration."""
 
-    def test_ytdlp_options_includes_concurrent_fragments(self, test_settings: Settings) -> None:
-        """Test yt-dlp options include concurrent_fragments setting."""
-        ydl_opts = {
-            "concurrent_fragments": test_settings.concurrent_fragments,
-            "throttledratelimit": test_settings.throttled_rate,
-            "http_chunk_size": test_settings.http_chunk_size,
-        }
-
-        assert "concurrent_fragments" in ydl_opts
-        assert ydl_opts["concurrent_fragments"] == 4  # test_settings has max_concurrent_downloads=2 but concurrent_fragments=4 default
-
-
     def test_ytdlp_options_includes_throttled_rate(self, test_settings: Settings) -> None:
         """Test yt-dlp options include throttled_rate setting."""
         ydl_opts = {
-            "concurrent_fragments": test_settings.concurrent_fragments,
             "throttledratelimit": test_settings.throttled_rate,
             "http_chunk_size": test_settings.http_chunk_size,
         }
@@ -488,11 +475,9 @@ class TestYtdlpOptions:
         assert "throttledratelimit" in ydl_opts
         assert ydl_opts["throttledratelimit"] == 100000
 
-
     def test_ytdlp_options_includes_http_chunk_size(self, test_settings: Settings) -> None:
         """Test yt-dlp options include http_chunk_size setting."""
         ydl_opts = {
-            "concurrent_fragments": test_settings.concurrent_fragments,
             "throttledratelimit": test_settings.throttled_rate,
             "http_chunk_size": test_settings.http_chunk_size,
         }
@@ -500,18 +485,17 @@ class TestYtdlpOptions:
         assert "http_chunk_size" in ydl_opts
         assert ydl_opts["http_chunk_size"] == 10485760
 
-
     def test_ytdlp_options_custom_values(self) -> None:
         """Test yt-dlp options accept custom settings values."""
-        custom_settings = Settings(concurrent_fragments=8, throttled_rate=200000, http_chunk_size=5242880)
+        custom_settings = Settings(max_concurrent_downloads=8, throttled_rate=200000, http_chunk_size=5242880)
 
         ydl_opts = {
-            "concurrent_fragments": custom_settings.concurrent_fragments,
+            "max_concurrent_downloads": custom_settings.max_concurrent_downloads,
             "throttledratelimit": custom_settings.throttled_rate,
             "http_chunk_size": custom_settings.http_chunk_size,
         }
 
-        assert ydl_opts["concurrent_fragments"] == 8
+        assert ydl_opts["max_concurrent_downloads"] == 8
         assert ydl_opts["throttledratelimit"] == 200000
         assert ydl_opts["http_chunk_size"] == 5242880
 
@@ -768,7 +752,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=1, concurrent_fragments=1)
+        test_settings = Settings(max_concurrent_downloads=1)
 
         output_path = tmp_path / "video.mp4"
 
@@ -829,7 +813,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=1, concurrent_fragments=1)
+        test_settings = Settings(max_concurrent_downloads=1)
 
         output_path = tmp_path / "video.mp4"
 
@@ -880,7 +864,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=4, concurrent_fragments=4)
+        test_settings = Settings(max_concurrent_downloads=4)
 
         output_path = tmp_path / "video.mp4"
 

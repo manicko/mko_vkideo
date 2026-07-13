@@ -107,26 +107,6 @@ def test_cookie_source_from_env() -> None:
         del os.environ["VKDOWNLOADER_COOKIE_SOURCE"]
 
 
-def test_concurrent_fragments_default(test_settings: Settings) -> None:
-    """Test concurrent_fragments default value is 4."""
-    assert test_settings.concurrent_fragments == 4
-
-
-def test_concurrent_fragments_validation(test_settings: Settings) -> None:
-    """Test concurrent_fragments accepts valid values and rejects invalid ones."""
-    test_settings = Settings(concurrent_fragments=1)
-    assert test_settings.concurrent_fragments == 1
-
-    test_settings = Settings(concurrent_fragments=16)
-    assert test_settings.concurrent_fragments == 16
-
-    with pytest.raises(ValidationError):
-        Settings(concurrent_fragments=0)  # Below minimum
-
-    with pytest.raises(ValidationError):
-        Settings(concurrent_fragments=17)  # Above maximum
-
-
 def test_throttled_rate_default(test_settings: Settings) -> None:
     """Test throttled_rate default value is 100000."""
     assert test_settings.throttled_rate == 100000

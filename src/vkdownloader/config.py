@@ -60,12 +60,6 @@ class Settings(BaseSettings):
         le=16,
         description="Maximum concurrent downloads",
     )
-    concurrent_fragments: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description="Concurrent HLS fragment downloads for yt-dlp (reduces throttling)",
-    )
     throttled_rate: int = Field(
         default=100000,
         ge=50000,
