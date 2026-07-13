@@ -35,6 +35,9 @@ class HLSDownloadRequest(BaseModel):
     # Type checkers understand these as the correct types via forward references
     settings: Any | None = None
     extractor: Any | None = None
+    # Runtime type: URLBackoffCoordinator | None
+    # Using Any to avoid circular import issues at module load time
+    backoff_coordinator: Any | None = None
 
 
 class DownloadResult(BaseModel):
