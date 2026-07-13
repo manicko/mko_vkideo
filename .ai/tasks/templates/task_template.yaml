@@ -14,9 +14,9 @@ depends_on:
   - task_007
 
 # ── Plan/Audit report source (REQUIRED when task originates from a plan or audit) ──
-# source_reference: .ai\plans\PLAN_XX.md
+# source_reference: \.ai\plans\PLAN_XX.md
 # source_section: TX — Task Title
-# source_file: .kilo/commands/audit/...           # if extracting from existing file
+# source_file: /.kilo/commands/audit/...           # if extracting from existing file
 # source_blocks:                                  # if extracting specific blocks
 #   - "BLOCK N — Block Name"
 

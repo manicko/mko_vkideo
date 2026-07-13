@@ -21,17 +21,17 @@ Max allowed parallel subagents = 2
 
 ## 1. Gather Base Layer Context (once)
 
-Read `.ai/context/commands.md` for verification commands.
+Read `/.ai/context/commands.md` for verification commands.
 Read `AGENTS.md` for project guidelines.
 List documentation structure from `docs/` folder.
 
 
 Set variables:
 - `{BASE_CONTEXT}` = summary of the above files
-- `{REPORT_TEMPLATE_PATH}` = `.ai/audit/templates/audit-findings.md`
-- `{TASK_FILES}` = list of files in `.kilo/commands/audit/phases/`
-- {auditor} - model from `.ai/models/lookup_table.md`
-- {VALIDATOR} -  model from `.ai/models/lookup_table.md`
+- `{REPORT_TEMPLATE_PATH}` = `/.ai/audit/templates/audit-findings.md`
+- `{TASK_FILES}` = list of files in `/.kilo/commands/audit/phases/`
+- {auditor} - model from `/.ai/models/lookup_table.md`
+- {VALIDATOR} -  model from `/.ai/models/lookup_table.md`
 
 *DO NOT*
 - Read executor role or executor tasks and templates, just provide links
@@ -67,13 +67,13 @@ IMPORTANT:
 ### 2.1 Extract Phase Metadata
 - `{TASK_PATH}` = full path to phase file
 - `{PHASE_NUMBER}`, `{PHASE_NAME}` = parsed from filename `NN-audit-name.md`
-- `{OUTPUT_PATH}` = `.ai/audit/{PHASE_NUMBER}-{PHASE_NAME}/findings.md`
+- `{OUTPUT_PATH}` = `/.ai/audit/{PHASE_NUMBER}-{PHASE_NAME}/findings.md`
 
 ### 2.2 Launch Executor
 Max allowed parallel subagents = 2
 ```
 Task(
-  prompt="Read .kilo/agents/auditor.md for your role.\n"
+  prompt="Read /.kilo/agents/auditor.md for your role.\n"
        + "Read and execute phase task: {TASK_PATH}\n"
        + "Report template: {REPORT_TEMPLATE_PATH}\n"
        + "Write findings to: {OUTPUT_PATH}\n"
@@ -95,10 +95,10 @@ If missing or empty: retry once, then escalate on second failure.
 
 ```
 Task(
-  prompt="Read .kilo/agents/validator.md for your role.\n"
-       + "Read validation task: .kilo/commands/audit/phases/99-audit-validate.md\n"
+  prompt="Read /.kilo/agents/validator.md for your role.\n"
+       + "Read validation task: /.kilo/commands/audit/phases/99-audit-validate.md\n"
        + "Validate findings at: {OUTPUT_PATH}\n"
-       + "Write validation report to: .ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md\n"
+       + "Write validation report to: /.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md\n"
        + "Base context: {BASE_CONTEXT}\n"
        + "problems_only = TRUE\n",
 
@@ -110,7 +110,7 @@ Task(
 ```
 
 ### 2.5 Verify Validation Output
-Check that `.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated.md` exists.
+Check that `/.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated.md` exists.
 If missing or empty: retry once, then escalate on second failure.
 
 </phase_loop>

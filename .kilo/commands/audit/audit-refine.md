@@ -7,19 +7,19 @@ alwaysApply: false
 
 # Audit Improvement Agent
 
-Process audit files from .ai/audit/99-validation one by one.
+Process audit files from /.ai/audit/99-validation one by one.
 
 ## Workflow
 
 
 ## Gather Base Layer Context (once)
-Read `.ai/context/commands.md` for verification commands.
+Read `/.ai/context/commands.md` for verification commands.
 Read `AGENTS.md` for project guidelines.
 List documentation structure from `docs/` folder.
 
 Set variables:
 - `{BASE_CONTEXT}` = summary of the above files
-- `{AUDIT_FILES}` = list of files in `.ai/audit/99-validation`
+- `{AUDIT_FILES}` = list of files in `/.ai/audit/99-validation`
 
 <refine_loop>
 

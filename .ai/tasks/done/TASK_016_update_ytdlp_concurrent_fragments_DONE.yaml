@@ -1,0 +1,51 @@
+# Source: .ai/problems/decisions/DECISION_01.md
+# Update downloader.py to use max_concurrent_downloads for yt-dlp concurrent_fragments
+
+id: TASK_016
+
+title: Update yt-dlp concurrent_fragments to use max_concurrent_downloads
+
+priority: medium
+
+source_reference: .ai/problems/decisions/DECISION_01.md
+source_section: Refactoring Plan - Remove concurrent_fragments
+
+description: >
+  Update the _download_with_ytdlp function to use max_concurrent_downloads
+  for the concurrent_fragments yt-dlp option instead of the removed
+  concurrent_fragments field. This ensures consistent concurrency control.
+
+goals:
+  - Change ydl_opts["concurrent_fragments"] to use settings.max_concurrent_downloads
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: function
+        name: _download_with_ytdlp
+
+    semantic_anchors:
+      modify:
+        type: function_body
+        value: _download_with_ytdlp
+
+    changes:
+      - action: modify_assignment
+        description: >
+          Change "concurrent_fragments": settings.concurrent_fragments to
+          "concurrent_fragments": settings.max_concurrent_downloads in ydl_opts dict.
+        code_hint: |
+          # In ydl_opts dictionary, change:
+          # "concurrent_fragments": settings.concurrent_fragments,
+          # to:
+          # "concurrent_fragments": settings.max_concurrent_downloads,
+
+acceptance_criteria:
+  - ydl_opts uses max_concurrent_downloads for concurrent_fragments value
+  - No reference to concurrent_fragments remains in downloader.py
+
+risk_level: low
+
+depends_on:
+  - TASK_015

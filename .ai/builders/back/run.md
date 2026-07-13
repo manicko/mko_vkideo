@@ -1,1 +1,1 @@
-python .ai/builders/back/py_map.py   
+python /.ai/builders/back/py_map.py   

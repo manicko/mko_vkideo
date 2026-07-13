@@ -129,7 +129,7 @@ End-to-end data flow from CLI invocation through config loading, data fetching, 
 
 ## Report Output
 
-Write findings to: `.ai/audit/06-data-flow/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/06-data-flow/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 **Write the file incrementally — append blocks of ≤100 lines each. Never write the entire report in a single call.**
 

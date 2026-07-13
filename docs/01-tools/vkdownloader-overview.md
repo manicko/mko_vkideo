@@ -220,3 +220,68 @@ The `get_video_duration()` function retrieves video duration via ffprobe:
 - Uses `ffprobe -show_entries format=duration` for accurate timing
 - Gracefully handles missing ffprobe with warning log, returns None
 - Enables percentage calculation for progress display
+
+## Batch Download Architecture
+
+### Shared Concurrency Control
+
+All URLs in a batch share a single `asyncio.Semaphore` for segment downloads. The semaphore `max_concurrent_downloads` limit (from Settings) controls the total number of concurrent segment downloads across all URLs in the batch. This design enables **work stealing**: when one URL finishes downloading, its acquired semaphore permits are immediately released and available for remaining URLs.
+
+```
+Batch Download Flow
+    │
+    ▼
+┌─────────────────┐
+│  Shared Semaphore │
+│  (max_concurrent)│
+└────────┬────────┘
+         │
+         ▼
+┌──────────────────────────────────┐
+│  All URLs start immediately       │
+│  (up to max_concurrent total)   │
+└──────────────────────────────────┘
+         │
+         ├──► video_1 ──► [seg1][seg2][seg3]... (uses shared permits)
+         ├──► video_2 ──► [seg1][seg2][seg3]... (uses shared permits)
+         └──► video_3 ──► [seg1][seg2][seg3]... (uses shared permits)
+         
+As segments complete on shorter videos, permits return to pool
+and are immediately reallocated to remaining URLs.
+```
+
+### Per-URL Progress Tracking
+
+Progress displays in a per-URL segment format showing download status for each video:
+
+```
+Progress Format:
+video_1: 25/100, video_2: 45/150, video_3: 78/80
+
+Where:
+- video_N: Sequential index of the video in the batch
+- X/Y: Downloaded segments / Total segments for that video
+```
+
+The progress updates in-place using `\r` overwrite for a clean single-line display. Each URL's `_download_single()` task updates progress via a shared `_progress_state` dictionary using `_create_progress_callback()`.
+
+### Work Stealing Behavior
+
+URLs start immediately without waiting for previous downloads to complete. The shared semaphore ensures total concurrency never exceeds `max_concurrent_downloads`:
+
+- When video_1 completes (freed its permits), video_2 and video_3 can claim them
+- Available concurrency is automatically reallocated to remaining downloads
+- No manual coordination needed - semaphore naturally balances work allocation
+- All URLs make progress simultaneously rather than sequentially
+
+### Shared Backoff Coordination
+
+When any segment receives a 429 (Too Many Requests) or 5xx response, the `URLBackoffCoordinator` coordinates backoff:
+
+- `pause(video_url, duration)` sets backoff for the specific video URL
+- All segments of that URL call `wait_if_paused()` before downloading
+- Segments wait together during backoff to avoid cascading rate limits
+- Other URLs continue downloading using available semaphore permits
+- Backoff duration: 10 seconds default, with server `Retry-After` header honored
+
+This prevents a single rate-limited video from causing all downloads to stall, while still respecting VK's rate limiting across the batch.

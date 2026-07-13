@@ -31,7 +31,7 @@ Extract implementation decisions that downstream agents need. Produce `DECISION_
 ## Steps
 
 1. Ask user for the CONTEXT file number(s) to discuss. Wait for response.
-2. Load `CONTEXT_{file_number}.md` from `.ai/problems/`.
+2. Load `CONTEXT_{file_number}.md` from `/.ai/problems/`.
 3. Check if `DECISION_{file_number}.md` already exists — offer update/view/skip.
 4. Analyze the phase goal and generate 3-4 phase-specific gray areas (not generic categories).
 5. Present gray areas as multi-select — user chooses which to discuss. No skip option.

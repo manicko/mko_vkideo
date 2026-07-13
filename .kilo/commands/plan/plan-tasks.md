@@ -21,18 +21,18 @@ Transform validated findings into dependency-aware rollout plans with semantic t
 
 ## Steps
 
-1. **List** files .ai/audit/99-validation/` and `.ai/plans` (do not read contents yet) 
+1. **List** files /.ai/audit/99-validation/` and `/.ai/plans` (do not read contents yet) 
 2. **Ask user** to select: one file, multiple files, or ALL. Wait for selection.
 3. **Study** selected files — plans, validated findings, safety constraints, rollout constraints. Ignore rejected/stale findings.
-4. **Load structural context** — `.ai/structure/` dependency chains, integration boundaries, coupling zones, semantic insertion points.
+4. **Load structural context** — `/.ai/structure/` dependency chains, integration boundaries, coupling zones, semantic insertion points.
 5. **Build execution DAG** — isolated implementation blocks, dependency-aware task graph, rollout sequencing, parallel execution groups.
 6. **Establish file-based dependencies** — tasks modifying the same file must execute sequentially with explicit `depends_on_previous_task_in_chain`, even if only one file overlaps.
 7. **Define semantic targets** per task — affected files, symbol targets, anchors, insertion zones. Never use line numbers.
-7. **Generate task specifications** using `.ai/tasks/templates/task_template.yaml`. 
+7. **Generate task specifications** using `/.ai/tasks/templates/task_template.yaml`. 
 8. **Assess risk** — for potentially disruptive tasks (config changes, test infra, schema changes, hidden consumers), mark as blocked and create prerequisite research tasks.
 9. **Insert test tasks** — only for non-trivial features. Tests must validate user-visible behavior, exercise workflows, detect regressions.
 10. **Insert verification tasks** — inline verification for simple tasks; dedicated verification tasks for multi-stage/high-risk changes.
-11. **Generate execution ordering** using `.ai/tasks/templates/order_template.yaml`. Numbering must match rollout order. No circular dependencies.
+11. **Generate execution ordering** using `/.ai/tasks/templates/order_template.yaml`. Numbering must match rollout order. No circular dependencies.
 
 ## Task Naming
 
@@ -87,6 +87,6 @@ failure_action: return task to rework
 - Never merge conflicting recommendations into a single task
 
 ## Output
-- Semantic task YAML files in `.ai/tasks/todo/`
+- Semantic task YAML files in `/.ai/tasks/todo/`
 - Rollout ordering file (`order.yaml`)
 - Dependency graph / execution DAG

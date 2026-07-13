@@ -133,7 +133,7 @@ All source code files in `src/**/`. Focus on structural properties: complexity, 
 
 ## Report Output
 
-Write findings to: `.ai/audit/09-structural-quality/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/09-structural-quality/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 Use prefix `STR-` for finding IDs.
 

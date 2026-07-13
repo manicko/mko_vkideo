@@ -1,2 +1,2 @@
-IMPORTANT STUDY: `.ai\context\commands.md`
+IMPORTANT STUDY: `\.ai\context\commands.md`
 

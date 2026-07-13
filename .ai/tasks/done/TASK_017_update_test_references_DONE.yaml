@@ -1,0 +1,104 @@
+# Source: .ai/problems/decisions/DECISION_01.md
+# Update test files to remove concurrent_fragments references
+
+id: TASK_017
+
+title: Remove and update concurrent_fragments test references
+
+priority: medium
+
+source_reference: .ai/problems/decisions/DECISION_01.md
+source_section: Refactoring Plan - Remove concurrent_fragments
+
+description: >
+  Remove test functions and update tests that reference the removed
+  concurrent_fragments field:
+  - test_config.py: Remove test_concurrent_fragments_default and test_concurrent_fragments_validation
+  - test_hls_downloader.py: Remove test_ytdlp_options_includes_concurrent_fragments,
+    update other tests to remove concurrent_fragments references
+
+goals:
+  - Remove test_concurrent_fragments_default function
+  - Remove test_concurrent_fragments_validation function
+  - Remove test_ytdlp_options_includes_concurrent_fragments function
+  - Update test_ytdlp_options_includes_throttled_rate to remove concurrent_fragments
+  - Update test_ytdlp_options_includes_http_chunk_size to remove concurrent_fragments
+  - Update test_ytdlp_options_custom_values to use max_concurrent_downloads
+  - Update test_sequential_mode_applies_delay_after_semaphore to remove concurrent_fragments=1
+  - Update test_sequential_mode_triggers_backoff_on_429 to remove concurrent_fragments=1
+  - Update test_parallel_mode_no_inter_segment_delay to remove concurrent_fragments=4
+
+files:
+  - path: tests/test_config.py
+
+    targets:
+      - type: function
+        name: test_concurrent_fragments_default
+      - type: function
+        name: test_concurrent_fragments_validation
+
+    semantic_anchors:
+      delete:
+        type: function
+        value: test_concurrent_fragments_default
+        value: test_concurrent_fragments_validation
+
+    changes:
+      - action: delete_functions
+        description: >
+          Remove the two test functions for concurrent_fragments field.
+
+  - path: tests/test_hls_downloader.py
+
+    targets:
+      - type: function
+        name: test_ytdlp_options_includes_concurrent_fragments
+      - type: function
+        name: test_ytdlp_options_includes_throttled_rate
+      - type: function
+        name: test_ytdlp_options_includes_http_chunk_size
+      - type: function
+        name: test_ytdlp_options_custom_values
+      - type: function
+        name: test_sequential_mode_applies_delay_after_semaphore
+      - type: function
+        name: test_sequential_mode_triggers_backoff_on_429
+      - type: function
+        name: test_parallel_mode_no_inter_segment_delay
+
+    semantic_anchors:
+      delete:
+        type: function
+        value: test_ytdlp_options_includes_concurrent_fragments
+
+      modify:
+        type: function_body
+        value: test_ytdlp_options_includes_throttled_rate
+        value: test_ytdlp_options_includes_http_chunk_size
+        value: test_ytdlp_options_custom_values
+        value: test_sequential_mode_applies_delay_after_semaphore
+        value: test_sequential_mode_triggers_backoff_on_429
+        value: test_parallel_mode_no_inter_segment_delay
+
+    changes:
+      - action: delete_test_function
+        description: >
+          Remove test_ytdlp_options_includes_concurrent_fragments entirely.
+      - action: update_test
+        description: >
+          Remove "concurrent_fragments" from ydl_opts dict in remaining tests.
+      - action: update_settings_call
+        description: >
+          Change Settings(max_concurrent_downloads=X, concurrent_fragments=Y) to
+          Settings(max_concurrent_downloads=X) since both values should match.
+
+acceptance_criteria:
+  - All tests in test_config.py pass
+  - All tests in test_hls_downloader.py pass
+  - No references to concurrent_fragments in test files
+
+risk_level: low
+
+depends_on:
+  - TASK_015
+  - TASK_016

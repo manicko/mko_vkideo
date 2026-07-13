@@ -62,7 +62,7 @@ Provide:
 ## Step 1 — Load Context
 
 Study:
-- original task specifications in `.ai/tasks/done/*`
+- original task specifications in `/.ai/tasks/done/*`
 - validated findings
 - dependency graph
 - architecture documentation
@@ -272,7 +272,7 @@ Detect:
 
 Create validation report:
 
-- `.ai/tasks/validation/implementation_audit_<next_number>.md`
+- `/.ai/tasks/validation/implementation_audit_<next_number>.md`
 
 Where:
 - `<next_number>` = next free sequential number

@@ -15,7 +15,7 @@ Validate each audit finding for correctness, applicability, and architectural sa
 
 ### Step 1 — Copy Source Findings
 
-Copy the auditor's `.ai/audit/{phase_number}-{phase_name}/findings.md` as the base for the validated report at `.ai/audit/99-validation/{phase_number}-{phase_name}-validated.md`.
+Copy the auditor's `/.ai/audit/{phase_number}-{phase_name}/findings.md` as the base for the validated report at `/.ai/audit/99-validation/{phase_number}-{phase_name}-validated.md`.
 
 All edits are applied inline to this copy. The final file must be fully self-contained — the reader should never need to consult the original.
 

@@ -142,7 +142,7 @@ All test files, test fixtures, mocking strategies, test coverage, test isolation
 
 ## Report Output
 
-Write findings to: `.ai/audit/07-tests/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/07-tests/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 Use prefix `TST-` for finding IDs.
 

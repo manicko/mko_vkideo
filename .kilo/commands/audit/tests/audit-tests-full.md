@@ -187,7 +187,7 @@ tests/
 
 ## Audit Result Format
 
-Create file: `.ai/audit/tests/audit_report_<number>.md` (next available number)
+Create file: `/.ai/audit/tests/audit_report_<number>.md` (next available number)
 
 **Report Structure:**
 

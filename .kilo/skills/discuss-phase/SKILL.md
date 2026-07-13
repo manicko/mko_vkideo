@@ -48,7 +48,7 @@ Ask about vision and implementation choices. Capture decisions for downstream ag
 <scope_guardrail>
 **CRITICAL: No scope creep.**
 
-The phase boundary comes from `.ai\problems\CONTEXT_*.md` and is FIXED. Discussion clarifies HOW to implement what's scoped, never WHETHER to add new capabilities.
+The phase boundary comes from `\.ai\problems\CONTEXT_*.md` and is FIXED. Discussion clarifies HOW to implement what's scoped, never WHETHER to add new capabilities.
 
 **Allowed (clarifying ambiguity):**
 
@@ -123,7 +123,7 @@ Check if DECISION_{file_number}.md already exists:
 
 ```bash
 # Match both zero-padded (05-*) and unpadded (5-*) folders
-ls .ai/problems/decisions/DECISION_*.md
+ls /.ai/problems/decisions/DECISION_*.md
 ```
 
 **If exists:**
@@ -146,7 +146,7 @@ If "Skip": Exit workflow
 <step name="analyze_phase">
 Analyze the phase to identify gray areas worth discussing.
 
-`.ai\problems\CONTEXT_*.md` defines the phase scope. Read it to understand what capability this phase delivers.
+`/.ai\problems\CONTEXT_*.md` defines the phase scope. Read it to understand what capability this phase delivers.
 
 **Read the project description from 
 - [AGENTS.md](AGENTS.md)
@@ -287,7 +287,7 @@ Track deferred ideas internally.
 </step>
 
 <step name="write_context">
-Create `.ai\problems\decisions\DECISION_<next_available_number>.md capturing decisions made.
+Create `/.ai\problems\decisions\DECISION_<next_available_number>.md capturing decisions made.
 next_available_number - any existing DECISION files + 1, zero-padded (e.g. DECISION_01.md)
 
 **Structure the content by what was discussed:**
@@ -354,7 +354,7 @@ Write file.
 Present summary and next steps:
 
 ```
-Created: `.ai\problems\decisions\DECISION_<next_available_number>.md`
+Created: `\.ai\problems\decisions\DECISION_<next_available_number>.md`
 
 ## Decisions Captured
 

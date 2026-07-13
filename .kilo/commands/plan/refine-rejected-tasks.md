@@ -18,7 +18,7 @@ Generate / update:
 
 ## Constraints
 
-- Соблюдать требования к планированию задач из `.kilo/commands/plan/plan-tasks.md`
+- Соблюдать требования к планированию задач из `/.kilo/commands/plan/plan-tasks.md`
 - Не модифицировать исходный код проекта
 - Не реализовывать изменения — только планировать и уточнять задачи
 - Предпочитать атомарные, независимые и семантически устойчивые задачи
@@ -31,7 +31,7 @@ Generate / update:
 ## Step 1 — Load and Study Rejected Tasks
 
 Изучить все отклонённые задачи:
-- `.ai/tasks/todo/*_REJECTED.yaml`
+- `/.ai/tasks/todo/*_REJECTED.yaml`
 
 Проанализировать:
 - содержание каждой задачи
@@ -42,7 +42,7 @@ Generate / update:
 ## Step 2 — Analyze Rejection Reasons
 
 Изучить причины отклонения в:
-- `.ai/tasks/validation/**.md`
+- `/.ai/tasks/validation/**.md`
 
 Для каждой задачи определить:
 - основные причины отклонения
@@ -66,8 +66,8 @@ Generate / update:
 ## Step 4 — Create Additional Tasks (if needed)
 
 При необходимости создать новые задачи, строго соблюдая:
-- `.kilo/commands/plan/plan-tasks.md`
-- шаблон задачи `.ai/tasks/templates/task_template.yaml`
+- `/.kilo/commands/plan/plan-tasks.md`
+- шаблон задачи `/.ai/tasks/templates/task_template.yaml`
 
 Новые задачи должны:
 - закрывать выявленные пробелы
@@ -89,7 +89,7 @@ Generate / update:
 ## Step 6 — Update Execution Order
 
 Обновить файл:
-- `.ai/tasks/todo/order.yaml`
+- `/.ai/tasks/todo/order.yaml`
 
 При обновлении:
 - учесть все оставшиеся и новые задачи
@@ -97,7 +97,7 @@ Generate / update:
 - сохранить нумерацию, соответствующую последовательности rollout
 - максимально безопасно распараллелить независимые задачи
 
-Использовать шаблон `.ai/tasks/templates/order_template.yaml` (если доступен).
+Использовать шаблон `/.ai/tasks/templates/order_template.yaml` (если доступен).
 
 ---
 

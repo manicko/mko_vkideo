@@ -112,7 +112,7 @@ Google Sheets API integration (GSheetsReader), Telegram API integration (Telegra
 
 ## Report Output
 
-Write findings to: `.ai/audit/05-integrations/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/05-integrations/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 **Write the file incrementally — append blocks of ≤100 lines each. Never write the entire report in a single call.**
 

@@ -141,7 +141,7 @@ All source code files. Code quality, type safety, security, maintainability, pro
 
 ## Report Output
 
-Write findings to: `.ai/audit/08-quality/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/08-quality/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 use prefix `QLT-` for finding IDs.
 

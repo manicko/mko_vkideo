@@ -1,7 +1,7 @@
+import ast
 import hashlib
 from pathlib import Path
 
-import ast
 import yaml
 
 IGNORE_DIRS = {".venv", "node_modules", "__pycache__", ".git", "dist", "build"}

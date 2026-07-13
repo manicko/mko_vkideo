@@ -1,0 +1,48 @@
+# Source: .ai/problems/decisions/DECISION_01.md
+# Remove concurrent_fragments field from Settings class
+
+id: TASK_015
+
+title: Remove concurrent_fragments field from Settings class
+
+priority: high
+
+source_reference: .ai/problems/decisions/DECISION_01.md
+source_section: Refactoring Plan - Remove concurrent_fragments
+
+description: >
+  Remove the concurrent_fragments field from the Settings Pydantic model.
+  This field is redundant and creates conflicting concurrency with max_concurrent_downloads,
+  potentially causing 4x4=16 concurrent requests (4 videos × 4 fragments) and 429 errors.
+
+goals:
+  - Remove the concurrent_fragments field declaration from Settings class
+
+files:
+  - path: src/vkdownloader/config.py
+
+    targets:
+      - type: class
+        name: Settings
+      - type: field
+        name: concurrent_fragments
+
+    semantic_anchors:
+      delete:
+        type: field
+        value: concurrent_fragments
+
+    changes:
+      - action: delete_field
+        description: >
+          Remove the concurrent_fragments field from Settings class.
+          The field is defined between max_concurrent_downloads and throttled_rate fields.
+          After removal, other fields remain in their original order.
+
+acceptance_criteria:
+  - concurrent_fragments field no longer exists in Settings class
+  - Settings model still validates with other fields intact
+
+risk_level: low
+
+depends_on: []

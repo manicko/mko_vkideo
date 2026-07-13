@@ -131,7 +131,7 @@ Pydantic models, YAML config loading, path resolution, config validation, init s
 
 ## Report Output
 
-Write findings to: `.ai/audit/02-config/findings.md` using template `.ai/audit/templates/audit-findings.md`.
+Write findings to: `/.ai/audit/02-config/findings.md` using template `/.ai/audit/templates/audit-findings.md`.
 
 **Write the file incrementally — append blocks of ≤100 lines each. Never write the entire report in a single call.**
 

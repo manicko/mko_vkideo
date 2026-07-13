@@ -41,7 +41,7 @@ Identify:
 ## Step 2. Analyze Development Tasks
 
 Review contents of:
-`.ai/tasks/done/*`
+`/.ai/tasks/done/*`
 
 For each file:
 

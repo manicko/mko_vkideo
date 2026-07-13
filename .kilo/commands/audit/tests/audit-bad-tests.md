@@ -99,7 +99,7 @@ Use `websearch` to verify current best practices for:
 
 ## Report Format
 
-Create file: `.ai/audit/tests/audit_report_<number>.md` (next available number)
+Create file: `/.ai/audit/tests/audit_report_<number>.md` (next available number)
 
 | FilePath | TestName | Type | Problem | Recommendation |
 |----------|----------|------|---------|----------------|
