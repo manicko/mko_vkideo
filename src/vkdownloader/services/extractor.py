@@ -75,7 +75,7 @@ class VKVideoExtractor:
 
         logger.info("extracting_streams", video_id=video_id_full, url=_strip_auth_params(url))
 
-        streams = await self._extract_with_ytdlp(url, video_id_full)
+        streams, title = await self._extract_with_ytdlp(url, video_id_full)
 
         if not streams:
             raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
@@ -85,6 +85,7 @@ class VKVideoExtractor:
         return VideoWithStreams(
             id=video_id_full,
             streams=streams,
+            title=title,
         )
 
     async def extract_streams_with_cookies(
@@ -112,7 +113,7 @@ class VKVideoExtractor:
         # Check cookie source setting first (unless forced)
         if not force_browser and self.settings.cookie_source == CookieSource.NONE:
             # Skip browser, use yt-dlp only - no cookies
-            streams = await self._extract_with_ytdlp(url, video_id_full)
+            streams, _ = await self._extract_with_ytdlp(url, video_id_full)
             if not streams:
                 raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
             logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
@@ -121,7 +122,7 @@ class VKVideoExtractor:
         if not force_browser and self.settings.cookie_source == CookieSource.FILE:
             # Future: Load cookies from file
             # For now, return streams without cookies (placeholder)
-            streams = await self._extract_with_ytdlp(url, video_id_full)
+            streams, _ = await self._extract_with_ytdlp(url, video_id_full)
             if not streams:
                 raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
             logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
@@ -136,22 +137,30 @@ class VKVideoExtractor:
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
         return streams, cookies
 
-    async def _extract_with_ytdlp(self, url: str, video_id: str) -> list[Stream]:
-        """Extract streams using yt-dlp (handles VK protections)."""
+    async def _extract_with_ytdlp(
+        self, url: str, video_id: str
+    ) -> tuple[list[Stream], str | None]:
+        """Extract streams and title using yt-dlp (handles VK protections)."""
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
         }
 
-        def _sync_extract() -> list[Stream]:
+        def _sync_extract() -> tuple[list[Stream], str | None]:
             """Synchronous extraction in thread."""
             found_streams: list[Stream] = []
+            title: str | None = None
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
                     info = ydl.extract_info(url, download=False)
                     if not info:
-                        raise ExtractionError(f"No video info extracted for video: {_strip_auth_params(url)}")
+                        raise ExtractionError(
+                            f"No video info extracted for video: {_strip_auth_params(url)}"
+                        )
+
+                    # Extract title from video metadata
+                    title = info.get("title") or info.get("fulltitle")
 
                     formats = info.get("formats", [])
                     for f in formats:
@@ -177,14 +186,14 @@ class VKVideoExtractor:
                     logger.warning("ytdlp_extraction_error", error=str(e))
                     raise ExtractionError(f"Failed to extract video data: {e}") from e
 
-            return found_streams
+            return found_streams, title
 
         # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
-        streams = await loop.run_in_executor(None, _sync_extract)
+        streams, title = await loop.run_in_executor(None, _sync_extract)
 
         logger.debug("ytdlp_extraction_complete", count=len(streams))
-        return streams
+        return streams, title
 
     async def _extract_with_browser(self, url: str, video_id_full: str) -> tuple[list[Stream], str | None]:
         """Extract streams using Playwright browser automation with cookies capture."""

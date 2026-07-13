@@ -7,6 +7,7 @@ import pytest
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
 from vkdownloader.models.enums import CookieSource, StreamFormat
+from vkdownloader.models.video import Stream
 from vkdownloader.services.extractor import VKVideoExtractor
 
 
@@ -61,7 +62,7 @@ class TestExtractionErrors:
         extractor = VKVideoExtractor()
 
         with patch.object(
-            extractor, "_extract_with_ytdlp", return_value=[]
+            extractor, "_extract_with_ytdlp", return_value=([], None)
         ):
             with pytest.raises(VideoNotFoundError, match="No streams found"):
                 await extractor.extract_streams("https://vkvideo.ru/video-12345_67890")
@@ -158,7 +159,7 @@ class TestExtractionErrors:
         with patch.object(
             extractor,
             "_extract_with_ytdlp",
-            return_value=[mock_stream],
+            return_value=([mock_stream], None),
         ):
             streams, cookies = await extractor.extract_streams_with_cookies(url)
 
@@ -198,7 +199,7 @@ class TestExtractionErrors:
         with patch.object(
             extractor,
             "_extract_with_ytdlp",
-            return_value=[mock_stream],
+            return_value=([mock_stream], None),
         ):
             streams, cookies = await extractor.extract_streams_with_cookies(url)
 
@@ -227,7 +228,7 @@ class TestExtractionErrors:
         mock_stream.format = StreamFormat.HLS
 
         with patch.object(
-            extractor, "_extract_with_ytdlp", return_value=[mock_stream]
+            extractor, "_extract_with_ytdlp", return_value=([mock_stream], None)
         ) as mock_extract:
             streams, cookies = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
 
@@ -250,3 +251,54 @@ class TestExtractionErrors:
 
             mock_browser.assert_called_once()
             assert cookies == "cookies"
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_title_populated(self) -> None:
+        """Test extract_streams returns VideoWithStreams with populated title."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+
+        with patch.object(
+            extractor,
+            "_extract_with_ytdlp",
+            return_value=([mock_stream], "Test Video Title"),
+        ):
+            result = await extractor.extract_streams(url)
+
+            assert result.title == "Test Video Title"
+            assert result.id == "12345_67890"
+            assert len(result.streams) == 1
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_title_fallback_to_fulltitle(self) -> None:
+        """Test extract_streams uses fulltitle when title is not available."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+
+        with patch.object(
+            extractor,
+            "_extract_with_ytdlp",
+            return_value=([mock_stream], "Full Video Title"),
+        ):
+            result = await extractor.extract_streams(url)
+
+            assert result.title == "Full Video Title"
+
+    @pytest.mark.asyncio
+    async def test_extract_streams_title_none_when_unavailable(self) -> None:
+        """Test extract_streams handles None title gracefully."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+
+        with patch.object(
+            extractor,
+            "_extract_with_ytdlp",
+            return_value=([mock_stream], None),
+        ):
+            result = await extractor.extract_streams(url)
+
+            assert result.title is None
+            assert result.id == "12345_67890"
