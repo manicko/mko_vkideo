@@ -1,5 +1,6 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
+import asyncio
 import builtins
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,6 +9,7 @@ import pytest
 
 from vkdownloader.services.downloader_throttle import (
     RETRYABLE_STATUS_CODES,
+    ProgressManager,
     URLBackoffCoordinator,
     _parse_retry_after,
     _retry_429_with_backoff,
@@ -645,8 +647,6 @@ class TestProgressManager:
     @pytest.mark.asyncio
     async def test_update_stores_progress(self) -> None:
         """Test that update stores progress for a URL index."""
-        from vkdownloader.services.downloader_throttle import ProgressManager
-
         manager = ProgressManager()
         await manager.update(0, 25, 100)
 
@@ -656,8 +656,6 @@ class TestProgressManager:
     @pytest.mark.asyncio
     async def test_update_multiple_urls(self) -> None:
         """Test that update handles multiple URLs independently."""
-        from vkdownloader.services.downloader_throttle import ProgressManager
-
         manager = ProgressManager()
         await manager.update(0, 25, 100)
         await manager.update(1, 50, 200)
@@ -669,8 +667,6 @@ class TestProgressManager:
     @pytest.mark.asyncio
     async def test_get_formatted_progress_defaults_to_zero(self) -> None:
         """Test that get_formatted_progress returns 0/0 for unset URLs."""
-        from vkdownloader.services.downloader_throttle import ProgressManager
-
         manager = ProgressManager()
         result = await manager.get_formatted_progress(3)
 
@@ -681,8 +677,6 @@ class TestProgressManager:
     @pytest.mark.asyncio
     async def test_clear_removes_all_progress(self) -> None:
         """Test that clear removes all stored progress."""
-        from vkdownloader.services.downloader_throttle import ProgressManager
-
         manager = ProgressManager()
         await manager.update(0, 50, 100)
         await manager.clear()
@@ -693,8 +687,6 @@ class TestProgressManager:
     @pytest.mark.asyncio
     async def test_overwrites_existing_progress(self) -> None:
         """Test that update overwrites existing progress for same index."""
-        from vkdownloader.services.downloader_throttle import ProgressManager
-
         manager = ProgressManager()
         await manager.update(0, 25, 100)
         await manager.update(0, 75, 100)
@@ -702,3 +694,63 @@ class TestProgressManager:
         result = await manager.get_formatted_progress(1)
         assert "video_0: 75/100" in result
         assert "25" not in result
+
+    @pytest.mark.asyncio
+    async def test_progress_manager_concurrent_updates(self) -> None:
+        """Test that ProgressManager handles concurrent updates safely."""
+        manager = ProgressManager()
+        url_count = 10
+
+        async def update_task(idx: int) -> None:
+            for i in range(100):
+                await manager.update(idx, i, 100)
+
+        # Run concurrent updates
+        await asyncio.gather(*[update_task(i) for i in range(url_count)])
+
+        # Verify all states are consistent
+        progress = await manager.get_formatted_progress(url_count)
+        assert "video_" in progress
+        for i in range(url_count):
+            value = await manager.get_progress(i)
+            assert value == (99, 100)  # Last update
+
+    @pytest.mark.asyncio
+    async def test_progress_manager_concurrent_reads_during_writes(self) -> None:
+        """Test that concurrent reads return consistent data during writes."""
+        manager = ProgressManager()
+        url_count = 5
+        read_results: list[tuple[int, tuple[int, int]]] = []
+
+        async def update_task(idx: int) -> None:
+            for i in range(50):
+                await manager.update(idx, i, 100)
+
+        async def read_task(reader_id: int) -> None:
+            for _ in range(50):
+                for i in range(url_count):
+                    value = await manager.get_progress(i)
+                    # Should always have valid tuple values
+                    assert isinstance(value, tuple)
+                    assert len(value) == 2
+                    read_results.append((reader_id, value))
+
+        # Run concurrent reads and writes
+        await asyncio.gather(
+            *[update_task(i) for i in range(url_count)],
+            *[read_task(i) for i in range(3)]
+        )
+
+        # Verify no race conditions - all read results should be valid
+        assert len(read_results) > 0
+        for _reader_id, value in read_results:
+            downloaded, total = value
+            assert total == 100  # Total should always be our test value
+            assert 0 <= downloaded <= 100  # Downloaded should be in valid range
+
+    @pytest.mark.asyncio
+    async def test_get_progress_returns_default_for_missing_key(self) -> None:
+        """Test that get_progress returns (0, 0) for unset index."""
+        manager = ProgressManager()
+        result = await manager.get_progress(999)
+        assert result == (0, 0)
