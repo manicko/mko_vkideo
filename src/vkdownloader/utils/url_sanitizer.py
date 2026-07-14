@@ -62,6 +62,6 @@ def _strip_auth_params(url: str) -> str:
             "&".join(query_parts) if query_parts else "",
             parsed.fragment,
         ))
-    except Exception:
+    except (ValueError, AttributeError):
         # If parsing fails, return original URL
         return url

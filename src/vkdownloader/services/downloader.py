@@ -985,7 +985,7 @@ async def _download_with_ytdlp(
         if not download_task.done():
             download_task.cancel()
         raise
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         logger.error("download_failed", error=str(e))
         return None
 

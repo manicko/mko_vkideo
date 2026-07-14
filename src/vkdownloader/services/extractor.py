@@ -257,5 +257,5 @@ class VKVideoExtractor:
         try:
             await page.click(".VideoPlayer")
             logger.debug("clicked_video_player")
-        except Exception:
-            pass
+        except TimeoutError:
+            logger.debug("video_player_click_failed", exc_info=True)
