@@ -1,0 +1,85 @@
+id: task_004_refactor_perform_download_signature
+title: Refactor perform_download to accept pre-extracted video data
+priority: medium
+depends_on: []
+source_reference: \.ai\audit\99-validation\01-cli-validated.md
+source_section: CLI-003
+description: >
+  Extend perform_download signature in downloader.py to accept optional
+  video_data and selected_stream parameters. This eliminates duplicate
+  stream extraction between CLI (_download and _download_single) and
+  perform_download, and fixes the issue where quality selection is
+  ignored in the service layer (perform_download uses streams[0].url
+  directly instead of the selected stream).
+
+goals:
+  - Add video_data and selected_stream optional parameters to perform_download
+  - Modify perform_download logic to use pre-extracted data when provided
+  - Update CLI callers (_download, _download_single) to pass pre-extracted data
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: perform_download
+    semantic_anchors:
+      - modify_signature: add video_data and selected_stream parameters
+      - modify_logic: lines 1061-1077 use pre-extracted data
+    changes:
+      - action: modify_signature
+        description: >
+          Extend perform_download signature adding video_data: VideoWithStreams | None = None
+          and selected_stream: Stream | None = None
+        code_hint: |
+          async def perform_download(
+              url: str,
+              quality: str,
+              output_file: Path,
+              method: DownloadMethod,
+              extractor: VKVideoExtractor | None = None,
+              settings: Settings | None = None,
+              backoff_coordinator: Any | None = None,
+              semaphore: asyncio.Semaphore | None = None,
+              progress_callback: Callable[[str, int, int], None] | None = None,
+              video_data: VideoWithStreams | None = None,      # NEW
+              selected_stream: Stream | None = None,          # NEW
+          ) -> Path | None:
+
+      - action: modify_logic
+        description: >
+          Use pre-extracted data when provided, otherwise fall back to extraction.
+          Use selected_stream.url instead of streams[0].url when available.
+        code_hint: |
+          # In perform_download, replace extraction logic (approx line 1061-1077):
+          if video_data is not None and selected_stream is not None:
+              streams = video_data.streams
+              m3u8_url = str(selected_stream.url)
+              effective_quality = selected_stream.quality
+          elif extractor is None:
+              # existing extraction logic...
+
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: _download
+      - type: function
+        name: _download_single
+    semantic_anchors:
+      - modify_call: perform_download calls in both functions
+    changes:
+      - action: modify_code
+        description: Pass video and stream to perform_download in both functions
+        code_hint: |
+          # In _download (cli.py), before calling perform_download:
+          # Remove redundant extraction before perform_download call
+          # pass: perform_download(..., video_data=video, selected_stream=stream)
+          
+          # In _download_single (cli.py), before calling perform_download:
+          # Remove redundant extraction before perform_download call
+          # pass: perform_download(..., video_data=video, selected_stream=stream, ...)
+
+acceptance_criteria:
+  - Redundant stream extraction eliminated
+  - Quality selection properly respected in download flow
+  - All tests pass
+  - Download functionality works correctly

@@ -1,0 +1,49 @@
+id: task_001_fix_test_assertion_ssl_verify
+title: Fix test assertion for ssl_verify default value isolation
+priority: high
+depends_on: []
+source_reference: \.ai\audit\99-validation\01-cli-validated.md
+source_section: CLI-001 / CFG-001
+source_file: tests/test_config.py
+description: >
+  Fix test_settings_creates_with_defaults to isolate from .env configuration.
+  The test currently fails because .env sets VKDOWNLOADER_SSL_VERIFY=false, which
+  overrides the Settings default of True. The test should either use Settings()
+  with explicit ssl_verify=True or use Settings(model_config={"env_file": None})
+  to skip .env loading when testing defaults.
+
+goals:
+  - Fix test to pass independently of .env configuration
+  - Ensure test correctly validates Settings default behavior
+  - Maintain backward compatibility for other tests
+
+files:
+  - path: tests/test_config.py
+    targets:
+      - type: function
+        name: test_settings_creates_with_defaults
+    semantic_anchors:
+      - insert_after:
+          type: variable
+          value: settings
+      - replace_statement:
+          type: assertion
+          value: assert settings.ssl_verify is True
+    changes:
+      - action: modify_code
+        description: >
+          Either create Settings with explicit ssl_verify=True override, or
+          use Settings(model_config={"env_file": None}) to disable .env loading.
+        code_hint: |
+          # Option 1: Explicitly set ssl_verify to override .env
+          settings = Settings(ssl_verify=True)
+          
+          # Option 2: Disable env_file loading during defaults test
+          settings = Settings()
+          # In Settings instantiation, pass model_config={"env_file": None}
+          # Or use: Settings(_env_file=None) if supported
+
+acceptance_criteria:
+  - Test passes without modification to .env file
+  - Settings default=True is correctly validated
+  - No regression in other test_config.py tests

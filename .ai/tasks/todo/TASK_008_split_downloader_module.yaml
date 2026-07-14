@@ -1,0 +1,58 @@
+id: task_008_split_downloader_module
+title: Split 1130-line downloader.py into focused modules
+priority: high
+depends_on: [task_004_refactor_perform_download_signature]
+source_reference: \.ai\audit\99-validation\03-services-validated.md
+source_section: SRV-003
+description: >
+  Split the god module downloader.py (1130 lines) into focused components per
+  project rule #5. The module contains HLS downloading, ffmpeg process management,
+  segment merging, signal handling, and download orchestration logic.
+
+  Note: This is a multi-stage task requiring verification after each split.
+
+goals:
+  - Create ffmpeg_utils.py - ffmpeg command building and process management
+  - Create segment_downloader.py - segment download orchestration and merging
+  - Move signal handling and progress parsing to appropriate modules
+  - Maintain backward compatibility via imports
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: module
+        name: downloader
+    semantic_anchors:
+      - extract_to_module: HLSDownloader class and related functions
+      - extract_to_module: ProgressParser class and read_progress function
+      - extract_to_module: Signal handling functions
+    changes:
+      - action: restructure_module
+        description: >
+          Phase 1: Extract HLSDownloader class and _fetch_playlist_with_retry to segment_downloader.py
+          Phase 2: Extract ProgressParser and read_progress to ffmpeg_utils.py
+          Phase 3: Extract setup_signal_handlers and related to signal_handler.py or keep in downloader_throttle.py
+          Phase 4: Update imports and verify all callers
+
+  - path: src/vkdownloader/services/
+    targets:
+      - type: module
+        name: segment_downloader
+      - type: module
+        name: ffmpeg_utils
+    semantic_anchors:
+      - create_new_module: ffmpeg_utils.py
+      - create_new_module: segment_downloader.py
+    changes:
+      - action: create_module
+        description: >
+          Create new modules with extracted functionality, maintaining all
+          function signatures and behavior
+
+acceptance_criteria:
+  - Each module under 300 lines
+  - All existing tests pass
+  - No breaking changes to public API
+  - Type checking passes
+
+verification_required: true

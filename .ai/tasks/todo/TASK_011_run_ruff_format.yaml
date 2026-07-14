@@ -1,0 +1,27 @@
+id: task_011_run_ruff_format
+title: Apply ruff formatting to standardize code style
+priority: low
+depends_on: []
+source_reference: \.ai\audit\99-validation\08-quality-validated.md
+source_section: QLT-009
+description: >
+  Apply ruff format to fix code formatting inconsistencies across 10 source files.
+  This is a non-breaking change that improves code consistency.
+
+goals:
+  - Run ruff format on all source files
+  - Optionally add format check to CI configuration
+
+files:
+  - path: src/vkdownloader/
+    targets:
+      - type: directory
+        name: all source files
+    semantic_anchors:
+      - apply_formatting: entire directory
+    changes:
+      - action: format
+        description: Run ruff format on all Python source files
+        code_hint: |
+          uv run ruff format src/
+          # Optional: add to pyproject.toml CI checks

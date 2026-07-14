@@ -1,0 +1,65 @@
+id: task_007_replace_bare_exception_catches
+title: Replace bare Exception catches with specific exception types
+priority: medium
+depends_on: []
+source_reference: \.ai\audit\99-validation\08-quality-validated.md
+source_section: QLT-004
+description: >
+  Replace bare Exception catches with specific exception types to improve
+  error handling and debugging. Per the validation note, the catch at
+  downloader.py:814 (_cancel_all_downloads) and downloader_throttle.py:226
+  (_retry_429_with_backoff) are legitimate for top-level error handling,
+  but other locations should catch specific exceptions.
+
+goals:
+  - Replace bare Exception at downloader.py:1029 (_download_with_ytdlp) with RuntimeError/OSError
+  - Replace bare Exception at extractor.py:260 (_simulate_video_interaction) with TimeoutError + logging
+  - Replace bare Exception at url_sanitizer.py:65 with ValueError, AttributeError
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: _download_with_ytdlp
+    semantic_anchors:
+      - modify_exception_handler: around line 1029
+    changes:
+      - action: modify_code
+        description: >
+          Replace bare Exception catch with RuntimeError, OSError for yt-dlp specific errors
+        code_hint: |
+          except (RuntimeError, OSError) as e:
+              # Re-raise for cancellation handling
+
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: function
+        name: _simulate_video_interaction
+    semantic_anchors:
+      - modify_exception_handler: around line 260
+    changes:
+      - action: modify_code
+        description: >
+          Replace bare Exception with TimeoutError and add debug logging
+        code_hint: |
+          except TimeoutError:
+              logger.debug("video_player_click_failed", exc_info=True)
+
+  - path: src/vkdownloader/utils/url_sanitizer.py
+    targets:
+      - type: function
+        name: sanitize_url
+    semantic_anchors:
+      - modify_exception_handler: around line 65
+    changes:
+      - action: modify_code
+        description: >
+          Replace bare Exception with ValueError, AttributeError for URL parsing
+        code_hint: |
+          except (ValueError, AttributeError):
+              return url
+
+acceptance_criteria:
+  - All specified Exception catches replaced with specific types
+  - Code compiles and type-checks correctly
+  - Error handling behavior preserved or improved

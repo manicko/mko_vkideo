@@ -1,0 +1,17 @@
+id: task_009_verify_module_split
+title: Verify downloader.py module split and integration
+type: verification
+status: pending
+depends_on: [task_008_split_downloader_module]
+verifies:
+  - task_008_split_downloader_module
+verification_steps:
+  - build: "uv run mypy src"
+  - test: "uv run pytest tests/ -v"
+  - smoke_check: "uv run ruff check src"
+pass_criteria:
+  - build succeeds with no mypy errors
+  - all tests pass
+  - no import errors
+  - no linting errors
+failure_action: return task_008_split_downloader_module to rework
