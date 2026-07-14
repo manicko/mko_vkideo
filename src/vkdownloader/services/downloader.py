@@ -19,6 +19,7 @@ from ..config import Settings
 from ..exceptions import ExtractionError
 from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, DownloadMethod
+from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
@@ -1041,6 +1042,8 @@ async def perform_download(
     backoff_coordinator: Any | None = None,
     semaphore: asyncio.Semaphore | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    video_data: VideoWithStreams | None = None,
+    selected_stream: Stream | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -1054,6 +1057,8 @@ async def perform_download(
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
         semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
+        video_data: Optional pre-extracted video data with streams. When provided, skips extraction.
+        selected_stream: Optional pre-selected stream. When provided, used instead of streams[0].
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -1066,15 +1071,20 @@ async def perform_download(
     if extractor is None:
         extractor = VKVideoExtractor(settings=settings)
 
-    # Get m3u8 URL via yt-dlp (most reliable for extraction)
-    video_data = await extractor.extract_streams(url)
-    streams = video_data.streams
+    # Use pre-extracted data when provided, otherwise extract streams
+    if video_data is not None and selected_stream is not None:
+        streams = video_data.streams
+        m3u8_url = str(selected_stream.url)
+    else:
+        # Get m3u8 URL via yt-dlp (most reliable for extraction)
+        video_data = await extractor.extract_streams(url)
+        streams = video_data.streams
 
-    if not streams:
-        logger.error("no_streams_found", url=_strip_auth_params(url))
-        return None
+        if not streams:
+            logger.error("no_streams_found", url=_strip_auth_params(url))
+            return None
 
-    m3u8_url = str(streams[0].url)
+        m3u8_url = str(streams[0].url)
 
     match method:
         case DownloadMethod.YTDLP:

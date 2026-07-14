@@ -129,7 +129,9 @@ def download(
             output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
         return await perform_download(
-            url, str(stream.quality), output_file, method, extractor, settings
+            url, str(stream.quality), output_file, method, extractor, settings,
+            video_data=video,
+            selected_stream=stream,
         )
 
     try:
@@ -260,6 +262,8 @@ def batch_download(
                 backoff_coordinator=backoff_coordinator,
                 semaphore=shared_semaphore,
                 progress_callback=progress_callback,
+                video_data=video,
+                selected_stream=stream,
             )
 
             status = "success" if result else "failed"
