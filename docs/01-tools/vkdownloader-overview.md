@@ -23,15 +23,16 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 |---------|--------|----------------|
 | VKVideoExtractor | `services/extractor.py` | Extracts stream URLs from VK video URLs using yt-dlp or browser automation |
 | QualitySelector | `services/quality.py` | Selects appropriate stream based on quality preference |
-| HLSDownloader | `services/downloader.py` | Downloads HLS streams with segment-level resume support |
+| HLSDownloader | `services/downloader.py` | Downloads HLS streams via ffmpeg integration |
 | DownloaderThrottle | `services/downloader_throttle.py` | Rate limiting with AWS Full Jitter exponential backoff for 429/5xx errors |
+| SegmentDownloader | `services/segment_downloader.py` | Segment-level download orchestration with resume support |
 
 ### Download Functions
 
 | Function | Module | Responsibility |
 |----------|--------|----------------|
 | `perform_download()` | `services/downloader.py` | Main orchestration: quality selection + download method routing |
-| `download_hls_with_resume()` | `services/downloader.py` | Segment-level download with token refresh and anti-detection throttling |
+| `download_hls_with_resume()` | `services/segment_downloader.py` | Segment-level download with token refresh and anti-detection throttling |
 | `download_with_ffmpeg()` | `services/downloader.py` | Direct ffmpeg download with real-time progress tracking |
 | `download_with_ytdlp_with_resume_fallback()` | `services/downloader.py` | yt-dlp download with segment fallback on failure |
 
@@ -42,6 +43,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | HttpClient | `infrastructure/http_client.py` | Async HTTP requests with retry logic and browser-like headers |
 | BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management |
 | NetworkMonitor | `infrastructure/network_monitor.py` | Captures m3u8 URLs from browser network traffic |
+| AdaptiveThrottle | `infrastructure/adaptive_throttle.py` | Dynamic rate limiting with backoff/recovery strategy |
 | **_retry_429_with_backoff** | `services/downloader_throttle.py` | AWS Full Jitter backoff for rate-limited segment downloads |
 
 ### Models
@@ -83,6 +85,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | Function | Module | Responsibility |
 |----------|--------|---------------|
 | `validate_output_path()` | `utils/security.py` | Prevents path traversal attacks |
+| `_sanitize_title()` | `utils/security.py` | Sanitizes titles for filesystem safety |
 | `_strip_auth_params()` | `utils/url_sanitizer.py` | Strips tokens from URLs in logs |
 
 ## Architecture Flow
@@ -151,6 +154,7 @@ Both commands support:
 - Authentication token stripping from logged URLs
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
+- Title sanitization for filesystem safety via `_sanitize_title()`
 
 ## Rate Limiting & Throttling
 
@@ -212,14 +216,6 @@ The `DownloadProgress` model includes:
 - `speed` - Bytes per second download rate
 - `eta_seconds` - Estimated time to completion
 - `percent` - Percentage completion (when duration known)
-
-## Video Duration Extraction
-
-The `get_video_duration()` function retrieves video duration via ffprobe:
-
-- Uses `ffprobe -show_entries format=duration` for accurate timing
-- Gracefully handles missing ffprobe with warning log, returns None
-- Enables percentage calculation for progress display
 
 ## Batch Download Architecture
 
@@ -285,3 +281,25 @@ When any segment receives a 429 (Too Many Requests) or 5xx response, the `URLBac
 - Backoff duration: 10 seconds default, with server `Retry-After` header honored
 
 This prevents a single rate-limited video from causing all downloads to stall, while still respecting VK's rate limiting across the batch.
+
+## Shutdown Handling
+
+The `get_shutdown_event()` function provides an asyncio-aware shutdown mechanism:
+
+- Uses `ContextVar` to avoid "bound to different event loop" errors
+- Checked during segment downloads to enable graceful cancellation
+- Integrated with signal handlers via `setup_signal_handlers()`
+- Supports SIGINT/SIGTERM for clean interruption of ongoing downloads
+
+## Module Architecture
+
+The downloader module has been refactored into focused components per project rule #5:
+
+```
+services/
+├── downloader.py        (~487 lines)  - Orchestration, ffmpeg integration
+├── segment_downloader.py (~336 lines) - Segment download, playlist fetching, merging
+└── ffmpeg_utils.py      (~269 lines)  - FFmpeg commands, progress parsing, process management
+```
+
+All modules export their public APIs through `downloader.py` for backward compatibility.

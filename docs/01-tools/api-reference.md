@@ -251,7 +251,7 @@ Download segment with AWS Full Jitter backoff for 429/5xx errors.
 
 ### FfmpegProgress
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.ffmpeg_utils`
 
 Progress state from ffmpeg -progress pipe output.
 
@@ -271,7 +271,7 @@ Progress state from ffmpeg -progress pipe output.
 
 ### ProgressParser
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.ffmpeg_utils`
 
 Parser for ffmpeg KEY=VALUE progress output.
 
@@ -290,7 +290,7 @@ Parse a single progress line in KEY=VALUE format.
 
 ### read_progress
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.ffmpeg_utils`
 
 Async generator reading ffmpeg progress output in real-time.
 
@@ -311,31 +311,6 @@ async def read_progress(
 | stderr_collector | list[bytes] \| None | None | Optional list to collect raw stderr lines for error handling. |
 
 **Yields:** FfmpegProgress objects as they are parsed from stdout.
-
----
-
-### get_video_duration
-
-Location: `vkdownloader.services.downloader`
-
-Get video duration in milliseconds using ffprobe for ETA calculation.
-
-```python
-async def get_video_duration(m3u8_url: str) -> int | None:
-    ...
-```
-
-**Parameters:**
-| Name | Type | Description |
-|------|------|-------------|
-| m3u8_url | str | HLS playlist URL or input URL for ffprobe. |
-
-**Returns:** Duration in milliseconds if available, None if ffprobe unavailable or fails.
-
-**Behavior:**
-- Uses `ffprobe -show_entries format=duration` for accurate timing
-- Gracefully handles missing ffprobe with warning log, returns None
-- Enables percentage calculation for progress display
 
 ---
 
@@ -366,7 +341,7 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
 
 ### _fetch_playlist_with_retry
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.segment_downloader`
 
 Fetch m3u8 playlist with automatic token refresh on 403/410 responses.
 
@@ -403,26 +378,6 @@ async def _fetch_playlist_with_retry(
 
 ---
 
-### _parse_target_duration
-
-Location: `vkdownloader.services.downloader`
-
-Parse #EXT-X-TARGETDURATION from m3u8 content as fallback duration source.
-
-```python
-def _parse_target_duration(content: str) -> int | None:
-    ...
-```
-
-**Parameters:**
-| Name | Type | Description |
-|------|------|-------------|
-| content | str | Raw m3u8 playlist content. |
-
-**Returns:** Target duration in milliseconds if found, None otherwise.
-
----
-
 ## Download Functions
 
 ### perform_download
@@ -456,6 +411,8 @@ result = await perform_download(
 | `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
 | `semaphore` | asyncio.Semaphore \| None | None | Shared semaphore for work-stealing concurrency in batch downloads. |
 | `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback for per-URL segment progress (video_id, downloaded, total). |
+| `video_data` | VideoWithStreams \| None | None | Optional pre-extracted video data with streams. When provided, skips extraction. |
+| `selected_stream` | Stream \| None | None | Optional pre-selected stream. When provided, used instead of streams[0]. |
 
 **Returns:** Path to downloaded file on success, None on failure.
 
@@ -465,12 +422,12 @@ result = await perform_download(
 
 ### download_hls_with_resume
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.segment_downloader`
 
 Download HLS stream with segment-level resume and automatic token refresh on 403/410 responses.
 
 ```python
-from vkdownloader.services.downloader import download_hls_with_resume
+from vkdownloader.services.segment_downloader import download_hls_with_resume
 from vkdownloader.models.dtos import HLSDownloadRequest
 
 request = HLSDownloadRequest(
@@ -496,7 +453,7 @@ result = await download_hls_with_resume(request)
 
 ### _download_segment
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.segment_downloader`
 
 Download a single HLS segment with optional retry backoff for sequential mode.
 
@@ -885,6 +842,23 @@ validated_path = validate_output_path(Path("./output/video.mp4"))
 | `warning` | bool | True | Whether to log warning for repo-root paths. |
 
 **Raises:** `DownloadError` if path contains traversal attempts ("..").
+
+---
+
+### _sanitize_title
+
+Location: `vkdownloader.utils.security`
+
+Sanitizes video titles for filesystem safety by removing invalid characters.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| title | str | Video title to sanitize. |
+
+**Returns:** Sanitized title string.
+
+**Behavior:** Replaces characters invalid on Windows/Unix filesystems (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) with underscores, strips whitespace, and limits length to 100 characters.
 
 ---
 
