@@ -1,5 +1,7 @@
 """HLS downloader service with segment-level resume support."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import random
@@ -8,7 +10,7 @@ import ssl
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 import aiohttp
@@ -24,6 +26,9 @@ from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 from .downloader_throttle import RETRYABLE_STATUS_CODES, _retry_429_with_backoff, get_shutdown_event
+
+if TYPE_CHECKING:
+    from .downloader_throttle import URLBackoffCoordinator
 
 logger = get_logger(__name__)
 
@@ -523,7 +528,7 @@ async def _download_segment(
     headers: dict[str, str],
     max_concurrent_downloads: int = 1,
     segment_index: int = 0,
-    backoff_coordinator: Any | None = None,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
 ) -> bool:
     """Download a single HLS segment.
@@ -992,7 +997,7 @@ async def perform_download(
     method: DownloadMethod,
     extractor: VKVideoExtractor | None = None,
     settings: Settings | None = None,
-    backoff_coordinator: Any | None = None,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
     semaphore: asyncio.Semaphore | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     video_data: VideoWithStreams | None = None,
