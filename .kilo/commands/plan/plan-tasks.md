@@ -1,4 +1,4 @@
-З---
+---
 name: plan-tasks
 description: Build dependency-aware rollout plans and generate semantic implementation-ready task specifications using stable symbol-level targeting
 agent: planner
@@ -21,7 +21,7 @@ Transform validated findings into dependency-aware rollout plans with semantic t
 
 ## Steps
 
-1. **List** files /.ai/audit/99-validation/` and `/.ai/plans` (do not read contents yet) 
+1. **List** files .ai/audit/99-validation/` and `/.ai/plans` (do not read contents yet) 
 2. **Ask user** to select: one file, multiple files, or ALL. Wait for selection.
 3. **Study** selected files — plans, validated findings, safety constraints, rollout constraints. Ignore rejected/stale findings.
 4. **Load structural context** — `/.ai/structure/` dependency chains, integration boundaries, coupling zones, semantic insertion points.

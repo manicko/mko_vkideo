@@ -9,7 +9,7 @@ validated: yes
 # Phase 07 Audit Findings — Test Quality (Validated)
 
 **Executor:** validator  
-**Source:** /.ai/audit/07-tests/findings.md  
+**Source:** .ai/audit/07-tests/findings.md  
 **Status:** complete  
 **Validated:** yes
 
@@ -65,7 +65,32 @@ validated: yes
 - Line 40: `mock_response.status = 200` followed by line 44: `assert mock_response.status == 200`
 - Line 52: Hardcoded `video_ids` list followed by line 63: `assert vid in html_content` (always true)
 
-**Recommendation:** Remove these tautological tests or replace them with actual integration tests that exercise real application code paths against mock HTTP servers.
+**Recommendation:** Replace these tautological tests with actual integration tests that exercise real application code. The recommended approach is to test the extractor service against mock HTTP responses:
+
+```python
+# tests/integration/test_extractor_integration.py
+def test_extractor_parses_m3u8_playlist():
+    """Test that extractor correctly parses m3u8 playlist format."""
+    m3u8_content = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=4684000,RESOLUTION=1920x804
+https://cdn.example.com/1080p.m3u8
+"""
+    # Test _parse_m3u8_segments function directly
+    segments = _parse_m3u8_segments(m3u8_content)
+    assert len(segments) == 1
+    assert "1080p.m3u8" in segments[0]
+
+
+def test_extractor_handles_various_video_ids():
+    """Test that video ID patterns are correctly extracted."""
+    # Test parse_video_id function with real URLs
+    from vkdownloader.services.extractor import parse_video_id
+
+    assert parse_video_id("https://vkvideo.ru/video-1_2") == ("1", "2")
+    assert parse_video_id("https://vkvideo.ru/video-123_456") == ("123", "456")
+```
+
+Alternatively, delete `tests/integration/test_mock_vk_server.py` entirely since it provides no meaningful coverage.
 
 ---
 
@@ -88,19 +113,40 @@ validated: yes
 
 **Evidence:** `tests/test_security.py:55-64` - the test body is `pass` with a comment explaining why it can't be easily tested.
 
-**Recommendation:** Either implement the test with proper mocking of the repository detection logic, or remove the test and convert it to a manual verification note in documentation.
+**Recommendation:** Implement the test using mocking of repository root detection. The implementation approach:
 
----
+```python
+# tests/test_security.py (replace lines 55-64)
+def test_path_inside_repo_warns(tmp_path: Path) -> None:
+    """Test that path inside repository root triggers warning."""
+    # Mock the repo root to be tmp_path, then create path inside it
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    inside_path = repo_root / "output" / "video.mp4"
 
-### TST-004: ~~Coverage gap - AdaptiveThrottle module has no tests~~ [REJECTED]
+    with patch("vkdownloader.utils.security.Path") as mock_path_cls:
+        # Make Path(__file__) return a path under our mock repo
+        mock_path_cls.return_value.resolve.return_value = repo_root / "some" / "file.py"
 
-> **Rejection reason:** This finding was addressed in SRV-001 (Phase 03 validation). The `AdaptiveThrottle` class is listed in architecture documentation (`py_map.yaml` and `py_anchors.yaml`), indicating it represents intentional architectural design for future rate limiting strategy. Per project rules: "when a component appears in documentation/spec but is unused, it should be classified as SPEC-DEVIATION (missing integration, not dead code)." This is architectural intent, not a coverage gap.
+        with patch("vkdownloader.utils.security.Path.__init__", return_value=None):
+            with patch("vkdownloader.utils.security.logger") as mock_logger:
+                # Mock the relative_to check to simulate "inside repo"
+                mock_resolved = MagicMock()
+                mock_resolved.relative_to.side_effect = lambda x: (
+                    None
+                )  # No ValueError = inside repo
+                with patch(
+                    "vkdownloader.utils.security.Path.resolve",
+                    return_value=mock_resolved,
+                ):
+                    result = validate_output_path(inside_path)
 
----
+                    # Verify warning was logged
+                    mock_logger.warning.assert_called_once()
+```
 
-### TST-005: ~~Coverage gap - DTO models have no validation tests~~ [REJECTED]
-
-> **Rejection reason:** The `HLSDownloadRequest` DTO is extensively tested via usage in `test_hls_downloader.py` (7+ test cases use it). Pydantic models inherit automatic validation from the framework - `HttpUrl` validation is exercised when URLs are passed to `DownloadRequest`. Explicit validation tests for Pydantic models typically have low ROI since: (1) validation is automatic and well-tested by Pydantic itself, (2) the models are already exercised through integration in test_hls_downloader.py and production code. Per validation rules: reject when "ROI is negative for project scale."
+If mocking proves too complex, remove the test and add to `docs/11-guides/configuration.md`:
+> **Note:** The `validate_output_path()` warning for paths inside repository root is exercised in production but not in automated tests due to `Path.resolve()` mocking complexity. Manual verification: run with `--output ./src/vkdownloader/output` to see warning.
 
 ---
 
@@ -116,7 +162,7 @@ validated: yes
 
 > **Validation Note:**
 > - **Action:** validated
-> - **Detail:** Confirmed - lines 257 and 309 use `assert result.exit_code != 0` without verifying error messages. This is valid improvement but low impact. Per validation rules, this is valid BEST-PRACTICE with advisory classification.
+> - **Detail:** Confirmed - lines 257 and 309 use `assert result.exit_code != 0` without verifying error messages. The actual exit code for invalid enum options is 2 (typer's standard for argument validation errors). This is valid improvement but low impact. Per validation rules, this is valid BEST-PRACTICE with advisory classification.
 > - **See also:** —
 
 **Description:** Tests `test_invalid_quality_option` and `test_invalid_method_option` use `assert result.exit_code != 0` which only checks that the exit code is non-zero. They don't verify that the correct error message is displayed or that the proper exception path is taken. This could allow unrelated failures to pass as "correct" validation.
@@ -125,7 +171,29 @@ validated: yes
 - tests/test_cli.py:257: `assert result.exit_code != 0`
 - tests/test_cli.py:309: `assert result.exit_code != 0`
 
-**Recommendation:** Strengthen assertions to check for specific error messages or exit codes to ensure the validation logic is actually being tested.
+**Recommendation:** Strengthen assertions to check for specific exit code (2) and error messages that verify the enum validation path. The implementation:
+
+```python
+# For test_invalid_quality_option (line 257):
+# Before:
+assert result.exit_code != 0
+
+# After:
+assert result.exit_code == 2  # Typer's exit code for argument validation errors
+assert "invalid" in result.output.lower() or "quality" in result.output.lower()
+```
+
+```python
+# For test_invalid_method_option (line 309):
+# Before:
+assert result.exit_code != 0
+
+# After:
+assert result.exit_code == 2  # Typer's exit code for argument validation errors
+assert "invalid" in result.output.lower() or "method" in result.output.lower()
+```
+
+The actual Typer error output for invalid enum values typically shows: "Error: Invalid value for '--quality': 'invalid_quality' is not a valid 'quality'."
 
 ---
 

@@ -110,7 +110,7 @@ validated: yes
 | **Affected Modules** | src/vkdownloader/config.py:53-56 |
 | **Classification** | advisory |
 
-**Description:** The `download_dir` field in `Settings` uses `Path.home() / "Downloads" / "vkdownloader"` as a default, but there is no `@field_validator` or `AfterValidator` to ensure the path is properly resolved and validated when set via environment variable. Unlike `ssl_verify`, `download_timeout`, and other fields that have constraints, `download_dir` lacks validation for path traversal attacks or invalid paths at Settings instantiation time. However, `validate_output_path` in `src/vkdownloader/utils/security.py` is called by services before using the path.
+**Description:** The `download_dir` field in `Settings` uses `Path.home() / "Downloads" / "vkdownloader"` as a default, but there is no `@field_validator` or `AfterValidator` to ensure the path is properly resolved and validated when set via environment variable. Unlike `ssl_verify`, `download_timeout`, and other fields that have constraints, `download_dir` lacks validation for path traversal attacks or invalid paths at Settings instantiation time.
 
 **Evidence:**
 - `src/vkdownloader/config.py:53-56` shows `download_dir` field without any validators
@@ -118,7 +118,46 @@ validated: yes
 - `src/vkdownloader/services/downloader.py:339` calls `validate_output_path(request.output_file)`
 - `src/vkdownloader/cli.py:130` calls `validate_output_path(output, warning=False)`
 
-**Recommendation:** Consider adding a `field_validator` for `download_dir` to validate paths at Settings instantiation time, ensuring invalid paths are caught early. Effort: small. Priority: recommended.
+**Recommendation:** Add a `field_validator` in `Settings` class to validate `download_dir` at instantiation time using mode="before" to intercept the raw input before Pydantic processes it:
+
+```python
+@field_validator("download_dir", mode="before")
+@classmethod
+def validate_download_dir(cls, v: str | Path) -> Path:
+    """Validate download_dir path to prevent traversal and ensure resolvable path."""
+    from pathlib import Path
+
+    path = Path(v) if isinstance(v, str) else v
+    path_str = str(path)
+
+    # Check for path traversal attempts (reusing logic from utils/security.py)
+    if ".." in path_str:
+        raise ValueError(f"Path traversal detected in download_dir: {path}")
+
+    # Validate path can be resolved
+    try:
+        resolved = path.resolve()
+    except OSError as e:
+        raise ValueError(f"Invalid download_dir path: {e}") from e
+
+    # Ensure parent directory can be created (if path doesn't exist yet)
+    if not resolved.exists():
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise ValueError(f"Cannot create download_dir path: {e}") from e
+
+    return resolved
+```
+
+This validator:
+1. Uses `mode="before"` to intercept input before Pydantic Path validation
+2. Reuses the existing `validate_output_path` logic pattern for path traversal detection
+3. Raises `ValueError` (Pydantic's native validation error type) for invalid paths
+4. Ensures parent directory exists or can be created for usability
+5. Runs at Settings instantiation, catching errors early before download attempts
+
+Effort: small | Priority: recommended
 
 > **Validation Note:**
 > - **Action:** confirmed

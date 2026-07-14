@@ -1,7 +1,7 @@
 # Phase 04 Audit Findings — Security & Secret Management
 
 **Executor:** auditor
-**Template:** /.ai/audit/templates/audit-findings.md
+**Template:** .ai/audit/templates/audit-findings.md
 **Status:** complete
 **Validated:** no
 

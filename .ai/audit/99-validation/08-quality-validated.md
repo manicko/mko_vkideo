@@ -77,11 +77,6 @@ Effort: small | Priority: recommended
 
 ### QLT-004: Multiple bare Exception catches suppress errors
 
-> **Validation Note:**
-> - **Action:** validated with nuance
-> - **Detail:** Bare Exception catches found at lines 814, 1029, 226 are legitimate for top-level error handling where the code logs and continues/safely returns. The catch at extractor.py:260 (`except Exception: pass`) is questionable as it silently swallows errors without logging. For url_sanitizer.py:65, the comment explicitly states "If parsing fails, return original URL" which is valid graceful degradation.
-> - **See also:** —
-
 | Field | Value |
 |-------|-------|
 | **ID** | QLT-004 |
@@ -90,18 +85,45 @@ Effort: small | Priority: recommended
 | **Affected Modules** | src/vkdownloader/services/downloader.py, src/vkdownloader/services/downloader_throttle.py, src/vkdownloader/services/extractor.py, src/vkdownloader/utils/url_sanitizer.py |
 | **Classification** | advisory |
 
-**Description:** Several files catch bare `Exception` which can hide programming errors and make debugging difficult. The code catches `Exception` in multiple places where more specific exception types should be used.
+**Description:** Several files catch bare `Exception` which can hide programming errors and make debugging difficult. Each location has distinct context requiring specific handling patterns.
 
 **Evidence:**
-- `src/vkdownloader/services/downloader.py:814`: `except Exception as e:` with only logging
-- `src/vkdownloader/services/downloader.py:1029`: `except Exception as e:` for download fallback
-- `src/vkdownloader/services/downloader_throttle.py:226`: `except Exception as e:` 
-- `src/vkdownloader/services/extractor.py:260`: `except Exception:` followed by `pass` (click simulation)
-- `src/vkdownloader/utils/url_sanitizer.py:65`: `except Exception:` for URL parsing fallback
+- `src/vkdownloader/services/downloader.py:814`: `except Exception as e:` in `_cancel_all_downloads()` - Process termination cleanup, legitimately needs broad catch
+- `src/vkdownloader/services/downloader.py:1029`: `except Exception as e:` in `_download_with_ytdlp()` - Download execution, should be more specific
+- `src/vkdownloader/services/downloader_throttle.py:226`: `except Exception as e:` in `_retry_429_with_backoff()` - HTTP segment download, should catch network errors
+- `src/vkdownloader/services/extractor.py:215`: `except Exception as e:` in `_extract_with_browser()` - Cookie capture, should catch `AttributeError`
+- `src/vkdownloader/services/extractor.py:260`: `except Exception:` in `_simulate_video_interaction()` - Click simulation, silently swallows errors without logging
+- `src/vkdownloader/utils/url_sanitizer.py:65`: `except Exception:` for URL parsing - Graceful degradation, but should catch specific parsing exceptions
 
-**Recommendation:** Either use more specific exception types or restructure to avoid catching broad exceptions. For the URL sanitizer, catching specific parsing exceptions is appropriate. For the click simulation in extractor.py, logging at debug level would be more informative.
+**Recommendation:** Replace bare `Exception` catches with specific exception types based on context:
+
+| Location | Specific Exception Types | Rationale |
+|----------|------------------------|-----------|
+| `downloader.py:814` (`_cancel_all_downloads`) | No change needed | Process termination cleanup legitimately catches `ProcessLookupError` and other OS errors; broad catch + logging is appropriate for cleanup code that must not fail |
+| `downloader.py:1029` (`_download_with_ytdlp`) | `RuntimeError`, `OSError` | yt-dlp specific errors include `DownloadError`, `ExtractorError`; broad catch hides issues. Re-raise as `RuntimeError` for cancellation handling |
+| `downloader_throttle.py:226` (`_retry_429_with_backoff`) | `aiohttp.ClientError`, `TimeoutError` | HTTP errors from `session.get()` are `ClientError` (aiohttp), shutdown checks use `wait_for` which raises `TimeoutError`; these are the primary expected exceptions |
+| `extractor.py:215` (`_extract_with_browser`) | `TimeoutError` | `page.context.cookies()` can timeout; the existing `logger.debug` logging is sufficient. Catch `TimeoutError` specifically for network/page issues |
+| `extractor.py:260` (`_simulate_video_interaction`) | `TimeoutError` + debug logging | `page.click()` raises `TimeoutError` when element not found or times out; add `logger.debug("video_player_click_failed")` for observability |
+| `url_sanitizer.py:65` | `ValueError`, `AttributeError` | `urlparse()` and `urlunparse()` raise `ValueError` on malformed URLs; graceful degradation is valid but should be explicit |
+
+**Implementation examples:**
+
+```python
+# extractor.py:260 - Add debug logging
+except TimeoutError:
+    logger.debug("video_player_click_failed", exc_info=True)
+
+# url_sanitizer.py:65 - Catch specific exceptions
+except (ValueError, AttributeError):
+    return url
+```
 
 Effort: small | Priority: recommended
+
+> **Validation Note:**
+> - **Action:** validated with nuance
+> - **Detail:** Bare Exception catches at downloader.py:814 (`_cancel_all_downloads`) and downloader_throttle.py:226 (`_retry_429_with_backoff`) are legitimate for top-level error handling where the code logs and continues/safely returns. The catch at extractor.py:260 (`_simulate_video_interaction`) is questionable as it silently swallows errors without logging. For url_sanitizer.py:65, the comment explicitly states "If parsing fails, return original URL" which is valid graceful degradation.
+> - **See also:** —
 
 ---
 
@@ -124,9 +146,70 @@ Effort: small | Priority: recommended
 - `src/vkdownloader/services/downloader.py:708`: File write in `_perform_final_merge`
 - `src/vkdownloader/services/downloader.py:774,784`: JSON read/write in `_load_downloaded_count` and `_save_downloaded_count`
 
-**Recommendation:** Replace with `aiofiles` or use `asyncio.to_thread()` for file I/O operations to avoid blocking the event loop. For small JSON metadata files, the async overhead may not be worth it, but for large file writes, async I/O improves concurrency.
+**Recommendation:** Replace blocking `open()` calls with `asyncio.to_thread()` for all file I/O operations.
 
-Effort: small | Priority: recommended
+**Rationale for asyncio.to_thread() over aiofiles:**
+1. **No new dependency required** - `asyncio.to_thread()` is built into Python 3.9+ (project uses 3.12)
+2. **Same underlying mechanism** - aiofiles also delegates to a thread pool executor; `asyncio.to_thread()` achieves the same result more directly
+3. **Project scale considerations** - HLS segments are 2-10MB each, downloaded concurrently (up to `max_concurrent_downloads`). For this workload, the built-in executor is sufficient
+4. **Avoids overengineering** - Per project rule #5, simpler solutions are preferred
+
+**Implementation approach by file size:**
+
+| Location | File Size | Operation | Implementation |
+|----------|-----------|-----------|----------------|
+| `_download_segment` (lines 548, 565) | 2-10MB per segment | Write downloaded content | `asyncio.to_thread(_write_file, output_path, content)` |
+| `_merge_batch_segments` (line 668) | <1KB | Write ffmpeg concat list | `await asyncio.to_thread(_write_concat_list, file_list_path, batch_files)` |
+| `_perform_final_merge` (line 708) | <1KB | Write final concat list | `await asyncio.to_thread(_write_concat_list, final_list_path, temp_files)` |
+| `_load_downloaded_count` (line 774) | <1KB | Read JSON metadata | `await asyncio.to_thread(_read_metadata, metadata_file)` |
+| `_save_downloaded_count` (line 784) | <1KB | Write JSON metadata | `await asyncio.to_thread(_write_metadata, metadata_file, count)` |
+
+**Concrete implementation:**
+
+```python
+# Helper functions (synchronous, extracted for to_thread)
+def _write_file(path: Path, content: bytes) -> None:
+    """Write bytes to file synchronously."""
+    with open(path, "wb") as f:
+        f.write(content)
+
+def _write_concat_list(path: Path, files: list[Path]) -> None:
+    """Write ffmpeg concat list file."""
+    with open(path, "w", encoding="utf-8") as f:
+        for file_path in files:
+            f.write(f"file '{file_path.as_posix()}'\n")
+
+def _read_metadata(path: Path) -> int:
+    """Read downloaded count from JSON metadata file."""
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                data: dict[str, int] = json.load(f)
+                return data.get("downloaded_count", 0)
+        except (json.JSONDecodeError, OSError):
+            return 0
+    return 0
+
+def _write_metadata(path: Path, count: int) -> None:
+    """Write downloaded count to JSON metadata file."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"downloaded_count": count}, f)
+
+# In async functions, replace:
+# with open(output_path, "wb") as f:
+#     f.write(content)
+# With:
+await asyncio.to_thread(_write_file, output_path, content)
+
+# Replace:
+# with open(file_list_path, "w", encoding="utf-8") as f:
+#     for segment_path in batch_files:
+#         f.write(f"file '{segment_path.as_posix()}'\n")
+# With:
+await asyncio.to_thread(_write_concat_list, file_list_path, batch_files)
+```
+
+**Effort:** small | **Priority:** recommended
 
 ---
 
@@ -146,7 +229,9 @@ Effort: small | Priority: recommended
 - `src/vkdownloader/services/downloader.py:851`: `signal.signal(sig, lambda s, f: _handle_signal())` - argument `s` unused
 - `src/vkdownloader/services/downloader.py:856`: Same pattern
 
-**Recommendation:** Use underscore prefix for unused arguments: `lambda _s, _f: _handle_signal()` or define a proper handler function.
+**Recommendation:** Use underscore prefix for unused arguments: `lambda _s, _f: _handle_signal()`.
+
+**Note:** This fix is incorporated into the QLT-007 implementation for signal handlers.
 
 Effort: trivial | Priority: recommended
 
@@ -165,11 +250,66 @@ Effort: trivial | Priority: recommended
 **Description:** The `setup_signal_handlers()` function uses `global _signal_handlers_setup` to track state, which is discouraged in Python code as it makes the code harder to test and can cause issues in some contexts.
 
 **Evidence:**
-- `src/vkdownloader/services/downloader.py:821-826`: Global variable `_signal_handlers_setup` used to prevent duplicate signal handler registration
+- `src/vkdownloader/services/downloader.py:821-858`: Global variable `_signal_handlers_setup` used to prevent duplicate signal handler registration
 
-**Recommendation:** Refactor to use a class or closure pattern instead of global state. Consider using a singleton pattern or module-level initialization guard.
+**Recommendation:** Replace the global variable with a function attribute pattern (module-level initialization guard).
 
-Effort: small | Priority: recommended
+**Rationale for function attribute pattern:**
+1. **Simplest refactoring** - Requires no class changes, minimal code modification
+2. **Maintains backward compatibility** - `setup_signal_handlers()` API remains unchanged
+3. **Follows existing patterns** - Uses same technique as `get_shutdown_event()` with `ContextVar` for state isolation
+4. **Test-friendly** - Can be reset in tests via `setup_signal_handlers._handlers_setup = False`
+5. **No overengineering** - Per project rule #5, avoids unnecessary class instantiation for simple state tracking
+
+**Concrete implementation:**
+
+```python
+# Replace lines 820-821:
+# _signal_handlers_setup = False
+# With function attribute initialization (add inside setup_signal_handlers):
+if not hasattr(setup_signal_handlers, "_handlers_setup"):
+    setup_signal_handlers._handlers_setup = False  # type: ignore[attr-defined]
+
+def setup_signal_handlers() -> None:
+    """Setup signal handlers for graceful shutdown on SIGINT/SIGTERM."""
+    # Initialize function attribute on first call
+    if not hasattr(setup_signal_handlers, "_handlers_setup"):
+        setup_signal_handlers._handlers_setup = False  # type: ignore[attr-defined]
+
+    if setup_signal_handlers._handlers_setup:  # type: ignore[attr-defined]
+        return
+
+    shutdown_event = get_shutdown_event()
+
+    def _handle_signal() -> None:
+        """Signal handler to trigger graceful shutdown."""
+        if not shutdown_event.is_set():
+            logger.info("shutdown_signal_received")
+            shutdown_event.set()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _handle_signal)
+                setup_signal_handlers._handlers_setup = True  # type: ignore[attr-defined]
+            except NotImplementedError:
+                # Windows doesn't support loop.add_signal_handler in some Python versions
+                # Use signal.signal as fallback
+                signal.signal(sig, lambda _s, _f: _handle_signal())  # Fixed unused args
+                setup_signal_handlers._handlers_setup = True  # type: ignore[attr-defined]
+    else:
+        # Fallback for non-async context
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda _s, _f: _handle_signal())  # Fixed unused args
+            setup_signal_handlers._handlers_setup = True  # type: ignore[attr-defined]
+```
+
+**Effort:** small | **Priority:** recommended
 
 ---
 
@@ -262,10 +402,10 @@ Effort: trivial | Priority: recommended
 | ID | Recommendation |
 |----|----------------|
 | QLT-003 | Replace `Any` with TYPE_CHECKING imports for proper type hints |
-| QLT-004 | Use more specific exception types or add logging where silent |
-| QLT-005 | Consider async file I/O for large file operations |
+| QLT-004 | Replace bare Exception (6 locations): No change for downloader.py:814; RuntimeError/OSError for downloader.py:1029; aiohttp.ClientError/TimeoutError for downloader_throttle.py:226; TimeoutError for extractor.py:215/260; ValueError/AttributeError for url_sanitizer.py:65 |
+| QLT-005 | Replace blocking `open()` with `asyncio.to_thread()` for file I/O operations |
 | QLT-006 | Fix unused lambda arguments with underscore prefix |
-| QLT-007 | Refactor global state to class/closure pattern |
+| QLT-007 | Refactor global state to function attribute pattern |
 | QLT-009 | Run `ruff format` to standardize code formatting |
 
 ---
@@ -274,7 +414,12 @@ Effort: trivial | Priority: recommended
 
 - Formatting fix (QLT-009) can be applied first as it is non-breaking
 - Type annotation fix (QLT-003) is low-risk and can be applied independently
-- Error handling improvements (QLT-004) should be done carefully with testing
+- Error handling improvements (QLT-004): Apply specific catches in order:
+  1. extractor.py:260 - Add debug logging for TimeoutError (non-breaking, improves observability)
+  2. url_sanitizer.py:65 - Narrow to ValueError, AttributeError (low risk)
+  3. extractor.py:215 - Narrow to TimeoutError (low risk, network operations can timeout)
+  4. downloader_throttle.py:226 - Catch aiohttp.ClientError specifically (medium risk, test HTTP fallbacks)
+  5. downloader.py:1029 - Catch RuntimeError/OSError for yt-dlp (medium risk, validate download behavior)
 - Module splitting (QLT-002, via SRV-003) has highest complexity; should be done last
 - No circular dependencies detected between findings
 - No unsafe execution sequences identified

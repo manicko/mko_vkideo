@@ -99,13 +99,13 @@ Answer: "What do I need to know to PLAN this phase well?"
 
 <output>
 IMPORTANT: 
-Write research findings to: /.ai/researches/RESEARCH_{file_number}.md
+Write research findings to: .ai/researches/RESEARCH_{file_number}.md
 </output>
 ```
 
 ```
 Task(
-  prompt="First, read /.kilo/agents/researcher.md for your role and instructions.\n\n" + research_prompt,
+  prompt="First, read .kilo/agents/researcher.md for your role and instructions.\n\n" + research_prompt,
   subagent_type="Researcher",
   description="Research Phase {file_number}"
 )
@@ -201,7 +201,7 @@ Before returning PLANNING COMPLETE:
 
 ```
 Task(
-  prompt="First, read /.kilo/agents/planner.md for your role and instructions.\n\n" + filled_prompt,
+  prompt="First, read .kilo/agents/planner.md for your role and instructions.\n\n" + filled_prompt,
   subagent_type="plan",
   description="Plan Phase {file_number}"
 )
@@ -326,7 +326,7 @@ Return what changed.
 
 ```
 Task(
-  prompt="First, read /.kilo/agents/planner.md for your role and instructions.\n\n" + revision_prompt,
+  prompt="First, read .kilo/agents/planner.md for your role and instructions.\n\n" + revision_prompt,
   subagent_type="planner",
   description="Revise Phase {file_number} plans"
 )

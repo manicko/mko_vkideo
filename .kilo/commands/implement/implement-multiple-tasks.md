@@ -57,7 +57,7 @@ For each task file in `{TASKS_FILES_TO_IMPLEMENT}` one at a time:
 2. Validate preconditions: semantic targets exist, depends_on tasks are done.
   If already implemented: rename to *_DONE.yaml, move to done/, return IMPLEMENTATION_COMPLETE.
 3. Implement: edit only required files.  
-4. If found a bug or any problem not relates to the task - don't solve, but create the new file with report to /.ai/audit/00-bug_report/ХХ-report.md
+4. If found a bug or any problem not relates to the task - don't solve, but create the new file with report to .ai/audit/00-bug_report/ХХ-report.md
 XX - free number.
 5. Validate:
   - Python: uv run ruff check <files>, uv run mypy <files>, uv run pytest <paths>
@@ -69,7 +69,7 @@ XX - free number.
     -- remove obsolete tests
   -Do NOT degrade architecture for outdated tests.
 
-6. Finalize: rename task file to *_DONE.yaml, move to /.ai/tasks/done/.
+6. Finalize: rename task file to *_DONE.yaml, move to .ai/tasks/done/.
 If you see changes in files not related to the task it is normal - other agents are doing their task in parallel.
 
 Output:

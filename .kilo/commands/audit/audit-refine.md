@@ -7,7 +7,7 @@ alwaysApply: false
 
 # Audit Improvement Agent
 
-Process audit files from /.ai/audit/99-validation one by one.
+Process audit files from .ai/audit/99-validation one by one.
 
 ## Workflow
 

@@ -77,28 +77,90 @@ def _sanitize_title(title: str) -> str:
 
 ---
 
-### CLI-003: Significant business logic embedded in `batch_download` command handler
+### CLI-003: Refactor `_download_single` to reuse `perform_download` instead of duplicating logic
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-003 |
 | **Severity** | LOW |
 | **Type** | SPEC-DEVIATION |
-| **Affected Modules** | src/vkdownloader/cli.py:181-361 |
+| **Affected Modules** | src/vkdownloader/cli.py:111-144, src/vkdownloader/cli.py:240-283, src/vkdownloader/services/downloader.py:1034-1130 |
 | **Classification** | mandatory |
 
-**Description:** The `_download_single` and `_run_batch_with_progress` inner async functions within `batch_download` command contain download orchestration logic including stream extraction, quality selection, and progress tracking. The existing `perform_download` service function (services/downloader.py:1034-1130) already handles single video download orchestration, but batch-specific coordination (shared semaphore, backoff coordinator, progress aggregation) remains in the CLI.
+**Description:** Both `_download()` (download command, cli.py:111-144) and `_download_single()` (batch_download command, cli.py:240-283) duplicate stream extraction and Settings/Extractor instantiation that `perform_download` already handles. Both call `extractor.extract_streams(url)` and create Settings/Extractor objects, but they do so *before* calling `perform_download`, which then repeats the extraction internally (downloader.py:1063-1071), causing redundant work. Additionally, `perform_download` ignores the passed `quality` parameter for stream selection, instead using `streams[0].url` directly (line 1077), making the quality selection in the CLI calls effectively unused.
 
 **Evidence:** 
-- cli.py lines 240-283: `_download_single` inner function with Settings, extractor, quality selection
-- cli.py lines 285-330: `_run_batch_with_progress` with semaphore/backoff coordinator creation
-- services/downloader.py: `perform_download()` already provides download orchestration
-- Documentation STRUCT.md describes batch download architecture intentionally in CLI layer
+- cli.py:115-117 and cli.py:249-251 create Settings/VKVideoExtractor and call `extractor.extract_streams(url)`
+- cli.py:126-127 and cli.py:253-254 use QualitySelector to select a stream based on quality
+- cli.py:142-144 and cli.py:269-274 call `perform_download` passing `str(stream.quality)`
+- downloader.py:1063-1077 creates Settings/VKVideoExtractor if None, then calls `extractor.extract_streams(url)` AGAIN, ignoring the quality selection and using `streams[0].url`
+- This results in: (1) duplicate stream extraction calls per download, (2) quality selection being ignored in the service layer
 
-> **Validation Note:**
-> - **Action:** partially validated with caveat
-> - **Detail:** Core download logic IS duplicated - `_download_single` repeats what `perform_download` does. However, the batch-specific coordination (shared resources, progress aggregation) is appropriately CLI-layer code. The `_download_single` logic should be refactored to reuse `perform_download`, but full extraction to a separate service has negative ROI.
-> - **See also:** CLI-002 (filename sanitization could be extracted together)
+**Implementation Plan:**
+
+**Step 1: Extend `perform_download` signature in downloader.py**
+```python
+async def perform_download(
+    url: str,
+    quality: str,
+    output_file: Path,
+    method: DownloadMethod,
+    extractor: VKVideoExtractor | None = None,
+    settings: Settings | None = None,
+    backoff_coordinator: Any | None = None,
+    semaphore: asyncio.Semaphore | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    video_data: VideoWithStreams | None = None,      # NEW: Optional pre-extracted data
+    selected_stream: Stream | None = None,            # NEW: Optional pre-selected stream
+) -> Path | None:
+```
+
+**Step 2: Modify `perform_download` logic (lines 1061-1077)**
+```python
+logger.info("starting_download", method=str(method), url=_strip_auth_params(url), quality=quality, output=str(output_file))
+
+# Use pre-extracted data if provided, otherwise extract
+if video_data is not None and selected_stream is not None:
+    streams = video_data.streams
+    m3u8_url = str(selected_stream.url)
+    effective_quality = selected_stream.quality
+elif extractor is None:
+    settings = settings or Settings()
+    extractor = VKVideoExtractor(settings=settings)
+    video_data = await extractor.extract_streams(url)
+    streams = video_data.streams
+    if not streams:
+        logger.error("no_streams_found", url=_strip_auth_params(url))
+        return None
+    m3u8_url = str(streams[0].url)
+    effective_quality = quality
+else:
+    # extractor provided but no video_data - still need extraction
+    video_data = await extractor.extract_streams(url)
+    streams = video_data.streams
+    if not streams:
+        logger.error("no_streams_found", url=_strip_auth_params(url))
+        return None
+    m3u8_url = str(streams[0].url)
+    effective_quality = quality
+```
+
+**Step 3: Refactor `_download()` in cli.py (lines 111-144)**
+- Keep Settings/Extractor creation (needed for quality listing)
+- Remove stream extraction and quality selection before `perform_download` call
+- OR pass pre-extracted data: `perform_download(..., video_data=video, selected_stream=stream)`
+
+**Step 4: Refactor `_download_single()` in cli.py (lines 240-283)**
+- Keep Settings/Extractor creation (batch-coordination-specific)
+- Remove stream extraction and quality selection before `perform_download` call
+- Pass pre-extracted data: `perform_download(..., video_data=video, selected_stream=stream, ...)`
+
+**Step 5: Update both calls to use effective_quality if needed
+
+This eliminates:
+- Redundant stream extraction (currently 2 calls per download)
+- Quality selection being silently ignored in the service layer
+- Code duplication between `download()` and `batch_download()` commands
 
 ---
 
@@ -160,7 +222,7 @@ def _sanitize_title(title: str) -> str:
 |----|-------|----------------|
 | CLI-001 | Test assertion needs fix for .env isolation | Mandatory fix |
 | CLI-002 | `_sanitize_title` should move to utils/security.py | Mandatory fix |
-| CLI-003 | Refactor `_download_single` to reuse `perform_download` instead of duplicating logic | Optional improvement |
+| CLI-003 | Refactor both `_download()` and `_download_single()` to pass pre-extracted data to `perform_download` | Mandatory fix |
 
 >**Note:** CLI-001 and CFG-001 describe the same issue (duplicate finding across phases). Fixing CLI-001 will resolve CFG-001.
 
@@ -169,5 +231,5 @@ def _sanitize_title(title: str) -> str:
 ## Rollout Analysis
 
 - CLI-001 and CLI-002 can be fixed independently
-- CLI-003 refactor would reduce code duplication but requires careful testing of batch download flow
+- CLI-003 requires changes to both cli.py and downloader.py; must be done as single commit
 - No circular dependencies or rollout conflicts detected

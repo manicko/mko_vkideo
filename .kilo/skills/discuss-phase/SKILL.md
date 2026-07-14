@@ -123,7 +123,7 @@ Check if DECISION_{file_number}.md already exists:
 
 ```bash
 # Match both zero-padded (05-*) and unpadded (5-*) folders
-ls /.ai/problems/decisions/DECISION_*.md
+ls .ai/problems/decisions/DECISION_*.md
 ```
 
 **If exists:**

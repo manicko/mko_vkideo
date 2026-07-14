@@ -8,7 +8,7 @@ alwaysApply: false
 # Phase 06 Audit Findings — End-to-End Data Flow (Validated)
 
 **Executor:** auditor → validator
-**Template:** /.ai/audit/templates/audit-findings.md
+**Template:** .ai/audit/templates/audit-findings.md
 **Status:** complete
 **Validated:** yes
 
@@ -71,15 +71,44 @@ alwaysApply: false
 - `src/vkdownloader/cli.py:216`: `max_retries: int = typer.Option(Settings().max_retries, ...)`
 - **Verified:** Code pattern confirmed at line 216 where the pattern exists without `# noqa: B008`
 
-**Recommendation:** Use a sentinel value or `None` as default and resolve the actual default inside the function. For example:
+**Recommendation:** Use `None` as default and resolve the actual default inside the function. This follows the same pattern used elsewhere in the CLI where default enum values are handled without instantiation. The implementation should:
+
 ```python
-max_retries: int | None = typer.Option(None, "--max-retries", "-r")
-# Then inside function: actual_retries = max_retries if max_retries is not None else Settings().max_retries
+# Before (line 215-220):
+# max_retries: int = typer.Option(
+#     Settings().max_retries,
+#     "--max-retries",
+#     "-r",
+#     help="Maximum retry attempts for failed segment downloads",
+# )
+
+# After:
+max_retries: int | None = typer.Option(
+    None,
+    "--max-retries",
+    "-r",
+    help="Maximum retry attempts for failed segment downloads",
+)
 ```
 
+Then inside `_download_single()` function (around line 249), resolve the default:
+
+```python
+# Replace:
+# settings = Settings(cookie_source=cookie_source, max_retries=max_retries, ssl_verify=ssl_verify)
+
+# With:
+actual_max_retries = max_retries if max_retries is not None else Settings().max_retries
+settings = Settings(
+    cookie_source=cookie_source, max_retries=actual_max_retries, ssl_verify=ssl_verify
+)
+```
+
+This pattern avoids the B008 lint violation and ensures the default is evaluated at runtime, not import time.
+
 > **Validation Note:**
-> - **Action:** validated
-> - **Detail:** Finding is technically correct. Using `Settings().max_retries` in function signature default evaluates at import time and is flagged by the B008 lint rule. The pattern exists and is a valid best-practice improvement.
+> - **Action:** validated with concrete implementation
+> - **Detail:** The current pattern creates a Settings instance at module import time. The fix uses None sentinel with runtime resolution, consistent with Pydantic best practices and avoiding the B008 lint rule violation.
 > - **See also:** DF-004 (inconsistent Settings instantiation)
 
 ---
@@ -149,23 +178,51 @@ Both commands receive additional CLI options (like `user_agent`, `accept_languag
 | **ID** | DF-005 |
 | **Severity** | LOW |
 | **Type** | DOC-UPDATE |
-| **Affected Modules** | src/vkdownloader/models/dtos.py |
+| **Affected Modules** | src/vkdownloader/models/dtos.py, docs/01-tools/vkdownloader-overview.md |
 | **Classification** | advisory |
 
-**Description:** The `DownloadRequest` and `DownloadResult` DTOs are defined in `models/dtos.py` and exported in `__init__.py` but are never actually instantiated or used anywhere in the codebase. The codebase uses `HLSDownloadRequest` extensively but these other DTOs appear to be dead code.
+**Description:** The `DownloadRequest` and `DownloadResult` DTOs are defined in `models/dtos.py` and exported in `__init__.py` but are never actually instantiated or used anywhere in the codebase. The codebase uses `HLSDownloadRequest` extensively but these other DTOs appear to be missing integration. Per project rule: "when a component appears in documentation/spec but is unused, classify as SPEC-DEVIATION (missing integration, not dead code)."
 
 **Evidence:**
 - `src/vkdownloader/models/dtos.py:16-23`: `DownloadRequest` class definition (no instantiations found)
 - `src/vkdownloader/models/dtos.py:50-58`: `DownloadResult` class definition (no instantiations found)
-- `src/vkdownloader/models/__init__.py:3,8-9`: Both exported in `__all__`
-- No imports or usages found outside of definition and model exports
+- `docs/01-tools/vkdownloader-overview.md:54-56`: Both models documented as public API
 - **Verified:** Search confirms no `= DownloadRequest(` or `= DownloadResult(` patterns in codebase
 
-**Recommendation:** Either remove unused DTOs or document their intended future use.
+**Recommendation:** Implement integration in the download flow to use these DTOs. Two paths forward:
+
+**Option A - Implement in download flow (recommended):** Integrate these DTOs into the core download orchestration.
+
+1. **For DownloadRequest**: Use it to wrap the initial download request in `perform_download()` function. The current signature takes 6 parameters; refactor to use a DTO:
+
+```python
+# In services/downloader.py, refactor perform_download signature:
+async def perform_download(request: DownloadRequest, ...) -> Path | None:
+    # Access via request.url, request.quality, request.output_path
+```
+
+2. **For DownloadResult**: Modify download functions to return structured results:
+
+```python
+# Return structured result from download functions:
+return DownloadResult(
+    video_id=extracted_video_id,
+    output_file=str(output_path),
+    file_size=output_path.stat().st_size if output_file.exists() else 0,
+    duration=await get_video_duration(m3u8_url) or 0,
+    streams_used=used_streams,
+    success=bool(output_path and output_path.exists()),
+)
+```
+
+**Option B - Remove from documentation**: If these DTOs are not intended for implementation, remove them from:
+- `models/dtos.py` (lines 16-23 and 50-58)
+- `models/__init__.py` (remove from `__all__`)
+- `docs/01-tools/vkdownloader-overview.md` (remove rows for DownloadRequest and DownloadResult)
 
 > **Validation Note:**
-> - **Action:** reclassified
-> - **Detail:** Per project rules on "dead code" findings, the spec/documentation reference check must be performed first. `DownloadRequest` and `DownloadResult` ARE documented in `docs/01-tools/vkdownloader-overview.md` lines 54-56 as part of the public model API. This is not dead code but **missing integration** - the models exist in documentation but are not implemented in the codebase. Reclassified as DOC-UPDATE (documentation is ahead of implementation, not code behind docs).
+> - **Action:** validated with concrete implementation option
+> - **Detail:** Models are part of documented public API. Two paths forward: (A) implement integration in download flow, or (B) remove from documentation and code. Implementation path is recommended to align documentation with code.
 > - **See also:** —
 
 ---

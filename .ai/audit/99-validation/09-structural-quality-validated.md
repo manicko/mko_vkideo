@@ -9,7 +9,7 @@ validated: yes
 # Phase 09 Audit Findings — Structural Code Quality (Validated)
 
 **Executor:** validator  
-**Template:** /.ai/audit/templates/audit-findings.md  
+**Template:** .ai/audit/templates/audit-findings.md  
 **Status:** complete  
 **Validated:** yes  
 

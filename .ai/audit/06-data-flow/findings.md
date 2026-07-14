@@ -8,7 +8,7 @@ alwaysApply: false
 # Phase 06 Audit Findings — End-to-End Data Flow
 
 **Executor:** auditor
-**Template:** /.ai/audit/templates/audit-findings.md
+**Template:** .ai/audit/templates/audit-findings.md
 **Status:** complete
 **Validated:** no
 
@@ -62,58 +62,44 @@ alwaysApply: false
 **Description:** The `batch_download` command uses `Settings().max_retries` as the default value for `max_retries` option (line 216). This evaluates at module import time, meaning any environment configuration or `.env` values are captured before the user can provide CLI arguments. It also creates unnecessary Settings instances.
 
 **Evidence:**
-- `src/vkdownloader/cli.py:215-216`: `max_retries: int = typer.Option(Settings().max_retries, ...)`
-- This pattern is flagged by linter as `# noqa: B008` (function call in argument defaults)
+- `src/vkdownloader/cli.py:216`: `max_retries: int = typer.Option(Settings().max_retries, ...)`
 
-**Recommendation:** Use a sentinel value or `None` as default and resolve the actual default inside the function. For example:
+**Recommendation:** Use `None` as default and resolve the actual default inside the function body. This follows the same pattern used elsewhere in the CLI where default enum values are handled (see `quality` and `method` options which correctly use class-level defaults without instantiation). The implementation should:
+
 ```python
-max_retries: int | None = typer.Option(None, "--max-retries", "-r")
-# Then inside function: actual_retries = max_retries if max_retries is not None else Settings().max_retries
+# Before (line 215-220):
+# max_retries: int = typer.Option(
+#     Settings().max_retries,
+#     "--max-retries",
+#     "-r",
+#     help="Maximum retry attempts for failed segment downloads",
+# )
+
+# After:
+max_retries: int | None = typer.Option(
+    None,
+    "--max-retries",
+    "-r",
+    help="Maximum retry attempts for failed segment downloads",
+)
 ```
 
----
+Then inside `_run_batch_with_progress()` or at the start of the function body, resolve the default:
 
-### DF-003: Unused Settings Fields Not Propagated in Download Flow
+```python
+settings = Settings(
+    cookie_source=cookie_source,
+    max_retries=max_retries if max_retries is not None else Settings().max_retries,
+    ssl_verify=ssl_verify,
+)
+```
 
-| Field | Value |
-|-------|-------|
-| **ID** | DF-003 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | src/vkdownloader/cli.py, src/vkdownloader/services/downloader.py |
-| **Classification** | advisory |
+This pattern avoids the B008 lint violation and ensures the default is evaluated at runtime, not import time.
 
-**Description:** Several Settings fields are not propagated through the download flow:
-- `timezone` and `locale` are only used in BrowserManager but not passed to VKVideoExtractor or other services
-- `throttled_rate` is used in yt-dlp but `HttpClient.download_file` doesn't utilize settings for timeout or retry logic
-
-**Evidence:**
-- `timezone` and `locale` in Settings (config.py) are used only in BrowserManager.create_stealth_page (browser.py:66-67)
-- `throttled_rate` is in Settings but the gap between config defaults and actual usage is not verified
-
----
-
-### DF-004: Inconsistent Settings Instantiation Pattern
-
-| Field | Value |
-|-------|-------|
-| **ID** | DF-004 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | src/vkdownloader/cli.py |
-| **Classification** | advisory |
-
-**Description:** The CLI creates Settings instances in multiple places with inconsistent field coverage:
-- `download()` command (line 115): Creates Settings with `cookie_source` and `ssl_verify` only
-- `batch_download()` command (line 249): Creates Settings with `cookie_source`, `max_retries`, `ssl_verify` only
-
-The batch command receives `user_agent`, `accept_language`, `timezone`, `locale` from environment but doesn't pass them explicitly, while the download command doesn't either. Both rely on Settings defaults.
-
-**Evidence:**
-- `src/vkdownloader/cli.py:115`: `Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)`
-- `src/vkdownloader/cli.py:249`: `Settings(cookie_source=cookie_source, max_retries=max_retries, ssl_verify=ssl_verify)`
-
-**Recommendation:** Consider creating Settings with all CLI-provided options explicitly, or create a single Settings instance at the command entry point and pass it through.
+> **Validation Note:**
+> - **Action:** validated with concrete implementation
+> - **Detail:** The current pattern creates a Settings instance at module import time. The fix uses None sentinel with runtime resolution, consistent with Pydantic best practices and avoiding the B008 lint rule violation.
+> - **See also:** —
 
 ---
 
@@ -123,19 +109,54 @@ The batch command receives `user_agent`, `accept_language`, `timezone`, `locale`
 |-------|-------|
 | **ID** | DF-005 |
 | **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | src/vkdownloader/models/dtos.py |
+| **Type** | DOC-UPDATE |
+| **Affected Modules** | src/vkdownloader/models/dtos.py, docs/01-tools/vkdownloader-overview.md |
 | **Classification** | advisory |
 
-**Description:** The `DownloadRequest` and `DownloadResult` DTOs are defined in `models/dtos.py` and exported in `__init__.py` but are never actually instantiated or used anywhere in the codebase. The codebase uses `HLSDownloadRequest` extensively but these other DTOs appear to be dead code.
+**Description:** The `DownloadRequest` and `DownloadResult` DTOs are defined in `models/dtos.py` and exported in `__init__.py` but are never actually instantiated or used anywhere in the codebase. The codebase uses `HLSDownloadRequest` extensively but these other DTOs appear to be missing integration. Per project rule: "when a component appears in documentation/spec but is unused, classify as SPEC-DEVIATION (missing integration, not dead code)."
 
 **Evidence:**
 - `src/vkdownloader/models/dtos.py:16-23`: `DownloadRequest` class definition (no instantiations found)
 - `src/vkdownloader/models/dtos.py:50-58`: `DownloadResult` class definition (no instantiations found)
-- `src/vkdownloader/models/__init__.py:3,8-9`: Both exported in `__all__`
-- No imports or usages found outside of definition and model exports
+- `docs/01-tools/vkdownloader-overview.md:54-56`: Both models documented as public API
 
-**Recommendation:** Either remove unused DTOs or document their intended future use. Per project rules on dead code, investigate purpose before removal.
+**Recommendation:** Implement integration in the download flow to use these DTOs. The recommended approach is to integrate them into the core download orchestration:
+
+1. **For DownloadRequest**: Use it to wrap the initial download request in `perform_download()` function. Replace the current multi-parameter function signature with a single DTO parameter that consolidates `url`, `quality`, and `output_file`:
+
+```python
+# In services/downloader.py, refactor perform_download signature:
+async def perform_download(request: DownloadRequest, ...) -> Path | None:
+    # Access via request.url, request.quality, request.output_path
+```
+
+2. **For DownloadResult**: Use it to wrap the return value from download functions. Modify `perform_download()` and related functions to return `DownloadResult` instead of plain `Path | None`:
+
+```python
+# Return structured result:
+return DownloadResult(
+    video_id=video.id,
+    output_file=str(output_file),
+    file_size=output_file.stat().st_size if output_file.exists() else 0,
+    duration=await get_video_duration(m3u8_url),
+    streams_used=[stream],
+    success=True,
+)
+```
+
+3. **Update exports**: Keep `DownloadRequest` and `DownloadResult` in `models/__init__.py` as they become part of the public API.
+
+4. **Add tests**: Add `test_dtos.py` with validation tests for:
+   - `DownloadRequest.url` HttpUrl validation
+   - `DownloadRequest.quality` default value (QualityEnum.BEST)
+   - `DownloadResult.success` boolean flag behavior
+
+Alternatively, if these DTOs are not intended for implementation, remove them from both code (`models/dtos.py` and `models/__init__.py`) and documentation (`vkdownloader-overview.md`).
+
+> **Validation Note:**
+> - **Action:** validated with concrete implementation option
+> - **Detail:** Models are part of documented public API. Two paths forward: (A) implement integration in download flow, or (B) remove from documentation and code. Implementation path is recommended to align documentation with code.
+> - **See also:** —
 
 ---
 
@@ -146,7 +167,7 @@ The batch command receives `user_agent`, `accept_language`, `timezone`, `locale`
 | CRITICAL | 0 |
 | HIGH | 1 |
 | MEDIUM | 1 |
-| LOW | 3 |
+| LOW | 2 |
 
 ## Mandatory Fixes
 
@@ -154,11 +175,10 @@ The batch command receives `user_agent`, `accept_language`, `timezone`, `locale`
 
 ## Advisory Recommendations
 
-- DF-002: Batch command default value evaluates Settings at import time
-- DF-003: Unused Settings fields not propagated in download flow
+- DF-002: Batch command default value evaluates Settings at import time (with concrete implementation)
 - DF-004: Inconsistent Settings instantiation pattern
-- DF-005: Unused DTO models (DownloadRequest and DownloadResult)
+- DF-005: DownloadRequest and DownloadResult models documented but not implemented - either implement usage or remove from documentation
 
 ## Doc Updates Needed
 
-- DF-005: Consider documenting future use of DownloadRequest or removing it
+- DF-005: DownloadRequest and DownloadResult models documented but not implemented - either implement usage or remove from documentation
