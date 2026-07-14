@@ -1,6 +1,5 @@
 """Core domain models for VK Video Downloader."""
 
-
 from pydantic import BaseModel, HttpUrl
 
 from .enums import DownloadStatus, StreamFormat

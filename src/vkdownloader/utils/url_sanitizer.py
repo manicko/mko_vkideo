@@ -3,26 +3,28 @@
 from urllib.parse import urlparse, urlunparse
 
 # Authentication-related query parameters to strip from logged URLs
-AUTH_PARAMS = frozenset([
-    "token",
-    "access_token",
-    "auth",
-    "auth_token",
-    "session",
-    "session_id",
-    "sid",
-    "key",
-    "signature",
-    "sig",
-    "expire",
-    "expires",
-    "expires_in",
-    "timestamp",
-    "nonce",
-    "hash",
-    "hmac",
-    "secret",
-])
+AUTH_PARAMS = frozenset(
+    [
+        "token",
+        "access_token",
+        "auth",
+        "auth_token",
+        "session",
+        "session_id",
+        "sid",
+        "key",
+        "signature",
+        "sig",
+        "expire",
+        "expires",
+        "expires_in",
+        "timestamp",
+        "nonce",
+        "hash",
+        "hmac",
+        "secret",
+    ]
+)
 
 
 def _strip_auth_params(url: str) -> str:
@@ -54,14 +56,16 @@ def _strip_auth_params(url: str) -> str:
                 query_parts.append(param)
 
         # Reconstruct URL without auth parameters
-        return urlunparse((
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
-            "&".join(query_parts) if query_parts else "",
-            parsed.fragment,
-        ))
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                "&".join(query_parts) if query_parts else "",
+                parsed.fragment,
+            )
+        )
     except (ValueError, AttributeError):
         # If parsing fails, return original URL
         return url

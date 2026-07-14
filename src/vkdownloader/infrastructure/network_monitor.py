@@ -60,7 +60,9 @@ class NetworkMonitor:
             logger.debug("m3u8_url_captured", url=_strip_auth_params(normalized))
 
         # Also check for XHR responses containing stream URLs
-        if "video" in url and response.headers.get("content-type", "").startswith("application/json"):
+        if "video" in url and response.headers.get("content-type", "").startswith(
+            "application/json"
+        ):
             try:
                 data = await response.json()
                 self._extract_urls_from_json(data)

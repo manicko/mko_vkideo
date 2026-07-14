@@ -36,6 +36,7 @@ def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]
         semantics. The asyncio.Lock in ProgressManager protects the read path
         in get_formatted_progress, ensuring safe concurrent access.
     """
+
     def callback(video_id: str, downloaded: int, total: int) -> None:
         # Non-blocking - just update shared state
         # Note: tuple assignment is GIL-atomic in CPython for basic types
@@ -129,7 +130,12 @@ def download(
             output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
 
         return await perform_download(
-            url, str(stream.quality), output_file, method, extractor, settings,
+            url,
+            str(stream.quality),
+            output_file,
+            method,
+            extractor,
+            settings,
             video_data=video,
             selected_stream=stream,
         )
@@ -238,7 +244,9 @@ def batch_download(
         """Download a single video and return result tuple."""
         try:
             actual_max_retries = max_retries if max_retries is not None else Settings().max_retries
-            settings = Settings(cookie_source=cookie_source, max_retries=actual_max_retries, ssl_verify=ssl_verify)
+            settings = Settings(
+                cookie_source=cookie_source, max_retries=actual_max_retries, ssl_verify=ssl_verify
+            )
             extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 
@@ -259,7 +267,12 @@ def batch_download(
                 output_file = validated_output / f"{index}_{video.id}.mp4"
 
             result = await perform_download(
-                url, str(stream.quality), output_file, method, extractor, settings,
+                url,
+                str(stream.quality),
+                output_file,
+                method,
+                extractor,
+                settings,
                 backoff_coordinator=backoff_coordinator,
                 semaphore=shared_semaphore,
                 progress_callback=progress_callback,
@@ -319,8 +332,7 @@ def batch_download(
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # Filter out CancelledError results
         return [
-            r if isinstance(r, tuple) else (urls[i], "", "cancelled")
-            for i, r in enumerate(results)
+            r if isinstance(r, tuple) else (urls[i], "", "cancelled") for i, r in enumerate(results)
         ]
 
     try:

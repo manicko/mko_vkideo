@@ -50,7 +50,9 @@ class VKVideoExtractor:
         if not match:
             raise ValueError(f"Invalid VK video URL: {_strip_auth_params(url)}")
         owner_id, video_id = match.group(1), match.group(2)
-        logger.debug("parsed_video_id", owner_id=owner_id, video_id=video_id, url=_strip_auth_params(url))
+        logger.debug(
+            "parsed_video_id", owner_id=owner_id, video_id=video_id, url=_strip_auth_params(url)
+        )
         return owner_id, video_id
 
     async def extract_streams(self, url: str) -> VideoWithStreams:
@@ -137,9 +139,7 @@ class VKVideoExtractor:
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
         return streams, cookies
 
-    async def _extract_with_ytdlp(
-        self, url: str, video_id: str
-    ) -> tuple[list[Stream], str | None]:
+    async def _extract_with_ytdlp(self, url: str, video_id: str) -> tuple[list[Stream], str | None]:
         """Extract streams and title using yt-dlp (handles VK protections)."""
         ydl_opts = {
             "quiet": True,
@@ -172,7 +172,9 @@ class VKVideoExtractor:
                             if format_url:
                                 stream = Stream(
                                     url=HttpUrl(format_url),
-                                    format=StreamFormat.HLS if ".m3u8" in format_url else StreamFormat.MP4,
+                                    format=StreamFormat.HLS
+                                    if ".m3u8" in format_url
+                                    else StreamFormat.MP4,
                                     quality=f"{height}p" if height else "unknown",
                                     width=width,
                                     height=height,
@@ -195,7 +197,9 @@ class VKVideoExtractor:
         logger.debug("ytdlp_extraction_complete", count=len(streams))
         return streams, title
 
-    async def _extract_with_browser(self, url: str, video_id_full: str) -> tuple[list[Stream], str | None]:
+    async def _extract_with_browser(
+        self, url: str, video_id_full: str
+    ) -> tuple[list[Stream], str | None]:
         """Extract streams using Playwright browser automation with cookies capture."""
         streams: list[Stream] = []
         cookies_str: str | None = None
@@ -215,7 +219,9 @@ class VKVideoExtractor:
             except Exception as e:
                 logger.debug("failed_to_capture_cookies", error=str(e))
 
-            logger.debug("captured_m3u8_urls", urls=[_strip_auth_params(u) for u in monitor.m3u8_urls])
+            logger.debug(
+                "captured_m3u8_urls", urls=[_strip_auth_params(u) for u in monitor.m3u8_urls]
+            )
 
             if monitor.m3u8_urls:
                 stream = Stream(

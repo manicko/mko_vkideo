@@ -65,9 +65,7 @@ async def _download_segment(
         True on success, False on failure.
     """
     if max_concurrent_downloads == 1:
-        content = await _retry_429_with_backoff(
-            session, segment_url, headers, segment_index
-        )
+        content = await _retry_429_with_backoff(session, segment_url, headers, segment_index)
         if content is not None:
             with open(output_path, "wb") as f:
                 f.write(content)
@@ -190,7 +188,12 @@ async def download_hls_with_resume(
     Returns:
         Path to downloaded MP4 file on success, None on failure.
     """
-    logger.info("starting_segment_download", url=_strip_auth_params(request.video_url), output=str(request.output_file), quality=request.quality)
+    logger.info(
+        "starting_segment_download",
+        url=_strip_auth_params(request.video_url),
+        output=str(request.output_file),
+        quality=request.quality,
+    )
 
     if request.settings is None:
         settings = Settings()
@@ -226,8 +229,7 @@ async def download_hls_with_resume(
 
         async with aiohttp.ClientSession(connector=connector) as session:
             playlist_content = await _fetch_playlist_with_retry(
-                session, request.video_url, request.m3u8_url, headers,
-                request.extractor, settings
+                session, request.video_url, request.m3u8_url, headers, request.extractor, settings
             )
             if not playlist_content:
                 return None
@@ -237,8 +239,10 @@ async def download_hls_with_resume(
 
             # Download missing segments concurrently
             # Use shared semaphore if provided, otherwise create local one based on settings
-            semaphore_to_use = semaphore if semaphore is not None else asyncio.Semaphore(
-                settings.max_concurrent_downloads
+            semaphore_to_use = (
+                semaphore
+                if semaphore is not None
+                else asyncio.Semaphore(settings.max_concurrent_downloads)
             )
 
             async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
@@ -256,7 +260,10 @@ async def download_hls_with_resume(
                     segment_path = segments_dir / f"{idx:05d}.ts"
                     if not segment_path.exists():
                         result = await _download_segment(
-                            session, full_url, segment_path, headers,
+                            session,
+                            full_url,
+                            segment_path,
+                            headers,
                             max_concurrent_downloads=settings.max_concurrent_downloads,
                             segment_index=idx,
                             backoff_coordinator=request.backoff_coordinator,
@@ -299,12 +306,18 @@ async def download_hls_with_resume(
                     await asyncio.gather(*tasks, return_exceptions=True)
                     logger.info("download_cancelled", reason="shutdown_requested")
                     return None
-                downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in results if r)
+                downloaded_count = _load_downloaded_count(metadata_file) + sum(
+                    1 for r in results if r
+                )
                 _save_downloaded_count(metadata_file, downloaded_count)
 
                 # Call progress callback for per-URL segment updates
                 if request.progress_callback:
-                    video_id = request.video_url.split("_")[-1] if "_" in request.video_url else request.video_url
+                    video_id = (
+                        request.video_url.split("_")[-1]
+                        if "_" in request.video_url
+                        else request.video_url
+                    )
                     request.progress_callback(video_id, downloaded_count, len(segments))
 
                 # All downloaded - merge in batches

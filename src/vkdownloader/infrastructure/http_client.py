@@ -55,7 +55,10 @@ class HttpClient:
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            logger.warning("ssl_verification_disabled", message="SSL certificate verification is disabled - connections may be insecure")
+            logger.warning(
+                "ssl_verification_disabled",
+                message="SSL certificate verification is disabled - connections may be insecure",
+            )
 
         self._session = aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector)
         return self
@@ -106,7 +109,9 @@ class HttpClient:
                 if attempt < self.settings.max_retries - 1:
                     await asyncio.sleep(1)
 
-        raise DownloadError(f"Failed to fetch {url} after {self.settings.max_retries} attempts") from last_error
+        raise DownloadError(
+            f"Failed to fetch {url} after {self.settings.max_retries} attempts"
+        ) from last_error
 
     @staticmethod
     def _write_chunk_to_file(chunk: bytes, file_handle: BufferedWriter) -> int:
@@ -124,7 +129,9 @@ class HttpClient:
         return len(chunk)
 
     @staticmethod
-    def _update_progress(downloaded: int, total: int, callback: Callable[[int, int], None] | None) -> None:
+    def _update_progress(
+        downloaded: int, total: int, callback: Callable[[int, int], None] | None
+    ) -> None:
         """
         Update progress via callback if provided.
 
@@ -172,10 +179,14 @@ class HttpClient:
                         bytes_downloaded += self._write_chunk_to_file(chunk, f)
                         self._update_progress(bytes_downloaded, total_bytes, progress_callback)
 
-                logger.info("download_completed", url=_strip_auth_params(url), path=str(output_path))
+                logger.info(
+                    "download_completed", url=_strip_auth_params(url), path=str(output_path)
+                )
 
         except aiohttp.ClientError as e:
-            logger.error("download_failed", url=_strip_auth_params(url), path=str(output_path), error=str(e))
+            logger.error(
+                "download_failed", url=_strip_auth_params(url), path=str(output_path), error=str(e)
+            )
             if output_path.exists():
                 output_path.unlink()
             raise DownloadError(f"Failed to download {url}") from e

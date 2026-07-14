@@ -111,7 +111,8 @@ class HLSDownloader:
         cmd = [
             "ffmpeg",
             "-y",
-            "-progress", "pipe:2",
+            "-progress",
+            "pipe:2",
             "-nostats",
             "-headers",
             headers,
@@ -220,9 +221,7 @@ class HLSDownloader:
                     except asyncio.CancelledError:
                         pass
 
-            stderr_data = (
-                b"".join(stderr_chunks) if stderr_chunks else b""
-            )
+            stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
             if shutdown_event.is_set():
                 await cancel_ffmpeg_process(process)
@@ -230,7 +229,9 @@ class HLSDownloader:
 
             if process.returncode != 0:
                 error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
-                logger.error("ffmpeg_download_failed", returncode=process.returncode, error=error_msg)
+                logger.error(
+                    "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
+                )
                 return None
 
             logger.info("ffmpeg_download_completed", output=str(output_file))
@@ -343,7 +344,12 @@ async def _download_with_ytdlp(
     cookies: str | None = None,
 ) -> Path | None:
     """Download using yt-dlp."""
-    logger.info("starting_ytdlp_download", url=_strip_auth_params(video_url), output=str(output_file), quality=quality)
+    logger.info(
+        "starting_ytdlp_download",
+        url=_strip_auth_params(video_url),
+        output=str(output_file),
+        quality=quality,
+    )
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
     shutdown_event = get_shutdown_event()
@@ -394,9 +400,7 @@ async def _download_with_ytdlp(
     loop = asyncio.get_running_loop()
 
     # Create task for the executor to allow cancellation
-    download_task = asyncio.ensure_future(
-        loop.run_in_executor(None, _download)
-    )
+    download_task = asyncio.ensure_future(loop.run_in_executor(None, _download))
 
     try:
         result = await download_task
@@ -484,7 +488,13 @@ async def perform_download(
     Returns:
         Path to downloaded file on success, None on failure.
     """
-    logger.info("starting_download", method=str(method), url=_strip_auth_params(url), quality=quality, output=str(output_file))
+    logger.info(
+        "starting_download",
+        method=str(method),
+        url=_strip_auth_params(url),
+        quality=quality,
+        output=str(output_file),
+    )
 
     if settings is None:
         settings = Settings()
@@ -518,8 +528,7 @@ async def perform_download(
                 browser_streams = None
                 cookies = None
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings,
-                cookies=cookies
+                url, m3u8_url, output_file, quality, extractor, settings, cookies=cookies
             )
         case DownloadMethod.FFMPEG:
             # Conditionally get cookies based on cookie_source setting
@@ -531,9 +540,7 @@ async def perform_download(
                 browser_streams = None
                 cookies = None
             downloader = HLSDownloader(settings=settings)
-            result = await downloader.download_with_ffmpeg(
-                m3u8_url, output_file, quality, cookies
-            )
+            result = await downloader.download_with_ffmpeg(m3u8_url, output_file, quality, cookies)
             if result is None:
                 logger.info("ffmpeg_failed_fallback_to_segment_download")
                 result = await download_hls_with_resume(

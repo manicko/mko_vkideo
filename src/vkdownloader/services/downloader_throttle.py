@@ -195,7 +195,7 @@ async def _retry_429_with_backoff(
                     base_delay = 0.05
 
                 # Calculate delay with full jitter: random(0, base_delay * 2^attempt)
-                delay = random.uniform(0, min(base_delay * (2 ** attempt), 30.0))
+                delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
 
                 # Prefer Retry-After header over calculated delay
                 if retry_after_seconds is not None:
@@ -214,14 +214,18 @@ async def _retry_429_with_backoff(
                 try:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
                     # If wait completes (shutdown was triggered), return None
-                    logger.info("download_cancelled", segment_index=segment_index, url=sanitized_url)
+                    logger.info(
+                        "download_cancelled", segment_index=segment_index, url=sanitized_url
+                    )
                     return None
                 except TimeoutError:
                     # Normal timeout - continue with retry
                     pass
 
         except asyncio.CancelledError:
-            logger.info("segment_download_cancelled", segment_index=segment_index, url=sanitized_url)
+            logger.info(
+                "segment_download_cancelled", segment_index=segment_index, url=sanitized_url
+            )
             raise
         except Exception as e:
             logger.error(
@@ -258,9 +262,7 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
 
     # Try parsing as HTTP date
     try:
-        retry_date = datetime.strptime(
-            retry_after, "%a, %d %b %Y %H:%M:%S GMT"
-        )
+        retry_date = datetime.strptime(retry_after, "%a, %d %b %Y %H:%M:%S GMT")
         now = datetime.utcnow()
         delta = (retry_date - now).total_seconds()
         if delta > 0:
