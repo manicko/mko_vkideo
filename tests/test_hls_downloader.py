@@ -262,7 +262,7 @@ class TestDownloadHlsWithResume:
         metadata_file.write_text('{"downloaded_count": 1}')
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value=None,
         ):
             result = await download_hls_with_resume(
@@ -293,11 +293,11 @@ class TestDownloadHlsWithResume:
         metadata_file.write_text('{"downloaded_count": 1}')
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 return_value=False,
             ):
                 result = await download_hls_with_resume(
@@ -531,15 +531,15 @@ class TestParallelSegmentsDownload:
             return True
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 side_effect=mock_download_segment,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
                     await download_hls_with_resume(
@@ -568,22 +568,22 @@ class TestParallelSegmentsDownload:
 
         gather_called = False
 
-        async def mock_gather(*tasks: Any) -> list[bool]:
+        async def mock_gather(*tasks: Any, **kwargs: Any) -> list[bool]:
             nonlocal gather_called
             gather_called = True
             # Return True for each task
             return [True] * len(tasks)
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 return_value=True,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
                     with patch("asyncio.gather", side_effect=mock_gather):
@@ -629,15 +629,15 @@ class TestParallelSegmentsDownload:
             return True
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 side_effect=mock_download_segment,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
                     # Call with shared semaphore parameter
@@ -775,15 +775,15 @@ class TestSequentialDownloadMode:
             raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 side_effect=mock_download_segment,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
                     with patch("asyncio.wait_for", side_effect=mock_wait_for):
@@ -830,16 +830,16 @@ class TestSequentialDownloadMode:
             return b"segment content"
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._retry_429_with_backoff",
+                "vkdownloader.services.segment_downloader._retry_429_with_backoff",
                 side_effect=mock_backoff,
             ):
                 with patch("asyncio.sleep", return_value=None):
                     with patch(
-                        "vkdownloader.services.downloader._merge_segments_batched",
+                        "vkdownloader.services.segment_downloader._merge_segments_batched",
                         return_value=output_path,
                     ):
                         await download_hls_with_resume(
@@ -886,15 +886,15 @@ class TestSequentialDownloadMode:
             raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 side_effect=mock_download_segment,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
                     with patch("asyncio.wait_for", side_effect=mock_wait_for):
@@ -985,18 +985,18 @@ class TestDownloadMethodLogging:
         output_file = tmp_path / "video.mp4"
 
         with patch(
-            "vkdownloader.services.downloader._fetch_playlist_with_retry",
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
         ):
             with patch(
-                "vkdownloader.services.downloader._download_segment",
+                "vkdownloader.services.segment_downloader._download_segment",
                 return_value=True,
             ):
                 with patch(
-                    "vkdownloader.services.downloader._merge_segments_batched",
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_file,
                 ):
-                    with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                    with patch("vkdownloader.services.segment_downloader.logger.info", side_effect=capture_log):
                         result = await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",

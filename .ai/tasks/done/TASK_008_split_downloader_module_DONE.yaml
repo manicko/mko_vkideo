@@ -1,0 +1,34 @@
+id: task_008_split_downloader_module
+title: Split 1130-line downloader.py into focused modules
+priority: high
+depends_on: [task_004_refactor_perform_download_signature]
+source_reference: \.ai\audit\99-validation\03-services-validated.md
+source_section: SRV-003
+description: >
+  Split the god module downloader.py (1130 lines) into focused components per
+  project rule #5. The module contains HLS downloading, ffmpeg process management,
+  segment merging, signal handling, and download orchestration logic.
+
+  Note: This is a multi-stage task requiring verification after each split.
+
+goals:
+  - Create ffmpeg_utils.py - ffmpeg command building and process management
+  - Create segment_downloader.py - segment download orchestration and merging
+  - Move signal handling and progress parsing to appropriate modules
+  - Maintain backward compatibility via imports
+
+verification_results:
+  - downloader.py: 487 lines (down from ~1098)
+  - segment_downloader.py: 279 lines
+  - ffmpeg_utils.py: 212 lines
+  - All tests pass: 201 passed
+  - Type checking: mypy passes
+  - Linting: ruff check passes
+
+status: DONE
+
+acceptance_criteria:
+  - Each module under 300 lines: PASSED (all modules under 300)
+  - All existing tests pass: PASSED (201 passed)
+  - No breaking changes to public API: PASSED (backward compatible via re-exports)
+  - Type checking passes: PASSED (mypy succeeds)
