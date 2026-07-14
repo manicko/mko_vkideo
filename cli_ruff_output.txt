@@ -1,0 +1,43 @@
+I001 [*] Import block is un-sorted or un-formatted
+ --> cli_test.py:1:1
+  |
+1 | / from vkdownloader.cli import app
+2 | | from typer.testing import CliRunner
+  | |___________________________________^
+3 |   runner = CliRunner()
+4 |   result = runner.invoke(app, ['--help'])
+  |
+help: Organize imports
+
+W292 [*] No newline at end of file
+ --> cli_test.py:7:47
+  |
+5 | with open('cli_help_output.txt', 'w', encoding='utf-8') as f:
+6 |     f.write(result.output)
+7 | print("Output written to cli_help_output.txt")
+  |                                               ^
+  |
+help: Add trailing newline
+
+I001 [*] Import block is un-sorted or un-formatted
+ --> cli_test2.py:1:1
+  |
+1 | / from vkdownloader.cli import app
+2 | | from typer.testing import CliRunner
+  | |___________________________________^
+3 |   runner = CliRunner()
+  |
+help: Organize imports
+
+W292 [*] No newline at end of file
+  --> cli_test2.py:15:14
+   |
+13 |     f.write(result2.output)
+14 |
+15 | print("Done")
+   |              ^
+   |
+help: Add trailing newline
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.

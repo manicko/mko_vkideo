@@ -29,7 +29,6 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `ssl_verify` | `VKDOWNLOADER_SSL_VERIFY` | true | Verify SSL certificates |
 | `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
 | `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Segment-level concurrency limit shared across all batch URLs (1-16); 1 enables anti-detection delay |
-| `concurrent_fragments` | `VKDOWNLOADER_CONCURRENT_FRAGMENTS` | 4 | Concurrent HLS fragments for yt-dlp (reduces throttling) |
 | `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec before throttling triggers re-extract |
 | `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
 | `download_method` | `VKDOWNLOADER_DOWNLOAD_METHOD` | auto | Download method: yt-dlp, ffmpeg, or auto |

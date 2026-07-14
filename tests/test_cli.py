@@ -347,6 +347,108 @@ class TestMethodOptionValidation:
         assert result.exit_code == 0
 
 
+class TestSslVerifyOption:
+    """Tests for SSL verify option in CLI."""
+
+    def test_ssl_verify_default_true(self, tmp_path: Path, sample_video_url: str) -> None:
+        """Check that ssl_verify defaults to True and is passed to Settings."""
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/720p.m3u8",
+                quality="720",
+                height=720,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.cli.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["720"]
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "test_video_720.mp4"
+
+            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        download_dir=tmp_path,
+                        ssl_verify=True,
+                    )
+
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url],
+                        catch_exceptions=False,
+                    )
+
+                    # Verify Settings was called with ssl_verify=True (default)
+                    mock_settings_cls.assert_called_once()
+                    call_kwargs = mock_settings_cls.call_args[1]
+                    assert call_kwargs.get("ssl_verify", True) is True
+
+            assert result.exit_code == 0
+
+    def test_no_ssl_verify_flag(self, tmp_path: Path, sample_video_url: str) -> None:
+        """Check that --no-ssl-verify flag sets ssl_verify to False."""
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/720p.m3u8",
+                quality="720",
+                height=720,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.cli.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["720"]
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "test_video_720.mp4"
+
+            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        download_dir=tmp_path,
+                        ssl_verify=False,
+                    )
+
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url, "--no-ssl-verify"],
+                        catch_exceptions=False,
+                    )
+
+                    # Verify Settings was called with ssl_verify=False
+                    mock_settings_cls.assert_called_once()
+                    call_kwargs = mock_settings_cls.call_args[1]
+                    assert call_kwargs.get("ssl_verify") is False
+
+            assert result.exit_code == 0
+
+
 class TestCliHelp:
     """Tests for CLI help output."""
 

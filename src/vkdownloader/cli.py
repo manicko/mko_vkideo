@@ -95,6 +95,11 @@ def download(
         "-c",
         help="Cookie source: none, browser, or file",
     ),
+    ssl_verify: bool = typer.Option(
+        True,
+        "--ssl-verify/--no-ssl-verify",
+        help="Verify SSL certificates for CDN connections",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -107,7 +112,7 @@ def download(
         """Async implementation of video download."""
         # Setup signal handlers inside async context
         setup_signal_handlers()
-        settings = Settings(cookie_source=cookie_source)
+        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
@@ -202,6 +207,11 @@ def batch_download(
         "-c",
         help="Cookie source: none, browser, or file",
     ),
+    ssl_verify: bool = typer.Option(
+        True,
+        "--ssl-verify/--no-ssl-verify",
+        help="Verify SSL certificates for CDN connections",
+    ),
     max_retries: int = typer.Option(
         Settings().max_retries,
         "--max-retries",
@@ -236,7 +246,7 @@ def batch_download(
     ) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
-            settings = Settings(cookie_source=cookie_source, max_retries=max_retries)
+            settings = Settings(cookie_source=cookie_source, max_retries=max_retries, ssl_verify=ssl_verify)
             extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 

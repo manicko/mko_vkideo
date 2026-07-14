@@ -445,14 +445,17 @@ result = await perform_download(
 ```
 
 **Parameters:**
-| Name | Type | Description |
-|------|------|-------------|
-| `url` | str | VK video URL to download. |
-| `quality` | str | Quality string (e.g., "720", "1080"). |
-| `output_file` | Path | Output file path. |
-| `method` | DownloadMethod | Download method (YTDLP, FFMPEG, or AUTO). |
-| `extractor` | VKVideoExtractor \| None | Optional extractor instance. |
-| `settings` | Settings \| None | Optional settings instance. |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `url` | str | Required | VK video URL to download. |
+| `quality` | str | Required | Quality string (e.g., "720", "1080"). |
+| `output_file` | Path | Required | Output file path. |
+| `method` | DownloadMethod | Required | Download method (YTDLP, FFMPEG, or AUTO). |
+| `extractor` | VKVideoExtractor \| None | None | Optional extractor instance. |
+| `settings` | Settings \| None | None | Optional settings instance. |
+| `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
+| `semaphore` | asyncio.Semaphore \| None | None | Shared semaphore for work-stealing concurrency in batch downloads. |
+| `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback for per-URL segment progress (video_id, downloaded, total). |
 
 **Returns:** Path to downloaded file on success, None on failure.
 
@@ -560,6 +563,9 @@ Request model for HLS download with segment-level resume support.
 | `cookies` | str \| None | Cookies string for CDN authentication. |
 | `settings` | Settings \| None | Application settings. |
 | `extractor` | VKVideoExtractor \| None | Extractor for token refresh. |
+| `backoff_coordinator` | URLBackoffCoordinator \| None | For shared rate limiting across URLs. |
+| `progress_callback` | Callable[[str, int, int], None] \| None | Callback for per-URL segment progress (video_id, downloaded, total). |
+| `semaphore` | asyncio.Semaphore \| None | Shared semaphore for work-stealing concurrency. |
 
 ---
 
@@ -821,6 +827,42 @@ Monitors network traffic to capture m3u8 URLs from responses.
 
 ---
 
+### ProgressManager
+
+Location: `vkdownloader.services.downloader_throttle`
+
+Thread-safe progress state manager for concurrent batch downloads. Encapsulates progress state and asyncio.Lock for safe concurrent access across multiple download tasks.
+
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| `_state` | dict[int, tuple[int, int]] | Progress state keyed by URL index |
+| `_lock` | asyncio.Lock | Lock for thread-safe state access |
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `update(url_index, downloaded, total)` | Thread-safe progress state update |
+| `get_formatted_progress(url_count)` | Returns formatted string for all URLs |
+| `clear()` | Clear progress state for new batch |
+| `get_progress(url_index)` | Get progress tuple for specific URL |
+
+---
+
+### URLBackoffCoordinator
+
+Location: `vkdownloader.services.downloader_throttle`
+
+Manages shared backoff state per URL for coordinated rate limiting during batch downloads. When a 429 response occurs on any segment of a URL, all segments pause to avoid cascading rate limit violations.
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `pause(video_url, duration_seconds)` | Set backoff duration for URL |
+| `wait_if_paused(video_url)` | Block until backoff expires, returns True if was paused |
+
+---
+
 ## Security Utilities
 
 ### validate_output_path
@@ -919,7 +961,6 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `ssl_verify` | `True` | Verify SSL certificates for CDN connections |
 | `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
 | `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
-| `concurrent_fragments` | `4` | Concurrent HLS fragments for yt-dlp (reduces throttling) |
 | `throttled_rate` | `100000` | Minimum bytes/sec before throttling triggers re-extract |
 | `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
 | `download_method` | `AUTO` | Download method: yt-dlp, ffmpeg, or auto |
