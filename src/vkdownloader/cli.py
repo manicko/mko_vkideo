@@ -203,8 +203,8 @@ def batch_download(
         "--ssl-verify/--no-ssl-verify",
         help="Verify SSL certificates for CDN connections",
     ),
-    max_retries: int = typer.Option(
-        Settings().max_retries,
+    max_retries: int | None = typer.Option(
+        None,
         "--max-retries",
         "-r",
         help="Maximum retry attempts for failed segment downloads",
@@ -237,7 +237,8 @@ def batch_download(
     ) -> tuple[str, str, str]:
         """Download a single video and return result tuple."""
         try:
-            settings = Settings(cookie_source=cookie_source, max_retries=max_retries, ssl_verify=ssl_verify)
+            actual_max_retries = max_retries if max_retries is not None else Settings().max_retries
+            settings = Settings(cookie_source=cookie_source, max_retries=actual_max_retries, ssl_verify=ssl_verify)
             extractor = VKVideoExtractor(settings=settings)
             video = await extractor.extract_streams(url)
 
