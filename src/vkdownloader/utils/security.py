@@ -9,6 +9,17 @@ from ..exceptions import DownloadError
 logger = get_logger(__name__)
 
 
+def _sanitize_title(title: str) -> str:
+    """Sanitize title for filesystem safety.
+
+    Replaces characters that are invalid on Windows/Unix filesystems with underscores,
+    strips whitespace, and limits length to 100 characters.
+    """
+    for char in '/\\:*?"<>|':
+        title = title.replace(char, "_")
+    return title.strip()[:100]
+
+
 def validate_output_path(path: Path, warning: bool = True) -> Path:
     """
     Validate output path to prevent path traversal attacks.

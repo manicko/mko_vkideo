@@ -14,23 +14,12 @@ from .services.downloader import perform_download, setup_signal_handlers
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
-from .utils.security import validate_output_path
+from .utils.security import _sanitize_title, validate_output_path
 
 logger = get_logger(__name__)
 
 # Module-level progress manager for thread-safe per-URL progress tracking
 _progress_manager = ProgressManager()
-
-
-def _sanitize_title(title: str) -> str:
-    """Sanitize title for filesystem safety.
-
-    Replaces characters that are invalid on Windows/Unix filesystems with underscores,
-    strips whitespace, and limits length to 100 characters.
-    """
-    for char in '/\\:*?"<>|':
-        title = title.replace(char, "_")
-    return title.strip()[:100]
 
 
 def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]:
