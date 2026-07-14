@@ -9,7 +9,7 @@ from vkdownloader.models.enums import CookieSource, DownloadMethod, LogLevel
 
 def test_settings_creates_with_defaults() -> None:
     """Test Settings creates with default values."""
-    settings = Settings()
+    settings = Settings(ssl_verify=True)
 
     assert settings.user_agent is not None
     assert settings.accept_language == "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
