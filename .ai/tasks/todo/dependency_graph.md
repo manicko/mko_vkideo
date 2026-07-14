@@ -18,10 +18,10 @@ Task Dependency Analysis for vkdownloader Rollout Plan
 - `task_011_run_ruff_format` - Formatting fix
 
 ### Group 2: God Module Refactoring (Depends on task_004)
-- `task_008_split_downloader_module` - Split 1130-line downloader.py into focused modules
+- ~~task_008_split_downloader_module~~ - **DONE** - Split 1130-line downloader.py into focused modules
   - Depends on: task_004 (signature changes affect module structure)
 
-- `task_009_verify_module_split` - Verification task
+- ~~task_009_verify_module_split~~ - **DONE** - Verification task
   - Depends on: task_008
 
 ## Dependency Matrix
@@ -35,8 +35,8 @@ Task Dependency Analysis for vkdownloader Rollout Plan
 | 005 | - | - | Low |
 | 006 | - | - | Low |
 | 007 | - | - | Medium |
-| 008 | 004 | 009 | High |
-| 009 | 008 | - | Medium |
+| ~~008~~ | 004 | 009 | ~~High~~ DONE |
+| ~~009~~ | 008 | - | ~~Medium~~ DONE |
 | 010 | - | - | Low |
 | 011 | - | - | Low |
 

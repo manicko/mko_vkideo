@@ -16,8 +16,7 @@
 |--------|------------|----------|--------|-------------|
 | task_006 | QLT-003 | low | small | Replace Any with TYPE_CHECKING imports |
 | task_007 | QLT-004 | medium | small | Replace bare Exception catches |
-| task_008 | SRV-003/QLT-002/STR-007 | high | large | Split downloader.py god module |
-| task_009 | - | - | - | Verification task for module split |
+| ~~task_008~~ ~~task_009~~ | SRV-003/QLT-002/STR-007 | high | large | **DONE** Split downloader.py god module |
 | task_010 | DF-002 | low | small | Fix batch command Settings instantiation |
 | task_011 | QLT-009 | low | trivial | Run ruff format |
 
@@ -27,8 +26,8 @@
 Group 1 (No Dependencies - Can Run in Parallel):
   001, 002, 003, 004, 005, 006, 007, 010, 011
 
-Group 2 (Depends on task_004):
-  008 → 009 (module split with verification)
+DONE Group 2 (Depends on task_004):
+  008 → 009 (module split with verification) - COMPLETED
 ```
 
 ## Risk Assessment

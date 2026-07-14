@@ -20,14 +20,6 @@ tasks:
   - id: task_007_replace_bare_exception_catches
     depends_on: []
 
-  - id: task_008_split_downloader_module
-    depends_on:
-      - task_004_refactor_perform_download_signature
-
-  - id: task_009_verify_module_split
-    depends_on:
-      - task_008_split_downloader_module
-
   - id: task_010_fix_batch_command_settings_instantiation
     depends_on: []
 
