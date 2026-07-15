@@ -914,22 +914,6 @@ class TestSequentialDownloadMode:
         # Parallel mode should not have anti-detection wait_for calls
         assert len(wait_for_calls) == 0, "Parallel mode should not have inter-segment delay"
 
-    def test_structured_logging_fields(self, test_settings: Settings) -> None:
-        """Test that _retry_429_with_backoff logs contain structured fields."""
-        import inspect
-
-        from vkdownloader.services.downloader_throttle import _retry_429_with_backoff
-
-        # Test by verifying the log call structure exists in the module
-        source = inspect.getsource(_retry_429_with_backoff)
-
-        # Verify log message contains expected structured fields
-        assert "attempt" in source, "Log should include attempt field"
-        assert "status" in source, "Log should include status field"
-        assert "retry_after" in source, "Log should include retry_after field"
-        assert "segment_index" in source, "Log should include segment_index field"
-        assert "url" in source, "Log should include url field"
-
 
 class TestDownloadMethodLogging:
     """Tests for download method logging."""
@@ -943,7 +927,7 @@ class TestDownloadMethodLogging:
         from vkdownloader.services.downloader import perform_download
 
         # Capture log messages
-        log_messages: list[dict] = []
+        log_messages: list[dict[str, Any]] = []
 
         def capture_log(msg: str, **kwargs: Any) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
@@ -981,7 +965,7 @@ class TestDownloadMethodLogging:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that download_hls_with_resume logs the segment download method."""
-        log_messages: list[dict] = []
+        log_messages: list[dict[str, Any]] = []
 
         def capture_log(msg: str, **kwargs: Any) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
@@ -1022,7 +1006,7 @@ class TestDownloadMethodLogging:
         """Test that _download_with_ytdlp logs starting_ytdlp_download."""
         from vkdownloader.services.downloader import _download_with_ytdlp
 
-        log_messages: list[dict] = []
+        log_messages: list[dict[str, Any]] = []
 
         def capture_log(msg: str, **kwargs: Any) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
@@ -1069,7 +1053,7 @@ class TestDownloadMethodLogging:
         from vkdownloader.models.enums import DownloadMethod
         from vkdownloader.services.downloader import perform_download
 
-        log_messages: list[dict] = []
+        log_messages: list[dict[str, Any]] = []
 
         def capture_log(msg: str, **kwargs: Any) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})

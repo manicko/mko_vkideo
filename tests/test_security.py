@@ -1,7 +1,7 @@
 """Tests for security utilities - path validation."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -54,14 +54,25 @@ class TestValidateOutputPath:
 
     def test_path_inside_repo_warns(self, tmp_path: Path) -> None:
         """Test that path inside repository root triggers warning."""
-        # Use a path that is inside the actual repo (current directory when running tests)
-        # since tmp_path is outside the repo but we can test the warning behavior differently
-        # by mocking the repo root check more directly
+        test_path = tmp_path / "output" / "video.mp4"
 
-        # Note: This test validates that the warning path exists in the code
-        # Full integration test would require mocking Path.resolve() which is complex
-        # The warning is applied when warning=True and path is inside repo root
-        pass
+        with patch("vkdownloader.utils.security.logger") as mock_logger:
+            # Mock relative_to to succeed (meaning path is inside repo)
+            resolved_mock = MagicMock()
+            resolved_mock.relative_to.return_value = tmp_path  # Succeeds for paths inside repo
+
+            with patch.object(
+                Path,
+                "resolve",
+                return_value=resolved_mock,
+            ):
+                validate_output_path(test_path, warning=True)
+
+                # Warning should be logged for path inside repo
+                mock_logger.warning.assert_called_once()
+                call_kwargs = mock_logger.warning.call_args[1]
+                assert "path" in call_kwargs
+                assert "repo_root" in call_kwargs
 
 
 class TestValidateOutputPathEdgeCases:
