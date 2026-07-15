@@ -123,6 +123,22 @@ class TestExtractionErrors:
         result = extractor._format_cookies_for_ffmpeg(cookies)
         assert "=val; name=" == result
 
+        # Test CRLF sanitization - prevents header injection
+        cookies = [{"name": "session\nmalicious", "value": "abc\r123"}]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+        assert "\n" not in result
+        assert "\r" not in result
+        assert "sessionmalicious" in result
+        assert "abc123" in result
+
+        # Test CRLF in both name and value
+        cookies = [{"name": "bad\r\nname", "value": "val\nue\r\n"}]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+        assert "\r" not in result
+        assert "\n" not in result
+        assert "badname" in result
+        assert "value" in result
+
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_success(self) -> None:
         """Test extract_streams_with_cookies returns streams and formatted cookies."""

@@ -2,7 +2,6 @@
 
 import asyncio
 import builtins
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -491,35 +490,6 @@ class TestURLBackoffCoordinator:
     """Tests for URLBackoffCoordinator class."""
 
     @pytest.mark.asyncio
-    async def test_is_paused_returns_false_for_unknown_url(self) -> None:
-        """Test is_paused returns False when URL not in backoff state."""
-        coordinator = URLBackoffCoordinator()
-        result = await coordinator.is_paused("https://example.com/video1")
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_is_paused_returns_true_during_backoff(self) -> None:
-        """Test is_paused returns True when URL is in backoff period."""
-        coordinator = URLBackoffCoordinator()
-        await coordinator.pause("https://example.com/video1", 10.0)
-
-        # Immediately check - should be paused
-        result = await coordinator.is_paused("https://example.com/video1")
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_is_paused_returns_false_after_backoff_expires(self) -> None:
-        """Test is_paused returns False after backoff period expires."""
-        coordinator = URLBackoffCoordinator()
-        await coordinator.pause("https://example.com/video1", 0.01)
-
-        # Wait for backoff to expire
-        time.sleep(0.02)
-
-        result = await coordinator.is_paused("https://example.com/video1")
-        assert result is False
-
-    @pytest.mark.asyncio
     async def test_wait_if_paused_returns_false_when_not_paused(self) -> None:
         """Test wait_if_paused returns False when URL is not paused."""
         coordinator = URLBackoffCoordinator()
@@ -555,29 +525,6 @@ class TestURLBackoffCoordinator:
         # Should return True when shutdown is triggered
         assert result is True
         mock_event.wait.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_multiple_urls_have_independent_backoff(self) -> None:
-        """Test that different URLs have independent backoff states."""
-        coordinator = URLBackoffCoordinator()
-        await coordinator.pause("https://example.com/video1", 10.0)
-
-        # video2 should not be paused
-        result = await coordinator.is_paused("https://example.com/video2")
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_pause_overwrites_existing_backoff(self) -> None:
-        """Test that pause overwrites existing backoff for same URL."""
-        coordinator = URLBackoffCoordinator()
-        await coordinator.pause("https://example.com/video1", 1.0)
-
-        # Wait a bit then set a new backoff
-        time.sleep(0.02)
-        await coordinator.pause("https://example.com/video1", 10.0)
-
-        result = await coordinator.is_paused("https://example.com/video1")
-        assert result is True
 
 
 class TestParseRetryAfter:

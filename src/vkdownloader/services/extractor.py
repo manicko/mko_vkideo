@@ -236,11 +236,14 @@ class VKVideoExtractor:
         return streams, cookies_str
 
     def _format_cookies_for_ffmpeg(self, cookies: list[Cookie]) -> str:
-        """Format cookies list for ffmpeg HTTP cookie header."""
+        """Format cookies list for ffmpeg HTTP cookie header.
+
+        Strips CRLF characters from cookie names and values to prevent header injection.
+        """
         cookie_parts = []
         for cookie in cookies:
-            name = cookie.get("name", "")
-            value = cookie.get("value", "")
+            name = cookie.get("name", "").replace("\r", "").replace("\n", "")
+            value = cookie.get("value", "").replace("\r", "").replace("\n", "")
             # Include all cookies - they may be needed for CDN authentication
             cookie_parts.append(f"{name}={value}")
         return "; ".join(cookie_parts[:20])  # Limit to avoid header size issues

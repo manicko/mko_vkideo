@@ -48,12 +48,6 @@ class URLBackoffCoordinator:
         self._backoff_state: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
-    async def is_paused(self, video_url: str) -> bool:
-        """Check if URL is currently in backoff."""
-        async with self._lock:
-            timestamp = self._backoff_state.get(video_url, 0)
-            return time.time() < timestamp
-
     async def pause(self, video_url: str, duration_seconds: float) -> None:
         """Set backoff duration for URL."""
         async with self._lock:
