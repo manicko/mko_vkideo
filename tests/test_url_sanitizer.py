@@ -6,86 +6,69 @@ from vkdownloader.utils.url_sanitizer import _strip_auth_params
 class TestStripAuthParams:
     """Tests for _strip_auth_params function."""
 
-    def test_strip_single_token_param(self) -> None:
-        """Test stripping a single token parameter from URL."""
+    def test_strips_url_with_query_params(self) -> None:
+        """Test URL with query parameters is fully redacted."""
         url = "https://example.com/video.m3u8?token=abc123"
         result = _strip_auth_params(url)
 
+        assert result == "https://example.com/***REDACTED***"
         assert "token" not in result
-        assert result == "https://example.com/video.m3u8"
+        assert "abc123" not in result
 
-    def test_strip_multiple_auth_params(self) -> None:
-        """Test stripping multiple auth parameters from URL."""
+    def test_strips_url_with_multiple_query_params(self) -> None:
+        """Test URL with multiple query parameters is fully redacted."""
         url = "https://example.com/video.m3u8?token=abc123&expire=3600&quality=720"
         result = _strip_auth_params(url)
 
+        assert result == "https://example.com/***REDACTED***"
         assert "token" not in result
         assert "expire" not in result
-        assert "quality=720" in result
-        assert result == "https://example.com/video.m3u8?quality=720"
+        assert "quality" not in result
+        assert "abc123" not in result
 
-    def test_preserve_non_auth_params(self) -> None:
-        """Test that non-auth parameters are preserved."""
-        url = "https://example.com/video.m3u8?quality=720&format=mp4"
-        result = _strip_auth_params(url)
-
-        assert "quality=720" in result
-        assert "format=mp4" in result
-        assert result == "https://example.com/video.m3u8?quality=720&format=mp4"
-
-    def test_no_query_params(self) -> None:
-        """Test URL without query parameters returns unchanged."""
+    def test_handles_url_without_query_params(self) -> None:
+        """Test URL without query parameters still gets redacted."""
         url = "https://example.com/video.m3u8"
         result = _strip_auth_params(url)
 
-        assert result == url
+        assert result == "https://example.com/***REDACTED***"
 
-    def test_empty_url(self) -> None:
-        """Test empty URL returns empty string."""
+    def test_handles_empty_url(self) -> None:
+        """Test empty URL returns redacted marker."""
         url = ""
         result = _strip_auth_params(url)
 
-        assert result == url
+        assert result == "***REDACTED***"
 
-    def test_strip_access_token(self) -> None:
-        """Test stripping access_token parameter."""
-        url = "https://example.com/video.m3u8?access_token=xyz789&other=value"
+    def test_strips_signed_cdn_url_with_path_token(self) -> None:
+        """Test signed CDN URL with token in path is fully redacted."""
+        url = "https://cdn.example.com/signature123/segment_0.ts?quality=720"
         result = _strip_auth_params(url)
 
-        assert "access_token" not in result
-        assert "other=value" in result
+        assert result == "https://cdn.example.com/***REDACTED***"
+        assert "signature123" not in result
+        assert "quality" not in result
 
-    def test_strip_signature_params(self) -> None:
-        """Test stripping signature-related parameters."""
-        url = "https://example.com/video.m3u8?signature=sig123&sig=sig456&data=test"
+    def test_strips_unknown_auth_params(self) -> None:
+        """Test unknown auth parameters are redacted (allowlist strategy)."""
+        url = "https://example.com/video.m3u8?siv=signed_value&extra=extra_value"
         result = _strip_auth_params(url)
 
-        assert "signature" not in result
-        assert "sig" not in result
-        assert "data=test" in result
+        assert result == "https://example.com/***REDACTED***"
+        assert "siv" not in result
+        assert "signed_value" not in result
 
-    def test_strip_expire_params(self) -> None:
-        """Test stripping expire-related parameters."""
-        url = "https://example.com/video.m3u8?expires=123456&expires_in=3600"
+    def test_preserves_scheme_and_host(self) -> None:
+        """Test that scheme and host are preserved."""
+        url = "https://example.com/video.m3u8?token=secret"
         result = _strip_auth_params(url)
 
-        assert "expires" not in result
-        assert "expires_in" not in result
+        assert "https://" in result
+        assert "example.com" in result
 
-    def test_case_insensitive_param_matching(self) -> None:
-        """Test that parameter matching is case-insensitive."""
-        url = "https://example.com/video.m3u8?TOKEN=abc123&Expires=7200"
-        result = _strip_auth_params(url)
-
-        assert "TOKEN" not in result
-        assert "Expires" not in result
-        assert result == "https://example.com/video.m3u8"
-
-    def test_invalid_url_returns_unchanged(self) -> None:
-        """Test that invalid URLs return unchanged on exception."""
+    def test_handles_invalid_url(self) -> None:
+        """Test that invalid URLs return redacted marker."""
         url = "not a valid url with ?query=params"
-        # The function should handle this gracefully
         result = _strip_auth_params(url)
 
-        # Function returns original URL on parsing exception
-        assert result == url
+        assert result == "***REDACTED***"
