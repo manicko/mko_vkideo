@@ -127,5 +127,4 @@ def setup_logging(settings: Settings | None = None) -> None:
     )
 
 
-# Global settings instance
-settings = Settings()
+

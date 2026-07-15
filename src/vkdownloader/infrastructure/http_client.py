@@ -24,7 +24,7 @@ class HttpClient:
         Initialize HttpClient with optional settings.
 
         Args:
-            settings: Application settings. Uses global settings if not provided.
+            settings: Application settings. Constructs a new Settings() from environment when not provided.
         """
         self.settings = settings if settings is not None else Settings()
         self._session: aiohttp.ClientSession | None = None
