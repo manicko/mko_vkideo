@@ -116,8 +116,12 @@ def download(
         selector = QualitySelector()
         stream = selector.select(video.streams, quality)
 
+        # Apply settings download_dir as default output path
+        output_path = output if str(output) != "." else settings.download_dir
+        output_path = Path(output_path).resolve()
+
         # Validate output directory to prevent path traversal
-        validated_output = validate_output_path(output, warning=False)
+        validated_output = validate_output_path(output_path, warning=False)
 
         # Ensure output directory exists
         validated_output.mkdir(parents=True, exist_ok=True)
@@ -253,8 +257,12 @@ def batch_download(
             selector = QualitySelector()
             stream = selector.select(video.streams, quality)
 
+            # Apply settings download_dir as default output path
+            output_path = output if str(output) != "." else settings.download_dir
+            output_path = Path(output_path).resolve()
+
             # Validate output directory to prevent path traversal
-            validated_output = validate_output_path(output, warning=False)
+            validated_output = validate_output_path(output_path, warning=False)
 
             # Ensure output directory exists
             validated_output.mkdir(parents=True, exist_ok=True)
