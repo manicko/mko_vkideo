@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import ssl
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
@@ -186,6 +187,292 @@ async def _fetch_playlist_with_retry(
     return None
 
 
+def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnector:
+    """Create aiohttp connector with SSL settings.
+
+    Args:
+        settings: Application settings for SSL verification.
+        video_url: Video URL for logging.
+
+    Returns:
+        Configured TCPConnector.
+    """
+    if settings.ssl_verify:
+        return aiohttp.TCPConnector(limit=10)
+
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
+    return aiohttp.TCPConnector(ssl=ssl_context, limit=10)
+
+
+async def _process_downloaded_segments(
+    tasks: list[asyncio.Task[bool]],
+    metadata_file: Path,
+    segments: list[str],
+    segments_dir: Path,
+    output_file: Path,
+    progress_callback: Callable[[str, int, int], None] | None,
+    video_url: str,
+) -> Path | None:
+    """Process downloaded segments and merge if complete.
+
+    Args:
+        tasks: List of download tasks to await.
+        metadata_file: Path to progress metadata file.
+        segments: List of all segment URLs.
+        segments_dir: Directory containing downloaded segments.
+        output_file: Final output file path.
+        progress_callback: Optional callback for progress updates.
+        video_url: Video URL for progress callback video_id extraction.
+
+    Returns:
+        Path to merged file on success, None otherwise.
+    """
+    if not tasks:
+        return None
+
+    try:
+        # Wait for all tasks to complete, but allow shutdown interruption
+        download_results = await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        # Cancel any still-running tasks on interruption
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        # Wait for cancellation to propagate
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("download_cancelled", reason="shutdown_requested")
+        return None
+
+    downloaded_count = _load_downloaded_count(metadata_file) + sum(
+        1 for r in download_results if r
+    )
+    _save_downloaded_count(metadata_file, downloaded_count)
+
+    # Call progress callback for per-URL segment updates
+    if progress_callback:
+        video_id = (
+            video_url.split("_")[-1]
+            if "_" in video_url
+            else video_url
+        )
+        progress_callback(video_id, downloaded_count, len(segments))
+
+    # All downloaded - merge in batches
+    if downloaded_count == len(segments):
+        logger.info("merging_segments", count=len(segments))
+        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+        if result:
+            _cleanup_segments(segments_dir, metadata_file)
+        return result
+
+    return None
+
+
+async def _download_segment_concurrent(
+    session: aiohttp.ClientSession,
+    idx: int,
+    segment_url: str,
+    segments_dir: Path,
+    semaphore: asyncio.Semaphore,
+    m3u8_url: str,
+    headers: dict[str, str],
+    max_concurrent_downloads: int,
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str,
+    max_retries: int,
+    is_shared_semaphore: bool,
+) -> bool:
+    """Download a segment with semaphore rate limiting.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        idx: Index of the segment being downloaded.
+        segment_url: URL of the segment to download.
+        segments_dir: Directory to save downloaded segments.
+        semaphore: Semaphore for rate limiting.
+        m3u8_url: Base m3u8 URL for resolving relative segment URLs.
+        headers: Request headers to use.
+        max_concurrent_downloads: Maximum concurrent downloads.
+        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
+        video_url: Original video URL for coordinator keying.
+        max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
+        is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
+
+    Returns:
+        True on success, False on failure.
+    """
+    shutdown_event = get_shutdown_event()
+
+    # Check for shutdown before starting - raise to interrupt gather
+    if shutdown_event.is_set():
+        raise asyncio.CancelledError("Download cancelled by user")
+
+    async with semaphore:
+        # Check for shutdown after acquiring semaphore
+        if shutdown_event.is_set():
+            raise asyncio.CancelledError("Download cancelled by user")
+
+        full_url = urljoin(m3u8_url, segment_url) if not segment_url.startswith("http") else segment_url
+
+        segment_path = segments_dir / f"{idx:05d}.ts"
+        if segment_path.exists() and segment_path.stat().st_size > 0:
+            result = True
+        else:
+            result = await _download_segment(
+                session,
+                full_url,
+                segment_path,
+                headers,
+                max_concurrent_downloads=max_concurrent_downloads,
+                segment_index=idx,
+                backoff_coordinator=backoff_coordinator,
+                video_url=video_url,
+                max_retries=max_retries,
+            )
+
+        if result and not is_shared_semaphore and max_concurrent_downloads == 1:
+            if shutdown_event.is_set():
+                raise asyncio.CancelledError("Download cancelled by user")
+
+            # Anti-detection delay after semaphore release
+            delay = 1.5 + random.uniform(0, 0.5)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+                raise asyncio.CancelledError("Download cancelled by user")
+            except TimeoutError:
+                pass  # Normal completion
+
+        return result
+
+
+def _create_segment_download_tasks(
+    session: aiohttp.ClientSession,
+    segments: list[str],
+    segments_dir: Path,
+    semaphore: asyncio.Semaphore,
+    m3u8_url: str,
+    headers: dict[str, str],
+    max_concurrent_downloads: int,
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str,
+    max_retries: int,
+    is_shared_semaphore: bool,
+) -> list[asyncio.Task[bool]]:
+    """Create tasks for downloading missing segments.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        segments: List of segment URLs to download.
+        segments_dir: Directory to save downloaded segments.
+        semaphore: Semaphore for rate limiting.
+        m3u8_url: Base m3u8 URL for resolving relative segment URLs.
+        headers: Request headers to use.
+        max_concurrent_downloads: Maximum concurrent downloads.
+        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
+        video_url: Original video URL for coordinator keying.
+        max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
+        is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
+
+    Returns:
+        List of download tasks.
+    """
+    return [
+        asyncio.create_task(_download_segment_concurrent(
+            session,
+            i,
+            seg,
+            segments_dir,
+            semaphore,
+            m3u8_url,
+            headers,
+            max_concurrent_downloads,
+            backoff_coordinator,
+            video_url,
+            max_retries,
+            is_shared_semaphore,
+        ))
+        for i, seg in enumerate(segments)
+        if not (segments_dir / f"{i:05d}.ts").exists()
+        or (segments_dir / f"{i:05d}.ts").stat().st_size == 0
+    ]
+
+
+async def _run_download_session(
+    m3u8_url: str,
+    headers: dict[str, str],
+    settings: Settings,
+    segments_dir: Path,
+    metadata_file: Path,
+    output_file: Path,
+    progress_callback: Callable[[str, int, int], None] | None,
+    video_url: str,
+    extractor: VKVideoExtractor | None,
+    backoff_coordinator: URLBackoffCoordinator | None,
+    semaphore: asyncio.Semaphore | None,
+) -> Path | None:
+    """Run the download session with aiohttp client.
+
+    Args:
+        m3u8_url: HLS playlist URL.
+        headers: Request headers to use.
+        settings: Application settings.
+        segments_dir: Directory for downloaded segments.
+        metadata_file: Path to progress metadata file.
+        output_file: Final output file path.
+        progress_callback: Optional callback for progress updates.
+        video_url: Video URL for progress callback and coordinator keying.
+        extractor: Optional extractor for token refresh.
+        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
+        semaphore: Optional shared semaphore for work-stealing concurrency.
+
+    Returns:
+        Path to downloaded file on success, None on failure.
+    """
+    connector = _create_connector(settings, video_url)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        playlist_content = await _fetch_playlist_with_retry(
+            session, video_url, m3u8_url, headers, extractor, settings,
+            max_retries=settings.max_retries
+        )
+        if not playlist_content:
+            return None
+
+        segments = _parse_m3u8_segments(playlist_content)
+        downloaded_count = _load_downloaded_count(metadata_file)
+        logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
+
+        semaphore_to_use = semaphore if semaphore is not None else asyncio.Semaphore(settings.max_concurrent_downloads)
+        is_shared = semaphore is not None
+
+        tasks = _create_segment_download_tasks(
+            session,
+            segments,
+            segments_dir,
+            semaphore_to_use,
+            m3u8_url,
+            headers,
+            settings.max_concurrent_downloads,
+            backoff_coordinator,
+            video_url,
+            settings.max_retries,
+            is_shared,
+        )
+
+        return await _process_downloaded_segments(
+            tasks,
+            metadata_file,
+            segments,
+            segments_dir,
+            output_file,
+            progress_callback,
+            video_url,
+        )
+
+
 async def download_hls_with_resume(
     request: HLSDownloadRequest,
     semaphore: asyncio.Semaphore | None = None,
@@ -212,148 +499,46 @@ async def download_hls_with_resume(
         quality=request.quality,
     )
 
-    if request.settings is None:
-        settings = Settings()
-    else:
-        settings = request.settings
-
-    # Validate output path to prevent path traversal
+    settings = request.settings if request.settings is not None else Settings()
     output_file = validate_output_path(request.output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
     metadata_file = output_file.parent / f".{output_file.stem}_progress.json"
-
     segments_dir.mkdir(parents=True, exist_ok=True)
-    shutdown_event = get_shutdown_event()
+
+    headers: dict[str, str] = {
+        "User-Agent": settings.user_agent,
+        "Referer": "https://vkvideo.ru/",
+    }
+    if request.cookies:
+        headers["Cookie"] = request.cookies
 
     try:
-        downloaded_count = _load_downloaded_count(metadata_file)
-        headers: dict[str, str] = {
-            "User-Agent": settings.user_agent,
-            "Referer": "https://vkvideo.ru/",
-        }
-        if request.cookies:
-            headers["Cookie"] = request.cookies
-
-        if settings.ssl_verify:
-            connector = aiohttp.TCPConnector(limit=10)
-        else:
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            connector = aiohttp.TCPConnector(ssl=ssl_context, limit=10)
-            logger.warning("ssl_verification_disabled", url=_strip_auth_params(request.video_url))
-
-        async with aiohttp.ClientSession(connector=connector) as session:
-            playlist_content = await _fetch_playlist_with_retry(
-                session, request.video_url, request.m3u8_url, headers, request.extractor, settings,
-                max_retries=settings.max_retries
-            )
-            if not playlist_content:
-                return None
-
-            segments = _parse_m3u8_segments(playlist_content)
-            logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
-
-            # Download missing segments concurrently
-            # Use shared semaphore if provided, otherwise create local one based on settings
-            semaphore_to_use = (
-                semaphore
-                if semaphore is not None
-                else asyncio.Semaphore(settings.max_concurrent_downloads)
-            )
-
-            async def download_segment_concurrent(idx: int, segment_url: str) -> bool:
-                """Download segment with semaphore rate limiting."""
-                # Check for shutdown before starting - raise CancelledError to interrupt gather
-                if shutdown_event.is_set():
-                    raise asyncio.CancelledError("Download cancelled by user")
-                async with semaphore_to_use:
-                    # Check for shutdown after acquiring semaphore
-                    if shutdown_event.is_set():
-                        raise asyncio.CancelledError("Download cancelled by user")
-                    full_url = segment_url
-                    if not segment_url.startswith("http"):
-                        full_url = urljoin(request.m3u8_url, segment_url)
-                    segment_path = segments_dir / f"{idx:05d}.ts"
-                    if not segment_path.exists() or segment_path.stat().st_size == 0:
-                        result = await _download_segment(
-                            session,
-                            full_url,
-                            segment_path,
-                            headers,
-                            max_concurrent_downloads=settings.max_concurrent_downloads,
-                            segment_index=idx,
-                            backoff_coordinator=request.backoff_coordinator,
-                            video_url=request.video_url,
-                            max_retries=settings.max_retries,
-                        )
-                    else:
-                        result = True
-                    # Anti-detection delay AFTER semaphore release (outside context block)
-                    # Delay only applies in sequential mode (max_concurrent_downloads == 1)
-                    # Skip when shared semaphore is provided (work-stealing context)
-                    if result and semaphore is None and settings.max_concurrent_downloads == 1:
-                        # Check for shutdown in delay loop - raise to interrupt gather
-                        if shutdown_event.is_set():
-                            raise asyncio.CancelledError("Download cancelled by user")
-                        delay = 1.5 + random.uniform(0, 0.5)
-                        try:
-                            # Allow interruption during delay
-                            await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
-                            raise asyncio.CancelledError("Download cancelled by user")
-                        except TimeoutError:
-                            pass  # Normal completion
-                    return result
-
-            # Download all missing segments concurrently
-            tasks = [
-                asyncio.create_task(download_segment_concurrent(i, seg))
-                for i, seg in enumerate(segments)
-                if not (segments_dir / f"{i:05d}.ts").exists()
-                or (segments_dir / f"{i:05d}.ts").stat().st_size == 0
-            ]
-
-            if tasks:
-                try:
-                    # Wait for all tasks to complete, but allow shutdown interruption
-                    download_results = await asyncio.gather(*tasks)
-                except asyncio.CancelledError:
-                    # Cancel any still-running tasks on interruption
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    # Wait for cancellation to propagate
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    logger.info("download_cancelled", reason="shutdown_requested")
-                    return None
-                downloaded_count = _load_downloaded_count(metadata_file) + sum(
-                    1 for r in download_results if r
-                )
-                _save_downloaded_count(metadata_file, downloaded_count)
-
-                # Call progress callback for per-URL segment updates
-                if request.progress_callback:
-                    video_id = (
-                        request.video_url.split("_")[-1]
-                        if "_" in request.video_url
-                        else request.video_url
-                    )
-                    request.progress_callback(video_id, downloaded_count, len(segments))
-
-            # All downloaded - merge in batches
-            if downloaded_count == len(segments):
-                logger.info("merging_segments", count=len(segments))
-                result = await _merge_segments_batched(segments_dir, output_file, len(segments))
-                if result:
-                    _cleanup_segments(segments_dir, metadata_file)
-                return result
-
-            return None
+        return await _run_download_session(
+            request.m3u8_url,
+            headers,
+            settings,
+            segments_dir,
+            metadata_file,
+            output_file,
+            request.progress_callback,
+            request.video_url,
+            request.extractor,
+            request.backoff_coordinator,
+            semaphore,
+        )
     except Exception:
-        # On any exception, preserve segments for resume (don't cleanup)
-        if segments_dir.exists():
-            segment_count = len(list(segments_dir.glob("*.ts")))
-            if segment_count > 0:
-                logger.info("preserving_segments_for_resume", count=segment_count)
+        _log_preserve_segments(segments_dir)
         raise
+
+
+def _log_preserve_segments(segments_dir: Path) -> None:
+    """Log preserved segments for resume on exception.
+
+    Args:
+        segments_dir: Directory containing downloaded segments.
+    """
+    if segments_dir.exists():
+        segment_count = len(list(segments_dir.glob("*.ts")))
+        if segment_count > 0:
+            logger.info("preserving_segments_for_resume", count=segment_count)
