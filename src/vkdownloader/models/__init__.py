@@ -1,16 +1,13 @@
 """Models package exports."""
 
-from .dtos import DownloadRequest, DownloadResult, HLSDownloadRequest
+from .dtos import HLSDownloadRequest
 from .enums import CookieSource, DownloadMethod, DownloadStatus, LogLevel, QualityEnum, StreamFormat
-from .video import DownloadProgress, Stream, Video, VideoWithStreams
+from .video import Stream, Video, VideoWithStreams
 
 __all__ = [
     "CookieSource",
     "DownloadMethod",
-    "DownloadRequest",
-    "DownloadResult",
     "HLSDownloadRequest",
-    "DownloadProgress",
     "DownloadStatus",
     "LogLevel",
     "QualityEnum",

@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, HttpUrl
 
-from .enums import DownloadStatus, StreamFormat
+from .enums import StreamFormat
 
 
 class Video(BaseModel):
@@ -33,24 +33,3 @@ class VideoWithStreams(Video):
     """Video model extended with available streams."""
 
     streams: list[Stream]
-
-
-class DownloadProgress(BaseModel):
-    """Tracks download progress for a video."""
-
-    video_id: str
-    downloaded_bytes: int
-    total_bytes: int | None = None
-    segments_downloaded: int
-    segments_total: int
-    speed: float | None = None  # bytes/sec
-    eta_seconds: int | None = None
-    percent: float | None = None
-    status: DownloadStatus
-    error: str | None = None
-
-
-class StreamWithCookies(Stream):
-    """Stream with associated cookies for authentication."""
-
-    cookies: str | None = None

@@ -1,8 +1,8 @@
 """Tests for domain models."""
 
 
-from vkdownloader.models.enums import DownloadStatus, StreamFormat
-from vkdownloader.models.video import DownloadProgress, Stream, Video, VideoWithStreams
+from vkdownloader.models.enums import StreamFormat
+from vkdownloader.models.video import Stream, Video, VideoWithStreams
 
 
 def test_video_model_creation() -> None:
@@ -83,59 +83,3 @@ def test_video_with_streams() -> None:
     assert video.id == "12345_67890"
     assert video.streams == streams
     assert len(video.streams) == 2
-
-
-def test_download_progress_model() -> None:
-    """Test DownloadProgress model tracks download state."""
-    progress = DownloadProgress(
-        video_id="12345_67890",
-        downloaded_bytes=1024,
-        total_bytes=2048,
-        segments_downloaded=1,
-        segments_total=2,
-        status=DownloadStatus.DOWNLOADING,
-    )
-
-    assert progress.video_id == "12345_67890"
-    assert progress.downloaded_bytes == 1024
-    assert progress.total_bytes == 2048
-    assert progress.segments_downloaded == 1
-    assert progress.segments_total == 2
-    assert progress.status == DownloadStatus.DOWNLOADING
-    assert progress.error is None
-
-
-def test_download_progress_model_with_speed_and_eta() -> None:
-    """Test DownloadProgress model with speed and eta_seconds fields."""
-    progress = DownloadProgress(
-        video_id="12345_67890",
-        downloaded_bytes=512000,
-        total_bytes=1048576,
-        segments_downloaded=3,
-        segments_total=5,
-        speed=102400.5,
-        eta_seconds=45,
-        percent=49.0,
-        status=DownloadStatus.DOWNLOADING,
-    )
-
-    assert progress.video_id == "12345_67890"
-    assert progress.speed == 102400.5
-    assert progress.eta_seconds == 45
-    assert progress.percent == 49.0
-    assert progress.status == DownloadStatus.DOWNLOADING
-
-
-def test_download_progress_model_backward_compatibility() -> None:
-    """Test DownloadProgress model backward compatibility with optional fields."""
-    progress = DownloadProgress(
-        video_id="12345_67890",
-        downloaded_bytes=1024,
-        segments_downloaded=1,
-        segments_total=2,
-        status=DownloadStatus.PENDING,
-    )
-
-    assert progress.speed is None
-    assert progress.eta_seconds is None
-    assert progress.percent is None

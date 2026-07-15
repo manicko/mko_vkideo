@@ -51,11 +51,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `Video` | `models/video.py` | Basic video metadata |
 | `Stream` | `models/video.py` | Video stream with URL and quality info |
 | `VideoWithStreams` | `models/video.py` | Video model with available streams |
-| `DownloadRequest` | `models/dtos.py` | Request model for download initiation |
 | `HLSDownloadRequest` | `models/dtos.py` | Request model for segment-level resume download |
-| `DownloadResult` | `models/dtos.py` | Result model for completed download |
-| `DownloadProgress` | `models/video.py` | Tracks download progress with segment counts |
-| `StreamWithCookies` | `models/video.py` | Stream with cookies for CDN authentication |
 
 ### Enums
 

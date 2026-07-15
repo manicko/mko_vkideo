@@ -6,19 +6,7 @@ import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, HttpUrl
-
-from .enums import QualityEnum
-from .video import Stream
-
-
-class DownloadRequest(BaseModel):
-    """Request model for video download initiation."""
-
-    url: HttpUrl
-    quality: QualityEnum = QualityEnum.BEST
-    output_path: str = "."
-    filename: str | None = None
+from pydantic import BaseModel, ConfigDict
 
 
 class HLSDownloadRequest(BaseModel):
@@ -40,18 +28,6 @@ class HLSDownloadRequest(BaseModel):
     progress_callback: Callable[[str, int, int], None] | None = None
     # Shared semaphore for work-stealing concurrency across batch downloads
     semaphore: asyncio.Semaphore | None = None
-
-
-class DownloadResult(BaseModel):
-    """Result model for completed video download."""
-
-    video_id: str
-    output_file: str
-    file_size: int
-    duration: int
-    streams_used: list[Stream]
-    success: bool
-    error_message: str | None = None
 
 
 # Lazy model rebuild - called only when actually needed (when non-None values are passed)
