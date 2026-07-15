@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -100,17 +100,25 @@ class TestCancelFfmpegProcess:
         mock_process.kill = MagicMock()
         mock_process.pid = 12345
 
-        # Use AsyncMock for wait since it's called twice (once inside wait_for, once directly)
-        mock_process.wait = AsyncMock(return_value=0)
+        # Create a wait mock that raises TimeoutError to simulate timeout
+        # The coroutine (process.wait()) must NOT be awaited here as we're mocking wait_for
+        wait_call_count = 0
 
-        with patch("asyncio.wait_for") as mock_wait_for:
-            mock_wait_for.side_effect = TimeoutError()
+        async def mock_wait() -> int:
+            nonlocal wait_call_count
+            wait_call_count += 1
+            if wait_call_count == 1:
+                # First call - simulate timeout
+                raise TimeoutError()
+            return 0  # Second call after kill - return success
 
-            result = await cancel_ffmpeg_process(mock_process, timeout=5.0)
+        mock_process.wait = mock_wait
 
-            mock_process.terminate.assert_called_once()
-            mock_process.kill.assert_called_once()
-            assert result is True
+        result = await cancel_ffmpeg_process(mock_process, timeout=0.01)  # Short timeout
+
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_returns_false_on_process_lookup_error(self) -> None:

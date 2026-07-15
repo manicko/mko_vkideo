@@ -9,8 +9,10 @@ from vkdownloader.services.downloader_throttle import (
     RETRYABLE_STATUS_CODES,
     ProgressManager,
     URLBackoffCoordinator,
+    _compute_backoff_delay,
     _parse_retry_after,
     _retry_429_with_backoff,
+    _wait_with_shutdown,
 )
 
 
@@ -484,16 +486,22 @@ class TestURLBackoffCoordinator:
         # Mock shutdown event with is_set() returning True
         mock_event = MagicMock()
         mock_event.is_set.return_value = True
-        mock_event.wait = AsyncMock(return_value=None)
+
+        async def mock_wait_for(coro, timeout):
+            # Simulate shutdown triggered - wait_for returns successfully
+            return None
 
         with patch(
             "vkdownloader.services.downloader_throttle.get_shutdown_event",
             return_value=mock_event,
         ):
-            result = await coordinator.wait_if_paused("https://example.com/video1")
+            with patch(
+                "vkdownloader.services.downloader_throttle.asyncio.wait_for",
+                side_effect=mock_wait_for,
+            ):
+                result = await coordinator.wait_if_paused("https://example.com/video1")
 
         assert result is True
-        mock_event.wait.assert_called_once()
 
 
 class TestParseRetryAfter:
@@ -534,6 +542,95 @@ class TestParseRetryAfter:
         result = _parse_retry_after(mock_response)
 
         assert result is None
+
+
+class TestComputeBackoffDelay:
+    """Tests for _compute_backoff_delay function."""
+
+    def test_429_uses_base_delay_1(self) -> None:
+        """Test 429 status uses base_delay of 1.0."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=0.5):
+            result = _compute_backoff_delay(429, 0, None)
+
+        assert result == 0.5
+
+    def test_5xx_uses_base_delay_0_05(self) -> None:
+        """Test 5xx status uses base_delay of 0.05."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=0.025):
+            result = _compute_backoff_delay(500, 0, None)
+
+        assert result == 0.025
+
+    def test_delay_caps_at_30_seconds(self) -> None:
+        """Test delay upper bound is capped at 30 seconds."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform") as mock_uniform:
+            mock_uniform.return_value = 0.0  # Return 0 when called with capped upper bound
+            result = _compute_backoff_delay(429, 100, None)
+
+        # Verify the upper bound was capped at 30.0
+        call_args = mock_uniform.call_args[0]
+        assert call_args[1] == 30.0  # Upper bound should be 30.0
+        assert result == 0.0
+
+    def test_retry_after_overrides_delay(self) -> None:
+        """Test Retry-After header value overrides calculated delay."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=0.5):
+            result = _compute_backoff_delay(429, 0, 5.0)
+
+        assert result == 5.0
+
+    def test_retry_after_ignored_when_smaller(self) -> None:
+        """Test Retry-After header ignored when smaller than calculated delay."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=2.0):
+            result = _compute_backoff_delay(429, 2, 1.0)
+
+        assert result == 2.0
+
+
+class TestWaitWithShutdown:
+    """Tests for _wait_with_shutdown function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_shutdown(self) -> None:
+        """Test returns False when delay completes without shutdown."""
+        mock_event = MagicMock()
+
+        async def mock_wait_for(coro, timeout):
+            # Simulate timeout (no shutdown)
+            raise TimeoutError()
+
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for):
+            result = await _wait_with_shutdown(0.1, mock_event, 0, "https://example.com/segment.ts")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_shutdown(self) -> None:
+        """Test returns True when shutdown is triggered."""
+        mock_event = MagicMock()
+
+        async def mock_wait_for(coro, timeout):
+            # Simulate shutdown triggered - return immediately
+            return None
+
+        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for):
+            result = await _wait_with_shutdown(0.1, mock_event, 0, "https://example.com/segment.ts")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_handles_none_event_with_sleep(self) -> None:
+        """Test handles None shutdown_event by sleeping."""
+        sleep_called: list[float] = []
+
+        async def mock_sleep(delay: float) -> None:
+            sleep_called.append(delay)
+
+        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=mock_sleep):
+            result = await _wait_with_shutdown(0.1, None, 0, "https://example.com/segment.ts")
+
+        assert result is False
+        assert sleep_called == [0.1]
 
 
 class TestRetryableStatusCodes:
@@ -670,3 +767,4 @@ class TestProgressManager:
         manager = ProgressManager()
         result = await manager.get_progress(999)
         assert result == (0, 0)
+

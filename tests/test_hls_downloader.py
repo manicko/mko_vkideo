@@ -780,9 +780,16 @@ class TestSequentialDownloadMode:
             output_path.write_bytes(b"segment data")
             return True
 
+        # Mock wait_for to capture delay and raise TimeoutError (simulating normal completion)
+        # We must await the passed coroutine (shutdown_event.wait()) to avoid unawaited warning
         async def mock_wait_for(coro: Any, timeout: float) -> None:
             """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
             wait_for_calls.append(timeout)
+            # Await the coroutine to avoid RuntimeWarning
+            try:
+                await coro
+            except Exception:
+                pass  # Ignore any exceptions from the awaited coroutine
             raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
@@ -797,9 +804,19 @@ class TestSequentialDownloadMode:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
-                        await download_hls_with_resume(
-                            HLSDownloadRequest(
+                    # Mock get_shutdown_event to return a mock with proper wait() method
+                    # is_set() must return False to avoid early cancellation
+                    mock_shutdown_event = MagicMock()
+                    mock_shutdown_event.is_set.return_value = False
+
+                    async def mock_wait() -> None:
+                        pass
+
+                    mock_shutdown_event.wait = mock_wait
+                    with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
+                        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+                            await download_hls_with_resume(
+                                HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
                                 output_file=output_path,
@@ -848,12 +865,31 @@ class TestSequentialDownloadMode:
                 "vkdownloader.services.segment_downloader._retry_429_with_backoff",
                 side_effect=mock_backoff,
             ):
-                with patch("asyncio.sleep", return_value=None):
-                    with patch(
-                        "vkdownloader.services.segment_downloader._merge_segments_batched",
-                        return_value=output_path,
-                    ):
-                        await download_hls_with_resume(
+                async def mock_wait_for(coro: Any, timeout: float) -> None:
+                    # Simulate timeout - no shutdown
+                    # Await the coroutine to avoid RuntimeWarning about unawaited coroutine
+                    try:
+                        await coro
+                    except Exception:
+                        pass
+                    raise TimeoutError()
+
+                # Mock get_shutdown_event to return a mock with proper wait() method
+                # is_set() must return False to avoid early cancellation
+                mock_shutdown_event = MagicMock()
+                mock_shutdown_event.is_set.return_value = False
+
+                async def mock_wait() -> None:
+                    pass
+
+                mock_shutdown_event.wait = mock_wait
+                with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
+                        with patch(
+                            "vkdownloader.services.segment_downloader._merge_segments_batched",
+                            return_value=output_path,
+                        ):
+                            await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
@@ -891,9 +927,16 @@ class TestSequentialDownloadMode:
             output_path.write_bytes(b"segment data")
             return True
 
+        # Mock wait_for to capture delay and raise TimeoutError (simulating normal completion)
+        # We must await the passed coroutine (shutdown_event.wait()) to avoid unawaited warning
         async def mock_wait_for(coro: Any, timeout: float) -> None:
             """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
             wait_for_calls.append(timeout)
+            # Await the coroutine to avoid RuntimeWarning
+            try:
+                await coro
+            except Exception:
+                pass  # Ignore any exceptions from the awaited coroutine
             raise TimeoutError()  # Simulate timeout - normal completion
 
         with patch(
@@ -908,8 +951,18 @@ class TestSequentialDownloadMode:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
-                        await download_hls_with_resume(
+                    # Mock get_shutdown_event to return a mock with proper wait() method
+                    # is_set() must return False to avoid early cancellation
+                    mock_shutdown_event = MagicMock()
+                    mock_shutdown_event.is_set.return_value = False
+
+                    async def mock_wait() -> None:
+                        pass
+
+                    mock_shutdown_event.wait = mock_wait
+                    with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
+                        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+                            await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
@@ -991,8 +1044,18 @@ class TestDownloadMethodLogging:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_file,
                 ):
-                    with patch("vkdownloader.services.segment_downloader.logger.info", side_effect=capture_log):
-                        result = await download_hls_with_resume(
+                    # Mock get_shutdown_event to return a mock with proper wait() method
+                    # is_set() must return False to avoid early cancellation
+                    mock_shutdown_event = MagicMock()
+                    mock_shutdown_event.is_set.return_value = False
+
+                    async def mock_wait() -> None:
+                        pass
+
+                    mock_shutdown_event.wait = mock_wait
+                    with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
+                        with patch("vkdownloader.services.segment_downloader.logger.info", side_effect=capture_log):
+                            result = await download_hls_with_resume(
                             HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
@@ -1637,3 +1700,5 @@ class TestMergeSegmentsBatchedRealExecution:
 
         for code in [200, 400, 403, 404]:
             assert _is_retryable_status(code) is False
+
+
