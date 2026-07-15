@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiohttp
 from structlog import get_logger
@@ -273,8 +273,10 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
 
     # Try parsing as HTTP date
     try:
-        retry_date = datetime.strptime(retry_after, "%a, %d %b %Y %H:%M:%S GMT")
-        now = datetime.utcnow()
+        retry_date = datetime.strptime(retry_after, "%a, %d %b %Y %H:%M:%S GMT").replace(
+            tzinfo=UTC
+        )
+        now = datetime.now(UTC)
         delta = (retry_date - now).total_seconds()
         if delta > 0:
             return delta
