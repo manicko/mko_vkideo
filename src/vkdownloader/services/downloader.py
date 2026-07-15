@@ -318,75 +318,111 @@ async def download_with_ytdlp_with_resume_fallback(
 
         # Check for partial file - switch to segment download with fresh token
         validated_output = validate_output_path(output_file, warning=False)
-        if validated_output.exists() and validated_output.stat().st_size > 0:
-            logger.warning(
-                "download_interrupted_switching_to_segments",
-                path=str(validated_output),
-                size=validated_output.stat().st_size,
-                retry=retry_count,
-            )
-
-            # Get fresh m3u8 URL with new token via browser
-            if retry_count <= MAX_RESUME_RETRIES:
-                logger.info("attempting_segment_resume", retry=retry_count)
-
-                try:
-                    if extractor is None:
-                        extractor = VKVideoExtractor(settings=settings)
-                    # Force browser for token refresh during resume (recovery scenario)
-                    browser_streams, cookies = await extractor.extract_streams_with_cookies(
-                        video_url, force_browser=True
-                    )
-                    if browser_streams:
-                        try:
-                            quality_enum = _parse_quality_to_enum(quality)
-                            selector = QualitySelector()
-                            selected_stream = selector.select(browser_streams, quality_enum)
-                            m3u8_url = str(selected_stream.url)
-                            logger.info(
-                                "fresh_token_obtained_for_resume",
-                                quality=quality,
-                                selected_quality=selected_stream.quality,
-                            )
-                        except QualityNotAvailableError:
-                            logger.error(
-                                "requested_quality_not_available_in_browser_streams",
-                                quality=quality,
-                                available=[s.quality for s in browser_streams],
-                            )
-                            raise
-                        # Remove partial file to start clean segment download
-                        validated_output.unlink()
-                        # Continue to segment download
-                        segment_result = await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url=video_url,
-                                m3u8_url=m3u8_url,
-                                output_file=validated_output,
-                                quality=quality,
-                                cookies=cookies,
-                                settings=settings,
-                                extractor=extractor,
-                                backoff_coordinator=backoff_coordinator,
-                                semaphore=semaphore,
-                                progress_callback=progress_callback,
-                            )
-                        )
-                        if segment_result:
-                            return segment_result
-                except (ExtractionError, OSError) as e:
-                    logger.warning("failed_to_refresh_token", error=str(e))
-                except ValueError as e:
-                    logger.error("invalid_quality_for_browser_streams", error=str(e))
-                    raise
-            else:
-                logger.error("max_retries_exceeded")
-                return None
-        else:
-            # No partial file and no success - original failure, no point in segment download
+        if not validated_output.exists() or validated_output.stat().st_size == 0:
             return None
 
+        # Attempt segment resume with fresh token
+        if retry_count <= MAX_RESUME_RETRIES:
+            if (segment_result := await _attempt_segment_resume(
+                video_url, m3u8_url, validated_output, quality,
+                retry_count, extractor, settings, backoff_coordinator, semaphore,
+                progress_callback,
+            )) is not None:
+                return segment_result
+
     # All retries exhausted without success
+    logger.error("max_retries_exceeded")
+    return None
+
+
+async def _attempt_segment_resume(
+    video_url: str,
+    m3u8_url: str,
+    output_file: Path,
+    quality: str,
+    retry_count: int,
+    extractor: VKVideoExtractor | None,
+    settings: Settings,
+    backoff_coordinator: URLBackoffCoordinator | None,
+    semaphore: asyncio.Semaphore | None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> Path | None:
+    """Attempt segment-based download with fresh token on yt-dlp failure.
+
+    Called when yt-dlp fails and partial file exists. Forces browser extraction
+    to get fresh token, then switches to segment download to resume.
+
+    Args:
+        video_url: Original VK video URL.
+        m3u8_url: HLS playlist URL (may be stale).
+        output_file: Output file path with partial download.
+        quality: Quality string.
+        retry_count: Current retry attempt number.
+        extractor: VKVideoExtractor for token refresh.
+        settings: Application settings.
+        backoff_coordinator: Optional shared URLBackoffCoordinator.
+        semaphore: Optional shared semaphore for concurrency control.
+        progress_callback: Optional callback for per-URL segment progress.
+
+    Returns:
+        Path to downloaded file on success, None on failure.
+    """
+    logger.warning(
+        "download_interrupted_switching_to_segments",
+        path=str(output_file),
+        size=output_file.stat().st_size,
+        retry=retry_count,
+    )
+    logger.info("attempting_segment_resume", retry=retry_count)
+
+    try:
+        if extractor is None:
+            extractor = VKVideoExtractor(settings=settings)
+        # Force browser for token refresh during resume (recovery scenario)
+        browser_streams, cookies = await extractor.extract_streams_with_cookies(
+            video_url, force_browser=True
+        )
+        if browser_streams:
+            try:
+                quality_enum = _parse_quality_to_enum(quality)
+                selector = QualitySelector()
+                selected_stream = selector.select(browser_streams, quality_enum)
+                m3u8_url = str(selected_stream.url)
+                logger.info(
+                    "fresh_token_obtained_for_resume",
+                    quality=quality,
+                    selected_quality=selected_stream.quality,
+                )
+            except QualityNotAvailableError:
+                logger.error(
+                    "requested_quality_not_available_in_browser_streams",
+                    quality=quality,
+                    available=[s.quality for s in browser_streams],
+                )
+                raise
+            # Remove partial file to start clean segment download
+            output_file.unlink()
+            # Continue to segment download
+            return await download_hls_with_resume(
+                HLSDownloadRequest(
+                    video_url=video_url,
+                    m3u8_url=m3u8_url,
+                    output_file=output_file,
+                    quality=quality,
+                    cookies=cookies,
+                    settings=settings,
+                    extractor=extractor,
+                    backoff_coordinator=backoff_coordinator,
+                    semaphore=semaphore,
+                    progress_callback=progress_callback,
+                )
+            )
+    except (ExtractionError, OSError) as e:
+        logger.warning("failed_to_refresh_token", error=str(e))
+    except ValueError as e:
+        logger.error("invalid_quality_for_browser_streams", error=str(e))
+        raise
+
     return None
 
 
