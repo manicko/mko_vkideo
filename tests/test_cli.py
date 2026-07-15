@@ -97,13 +97,11 @@ class TestDownloadCommand:
 
             with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings"):
-                    with patch("vkdownloader.cli.asyncio.run") as mock_run:
-                        mock_run.side_effect = KeyboardInterrupt()
-                        result = runner.invoke(
-                            app,
-                            ["download", sample_video_url],
-                            catch_exceptions=False,
-                        )
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url],
+                        catch_exceptions=False,
+                    )
 
         assert result.exit_code == 130
         assert "cancelled" in result.output.lower()

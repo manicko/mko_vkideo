@@ -40,6 +40,195 @@ def _parse_m3u8_segments(content: str) -> list[str]:
     return segments
 
 
+async def _download_segment_sequential(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    segment_index: int = 0,
+    max_retries: int = 3,
+) -> bool:
+    """Download a single HLS segment with sequential retry logic.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        segment_url: URL of the segment to download.
+        output_path: Path to save the downloaded segment.
+        headers: Request headers to use.
+        segment_index: Index of the segment being downloaded (for logging).
+        max_retries: Maximum retry attempts for 429/5xx responses.
+
+    Returns:
+        True on success, False on failure.
+    """
+    content = await _retry_429_with_backoff(
+        session, segment_url, headers, segment_index, max_retries=max_retries
+    )
+    if content is not None:
+        with open(output_path, "wb") as f:
+            f.write(content)
+        return True
+    return False
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    """Check if HTTP status code is retryable (429, 500, 502, 503, 504)."""
+    return status_code in RETRYABLE_STATUS_CODES
+
+
+async def _notify_backoff_for_retryable_status(
+    status_code: int,
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+) -> None:
+    """Notify backoff coordinator for retryable HTTP status codes."""
+    if backoff_coordinator and video_url and _is_retryable_status(status_code):
+        await backoff_coordinator.pause(video_url, 10.0)
+
+
+def _should_continue_on_retry(
+    status_code: int,
+    attempt: int,
+    max_retries: int,
+) -> bool:
+    """Check if we should continue retrying for given status code."""
+    return _is_retryable_status(status_code) and attempt < max_retries - 1
+
+
+async def _run_parallel_download_with_backoff(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+    attempt: int,
+    max_retries: int,
+) -> bool | None:
+    """Run a single download attempt in parallel mode.
+
+    Returns True on success, None for retryable status codes, False for fatal errors.
+    """
+    async with session.get(segment_url, headers=headers) as response:
+        if response.status == 200:
+            with open(output_path, "wb") as f:
+                f.write(await response.read())
+            return True
+
+        logger.warning("segment_download_failed", status=response.status)
+        await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, video_url)
+
+        if _should_continue_on_retry(response.status, attempt, max_retries):
+            await asyncio.sleep(1.0)
+            return None
+
+        return False
+
+
+def _should_abort_retry(
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+    shutdown_event: asyncio.Event,
+) -> bool:
+    """Check if retry should be aborted due to backoff/shutdown."""
+    return backoff_coordinator is not None and video_url is not None
+
+
+async def _check_backoff_before_attempt(
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+    shutdown_event: asyncio.Event,
+) -> bool:
+    """Check backoff state before download attempt. Returns True if should abort."""
+    if backoff_coordinator and video_url:
+        was_paused = await backoff_coordinator.wait_if_paused(video_url)
+        if was_paused and shutdown_event.is_set():
+            return True
+    return False
+
+
+async def _do_parallel_download_attempt(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+    attempt: int,
+    max_retries: int,
+) -> bool:
+    """Perform a single download attempt in parallel mode.
+
+    Returns True on success, False for fatal errors.
+    """
+    result = await _run_parallel_download_with_backoff(
+        session, segment_url, output_path, headers,
+        backoff_coordinator, video_url, attempt, max_retries
+    )
+    return result is True
+
+
+async def _try_single_download_attempt(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    backoff_coordinator: URLBackoffCoordinator | None,
+    video_url: str | None,
+    attempt: int,
+    max_retries: int,
+) -> bool:
+    """Try a single download attempt, return True on success. Handles exceptions."""
+    try:
+        return await _do_parallel_download_attempt(
+            session, segment_url, output_path, headers,
+            backoff_coordinator, video_url, attempt, max_retries
+        )
+    except aiohttp.ClientError as e:
+        logger.error("segment_download_error", error=str(e))
+        return False
+
+
+async def _download_segment_parallel(
+    session: aiohttp.ClientSession,
+    segment_url: str,
+    output_path: Path,
+    headers: dict[str, str],
+    max_retries: int = 3,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+    video_url: str | None = None,
+) -> bool:
+    """Download a single HLS segment with parallel retry logic and shared backoff.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        segment_url: URL of the segment to download.
+        output_path: Path to save the downloaded segment.
+        headers: Request headers to use.
+        max_retries: Maximum retry attempts for 429/5xx responses.
+        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
+        video_url: Original video URL for coordinator keying (required if coordinator provided).
+
+    Returns:
+        True on success, False on failure.
+    """
+    shutdown_event = get_shutdown_event()
+
+    for attempt in range(max_retries):
+        if shutdown_event.is_set():
+            return False
+        if await _check_backoff_before_attempt(backoff_coordinator, video_url, shutdown_event):
+            return False
+
+        if await _try_single_download_attempt(
+            session, segment_url, output_path, headers,
+            backoff_coordinator, video_url, attempt, max_retries
+        ):
+            return True
+
+    return False
+
+
 async def _download_segment(
     session: aiohttp.ClientSession,
     segment_url: str,
@@ -58,7 +247,7 @@ async def _download_segment(
         segment_url: URL of the segment to download.
         output_path: Path to save the downloaded segment.
         headers: Request headers to use.
-        max_concurrent_downloads: Maximum concurrent downloads. When 1, uses retry with backoff.
+        max_concurrent_downloads: Maximum concurrent downloads. When 1, uses sequential retry.
         segment_index: Index of the segment being downloaded (for logging).
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
         video_url: Original video URL for coordinator keying (required if coordinator provided).
@@ -68,51 +257,18 @@ async def _download_segment(
         True on success, False on failure.
     """
     if max_concurrent_downloads == 1:
-        content = await _retry_429_with_backoff(
-            session, segment_url, headers, segment_index, max_retries=max_retries
+        return await _download_segment_sequential(
+            session, segment_url, output_path, headers,
+            segment_index=segment_index,
+            max_retries=max_retries,
         )
-        if content is not None:
-            with open(output_path, "wb") as f:
-                f.write(content)
-            return True
-        return False
 
-    # Existing logic for parallel mode with shared backoff support
-    shutdown_event = get_shutdown_event()
-
-    for attempt in range(max_retries):
-        # Check for shutdown signal
-        if shutdown_event.is_set():
-            return False
-
-        # Check for shared backoff before download attempt
-        if backoff_coordinator and video_url:
-            was_paused = await backoff_coordinator.wait_if_paused(video_url)
-            if was_paused and shutdown_event.is_set():
-                return False
-
-        try:
-            async with session.get(segment_url, headers=headers) as response:
-                if response.status == 200:
-                    with open(output_path, "wb") as f:
-                        f.write(await response.read())
-                    return True
-                logger.warning("segment_download_failed", status=response.status)
-                # Notify coordinator of rate limit for shared backoff
-                if backoff_coordinator and video_url and response.status in RETRYABLE_STATUS_CODES:
-                    await backoff_coordinator.pause(video_url, 10.0)
-                # Retry loop continues on retryable status codes
-                if response.status not in RETRYABLE_STATUS_CODES:
-                    return False
-                # Continue to next retry attempt after backoff
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1.0)  # Brief pause before retry
-        except aiohttp.ClientError as e:
-            logger.error("segment_download_error", error=str(e))
-            if attempt == max_retries - 1:
-                return False
-
-    return False
+    return await _download_segment_parallel(
+        session, segment_url, output_path, headers,
+        max_retries=max_retries,
+        backoff_coordinator=backoff_coordinator,
+        video_url=video_url,
+    )
 
 
 def _load_downloaded_count(metadata_file: Path) -> int:
@@ -306,12 +462,10 @@ async def _download_segment_concurrent(
     """
     shutdown_event = get_shutdown_event()
 
-    # Check for shutdown before starting - raise to interrupt gather
     if shutdown_event.is_set():
         raise asyncio.CancelledError("Download cancelled by user")
 
     async with semaphore:
-        # Check for shutdown after acquiring semaphore
         if shutdown_event.is_set():
             raise asyncio.CancelledError("Download cancelled by user")
 
@@ -337,13 +491,12 @@ async def _download_segment_concurrent(
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
 
-            # Anti-detection delay after semaphore release
             delay = 1.5 + random.uniform(0, 0.5)
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
                 raise asyncio.CancelledError("Download cancelled by user")
             except TimeoutError:
-                pass  # Normal completion
+                pass
 
         return result
 
