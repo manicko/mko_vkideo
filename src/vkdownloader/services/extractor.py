@@ -187,7 +187,7 @@ class VKVideoExtractor:
             return found_streams, title
 
         # Run in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         streams, title = await loop.run_in_executor(None, _sync_extract)
 
         logger.debug("ytdlp_extraction_complete", count=len(streams))
