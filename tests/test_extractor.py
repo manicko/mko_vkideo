@@ -203,24 +203,16 @@ class TestExtractionErrors:
             assert cookies == "forced_cookies"  # Cookies returned when forced
 
     @pytest.mark.asyncio
-    async def test_extract_streams_with_cookies_file_mode(self) -> None:
-        """Test extract_streams_with_cookies returns streams without cookies for FILE mode."""
+    async def test_extract_streams_with_cookies_file_mode_raises_not_implemented(self) -> None:
+        """Test extract_streams_with_cookies raises NotImplementedError for FILE mode."""
         settings = Settings(cookie_source=CookieSource.FILE)
         extractor = VKVideoExtractor(settings=settings)
         url = "https://vkvideo.ru/video-12345_67890"
 
-        mock_stream = MagicMock()
-        mock_stream.format = StreamFormat.HLS
-
-        with patch.object(
-            extractor,
-            "_extract_with_ytdlp",
-            return_value=([mock_stream], None),
+        with pytest.raises(
+            NotImplementedError, match="CookieSource.FILE is not implemented"
         ):
-            streams, cookies = await extractor.extract_streams_with_cookies(url)
-
-            assert len(streams) == 1
-            assert cookies is None  # No cookies for FILE mode (placeholder)
+            await extractor.extract_streams_with_cookies(url)
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_invalid_url(self) -> None:

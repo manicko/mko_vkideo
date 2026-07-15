@@ -121,14 +121,11 @@ class VKVideoExtractor:
             logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
             return streams, None
 
-        if not force_browser and self.settings.cookie_source == CookieSource.FILE:
-            # Future: Load cookies from file
-            # For now, return streams without cookies (placeholder)
-            streams, _ = await self._extract_with_ytdlp(url, video_id_full)
-            if not streams:
-                raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
-            logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
-            return streams, None
+        if self.settings.cookie_source == CookieSource.FILE:
+            raise NotImplementedError(
+                "CookieSource.FILE is not implemented. "
+                "Use --cookie-source browser or none instead."
+            )
 
         # Existing browser launch logic for BROWSER mode or forced
         streams, cookies = await self._extract_with_browser(url, video_id_full)
