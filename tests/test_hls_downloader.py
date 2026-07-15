@@ -1,5 +1,5 @@
 """Tests for HLSDownloader service with ffmpeg integration."""
-
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +17,13 @@ from vkdownloader.services.downloader import (
     _parse_m3u8_segments,
     _save_downloaded_count,
     download_hls_with_resume,
+)
+from vkdownloader.services.ffmpeg_utils import _merge_segments_batched
+from vkdownloader.services.segment_downloader import (
+    _download_segment,
+    _download_segment_parallel,
+    _download_segment_sequential,
+    _is_retryable_status,
 )
 
 
@@ -1321,3 +1328,312 @@ class TestReadProgress:
         assert results[0].out_time_us == 3000000
         assert results[0].out_time_ms == 3000
         assert results[0].out_time == "00:00:03.000000"
+
+class TestDownloadSegmentRealExecution:
+    """Tests for _download_segment with real execution logic."""
+
+    @pytest.mark.asyncio
+    async def test_download_segment_sequential_success(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment_sequential successfully downloads segment."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=b"fake segment content")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+
+        result = await _download_segment_sequential(
+            mock_session,
+            segment_url,
+            output_path,
+            headers,
+            segment_index=0,
+            max_retries=3,
+        )
+
+        assert result is True
+        assert output_path.exists()
+        assert output_path.read_bytes() == b"fake segment content"
+
+    @pytest.mark.asyncio
+    async def test_download_segment_sequential_retries_on_429(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment_sequential retries on 429 response."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        call_count = 0
+
+        def make_mock_response(status_code: int) -> AsyncMock:
+            response = AsyncMock()
+            response.status = status_code
+            response.read = AsyncMock(return_value=b"segment after retry" if status_code == 200 else b"")
+            response.__aenter__ = AsyncMock(return_value=response)
+            response.__aexit__ = AsyncMock(return_value=None)
+            response.headers = MagicMock()
+            response.headers.get = MagicMock(return_value=None)
+            return response
+
+        def mock_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return make_mock_response(429)
+            return make_mock_response(200)
+
+        mock_session = MagicMock()
+        mock_session.get = mock_get
+
+        with patch("vkdownloader.services.downloader_throttle._wait_with_shutdown", return_value=False):
+            result = await _download_segment_sequential(
+                mock_session,
+                segment_url,
+                output_path,
+                headers,
+                segment_index=0,
+                max_retries=3,
+            )
+
+        assert result is True
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_download_segment_sequential_fails_non_retryable(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment_sequential fails on non-retryable error."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        mock_response = AsyncMock()
+        mock_response.status = 403
+        mock_response.read = AsyncMock(return_value=b"forbidden")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+
+        result = await _download_segment_sequential(
+            mock_session,
+            segment_url,
+            output_path,
+            headers,
+            segment_index=0,
+            max_retries=3,
+        )
+
+        assert result is False
+        assert not output_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_download_segment_parallel_success(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment_parallel successfully downloads segment."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=b"parallel segment content")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+
+        result = await _download_segment_parallel(
+            mock_session,
+            segment_url,
+            output_path,
+            headers,
+            max_retries=3,
+        )
+
+        assert result is True
+        assert output_path.exists()
+        assert output_path.read_bytes() == b"parallel segment content"
+
+    @pytest.mark.asyncio
+    async def test_download_segment_parallel_retries_on_503(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment_parallel retries on 503 response."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        call_count = 0
+
+        def make_mock_response(status_code: int) -> AsyncMock:
+            response = AsyncMock()
+            response.status = status_code
+            response.read = AsyncMock(return_value=b"segment after retry")
+            response.__aenter__ = AsyncMock(return_value=response)
+            response.__aexit__ = AsyncMock(return_value=None)
+            response.headers = MagicMock()
+            response.headers.get = MagicMock(return_value=None)
+            return response
+
+        def mock_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return make_mock_response(503)
+            return make_mock_response(200)
+
+        mock_session = MagicMock()
+        mock_session.get = mock_get
+
+        result = await _download_segment_parallel(
+            mock_session,
+            segment_url,
+            output_path,
+            headers,
+            max_retries=3,
+        )
+
+        assert result is True
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_download_segment_main_success(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment dispatches to sequential mode when max_concurrent=1."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=b"main segment content")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+
+        with patch("vkdownloader.services.downloader_throttle._wait_with_shutdown", return_value=False):
+            result = await _download_segment(
+                mock_session,
+                segment_url,
+                output_path,
+                headers,
+                max_concurrent_downloads=1,
+                segment_index=0,
+            )
+
+        assert result is True
+        assert output_path.read_bytes() == b"main segment content"
+
+    @pytest.mark.asyncio
+    async def test_download_segment_main_parallel_dispatch(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Test _download_segment dispatches to parallel mode when max_concurrent>1."""
+        segment_url = "https://example.com/segment.ts"
+        output_path = tmp_path / "00000.ts"
+        headers = {"User-Agent": "test-agent"}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=b"parallel dispatch content")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+
+        result = await _download_segment(
+            mock_session,
+            segment_url,
+            output_path,
+            headers,
+            max_concurrent_downloads=4,
+            segment_index=0,
+        )
+
+        assert result is True
+        assert output_path.read_bytes() == b"parallel dispatch content"
+
+
+class TestMergeSegmentsBatchedRealExecution:
+    """Tests for _merge_segments_batched with real execution."""
+
+    @pytest.mark.asyncio
+    async def test_merge_segments_batched_success(self, tmp_path: Path) -> None:
+        """Test successful merge of segments with mocked ffmpeg."""
+        output = tmp_path / "output.ts"
+
+        for i in range(5):
+            (tmp_path / f"{i:05d}.ts").write_bytes(b"segment data")
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+
+        async def mock_communicate():
+            return b"", b""
+
+        mock_process.communicate = mock_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            batch_output = tmp_path / "batch_00000.ts"
+            batch_output.write_bytes(b"batch data")
+
+            result = await _merge_segments_batched(tmp_path, output, 5)
+
+        assert result == output
+
+    @pytest.mark.asyncio
+    async def test_merge_segments_batched_raises_on_missing_files(self, tmp_path: Path) -> None:
+        """Test _merge_segments_batched raises FileNotFoundError for missing segments."""
+        output = tmp_path / "output.ts"
+
+        with patch("asyncio.create_subprocess_exec"):
+            with pytest.raises(FileNotFoundError) as exc_info:
+                await _merge_segments_batched(tmp_path, output, 5)
+
+            assert "Missing segment files" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_merge_segments_batched_uses_batch_size_100(self, tmp_path: Path) -> None:
+        """Test that merge processes segments in batches of 100."""
+        output = tmp_path / "output.ts"
+
+        for i in range(250):
+            (tmp_path / f"{i:05d}.ts").write_bytes(b"segment data")
+
+        call_count = 0
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+
+        async def mock_communicate():
+            return b"", b""
+
+        mock_process.communicate = mock_communicate
+
+        def track_batch(*cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=track_batch):
+            for i in range(0, 250, 100):
+                batch_output = tmp_path / f"batch_{i:05d}.ts"
+                batch_output.write_bytes(b"batch data")
+
+            result = await _merge_segments_batched(tmp_path, output, 250)
+
+        assert call_count == 4  # 3 batches (0-99, 100-199, 200-249) + 1 final merge
+        assert result == output
+
+    def test_is_retryable_status(self) -> None:
+        """Test _is_retryable_status identifies retryable codes correctly."""
+        for code in [429, 500, 502, 503, 504]:
+            assert _is_retryable_status(code) is True
+
+        for code in [200, 400, 403, 404]:
+            assert _is_retryable_status(code) is False
