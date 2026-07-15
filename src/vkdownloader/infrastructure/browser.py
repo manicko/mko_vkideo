@@ -65,6 +65,7 @@ class BrowserManager:
             viewport={"width": 1920, "height": 1080},
             user_agent=self.settings.user_agent,
             locale=self.settings.locale,
+            timezone_id=self.settings.timezone,
         )
 
         page = await context.new_page()
