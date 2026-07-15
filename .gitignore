@@ -18,6 +18,9 @@ wheels/
 # Temporary segment files
 *_segments/
 
+# Cookie files for authenticated downloads
+*_cookies.txt
+
 # Progress metadata files
 *_progress.json
 

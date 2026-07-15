@@ -382,6 +382,7 @@ async def _download_with_ytdlp(
         }
 
         # Add cookies file generation if cookies provided
+        cookie_file: Path | None = None
         if cookies:
             cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
             cookie_file.write_text(_cookies_to_netscape(cookies))
@@ -396,6 +397,11 @@ async def _download_with_ytdlp(
             if "cancelled" in str(e).lower() or shutdown_event.is_set():
                 raise RuntimeError("Download cancelled") from e
             raise
+        finally:
+            # Clean up cookie file after download completes (success or failure)
+            if cookie_file is not None and cookie_file.exists():
+                cookie_file.unlink()
+                logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
 
     loop = asyncio.get_running_loop()
 
