@@ -1,0 +1,42 @@
+id: TASK_017_srv_010_cookie_file_not_implemented
+source_reference: .ai/audit/99-validation/03-services-validated.md
+source_section: SRV-010
+source_finding: SRV-010
+
+title: Raise NotImplementedError for unimplemented CookieSource.FILE
+priority: medium
+status: pending
+
+description: >
+  CookieSource.FILE is accepted by CLI and Settings but the extractor just has a placeholder comment
+  and behaves identically to NONE. Users get no indication that the feature is unimplemented.
+
+goals:
+  - Raise NotImplementedError when CookieSource.FILE is selected
+  - Provide clear message directing users to working alternatives
+
+files:
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: function
+        name: extract_streams_with_cookies
+    semantic_anchors:
+      within:
+        type: conditional
+        value: CookieSource.FILE
+
+changes:
+  - action: add_code
+    description: >
+      Replace placeholder comment with explicit NotImplementedError.
+    code_hint: |
+      elif self.settings.cookie_source == CookieSource.FILE:
+          raise NotImplementedError(
+              "CookieSource.FILE is not implemented. "
+              "Use --cookie-source browser or none instead."
+          )
+
+acceptance_criteria:
+  - Clear error when FILE cookie source selected
+  - Users directed to working alternatives
+  - Tests updated to expect NotImplementedError

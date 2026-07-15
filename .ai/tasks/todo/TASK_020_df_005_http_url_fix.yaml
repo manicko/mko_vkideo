@@ -1,0 +1,40 @@
+id: TASK_020_df_005_http_url_fix
+source_reference: .ai/audit/99-validation/06-data-flow-validated.md
+source_section: DF-005
+source_finding: DF-005
+
+title: Change Stream.url from HttpUrl to str to avoid signed URL mangling
+priority: medium
+status: pending
+
+description: >
+  Stream.url is typed as HttpUrl which may perform percent-encoding normalization, potentially
+  altering signed VK CDN URL tokens. Store as str to avoid this risk.
+
+goals:
+  - Change url field type from HttpUrl to str in Stream model
+  - Remove HttpUrl imports if no longer needed
+  - Preserve URL handling behavior
+
+files:
+  - path: src/vkdownloader/models/video.py
+    targets:
+      - type: class
+        name: Stream
+    semantic_anchors:
+      modify:
+        type: field
+        value: url
+
+changes:
+  - action: modify_field
+    description: >
+      Change Stream.url from HttpUrl to str.
+    code_hint: |
+      # url: HttpUrl  ->  url: str
+      # Remove HttpUrl import if unused elsewhere
+
+acceptance_criteria:
+  - URL stored as string without normalization
+  - No type checker errors
+  - Tests pass

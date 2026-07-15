@@ -1,0 +1,44 @@
+id: TASK_018_qlt_002_datetime_deprecation
+source_reference: .ai/audit/99-validation/08-quality-validated.md
+source_section: QLT-002
+source_finding: QLT-002
+
+title: Replace deprecated datetime.utcnow() with datetime.now(timezone.utc)
+priority: medium
+status: pending
+
+description: >
+  _parse_retry_after uses datetime.utcnow() which was deprecated in Python 3.12 (the project's
+  minimum) and will raise AttributeError in a future version.
+
+goals:
+  - Replace utcnow() with timezone-aware now()
+  - Import timezone from datetime module
+
+files:
+  - path: src/vkdownloader/services/downloader_throttle.py
+    targets:
+      - type: function
+        name: _parse_retry_after
+    semantic_anchors:
+      update:
+        type: method_call
+        value: datetime.utcnow
+
+changes:
+  - action: add_import
+    description: >
+      Add from datetime import datetime, timezone at top of file.
+    code_hint: |
+      from datetime import datetime, timezone
+
+  - action: modify_call
+    description: >
+      Replace datetime.utcnow() with datetime.now(timezone.utc).
+    code_hint: |
+      now = datetime.now(timezone.utc)
+
+acceptance_criteria:
+  - No DeprecationWarning on Python 3.12+
+  - Code runs on current and future Python versions
+  - Tests pass

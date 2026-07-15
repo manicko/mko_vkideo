@@ -1,0 +1,65 @@
+id: TASK_013_qlt_004_remove_unwired_modules
+source_reference: .ai/audit/99-validation/08-quality-validated.md
+source_section: QLT-004
+source_finding: QLT-004
+
+title: Remove unused HttpClient and AdaptiveThrottle modules
+priority: medium
+status: pending
+
+description: >
+  HttpClient (aiohttp wrapper) and AdaptiveThrottle (dynamic RPM limiter) are exported from
+  infrastructure/__init__.py and documented, but never imported by production code. The real
+  download path uses raw aiohttp in segment_downloader.py and rate limiting in downloader_throttle.py.
+  These represent duplicated logic and dead code.
+
+goals:
+  - Delete src/vkdownloader/infrastructure/http_client.py
+  - Delete src/vkdownloader/infrastructure/adaptive_throttle.py
+  - Remove exports from infrastructure/__init__.py
+  - Remove tests/test_http_client.py
+  - Update documentation to remove references
+
+files:
+  - path: src/vkdownloader/infrastructure/http_client.py
+    targets:
+      - type: file
+  - path: src/vkdownloader/infrastructure/adaptive_throttle.py
+    targets:
+      - type: file
+  - path: src/vkdownloader/infrastructure/__init__.py
+    targets:
+      - type: export_list
+  - path: tests/test_http_client.py
+    targets:
+      - type: file
+  - path: docs/01-tools/vkdownloader-overview.md
+    targets:
+      - type: documentation_table
+        name: Infrastructure table
+
+changes:
+  - action: delete_file
+    description: >
+      Remove unused http_client.py.
+
+  - action: delete_file
+    description: >
+      Remove unused adaptive_throttle.py.
+
+  - action: remove_exports
+    description: >
+      Remove AdaptiveThrottle and HttpClient from __init__.py exports.
+
+  - action: delete_file
+    description: >
+      Remove test_http_client.py (tests unused modules).
+
+  - action: update_docs
+    description: >
+      Remove HttpClient/AdaptiveThrottle rows from infrastructure documentation table.
+
+acceptance_criteria:
+  - Files deleted, exports removed
+  - Tests pass
+  - Documentation updated

@@ -1,0 +1,40 @@
+id: TASK_021_df_008_get_event_loop_fix
+source_reference: .ai/audit/99-validation/06-data-flow-validated.md
+source_section: DF-008
+source_finding: DF-008
+
+title: Replace deprecated asyncio.get_event_loop() with get_running_loop()
+priority: medium
+status: pending
+
+description: >
+  _extract_with_ytdlp uses asyncio.get_event_loop() inside a coroutine, which is deprecated
+  and can cause issues in some async configurations.
+
+goals:
+  - Replace get_event_loop() with get_running_loop()
+  - Ensure compatibility with async patterns
+
+files:
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: function
+        name: _extract_with_ytdlp
+    semantic_anchors:
+      modify:
+        type: method_call
+        value: line 194
+
+changes:
+  - action: replace
+    description: >
+      Replace asyncio.get_event_loop() with asyncio.get_running_loop().
+    code_hint: |
+      # loop = asyncio.get_event_loop()
+      # ->
+      loop = asyncio.get_running_loop()
+
+acceptance_criteria:
+  - No DeprecationWarning on Python 3.12+
+  - Correct running loop obtained
+  - Tests pass

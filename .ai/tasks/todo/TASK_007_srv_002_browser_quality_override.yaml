@@ -1,0 +1,50 @@
+id: TASK_007_srv_002_browser_quality_override
+source_reference: .ai/audit/99-validation/03-services-validated.md
+source_section: SRV-002
+source_finding: SRV-002
+secondary_reference: .ai/audit/99-validation/06-data-flow-validated.md
+secondary_section: DF-001
+
+title: Fix BROWSER mode quality override in perform_download
+priority: high
+status: pending
+
+description: >
+  When cookie_source=BROWSER, perform_download() re-extracts via the browser and overwrites the
+  chosen m3u8 URL with browser_streams[0].url (always "best" quality). The user's selected quality
+  is silently discarded. This affects both YTDLP and FFMPEG branches.
+
+goals:
+  - Re-select from browser streams by quality when BROWSER mode is used
+  - Fail loudly if requested quality is unavailable
+  - Preserve quality selection for all download methods
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: perform_download
+    semantic_anchors:
+      within:
+        type: match_case
+        value: DownloadMethod.YTDLP
+      within:
+        type: match_case
+        value: DownloadMethod.FFMPEG
+
+changes:
+  - action: modify_logic
+    description: >
+      After browser_streams is populated, run QualitySelector.select(browser_streams, quality)
+      to pick the correct stream instead of always using browser_streams[0].
+    code_hint: |
+      if settings.cookie_source == CookieSource.BROWSER:
+          browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+          if browser_streams:
+              selected_browser = QualitySelector.select(browser_streams, quality)
+              m3u8_url = str(selected_browser.url)
+
+acceptance_criteria:
+  - Quality selection honored in BROWSER mode
+  - Appropriate error if quality unavailable
+  - Download produces requested resolution

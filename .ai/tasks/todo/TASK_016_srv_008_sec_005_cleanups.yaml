@@ -1,0 +1,53 @@
+id: TASK_016_srv_008_sec_005_cleanups
+source_reference:
+  - .ai/audit/99-validation/03-services-validated.md
+  - .ai/audit/99-validation/04-security-validated.md
+source_section: SRV-008, SEC-005
+source_finding: SRV-008, SEC-005
+
+title: Remove unused is_paused method and add CRLF sanitization
+priority: medium
+status: pending
+
+description: >
+  URLBackoffCoordinator.is_paused() is a public method that is never invoked. It should be removed
+  as dead code. Additionally, SEC-005 identifies that ffmpeg -headers are built by concatenating
+  cookie name/value without CRLF sanitization, risking header injection.
+
+goals:
+  - Remove unused is_paused method from URLBackoffCoordinator
+  - Strip \r and \n from cookie values before building ffmpeg headers
+  - Add defense-in-depth against CRLF injection
+
+files:
+  - path: src/vkdownloader/services/downloader_throttle.py
+    targets:
+      - type: method
+        name: URLBackoffCoordinator.is_paused
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: function
+        name: _format_cookies_for_ffmpeg
+
+changes:
+  - action: remove_method
+    description: >
+      Remove is_paused method (lines 51-55) from URLBackoffCoordinator.
+    code_hint: |
+      # Remove lines 51-55:
+      # def is_paused(self, video_url: str) -> bool:
+      #     ...
+
+  - action: add_sanitization
+    description: >
+      Strip CRLF from cookie names and values in _format_cookies_for_ffmpeg.
+    code_hint: |
+      # In _format_cookies_for_ffmpeg, before joining:
+      safe_name = name.replace('\r', '').replace('\n', '')
+      safe_value = value.replace('\r', '').replace('\n', '')
+      parts.append(f"{safe_name}={safe_value}")
+
+acceptance_criteria:
+  - is_paused removed, wait_if_paused still works
+  - CRLF characters stripped from cookie values
+  - Tests pass

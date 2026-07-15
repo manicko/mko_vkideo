@@ -1,0 +1,136 @@
+tasks:
+  # Phase 1: Security fixes (independent)
+  - id: TASK_001_sec_001_cookie_file_cleanup
+    depends_on: []
+
+  - id: TASK_002_sec_002_env_ssl_fix
+    depends_on: []
+
+  - id: TASK_003_sec_003_url_sanitization
+    depends_on: []
+
+  # Phase 2: Config cleanup (same file - sequential)
+  - id: TASK_004_cfg_005_remove_dead_singleton
+    depends_on:
+      - TASK_002_sec_002_env_ssl_fix
+
+  - id: TASK_005_cfg_002_remove_download_method
+    depends_on:
+      - TASK_004_cfg_005_remove_dead_singleton
+
+  # Phase 3: Config wiring
+  - id: TASK_006_cfg_001_wire_download_dir
+    depends_on: []
+
+  # Phase 4: Critical service fixes (coupled)
+  - id: TASK_007_srv_002_browser_quality_override
+    depends_on: []
+
+  - id: TASK_008_qlt_001_max_retries_wiring
+    depends_on:
+      - TASK_007_srv_002_browser_quality_override
+
+  - id: TASK_009_srv_001_callback_wiring
+    depends_on:
+      - TASK_008_qlt_001_max_retries_wiring
+
+  # Phase 5: Research task (blocks implementation)
+  - id: TASK_010_qlt_008_hlsdownloadrequest_research
+    depends_on:
+      - TASK_009_srv_001_callback_wiring
+
+  # Phase 6: CLI fixes
+  - id: TASK_011_cli_002_003_006_exception_handling
+    depends_on:
+      - TASK_010_qlt_008_hlsdownloadrequest_research
+
+  # Phase 7: Cleanup tasks (independent)
+  - id: TASK_012_qlt_003_remove_unused_dependencies
+    depends_on: []
+
+  - id: TASK_013_qlt_004_remove_unwired_modules
+    depends_on:
+      - TASK_012_qlt_003_remove_unused_dependencies
+
+  - id: TASK_014_qlt_007_remove_unused_dtos
+    depends_on:
+      - TASK_013_qlt_004_remove_unwired_modules
+
+  - id: TASK_015_cfg_003_wire_timezone
+    depends_on: []
+
+  - id: TASK_016_srv_008_sec_005_cleanups
+    depends_on:
+      - TASK_015_cfg_003_wire_timezone
+
+  - id: TASK_017_srv_010_cookie_file_not_implemented
+    depends_on:
+      - TASK_016_srv_008_sec_005_cleanups
+
+  - id: TASK_018_qlt_002_datetime_deprecation
+    depends_on: []
+
+  # Phase 8: Resume and integrity fixes
+  - id: TASK_019_df_003_004_resume_fixes
+    depends_on:
+      - TASK_008_qlt_001_max_retries_wiring
+
+  - id: TASK_020_df_005_http_url_fix
+    depends_on:
+      - TASK_019_df_003_004_resume_fixes
+
+  - id: TASK_021_df_008_get_event_loop_fix
+    depends_on: []
+
+  # Phase 9: Verification
+  - id: TASK_022_verify_download_flow_changes
+    depends_on:
+      - TASK_007_srv_002_browser_quality_override
+      - TASK_008_qlt_001_max_retries_wiring
+      - TASK_009_srv_001_callback_wiring
+      - TASK_011_cli_002_003_006_exception_handling
+      - TASK_019_df_003_004_resume_fixes
+
+  # Phase 10: Structural refactoring (independent)
+  - id: TASK_023_str_001_read_progress_refactor
+    depends_on: []
+
+  - id: TASK_024_str_002_download_hls_refactor
+    depends_on: []
+
+  - id: TASK_025_str_003_ytdlp_resume_refactor
+    depends_on: []
+
+  - id: TASK_026_str_004_batch_cli_refactor
+    depends_on: []
+
+  - id: TASK_027_str_005_perform_download_refactor
+    depends_on:
+      - TASK_010_qlt_008_hlsdownloadrequest_research
+
+  - id: TASK_028_str_006_split_download_segment
+    depends_on: []
+
+  - id: TASK_029_str_007_retry_backoff_helpers
+    depends_on: []
+
+  - id: TASK_030_str_008_split_downloader_module
+    depends_on:
+      - TASK_023_str_001_read_progress_refactor
+
+  # Phase 11: Test improvements (independent)
+  - id: TASK_031_tst_001_real_segment_tests
+    depends_on: []
+
+  - id: TASK_032_tst_002_003_adaptive_throttle_tests
+    depends_on: []
+
+  - id: TASK_033_tst_004_005_006_test_quality_fixes
+    depends_on: []
+
+  - id: TASK_034_tst_007_008_fix_tests
+    depends_on: []
+
+  # Phase 12: Documentation (independent)
+  - id: TASK_035_int_001_002_doc_updates
+    depends_on: []

@@ -1,0 +1,44 @@
+id: TASK_028_str_006_split_download_segment
+source_reference: .ai/audit/99-validation/09-structural-quality-validated.md
+source_section: STR-006
+source_finding: STR-006
+
+title: Split _download_segment into sequential and parallel variants
+priority: low
+status: pending
+
+description: >
+  _download_segment (CC=12, nesting depth 4) folds two distinct download strategies into one
+  function based on max_concurrent_downloads==1 guard. This mixes concerns.
+
+goals:
+  - Split into _download_segment_sequential and _download_segment_parallel
+  - Each helper has CC ≤5 and nesting ≤3
+  - Maintain same behavior
+
+files:
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: function
+        name: _download_segment
+    semantic_anchors:
+      split:
+        type: conditional
+        value: max_concurrent_downloads check
+
+changes:
+  - action: split_function
+    description: >
+      Create separate _download_segment_sequential and _download_segment_parallel functions.
+    code_hint: |
+      async def _download_segment_sequential(...):
+          # Sequential retry path with _retry_429_with_backoff
+
+      async def _download_segment_parallel(...):
+          # Parallel path with backoff coordinator
+
+acceptance_criteria:
+  - Two focused functions created
+  - Each has CC ≤5, nesting ≤3
+  - Same download behavior
+  - Tests pass

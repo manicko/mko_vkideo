@@ -1,0 +1,40 @@
+id: TASK_031_tst_001_real_segment_tests
+source_reference: .ai/audit/99-validation/07-tests-validated.md
+source_section: TST-001
+source_finding: TST-001
+
+title: Add real execution tests for segment download and merge
+priority: low
+status: pending
+
+description: >
+  Core segment download, retry, and ffmpeg merge logic are never executed by tests - they are mocked
+  out. This creates a coverage gap for the most bug-prone paths.
+
+goals:
+  - Add tests that call actual _download_segment logic
+  - Add tests that call actual _merge_segments_batched
+  - Add tests for retry behavior on 429/5xx
+
+files:
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: test_file
+    semantic_anchors:
+      add_test:
+        type: real_execution
+        value: _download_segment
+      add_test:
+        type: real_execution
+        value: _merge_segments_batched
+
+changes:
+  - action: add_test
+    description: >
+      Create test that exercises actual _download_segment with mocked HTTP but real retry logic.
+    code_hint: null
+
+acceptance_criteria:
+  - At least one test exercises real _download_segment
+  - At least one test exercises real _merge_segments_batched
+  - Tests pass

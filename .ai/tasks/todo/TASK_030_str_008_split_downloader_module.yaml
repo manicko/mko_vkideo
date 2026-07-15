@@ -1,0 +1,52 @@
+id: TASK_030_str_008_split_downloader_module
+source_reference: .ai/audit/99-validation/09-structural-quality-validated.md
+source_section: STR-008
+source_finding: STR-008
+
+title: Split services/downloader.py god module into focused files
+priority: low
+status: pending
+
+description: >
+  services/downloader.py is 409 SLOC, exceeding the 300-line limit. It co-locates unrelated
+  responsibilities: cookie formatting, HLSDownloader class, three download functions, and signal
+  handling.
+
+goals:
+  - Create services/cookies.py for _cookies_to_netscape
+  - Create services/signal_handlers.py for setup_signal_handlers
+  - Keep HLSDownloader in downloader.py or rename to hls_downloader.py
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: _cookies_to_netscape
+      - type: function
+        name: setup_signal_handlers
+  - path: src/vkdownloader/services/cookies.py
+    targets:
+      - type: new_file
+  - path: src/vkdownloader/services/signal_handlers.py
+    targets:
+      - type: new_file
+
+changes:
+  - action: create_file
+    description: >
+      Create cookies.py with _cookies_to_netscape moved from downloader.py.
+    code_hint: null
+  - action: create_file
+    description: >
+      Create signal_handlers.py with setup_signal_handlers moved from downloader.py.
+    code_hint: null
+  - action: update_imports
+    description: >
+      Update downloader.py to import from the new modules.
+    code_hint: null
+
+acceptance_criteria:
+  - downloader.py reduced below 300 SLOC
+  - cookies.py and signal_handlers.py created
+  - All functionality preserved
+  - Tests pass

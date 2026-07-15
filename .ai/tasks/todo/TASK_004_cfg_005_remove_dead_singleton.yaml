@@ -1,0 +1,60 @@
+id: TASK_004_cfg_005_remove_dead_singleton
+source_reference: .ai/audit/99-validation/02-config-validated.md
+source_section: CFG-005
+source_finding: CFG-005
+
+title: Remove unused module-level settings singleton from config.py
+priority: medium
+status: pending
+
+depends_on:
+  - TASK_002_sec_002_env_ssl_fix
+
+description: >
+  config.py:131 creates a module-level `settings = Settings()` that is never imported or used.
+  This causes import-time side effects (reads .env on import). The docstrings in HttpClient and
+  BrowserManager incorrectly claim "Uses global settings if not provided".
+
+goals:
+  - Remove unused module-level settings singleton
+  - Fix docstrings in http_client.py and browser.py that misstate global settings usage
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: module_level_statement
+        name: settings singleton
+    semantic_anchors:
+      remove:
+        type: variable_assignment
+        value: settings = Settings()
+  - path: src/vkdownloader/infrastructure/http_client.py
+    targets:
+      - type: method
+        name: HttpClient.__init__
+    semantic_anchors:
+      update_docstring: true
+  - path: src/vkdownloader/infrastructure/browser.py
+    targets:
+      - type: method
+        name: BrowserManager.__init__
+    semantic_anchors:
+      update_docstring: true
+
+changes:
+  - action: remove_code
+    description: >
+      Delete the module-level settings = Settings() singleton (line 131).
+    code_hint: |
+      # Remove: settings: Settings = Settings()  # Line 131
+
+  - action: update_docstring
+    description: >
+      Correct docstrings to say "constructs a new Settings() from environment" instead of "Uses global settings".
+    code_hint: |
+      """Construct a new Settings() from environment when not provided."""
+
+acceptance_criteria:
+  - Module-level settings removed from config.py
+  - Docstrings corrected to reflect actual behavior
+  - No tests broken by removal

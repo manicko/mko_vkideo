@@ -1,0 +1,87 @@
+id: TASK_008_qlt_001_max_retries_wiring
+source_reference: .ai/audit/99-validation/08-quality-validated.md
+source_section: QLT-001
+source_finding: QLT-001
+secondary_reference: .ai/audit/99-validation/03-services-validated.md
+secondary_section: SRV-003, SRV-004
+
+title: Wire Settings.max_retries into segment download retry paths
+priority: high
+status: pending
+
+description: >
+  Settings.max_retries (default 3, range 1-10) is documented but has no effect on actual segment
+  downloads. In parallel mode, segments that receive 429/5xx are logged and returned as False with
+  no retry. In sequential mode, _retry_429_with_backoff uses hardcoded default of 3. yt-dlp uses
+  hardcoded "retries": 10. The documented knob is completely inert.
+
+goals:
+  - Pass settings.max_retries into _retry_429_with_backoff
+  - Pass settings.max_retries into _fetch_playlist_with_retry
+  - Replace hardcoded yt-dlp retries with settings.max_retries
+  - Add retry logic to parallel segment download path
+
+files:
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: function
+        name: _download_segment
+    semantic_anchors:
+      update:
+        type: function_call
+        value: _retry_429_with_backoff
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: function
+        name: _fetch_playlist_with_retry
+    semantic_anchors:
+      update:
+        type: default_argument
+        value: max_retries
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: _download_with_ytdlp
+      - type: function
+        name: perform_download
+    semantic_anchors:
+      update:
+        type: ytdlp_option
+        value: retries
+
+changes:
+  - action: modify_signature
+    description: >
+      Add max_retries parameter to _download_segment for parallel retry loop.
+    code_hint: |
+      async def _download_segment(..., max_retries: int = 3):
+
+  - action: add_logic
+    description: >
+      In parallel branch (max_concurrent_downloads > 1), add retry loop for non-200 responses.
+    code_hint: |
+      # In parallel branch, wrap the return False with retry loop:
+      for attempt in range(max_retries):
+          content = await _download_segment_once(...)
+          if content:
+              result = True
+              break
+          await backoff_coordinator.pause(url, backoff_seconds)
+
+  - action: modify_call
+    description: >
+      Pass settings.max_retries into _retry_429_with_backoff instead of hardcoded 3.
+    code_hint: |
+      content = await _retry_429_with_backoff(..., max_retries=settings.max_retries)
+
+  - action: modify_option
+    description: >
+      Replace hardcoded "retries": 10 with settings.max_retries in yt-dlp options.
+    code_hint: |
+      "retries": settings.max_retries,
+
+acceptance_criteria:
+  - settings.max_retries actually controls retry count
+  - Parallel mode retries on 429/5xx responses
+  - yt-dlp respects configured retry count
+  - Tests pass with modified retry behavior

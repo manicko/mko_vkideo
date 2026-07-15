@@ -1,0 +1,56 @@
+id: TASK_033_tst_004_005_006_test_quality_fixes
+source_reference: .ai/audit/99-validation/07-tests-validated.md
+source_section: TST-004, TST-005, TST-006
+source_finding: TST-004, TST-005, TST-006
+
+title: Remove tautological tests and implement placeholder security test
+priority: low
+status: pending
+
+description: >
+  TST-004: tests/integration/test_mock_vk_server.py contains tautological no-ops.
+  TST-005: test_path_inside_repo_warns has only 'pass' body.
+  TST-006: test_structured_logging_fields inspects source code instead of behavior.
+
+goals:
+  - Delete or replace tautological integration tests with real tests
+  - Implement test_path_inside_repo_warns
+  - Remove source-inspection test (redundant)
+
+files:
+  - path: tests/integration/test_mock_vk_server.py
+    targets:
+      - type: test_file
+    semantic_anchors:
+      remove_or_replace: true
+  - path: tests/test_security.py
+    targets:
+      - type: test_function
+        name: test_path_inside_repo_warns
+    semantic_anchors:
+      implement: true
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: test_function
+        name: test_structured_logging_fields
+    semantic_anchors:
+      remove: true
+
+changes:
+  - action: delete_or_replace
+    description: >
+      Delete tautological tests or replace with real integration tests.
+    code_hint: null
+  - action: implement
+    description: >
+      Add actual test for path-inside-repo warning behavior.
+    code_hint: null
+  - action: remove_test
+    description: >
+      Remove source-inspection test (redundant with behavioral tests).
+    code_hint: null
+
+acceptance_criteria:
+  - No tautological tests
+  - Security warning test implemented
+  - Test suite still passes

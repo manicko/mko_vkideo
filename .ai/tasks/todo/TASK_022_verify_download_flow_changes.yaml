@@ -1,0 +1,24 @@
+id: TASK_022_verify_download_flow_changes
+type: verification
+status: pending
+
+verifies:
+  - TASK_007_srv_002_browser_quality_override
+  - TASK_008_qlt_001_max_retries_wiring
+  - TASK_009_srv_001_callback_wiring
+  - TASK_011_cli_002_003_006_exception_handling
+  - TASK_019_df_003_004_resume_fixes
+
+verification_steps:
+  - build: uv run ruff check src/vkdownloader
+  - build: uv run mypy src/vkdownloader
+  - test: uv run pytest -q
+  - smoke_check: uv run python -c "import vkdownloader.cli; vkdownloader.cli.app(['--help'])"
+
+pass_criteria:
+  - All linter/type checks pass
+  - All 201 tests pass
+  - CLI help renders without error
+  - No runtime regressions
+
+failure_action: return TASK_007, TASK_008, TASK_009, TASK_011, TASK_019 to rework

@@ -1,0 +1,49 @@
+id: TASK_012_qlt_003_remove_unused_dependencies
+source_reference: .ai/audit/99-validation/08-quality-validated.md
+source_section: QLT-003
+source_finding: QLT-003
+
+title: Remove unused ffmpeg-python and tqdm dependencies
+priority: medium
+status: pending
+
+description: >
+  pyproject.toml declares ffmpeg-python>=0.2.0 and tqdm>=4.68.4 as runtime dependencies, but neither
+  is imported anywhere in src/ or tests/. ffmpeg is invoked by shelling out to the binary directly,
+  not via the Python library. No progress bar uses tqdm.
+
+goals:
+  - Remove ffmpeg-python from pyproject.toml dependencies
+  - Remove tqdm from pyproject.toml dependencies
+  - Verify no import breakage after removal
+
+files:
+  - path: pyproject.toml
+    targets:
+      - type: dependency_list
+        name: dependencies
+    semantic_anchors:
+      remove:
+        type: line
+        value: ffmpeg-python>=0.2.0
+      remove:
+        type: line
+        value: tqdm>=4.68.4
+
+changes:
+  - action: remove_line
+    description: >
+      Remove ffmpeg-python>=0.2.0 from dependencies.
+    code_hint: |
+      # Remove line 24: "ffmpeg-python>=0.2.0"
+
+  - action: remove_line
+    description: >
+      Remove tqdm>=4.68.4 from dependencies.
+    code_hint: |
+      # Remove line 27: "tqdm>=4.67.4"
+
+acceptance_criteria:
+  - Dependencies removed from pyproject.toml
+  - No imports break
+  - Tests pass

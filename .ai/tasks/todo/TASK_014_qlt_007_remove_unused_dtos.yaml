@@ -1,0 +1,64 @@
+id: TASK_014_qlt_007_remove_unused_dtos
+source_reference:
+  - .ai/audit/99-validation/08-quality-validated.md
+  - .ai/audit/99-validation/03-services-validated.md
+source_section: QLT-007, SRV-009
+source_finding: QLT-007, SRV-009
+
+title: Remove unused DTO models (DownloadRequest, DownloadResult, DownloadProgress, StreamWithCookies)
+priority: medium
+status: pending
+
+description: >
+  DownloadRequest, DownloadResult, DownloadProgress, and StreamWithCookies are defined/exported
+  but never instantiated in production code. perform_download returns Path | None instead of
+  DownloadResult. These inflate surface area and mislead about live API.
+
+goals:
+  - Remove unused DTO classes from models/dtos.py
+  - Remove unused StreamWithCookies from models/video.py
+  - Remove exports from models/__init__.py
+  - Ensure HLSDownloadRequest (the only used DTO) remains
+
+files:
+  - path: src/vkdownloader/models/dtos.py
+    targets:
+      - type: class
+        name: DownloadRequest
+      - type: class
+        name: DownloadResult
+      - type: class
+        name: DownloadProgress
+  - path: src/vkdownloader/models/video.py
+    targets:
+      - type: class
+        name: StreamWithCookies
+  - path: src/vkdownloader/models/__init__.py
+    targets:
+      - type: export_list
+
+changes:
+  - action: remove_class
+    description: >
+      Remove DownloadRequest class from dtos.py.
+
+  - action: remove_class
+    description: >
+      Remove DownloadResult class from dtos.py.
+
+  - action: remove_class
+    description: >
+      Remove DownloadProgress class from dtos.py.
+
+  - action: remove_class
+    description: >
+      Remove StreamWithCookies class from video.py.
+
+  - action: remove_exports
+    description: >
+      Remove unused DTO exports from __init__.py, keep HLSDownloadRequest.
+
+acceptance_criteria:
+  - Unused DTOs removed
+  - HLSDownloadRequest still available
+  - Tests pass

@@ -1,0 +1,45 @@
+id: TASK_026_str_004_batch_cli_refactor
+source_reference: .ai/audit/99-validation/09-structural-quality-validated.md
+source_section: STR-004
+source_finding: STR-004
+
+title: Extract closures from batch_download to module-level helpers
+priority: low
+status: pending
+
+description: >
+  batch_download (188 lines, CC=14, nesting depth 7) defines inline closures _download_single
+  and _run_batch_with_progress. The cancellation handling reaches nesting depth 7.
+
+goals:
+  - Hoist _download_single to module level
+  - Hoist _run_batch_with_progress to module level
+  - Extract _print_batch_summary for result aggregation
+  - Reduce function size and nesting
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: batch_download
+    semantic_anchors:
+      extract_closure:
+        type: nested_function
+        value: _download_single
+      extract_closure:
+        type: nested_function
+        value: _run_batch_with_progress
+
+changes:
+  - action: extract_function
+    description: >
+      Move _download_single and _run_batch_with_progress to module level with proper signatures.
+    code_hint: |
+      async def _download_single(...):  # module level
+      async def _run_batch_with_progress(...):  # module level
+
+acceptance_criteria:
+  - Function sizes reduced
+  - Nesting depth reduced to ≤3
+  - Same batch behavior preserved
+  - Tests pass

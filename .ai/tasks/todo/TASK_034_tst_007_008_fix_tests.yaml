@@ -1,0 +1,47 @@
+id: TASK_034_tst_007_008_fix_tests
+source_reference:
+  - .ai/audit/99-validation/07-tests-validated.md
+  - .ai/audit/99-validation/07-tests-validated.md
+source_section: TST-007, TST-008
+source_finding: TST-007, TST-008
+
+title: Fix unawaited coroutines and flaky timing tests
+priority: low
+status: pending
+
+description: >
+  TST-007: Tests leave unawaited coroutines (RuntimeWarning), masking potential bugs.
+  TST-008: Tests use real time.sleep with tight margins (flaky).
+
+goals:
+  - Fix tests to properly await coroutines
+  - Use wider margins or fake time for backoff timing tests
+
+files:
+  - path: tests/test_cli.py
+    targets:
+      - type: test_function
+        name: test_download_keyboard_interrupt
+  - path: tests/test_downloader_throttle.py
+    targets:
+      - type: test_function
+        name: test_wait_if_paused_returns_on_shutdown
+      - type: test_function
+        name: test_is_paused_returns_false_after_backoff_expires
+      - type: test_function
+        name: test_pause_overwrites_existing_backoff
+
+changes:
+  - action: fix_await
+    description: >
+      Ensure all async mocks are properly awaited in test teardown.
+    code_hint: null
+  - action: fix_timing
+    description: >
+      Increase time.sleep margins or mock time for backoff tests.
+    code_hint: null
+
+acceptance_criteria:
+  - No RuntimeWarnings on test run
+  - Tests pass consistently
+  - No flaky timing
