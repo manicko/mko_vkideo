@@ -274,6 +274,10 @@ async def download_with_ytdlp_with_resume_fallback(
     extractor: VKVideoExtractor | None,
     settings: Settings | None = None,
     cookies: str | None = None,
+    *,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+    semaphore: asyncio.Semaphore | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based resume on failure.
 
@@ -290,6 +294,9 @@ async def download_with_ytdlp_with_resume_fallback(
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
         cookies: Optional cookies string for authenticated downloads.
+        backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
+        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
+        progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -360,6 +367,9 @@ async def download_with_ytdlp_with_resume_fallback(
                                 cookies=cookies,
                                 settings=settings,
                                 extractor=extractor,
+                                backoff_coordinator=backoff_coordinator,
+                                semaphore=semaphore,
+                                progress_callback=progress_callback,
                             )
                         )
                         if segment_result:
@@ -594,7 +604,9 @@ async def perform_download(
                 browser_streams = None
                 cookies = None
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings, cookies=cookies
+                url, m3u8_url, output_file, quality, extractor, settings, cookies=cookies,
+                backoff_coordinator=backoff_coordinator, semaphore=semaphore,
+                progress_callback=progress_callback,
             )
         case DownloadMethod.FFMPEG:
             # Conditionally get cookies based on cookie_source setting
@@ -643,7 +655,9 @@ async def perform_download(
         case DownloadMethod.AUTO:
             # Auto: try yt-dlp first (more reliable), segment download for resume
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings
+                url, m3u8_url, output_file, quality, extractor, settings,
+                backoff_coordinator=backoff_coordinator, semaphore=semaphore,
+                progress_callback=progress_callback,
             )
         case _:
             logger.error("unknown_download_method", method=str(method))
