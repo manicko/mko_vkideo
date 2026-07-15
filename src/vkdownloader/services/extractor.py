@@ -5,7 +5,6 @@ import re
 
 import yt_dlp
 from playwright.async_api import Cookie, Page
-from pydantic import HttpUrl
 from structlog import get_logger
 
 from ..config import Settings
@@ -168,7 +167,7 @@ class VKVideoExtractor:
                             format_url = f.get("url")
                             if format_url:
                                 stream = Stream(
-                                    url=HttpUrl(format_url),
+                                    url=format_url,
                                     format=StreamFormat.HLS
                                     if ".m3u8" in format_url
                                     else StreamFormat.MP4,
@@ -222,7 +221,7 @@ class VKVideoExtractor:
 
             if monitor.m3u8_urls:
                 stream = Stream(
-                    url=HttpUrl(monitor.m3u8_urls[0]),
+                    url=monitor.m3u8_urls[0],
                     format=StreamFormat.HLS,
                     quality="best",
                     width=None,

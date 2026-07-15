@@ -20,7 +20,7 @@ class Video(BaseModel):
 class Stream(BaseModel):
     """Represents a video stream with URL and quality information."""
 
-    url: HttpUrl
+    url: str
     format: StreamFormat
     quality: str
     resolution: str | None = None
