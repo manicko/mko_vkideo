@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +27,22 @@ class FfmpegProgress:
     out_time_ms: int | None = None
     out_time: str | None = None
     progress: str | None = None
+
+
+# Type alias for progress key handler
+_ProgressHandler = Callable[[str, FfmpegProgress], None]
+
+
+# Lookup table for progress key handlers
+_PROGRESS_KEY_HANDLERS: dict[str, _ProgressHandler] = {
+    "frame": lambda v, p: setattr(p, "frame", int(v) if v != "N/A" else None),
+    "fps": lambda v, p: setattr(p, "fps", float(v) if v != "N/A" else None),
+    "speed": lambda v, p: setattr(p, "speed", float(v.rstrip("x")) if v != "N/A" else None),
+    "total_size": lambda v, p: setattr(p, "total_size", int(v) if v != "N/A" else None),
+    "out_time_us": lambda v, p: setattr(p, "out_time_us", int(v) if v != "N/A" else None),
+    "out_time_ms": lambda v, p: setattr(p, "out_time_ms", int(v) if v != "N/A" else None),
+    "out_time": lambda v, p: setattr(p, "out_time", v if v != "N/A" else None),
+}
 
 
 class ProgressParser:
@@ -73,21 +89,9 @@ async def read_progress(
         parsed = ProgressParser.parse_line(line.decode())
         if parsed:
             key, value = parsed
-            if key == "frame":
-                progress.frame = int(value) if value != "N/A" else None
-            elif key == "fps":
-                progress.fps = float(value) if value != "N/A" else None
-            elif key == "speed":
-                # Parse "1.2x" -> 1.2
-                progress.speed = float(value.rstrip("x")) if value != "N/A" else None
-            elif key == "total_size":
-                progress.total_size = int(value) if value != "N/A" else None
-            elif key == "out_time_us":
-                progress.out_time_us = int(value) if value != "N/A" else None
-            elif key == "out_time_ms":
-                progress.out_time_ms = int(value) if value != "N/A" else None
-            elif key == "out_time":
-                progress.out_time = value if value != "N/A" else None
+            handler = _PROGRESS_KEY_HANDLERS.get(key)
+            if handler is not None:
+                handler(value, progress)
             elif key == "progress":
                 progress.progress = value
                 yield progress
