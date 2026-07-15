@@ -12,9 +12,9 @@ import yt_dlp
 from structlog import get_logger
 
 from ..config import Settings
-from ..exceptions import ExtractionError
+from ..exceptions import ExtractionError, QualityNotAvailableError
 from ..models.dtos import HLSDownloadRequest
-from ..models.enums import CookieSource, DownloadMethod
+from ..models.enums import CookieSource, DownloadMethod, QualityEnum
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
@@ -29,6 +29,7 @@ from .ffmpeg_utils import (
     cancel_ffmpeg_process,
     read_progress,
 )
+from .quality import QualitySelector
 from .segment_downloader import (
     _cleanup_segments,
     _download_segment,
@@ -46,6 +47,31 @@ logger = get_logger(__name__)
 
 # Maximum retry attempts for getting new token on resume failure
 MAX_RESUME_RETRIES = 3
+
+
+def _parse_quality_to_enum(quality: str) -> QualityEnum:
+    """
+    Parse quality string to QualityEnum for stream selection.
+
+    Args:
+        quality: Quality string (e.g., "720", "1080", "best", "worst").
+
+    Returns:
+        QualityEnum value matching the string.
+
+    Raises:
+        ValueError: If quality string cannot be parsed to QualityEnum.
+    """
+    try:
+        return QualityEnum(quality)
+    except ValueError:
+        # If not a valid enum value, try to match with Q-prefixed values
+        normalized = quality.rstrip("p") if quality else "best"
+        try:
+            # Try matching Q-prefixed enum (e.g., "720" -> "Q720")
+            return QualityEnum(f"Q{normalized}")
+        except ValueError:
+            raise ValueError(f"Invalid quality value: {quality}") from None
 
 # Re-export for backward compatibility
 __all__ = [
@@ -305,8 +331,23 @@ async def download_with_ytdlp_with_resume_fallback(
                         video_url, force_browser=True
                     )
                     if browser_streams:
-                        m3u8_url = str(browser_streams[0].url)
-                        logger.info("fresh_token_obtained_for_resume")
+                        try:
+                            quality_enum = _parse_quality_to_enum(quality)
+                            selector = QualitySelector()
+                            selected_stream = selector.select(browser_streams, quality_enum)
+                            m3u8_url = str(selected_stream.url)
+                            logger.info(
+                                "fresh_token_obtained_for_resume",
+                                quality=quality,
+                                selected_quality=selected_stream.quality,
+                            )
+                        except QualityNotAvailableError:
+                            logger.error(
+                                "requested_quality_not_available_in_browser_streams",
+                                quality=quality,
+                                available=[s.quality for s in browser_streams],
+                            )
+                            raise
                         # Remove partial file to start clean segment download
                         validated_output.unlink()
                         # Continue to segment download
@@ -323,8 +364,11 @@ async def download_with_ytdlp_with_resume_fallback(
                         )
                         if segment_result:
                             return segment_result
-                except (ExtractionError, OSError, ValueError) as e:
+                except (ExtractionError, OSError) as e:
                     logger.warning("failed_to_refresh_token", error=str(e))
+                except ValueError as e:
+                    logger.error("invalid_quality_for_browser_streams", error=str(e))
+                    raise
             else:
                 logger.error("max_retries_exceeded")
                 return None
@@ -529,7 +573,23 @@ async def perform_download(
             if settings.cookie_source == CookieSource.BROWSER:
                 browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
                 if browser_streams:
-                    m3u8_url = str(browser_streams[0].url)
+                    try:
+                        quality_enum = _parse_quality_to_enum(quality)
+                        selector = QualitySelector()
+                        selected_stream = selector.select(browser_streams, quality_enum)
+                        m3u8_url = str(selected_stream.url)
+                        logger.info(
+                            "browser_streams_selected",
+                            quality=quality,
+                            selected_quality=selected_stream.quality,
+                        )
+                    except QualityNotAvailableError:
+                        logger.error(
+                            "requested_quality_not_available_in_browser_streams",
+                            quality=quality,
+                            available=[s.quality for s in browser_streams],
+                        )
+                        raise
             else:
                 browser_streams = None
                 cookies = None
@@ -541,7 +601,23 @@ async def perform_download(
             if settings.cookie_source == CookieSource.BROWSER:
                 browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
                 if browser_streams:
-                    m3u8_url = str(browser_streams[0].url)
+                    try:
+                        quality_enum = _parse_quality_to_enum(quality)
+                        selector = QualitySelector()
+                        selected_stream = selector.select(browser_streams, quality_enum)
+                        m3u8_url = str(selected_stream.url)
+                        logger.info(
+                            "browser_streams_selected",
+                            quality=quality,
+                            selected_quality=selected_stream.quality,
+                        )
+                    except QualityNotAvailableError:
+                        logger.error(
+                            "requested_quality_not_available_in_browser_streams",
+                            quality=quality,
+                            available=[s.quality for s in browser_streams],
+                        )
+                        raise
             else:
                 browser_streams = None
                 cookies = None
