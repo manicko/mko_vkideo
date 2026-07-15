@@ -40,10 +40,8 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| HttpClient | `infrastructure/http_client.py` | Async HTTP requests with retry logic and browser-like headers |
 | BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management |
 | NetworkMonitor | `infrastructure/network_monitor.py` | Captures m3u8 URLs from browser network traffic |
-| AdaptiveThrottle | `infrastructure/adaptive_throttle.py` | Dynamic rate limiting with backoff/recovery strategy |
 | **_retry_429_with_backoff** | `services/downloader_throttle.py` | AWS Full Jitter backoff for rate-limited segment downloads |
 
 ### Models
