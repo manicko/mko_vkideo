@@ -276,7 +276,7 @@ async def download_hls_with_resume(
                     if not segment_url.startswith("http"):
                         full_url = urljoin(request.m3u8_url, segment_url)
                     segment_path = segments_dir / f"{idx:05d}.ts"
-                    if not segment_path.exists():
+                    if not segment_path.exists() or segment_path.stat().st_size == 0:
                         result = await _download_segment(
                             session,
                             full_url,
@@ -311,11 +311,13 @@ async def download_hls_with_resume(
                 asyncio.create_task(download_segment_concurrent(i, seg))
                 for i, seg in enumerate(segments)
                 if not (segments_dir / f"{i:05d}.ts").exists()
+                or (segments_dir / f"{i:05d}.ts").stat().st_size == 0
             ]
+
             if tasks:
                 try:
                     # Wait for all tasks to complete, but allow shutdown interruption
-                    results = await asyncio.gather(*tasks)
+                    download_results = await asyncio.gather(*tasks)
                 except asyncio.CancelledError:
                     # Cancel any still-running tasks on interruption
                     for task in tasks:
@@ -326,7 +328,7 @@ async def download_hls_with_resume(
                     logger.info("download_cancelled", reason="shutdown_requested")
                     return None
                 downloaded_count = _load_downloaded_count(metadata_file) + sum(
-                    1 for r in results if r
+                    1 for r in download_results if r
                 )
                 _save_downloaded_count(metadata_file, downloaded_count)
 
@@ -339,17 +341,19 @@ async def download_hls_with_resume(
                     )
                     request.progress_callback(video_id, downloaded_count, len(segments))
 
-                # All downloaded - merge in batches
-                if downloaded_count == len(segments):
-                    logger.info("merging_segments", count=downloaded_count)
-                    result = await _merge_segments_batched(segments_dir, output_file, len(segments))
-                    if result:
-                        _cleanup_segments(segments_dir, metadata_file)
-                    return result
+            # All downloaded - merge in batches
+            if downloaded_count == len(segments):
+                logger.info("merging_segments", count=len(segments))
+                result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+                if result:
+                    _cleanup_segments(segments_dir, metadata_file)
+                return result
 
             return None
-    finally:
-        # Clean up on failure - only if segments_dir still exists
-        # (cleanup is done inside try block on success, so dir won't exist then)
+    except Exception:
+        # On any exception, preserve segments for resume (don't cleanup)
         if segments_dir.exists():
-            _cleanup_segments(segments_dir, metadata_file)
+            segment_count = len(list(segments_dir.glob("*.ts")))
+            if segment_count > 0:
+                logger.info("preserving_segments_for_resume", count=segment_count)
+        raise

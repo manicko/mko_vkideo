@@ -251,9 +251,10 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
         batch_end = min(batch_start + batch_size, count)
         batch_files = [segments_dir / f"{i:05d}.ts" for i in range(batch_start, batch_end)]
 
-        # Check all files exist
+        # Check all files exist - raise error if missing instead of silent continue
         if not all(f.exists() for f in batch_files):
-            continue
+            missing = [f.name for f in batch_files if not f.exists()]
+            raise FileNotFoundError(f"Missing segment files for merge: {missing}")
 
         result = await _merge_batch_segments(batch_files, segments_dir)
         if result is None:
