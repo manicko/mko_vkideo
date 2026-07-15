@@ -79,7 +79,7 @@ class QualitySelector:
                     # Quality not available - raise specific error
                     available_qualities = [s.quality for s in streams]
                     raise QualityNotAvailableError(
-                        f"Requested quality '{quality}' not available. Available: {available_qualities}"
+                        str(quality), available_qualities
                     )
 
         return result

@@ -230,7 +230,7 @@ class TestQualityOptionValidation:
             mock_selector = MagicMock()
             mock_selector.list_available_qualities.return_value = ["1080", "720"]
             mock_selector.select.side_effect = QualityNotAvailableError(
-                "Requested quality '1440' not available. Available: ['1080', '720', '480', '360', '240', '144']"
+                "1440", ["1080", "720", "480", "360", "240", "144"]
             )
             mock_selector_cls.return_value = mock_selector
 

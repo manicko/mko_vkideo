@@ -42,8 +42,15 @@ def test_quality_not_available_raises() -> None:
     ]
 
     # Request 480p which doesn't exist - should raise QualityNotAvailableError
-    with pytest.raises(QualityNotAvailableError, match="Requested quality '480' not available"):
+    with pytest.raises(QualityNotAvailableError) as exc_info:
         selector.select(streams, QualityEnum.Q480)
+
+    # Verify structured fields
+    error = exc_info.value
+    assert error.requested == "480"
+    assert error.available == ["720", "1080"]
+    # Verify message format
+    assert "Quality '480' not available" in str(error)
 
 
 def test_select_specific_quality() -> None:

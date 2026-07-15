@@ -82,10 +82,10 @@ class ProgressManager:
     across multiple download tasks.
 
     Thread-safety notes:
-        - The `_state` dict is accessed both via async methods (update, clear) with lock
-          protection, and via direct assignment from sync callbacks in _create_progress_callback.
-        - Direct tuple assignment to `_state[url_index]` is GIL-atomic in CPython, providing
-          safe fire-and-forget semantics for progress callbacks invoked from async tasks.
+        - The `_state` dict is accessed via async methods (update, clear, get_formatted_progress)
+          with lock protection for thread-safe access across async tasks.
+        - For sync callbacks (e.g., progress callbacks from segment downloads), use
+          `update_sync()` which relies on single-event-loop execution semantics.
         - The async lock protects the read path in get_formatted_progress, ensuring consistent
           reads while callbacks may write concurrently.
     """
@@ -104,6 +104,23 @@ class ProgressManager:
         """
         async with self._lock:
             self._state[url_index] = (downloaded, total)
+
+    def update_sync(self, url_index: int, downloaded: int, total: int) -> None:
+        """Update progress for a URL from sync callbacks in the same event loop.
+
+        This method is for use with sync callbacks that run within the asyncio event loop.
+        It performs direct assignment without lock protection, relying on the guarantee that
+        these callbacks execute sequentially in the single-threaded event loop.
+
+        Args:
+            url_index: Index of the URL in the batch for tracking.
+            downloaded: Number of bytes downloaded so far.
+            total: Total bytes to download.
+
+        Note:
+            Do not call this method from true multi-threaded contexts; use `update()` instead.
+        """
+        self._state[url_index] = (downloaded, total)
 
     async def get_formatted_progress(self, url_count: int) -> str:
         """Get formatted progress string for all URLs.

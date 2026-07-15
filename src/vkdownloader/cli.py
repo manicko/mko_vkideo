@@ -32,15 +32,14 @@ def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]
         Callback function that updates shared progress state.
 
     Thread-safety:
-        This callback uses GIL-atomic tuple assignment for fire-and-forget
-        semantics. The asyncio.Lock in ProgressManager protects the read path
-        in get_formatted_progress, ensuring safe concurrent access.
+        Uses `update_sync()` which performs direct assignment without lock protection.
+        This is safe because callbacks execute sequentially in the single-threaded
+        asyncio event loop. The async lock in `get_formatted_progress()` protects the
+        read path, ensuring consistent reads while callbacks write concurrently.
     """
 
     def callback(video_id: str, downloaded: int, total: int) -> None:
-        # Non-blocking - just update shared state
-        # Note: tuple assignment is GIL-atomic in CPython for basic types
-        _progress_manager._state[url_index] = (downloaded, total)
+        _progress_manager.update_sync(url_index, downloaded, total)
 
     return callback
 
@@ -163,18 +162,17 @@ def download(
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
     except QualityNotAvailableError as e:
-        # Parse the available qualities from the error message for a clearer output
-        error_str = str(e)
-        requested = error_str.split("'")[1] if "'" in error_str else "unknown"
-        available_str = error_str.split("Available: ")[-1] if "Available: " in error_str else ""
-        available_qualities = available_str.replace("'", "").replace("[", "").replace("]", "")
+        # Access structured fields directly instead of parsing error message
+        requested = e.requested
+        available_qualities = e.available
         typer.echo(
             f"\nRequested quality '{requested}p' is not available for this video.",
             err=True,
         )
-        typer.echo(f"Available qualities: {available_qualities}", err=True)
+        typer.echo(f"Available qualities: {', '.join(available_qualities)}", err=True)
         raise typer.Exit(code=1) from None
     except Exception:
+        logger.exception("download_failed")
         typer.echo("An error occurred during download", err=True)
         raise typer.Exit(code=1) from None
 

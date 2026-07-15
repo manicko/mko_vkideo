@@ -14,9 +14,26 @@ class VideoNotFoundError(VKDownloadError):
 
 
 class QualityNotAvailableError(VKDownloadError):
-    """Raised when requested quality is not available for a video."""
+    """Raised when requested quality is not available for a video.
 
-    pass
+    Attributes:
+        requested: The quality string that was requested (e.g., "1440p").
+        available: List of available quality strings (e.g., ["1080p", "720p"]).
+    """
+
+    requested: str
+    available: list[str]
+
+    def __init__(self, requested: str, available: list[str]) -> None:
+        """Initialize the exception with requested and available qualities.
+
+        Args:
+            requested: The quality string that was requested.
+            available: List of available quality strings.
+        """
+        self.requested = requested
+        self.available = available
+        super().__init__(f"Quality '{requested}' not available. Available: {available}")
 
 
 class ExtractionError(VKDownloadError):
