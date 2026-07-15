@@ -421,8 +421,8 @@ async def _download_with_ytdlp(
                 "Referer": "https://vkvideo.ru/",
             },
             "socket_timeout": 180,
-            "retries": 10,
-            "fragment_retries": 10,
+            "retries": settings.max_retries,
+            "fragment_retries": settings.max_retries,
         }
 
         # Add cookies file generation if cookies provided

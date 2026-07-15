@@ -48,6 +48,7 @@ async def _download_segment(
     segment_index: int = 0,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
+    max_retries: int = 3,
 ) -> bool:
     """Download a single HLS segment.
 
@@ -60,12 +61,15 @@ async def _download_segment(
         segment_index: Index of the segment being downloaded (for logging).
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
         video_url: Original video URL for coordinator keying (required if coordinator provided).
+        max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
 
     Returns:
         True on success, False on failure.
     """
     if max_concurrent_downloads == 1:
-        content = await _retry_429_with_backoff(session, segment_url, headers, segment_index)
+        content = await _retry_429_with_backoff(
+            session, segment_url, headers, segment_index, max_retries=max_retries
+        )
         if content is not None:
             with open(output_path, "wb") as f:
                 f.write(content)
@@ -75,26 +79,39 @@ async def _download_segment(
     # Existing logic for parallel mode with shared backoff support
     shutdown_event = get_shutdown_event()
 
-    # Check for shared backoff before download attempt
-    if backoff_coordinator and video_url:
-        was_paused = await backoff_coordinator.wait_if_paused(video_url)
-        if was_paused and shutdown_event.is_set():
+    for attempt in range(max_retries):
+        # Check for shutdown signal
+        if shutdown_event.is_set():
             return False
 
-    try:
-        async with session.get(segment_url, headers=headers) as response:
-            if response.status == 200:
-                with open(output_path, "wb") as f:
-                    f.write(await response.read())
-                return True
-            logger.warning("segment_download_failed", status=response.status)
-            # Notify coordinator of rate limit for shared backoff
-            if backoff_coordinator and video_url and response.status in RETRYABLE_STATUS_CODES:
-                await backoff_coordinator.pause(video_url, 10.0)
-            return False
-    except aiohttp.ClientError as e:
-        logger.error("segment_download_error", error=str(e))
-        return False
+        # Check for shared backoff before download attempt
+        if backoff_coordinator and video_url:
+            was_paused = await backoff_coordinator.wait_if_paused(video_url)
+            if was_paused and shutdown_event.is_set():
+                return False
+
+        try:
+            async with session.get(segment_url, headers=headers) as response:
+                if response.status == 200:
+                    with open(output_path, "wb") as f:
+                        f.write(await response.read())
+                    return True
+                logger.warning("segment_download_failed", status=response.status)
+                # Notify coordinator of rate limit for shared backoff
+                if backoff_coordinator and video_url and response.status in RETRYABLE_STATUS_CODES:
+                    await backoff_coordinator.pause(video_url, 10.0)
+                # Retry loop continues on retryable status codes
+                if response.status not in RETRYABLE_STATUS_CODES:
+                    return False
+                # Continue to next retry attempt after backoff
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0)  # Brief pause before retry
+        except aiohttp.ClientError as e:
+            logger.error("segment_download_error", error=str(e))
+            if attempt == max_retries - 1:
+                return False
+
+    return False
 
 
 def _load_downloaded_count(metadata_file: Path) -> int:
@@ -229,7 +246,8 @@ async def download_hls_with_resume(
 
         async with aiohttp.ClientSession(connector=connector) as session:
             playlist_content = await _fetch_playlist_with_retry(
-                session, request.video_url, request.m3u8_url, headers, request.extractor, settings
+                session, request.video_url, request.m3u8_url, headers, request.extractor, settings,
+                max_retries=settings.max_retries
             )
             if not playlist_content:
                 return None
@@ -268,6 +286,7 @@ async def download_hls_with_resume(
                             segment_index=idx,
                             backoff_coordinator=request.backoff_coordinator,
                             video_url=request.video_url,
+                            max_retries=settings.max_retries,
                         )
                     else:
                         result = True
