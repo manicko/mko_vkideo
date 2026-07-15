@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from vkdownloader.config import Settings
-from vkdownloader.models.enums import CookieSource, DownloadMethod, LogLevel
+from vkdownloader.models.enums import CookieSource, LogLevel
 
 
 def test_settings_creates_with_defaults() -> None:
@@ -19,7 +19,6 @@ def test_settings_creates_with_defaults() -> None:
     assert settings.download_timeout == 300
     assert settings.ssl_verify is True
     assert settings.max_concurrent_downloads == 4
-    assert settings.download_method == DownloadMethod.AUTO
     assert settings.log_level == LogLevel.INFO
     assert settings.log_file is None
 
@@ -35,7 +34,6 @@ def test_settings_accepts_valid_fields() -> None:
         download_timeout=600,
         ssl_verify=False,
         max_concurrent_downloads=8,
-        download_method=DownloadMethod.YTDLP,
         log_level="DEBUG",
     )
 
@@ -47,7 +45,6 @@ def test_settings_accepts_valid_fields() -> None:
     assert settings.download_timeout == 600
     assert settings.ssl_verify is False
     assert settings.max_concurrent_downloads == 8
-    assert settings.download_method == DownloadMethod.YTDLP
     assert settings.log_level == LogLevel.DEBUG
 
 

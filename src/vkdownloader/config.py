@@ -7,7 +7,7 @@ import structlog
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-from vkdownloader.models.enums import CookieSource, DownloadMethod, LogLevel
+from vkdownloader.models.enums import CookieSource, LogLevel
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -71,10 +71,6 @@ class Settings(BaseSettings):
         ge=1048576,
         le=104857600,
         description="HTTP chunk size in bytes for segment downloads",
-    )
-    download_method: DownloadMethod = Field(
-        default=DownloadMethod.AUTO,
-        description="Download method: 'yt-dlp', 'ffmpeg', or 'auto'",
     )
     cookie_source: CookieSource = Field(
         default=CookieSource.NONE,
