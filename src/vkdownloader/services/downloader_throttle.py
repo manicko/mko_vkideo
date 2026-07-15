@@ -176,7 +176,6 @@ async def _retry_429_with_backoff(
     shutdown_event = get_shutdown_event()
 
     for attempt in range(max_retries):
-        # Check for shutdown signal before each attempt
         if shutdown_event.is_set():
             logger.info("download_cancelled", segment_index=segment_index, url=sanitized_url)
             return None
@@ -195,22 +194,8 @@ async def _retry_429_with_backoff(
                     )
                     return None
 
-                # Parse Retry-After header
                 retry_after_seconds = _parse_retry_after(response)
-
-                # Determine base delay based on status code
-                if response.status == 429:
-                    base_delay = 1.0
-                else:
-                    # 5xx errors use shorter base delay per AWS SDK guidance
-                    base_delay = 0.05
-
-                # Calculate delay with full jitter: random(0, base_delay * 2^attempt)
-                delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
-
-                # Prefer Retry-After header over calculated delay
-                if retry_after_seconds is not None:
-                    delay = max(delay, retry_after_seconds)
+                delay = _compute_backoff_delay(response.status, attempt, retry_after_seconds)
 
                 logger.warning(
                     "segment_retry_429",
@@ -221,17 +206,8 @@ async def _retry_429_with_backoff(
                     url=sanitized_url,
                 )
 
-                # Use asyncio.wait_for to allow interruption during sleep
-                try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
-                    # If wait completes (shutdown was triggered), return None
-                    logger.info(
-                        "download_cancelled", segment_index=segment_index, url=sanitized_url
-                    )
+                if await _wait_with_shutdown(delay, shutdown_event, segment_index, sanitized_url):
                     return None
-                except TimeoutError:
-                    # Normal timeout - continue with retry
-                    pass
 
         except asyncio.CancelledError:
             logger.info(
@@ -284,3 +260,71 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
         pass
 
     return None
+
+
+def _compute_backoff_delay(
+    status_code: int,
+    attempt: int,
+    retry_after_seconds: float | None,
+) -> float:
+    """Compute backoff delay using AWS Full Jitter exponential backoff.
+
+    Calculates delay with full jitter: random(0, base_delay * 2^attempt).
+    Respects Retry-After header if present.
+
+    Args:
+        status_code: HTTP status code.
+        attempt: Current retry attempt number (0-indexed).
+        retry_after_seconds: Seconds from Retry-After header, if any.
+
+    Returns:
+        Seconds to wait before retry.
+    """
+    # Determine base delay based on status code
+    if status_code == 429:
+        base_delay = 1.0
+    else:
+        # 5xx errors use shorter base delay per AWS SDK guidance
+        base_delay = 0.05
+
+    # Calculate delay with full jitter: random(0, base_delay * 2^attempt)
+    delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
+
+    # Prefer Retry-After header over calculated delay
+    if retry_after_seconds is not None:
+        delay = max(delay, retry_after_seconds)
+
+    return delay
+
+
+async def _wait_with_shutdown(
+    delay: float,
+    shutdown_event: asyncio.Event | None,
+    segment_index: int,
+    url: str,
+) -> bool:
+    """Wait for specified delay while monitoring shutdown signal.
+
+    Uses asyncio.wait_for to allow interruption during sleep.
+
+    Args:
+        delay: Seconds to wait.
+        shutdown_event: Event that signals shutdown, if set returns True immediately.
+        segment_index: Segment index for logging.
+        url: Sanitized URL for logging.
+
+    Returns:
+        True if shutdown was triggered, False if delay completed normally.
+    """
+    if shutdown_event is None:
+        await asyncio.sleep(delay)
+        return False
+
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+        # If wait completes (shutdown was triggered), return True
+        logger.info("download_cancelled", segment_index=segment_index, url=url)
+        return True
+    except TimeoutError:
+        # Normal timeout - continue with retry
+        return False
