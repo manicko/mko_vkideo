@@ -33,6 +33,8 @@ from .quality import QualitySelector
 from .segment_downloader import (
     _cleanup_segments,
     _download_segment,
+    _download_segment_parallel,
+    _download_segment_sequential,
     _fetch_playlist_with_retry,
     _load_downloaded_count,
     _parse_m3u8_segments,
@@ -87,6 +89,8 @@ __all__ = [
     "_cleanup_segments",
     "_cookies_to_netscape",
     "_download_segment",
+    "_download_segment_parallel",
+    "_download_segment_sequential",
     "_fetch_playlist_with_retry",
     "_load_downloaded_count",
     "_merge_segments_batched",
@@ -513,6 +517,54 @@ async def _download_with_ytdlp(
         return None
 
 
+async def _resolve_cookies(
+    extractor: VKVideoExtractor,
+    settings: Settings,
+    url: str,
+    m3u8_url: str,
+    quality: str,
+) -> tuple[str, str | None]:
+    """Resolve cookies and update m3u8_url based on cookie_source setting.
+
+    Args:
+        extractor: VKVideoExtractor instance for stream extraction.
+        settings: Application settings.
+        url: Video URL to extract streams from.
+        m3u8_url: Current m3u8 URL (may be updated if browser streams used).
+        quality: Quality string for stream selection.
+
+    Returns:
+        Tuple of (updated m3u8_url, cookies string or None).
+
+    Raises:
+        QualityNotAvailableError: If requested quality not available in browser streams.
+    """
+    if settings.cookie_source == CookieSource.BROWSER:
+        browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+        if browser_streams:
+            try:
+                quality_enum = _parse_quality_to_enum(quality)
+                selector = QualitySelector()
+                selected_stream = selector.select(browser_streams, quality_enum)
+                m3u8_url = str(selected_stream.url)
+                logger.info(
+                    "browser_streams_selected",
+                    quality=quality,
+                    selected_quality=selected_stream.quality,
+                )
+            except QualityNotAvailableError:
+                logger.error(
+                    "requested_quality_not_available_in_browser_streams",
+                    quality=quality,
+                    available=[s.quality for s in browser_streams],
+                )
+                raise
+        else:
+            cookies = None
+        return m3u8_url, cookies
+    return m3u8_url, None
+
+
 # Track if signal handlers already setup to prevent duplicate registration
 _signal_handlers_setup = False
 
@@ -615,60 +667,18 @@ async def perform_download(
 
     match method:
         case DownloadMethod.YTDLP:
-            # Conditionally get cookies based on cookie_source setting
-            if settings.cookie_source == CookieSource.BROWSER:
-                browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
-                if browser_streams:
-                    try:
-                        quality_enum = _parse_quality_to_enum(quality)
-                        selector = QualitySelector()
-                        selected_stream = selector.select(browser_streams, quality_enum)
-                        m3u8_url = str(selected_stream.url)
-                        logger.info(
-                            "browser_streams_selected",
-                            quality=quality,
-                            selected_quality=selected_stream.quality,
-                        )
-                    except QualityNotAvailableError:
-                        logger.error(
-                            "requested_quality_not_available_in_browser_streams",
-                            quality=quality,
-                            available=[s.quality for s in browser_streams],
-                        )
-                        raise
-            else:
-                browser_streams = None
-                cookies = None
+            m3u8_url, cookies = await _resolve_cookies(
+                extractor, settings, url, m3u8_url, quality
+            )
             return await download_with_ytdlp_with_resume_fallback(
                 url, m3u8_url, output_file, quality, extractor, settings, cookies=cookies,
                 backoff_coordinator=backoff_coordinator, semaphore=semaphore,
                 progress_callback=progress_callback,
             )
         case DownloadMethod.FFMPEG:
-            # Conditionally get cookies based on cookie_source setting
-            if settings.cookie_source == CookieSource.BROWSER:
-                browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
-                if browser_streams:
-                    try:
-                        quality_enum = _parse_quality_to_enum(quality)
-                        selector = QualitySelector()
-                        selected_stream = selector.select(browser_streams, quality_enum)
-                        m3u8_url = str(selected_stream.url)
-                        logger.info(
-                            "browser_streams_selected",
-                            quality=quality,
-                            selected_quality=selected_stream.quality,
-                        )
-                    except QualityNotAvailableError:
-                        logger.error(
-                            "requested_quality_not_available_in_browser_streams",
-                            quality=quality,
-                            available=[s.quality for s in browser_streams],
-                        )
-                        raise
-            else:
-                browser_streams = None
-                cookies = None
+            m3u8_url, cookies = await _resolve_cookies(
+                extractor, settings, url, m3u8_url, quality
+            )
             downloader = HLSDownloader(settings=settings)
             result = await downloader.download_with_ffmpeg(m3u8_url, output_file, quality, cookies)
             if result is None:
