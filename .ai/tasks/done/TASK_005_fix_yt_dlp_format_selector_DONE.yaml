@@ -1,0 +1,34 @@
+id: fix_yt_dlp_format_selector
+source_reference: .ai/audit/99-validation/06-data-flow-validated-findings.md
+source_section: DF-004
+priority: high
+
+title: Fix yt-dlp format selector for literal "best" quality
+
+description: >
+  The yt-dlp format selector `best[height<=best]` breaks when quality is the
+  literal string "best" (default in HLSDownloadRequest.quality). This produces
+  an invalid selector because yt-dlp requires numeric height values for the
+  height<= comparison.
+
+goals:
+  - guard against non-numeric quality values in format selector
+  - use bare 'best' selector when quality is non-numeric
+  - maintain backward compatibility for numeric quality values
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: _download_with_ytdlp
+
+changes:
+  - action: add_code
+    description: >
+      Before building format selector, check if quality contains non-numeric
+      characters. If so, use bare 'best' selector without height filter.
+
+acceptance_criteria:
+  - downloads work with default quality="best" path
+  - numeric quality values still apply height filter
+  - no regression in download functionality

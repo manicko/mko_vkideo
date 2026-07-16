@@ -482,11 +482,18 @@ async def _download_with_ytdlp(
         if not settings.ssl_verify:
             logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
 
+        # Build format selector: use height filter for numeric quality, bare 'best' otherwise
+        format_selector = (
+            f"best[height<={quality_str}]"
+            if quality_str and quality_str.isdigit()
+            else "best"
+        )
+
         ydl_opts = {
             "outtmpl": str(output_file),
             "quiet": False,
             "no_warnings": True,
-            "format": f"best[height<={quality_str}]",
+            "format": format_selector,
             "nocheckcertificate": not settings.ssl_verify,
             "hls_prefer_native": True,
             "concurrent_fragments": settings.max_concurrent_downloads,
