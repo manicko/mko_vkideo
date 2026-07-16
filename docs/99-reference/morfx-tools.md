@@ -15,6 +15,8 @@ related:
 
 # Morfx Tools — Agent Reference
 
+> **Note:** The DSL examples in this document reference `telegram_service.py` and other files that are synthetic examples for illustration purposes only. They do not correspond to actual files in this codebase. This project is a VK Video Downloader, not a Telegram posting application.
+
 AST-based code transformation tools for agents. Morfx operates on the actual syntax tree, making every transformation targeted by node type and structure rather than raw text.
 
 ## ⚠️ Windows Restrictions
