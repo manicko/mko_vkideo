@@ -344,6 +344,67 @@ def _cleanup_segments(segments_dir: Path, metadata_file: Path) -> None:
     metadata_file.unlink(missing_ok=True)
 
 
+async def _refresh_token_and_retry(
+    video_url: str,
+    extractor: VKVideoExtractor,
+    settings: Settings,
+) -> tuple[str, str] | None:
+    """Refresh token via browser extraction on 403/410 error.
+
+    Returns tuple of (new_url, cookies) on success, None if refresh failed.
+    """
+    if settings.cookie_source != CookieSource.BROWSER:
+        logger.warning(
+            "token_refresh_failed_cookie_source",
+            cookie_source=str(settings.cookie_source),
+            reason="Cannot refresh token without browser access",
+        )
+        return None
+
+    streams, new_cookies, _raw_cookies = await extractor.extract_streams_with_cookies(
+        video_url, force_browser=True
+    )
+    if not streams:
+        return None
+
+    return str(streams[0].url), new_cookies or ""
+
+
+async def _fetch_single_playlist(
+    session: aiohttp.ClientSession,
+    url: str,
+    headers: dict[str, str],
+    timeout: aiohttp.ClientTimeout,
+) -> tuple[str, int] | None:
+    """Fetch a single playlist, returning (playlist_text, status_code) or None on error."""
+    try:
+        async with session.get(url, headers=headers, timeout=timeout) as response:
+            if response.status == 200:
+                return await response.text(), response.status
+            return "", response.status
+    except (aiohttp.ClientError, asyncio.CancelledError) as e:
+        logger.warning("playlist_fetch_failed", error=str(e))
+        return None
+
+
+async def _handle_token_refresh(
+    video_url: str,
+    extractor: VKVideoExtractor,
+    settings: Settings,
+    headers: dict[str, str],
+) -> str | None:
+    """Handle token refresh and update headers.
+
+    Returns new URL on success, None on failure.
+    """
+    refresh_result = await _refresh_token_and_retry(video_url, extractor, settings)
+    if refresh_result:
+        current_url, new_cookies = refresh_result
+        headers["Cookie"] = new_cookies
+        return current_url
+    return None
+
+
 async def _fetch_playlist_with_retry(
     session: aiohttp.ClientSession,
     video_url: str,
@@ -357,38 +418,28 @@ async def _fetch_playlist_with_retry(
     current_url = m3u8_url
     client_timeout = aiohttp.ClientTimeout(total=settings.download_timeout)
 
-    for attempt in range(max_retries):
-        try:
-            async with session.get(
-                current_url, headers=headers, timeout=client_timeout
-            ) as response:
-                if response.status == 200:
-                    return await response.text()
-                if response.status in (403, 410) and extractor:
-                    logger.info("token_expired_fetching_new", attempt=attempt + 1)
-                    # Check if cookie_source allows browser use for token refresh
-                    if settings.cookie_source == CookieSource.BROWSER:
-                        # Can refresh token via browser (recovery scenario)
-                        streams, new_cookies = await extractor.extract_streams_with_cookies(
-                            video_url, force_browser=True
-                        )
-                        if streams:
-                            current_url = str(streams[0].url)
-                            headers["Cookie"] = new_cookies or ""
-                            continue
-                    else:
-                        # Cannot refresh without browser, log warning and return None
-                        logger.warning(
-                            "token_refresh_failed_cookie_source",
-                            cookie_source=str(settings.cookie_source),
-                            reason="Cannot refresh token without browser access",
-                        )
-                        return None
-        except (aiohttp.ClientError, asyncio.CancelledError) as e:
-            logger.warning("playlist_fetch_failed", error=str(e))
+    for _ in range(max_retries):
+        result = await _fetch_single_playlist(session, current_url, headers, client_timeout)
+        if result is None:
+            continue
+
+        playlist_text, status = result
+        if status == 200:
+            return playlist_text
+
+        # Check if we should attempt token refresh
+        if status not in (403, 410) or not extractor:
+            return None
+
+        logger.info("token_expired_fetching_new")
+        new_url = await _handle_token_refresh(video_url, extractor, settings, headers)
+        if new_url is not None:
+            current_url = new_url
+            continue
+
+        return None
 
     return None
-
 
 def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnector:
     """Create aiohttp connector with SSL settings.
