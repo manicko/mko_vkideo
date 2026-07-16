@@ -47,6 +47,7 @@ async def _download_segment_sequential(
     headers: dict[str, str],
     segment_index: int = 0,
     max_retries: int = 3,
+    download_timeout: int = 300,
 ) -> bool:
     """Download a single HLS segment with sequential retry logic.
 
@@ -57,12 +58,14 @@ async def _download_segment_sequential(
         headers: Request headers to use.
         segment_index: Index of the segment being downloaded (for logging).
         max_retries: Maximum retry attempts for 429/5xx responses.
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         True on success, False on failure.
     """
     content = await _retry_429_with_backoff(
-        session, segment_url, headers, segment_index, max_retries=max_retries
+        session, segment_url, headers, segment_index, max_retries=max_retries,
+        download_timeout=download_timeout
     )
     if content is not None:
         with open(output_path, "wb") as f:
@@ -104,12 +107,14 @@ async def _run_parallel_download_with_backoff(
     video_url: str | None,
     attempt: int,
     max_retries: int,
+    download_timeout: int = 300,
 ) -> bool | None:
     """Run a single download attempt in parallel mode.
 
     Returns True on success, None for retryable status codes, False for fatal errors.
     """
-    async with session.get(segment_url, headers=headers) as response:
+    client_timeout = aiohttp.ClientTimeout(total=download_timeout)
+    async with session.get(segment_url, headers=headers, timeout=client_timeout) as response:
         if response.status == 200:
             with open(output_path, "wb") as f:
                 f.write(await response.read())
@@ -156,6 +161,7 @@ async def _do_parallel_download_attempt(
     video_url: str | None,
     attempt: int,
     max_retries: int,
+    download_timeout: int = 300,
 ) -> bool:
     """Perform a single download attempt in parallel mode.
 
@@ -163,7 +169,8 @@ async def _do_parallel_download_attempt(
     """
     result = await _run_parallel_download_with_backoff(
         session, segment_url, output_path, headers,
-        backoff_coordinator, video_url, attempt, max_retries
+        backoff_coordinator, video_url, attempt, max_retries,
+        download_timeout=download_timeout
     )
     return result is True
 
@@ -177,12 +184,14 @@ async def _try_single_download_attempt(
     video_url: str | None,
     attempt: int,
     max_retries: int,
+    download_timeout: int = 300,
 ) -> bool:
     """Try a single download attempt, return True on success. Handles exceptions."""
     try:
         return await _do_parallel_download_attempt(
             session, segment_url, output_path, headers,
-            backoff_coordinator, video_url, attempt, max_retries
+            backoff_coordinator, video_url, attempt, max_retries,
+            download_timeout=download_timeout
         )
     except aiohttp.ClientError as e:
         logger.error("segment_download_error", error=str(e))
@@ -197,6 +206,7 @@ async def _download_segment_parallel(
     max_retries: int = 3,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
+    download_timeout: int = 300,
 ) -> bool:
     """Download a single HLS segment with parallel retry logic and shared backoff.
 
@@ -208,6 +218,7 @@ async def _download_segment_parallel(
         max_retries: Maximum retry attempts for 429/5xx responses.
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
         video_url: Original video URL for coordinator keying (required if coordinator provided).
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         True on success, False on failure.
@@ -222,7 +233,8 @@ async def _download_segment_parallel(
 
         if await _try_single_download_attempt(
             session, segment_url, output_path, headers,
-            backoff_coordinator, video_url, attempt, max_retries
+            backoff_coordinator, video_url, attempt, max_retries,
+            download_timeout=download_timeout
         ):
             return True
 
@@ -239,6 +251,7 @@ async def _download_segment(
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
     max_retries: int = 3,
+    download_timeout: int = 300,
 ) -> bool:
     """Download a single HLS segment.
 
@@ -252,6 +265,7 @@ async def _download_segment(
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
         video_url: Original video URL for coordinator keying (required if coordinator provided).
         max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         True on success, False on failure.
@@ -261,6 +275,7 @@ async def _download_segment(
             session, segment_url, output_path, headers,
             segment_index=segment_index,
             max_retries=max_retries,
+            download_timeout=download_timeout,
         )
 
     return await _download_segment_parallel(
@@ -268,6 +283,7 @@ async def _download_segment(
         max_retries=max_retries,
         backoff_coordinator=backoff_coordinator,
         video_url=video_url,
+        download_timeout=download_timeout,
     )
 
 
@@ -311,10 +327,11 @@ async def _fetch_playlist_with_retry(
 ) -> str | None:
     """Fetch m3u8 playlist with token refresh on 403/410."""
     current_url = m3u8_url
+    client_timeout = aiohttp.ClientTimeout(total=settings.download_timeout)
 
     for attempt in range(max_retries):
         try:
-            async with session.get(current_url, headers=headers) as response:
+            async with session.get(current_url, headers=headers, timeout=client_timeout) as response:
                 if response.status == 200:
                     return await response.text()
                 if response.status in (403, 410) and extractor:
@@ -440,6 +457,7 @@ async def _download_segment_concurrent(
     video_url: str,
     max_retries: int,
     is_shared_semaphore: bool,
+    download_timeout: int = 300,
 ) -> bool:
     """Download a segment with semaphore rate limiting.
 
@@ -456,6 +474,7 @@ async def _download_segment_concurrent(
         video_url: Original video URL for coordinator keying.
         max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
         is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         True on success, False on failure.
@@ -485,6 +504,7 @@ async def _download_segment_concurrent(
                 backoff_coordinator=backoff_coordinator,
                 video_url=video_url,
                 max_retries=max_retries,
+                download_timeout=download_timeout,
             )
 
         if result and not is_shared_semaphore and max_concurrent_downloads == 1:
@@ -513,6 +533,7 @@ def _create_segment_download_tasks(
     video_url: str,
     max_retries: int,
     is_shared_semaphore: bool,
+    download_timeout: int = 300,
 ) -> list[asyncio.Task[bool]]:
     """Create tasks for downloading missing segments.
 
@@ -528,6 +549,7 @@ def _create_segment_download_tasks(
         video_url: Original video URL for coordinator keying.
         max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
         is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         List of download tasks.
@@ -546,6 +568,7 @@ def _create_segment_download_tasks(
             video_url,
             max_retries,
             is_shared_semaphore,
+            download_timeout,
         ))
         for i, seg in enumerate(segments)
         if not (segments_dir / f"{i:05d}.ts").exists()
@@ -613,6 +636,7 @@ async def _run_download_session(
             video_url,
             settings.max_retries,
             is_shared,
+            download_timeout=settings.download_timeout,
         )
 
         return await _process_downloaded_segments(

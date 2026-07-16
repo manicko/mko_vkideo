@@ -13,6 +13,9 @@ from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
+# Default download timeout in seconds (matches Settings.download_timeout default)
+DEFAULT_DOWNLOAD_TIMEOUT = 300
+
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
@@ -156,6 +159,7 @@ async def _retry_429_with_backoff(
     headers: dict[str, str],
     segment_index: int,
     max_retries: int = 3,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bytes | None:
     """Download segment with AWS Full Jitter exponential backoff for 429/5xx errors.
 
@@ -168,12 +172,14 @@ async def _retry_429_with_backoff(
         headers: Request headers to use.
         segment_index: Index of the segment being downloaded (for logging).
         max_retries: Maximum number of retry attempts (default 3).
+        download_timeout: Total timeout for HTTP request in seconds.
 
     Returns:
         Bytes content on success, None on permanent failure.
     """
     sanitized_url = _strip_auth_params(segment_url)
     shutdown_event = get_shutdown_event()
+    client_timeout = aiohttp.ClientTimeout(total=download_timeout)
 
     for attempt in range(max_retries):
         if shutdown_event.is_set():
@@ -181,7 +187,7 @@ async def _retry_429_with_backoff(
             return None
 
         try:
-            async with session.get(segment_url, headers=headers) as response:
+            async with session.get(segment_url, headers=headers, timeout=client_timeout) as response:
                 if response.status == 200:
                     return await response.read()
 
