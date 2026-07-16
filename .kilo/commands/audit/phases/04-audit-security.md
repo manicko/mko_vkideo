@@ -8,6 +8,20 @@ problems-only: true
 
 # Phase 04 Audit — Security & Secret Management
 
+## Purpose
+
+This phase audits the system's **security surface**: how secrets and credentials are
+stored, loaded, and used; how sensitive data is (or isn't) logged; file permissions and
+version-control hygiene; and how external input is validated against path traversal and
+injection. The goal is to find credential leaks, unsafe storage, and input-handling
+vulnerabilities.
+
+This file is written as a **reusable handbook** for the security phase of any audit. It
+deliberately avoids naming specific files, function names, or paths, and avoids
+naming specific third-party services — instead it describes *what to discover and
+verify*. Apply it to whatever credentials, secrets, and external inputs the current
+system actually has.
+
 ## Output Mode
 
 `problems-only: true` — **only problems, bugs, and deviations are documented.**
@@ -23,11 +37,11 @@ problems-only: true
 
 Before performing audit checks, discover the security surface:
 
-1. **Secret Discovery** — Identify all secrets and sensitive values: Telegram api_id/api_hash, bot tokens, Google OAuth2 credentials, spreadsheet IDs. Map where each is stored and how it flows through the code.
-2. **Credential File Discovery** — Locate `credentials.json`, `token.json`, Telethon session files. Check where they are stored, how they are created, who has access.
-3. **Logging Discovery** — Search all `logger` calls. Identify any that might log sensitive data (tokens, API keys, credentials, file paths to secrets).
-4. **Config Security Discovery** — Check how secrets are loaded: from config files, environment variables, or hardcoded. Verify config file permissions and .gitignore coverage.
-5. **Input Validation Discovery** — Identify all external inputs: config values, Google Sheets data, file paths from sheets. Check for path traversal, injection, or other input attacks.
+1. **Secret Discovery** — Identify all secrets and sensitive values: API keys, tokens, passwords, private keys, session identifiers, account identifiers. Map where each is stored and how it flows through the code.
+2. **Credential File Discovery** — Locate credential/token/session files. Check where they are stored, how they are created, who has access.
+3. **Logging Discovery** — Search all log calls. Identify any that might log sensitive data (tokens, keys, credentials, secret file paths).
+4. **Config Security Discovery** — Check how secrets are loaded: from files, environment variables, or hardcoded. Verify config file permissions and version-control ignore coverage.
+5. **Input Validation Discovery** — Identify all external inputs: config values, fetched data, file paths from external sources. Check for path traversal, injection, or other input attacks.
 
 ---
 
@@ -45,17 +59,17 @@ Search the entire codebase for hardcoded secrets: API keys, tokens, passwords, p
 
 ### Step R2 — Logger Audit
 
-Search all `logger.info()`, `logger.debug()`, `logger.warning()` calls for potential secret leakage:
+Search all log calls for potential secret leakage:
 
-- Any logger call that includes a variable containing api_hash, bot_token, api_id, credentials path, or token content is CRITICAL.
-- Any logger call that dumps an entire config model (which may contain secrets) is a finding.
+- Any log call that includes a variable containing a key, token, password, or credential is CRITICAL.
+- Any log call that dumps an entire config model (which may contain secrets) is a finding.
 
-### Step R3 — File Permission Check
+### Step R3 — File Permission / Ignore Check
 
-Check the permissions and .gitignore status of sensitive files:
+Check the version-control ignore status and storage location of sensitive files:
 
-- `credentials.json`, `token.json`, Telethon session files — are they in `.gitignore`?
-- Config directory — does it have appropriate permissions (user-readable only)?
+- Credential/token/session files — are they ignored by the version-control system?
+- Config/secrets directory — does it have appropriate permissions (user-only access)?
 
 ### Step R4 — Import Verification
 
@@ -77,21 +91,23 @@ Run the project's test suite.
 
 ## Audit Scope
 
-Secret management (Telegram API credentials, Google OAuth2 tokens), credential file handling, logging security, config security, input validation, path traversal prevention.
+Secret management (external API credentials, OAuth/token files, session identifiers), credential file handling, logging security, config security, input validation, and path traversal prevention.
 
 ---
 
 ## Audit Dimensions
 
+> For each dimension, adapt the concrete checks to the credentials and inputs the system
+> actually has. A dimension is omitted from the report if no problem is found in it.
+
 ### 1. Hardcoded Secrets
 
 | Check | Description |
 |-------|-------------|
-| No hardcoded API keys | `api_id`, `api_hash`, `bot_token` come from config, never from source code. |
-| No hardcoded OAuth2 credentials | Google `credentials.json` path comes from config, not hardcoded. |
-| No hardcoded spreadsheet IDs | Spreadsheet ID comes from config. |
-| No hardcoded file paths to secrets | Paths to `credentials.json`, `token.json` use `PathResolver`, not hardcoded strings. |
-| Test fixtures use fake values | Test mocks use obviously fake values (`"test_token"`, `12345`), not real credentials. |
+| No hardcoded API keys/tokens | Keys, tokens, and passwords come from config or a secret store, never from source code. |
+| No hardcoded credential paths | Paths to credential/token files use the project's path-resolution utility, not hardcoded strings. |
+| No hardcoded account/session IDs | Identifiers come from config. |
+| Test fixtures use fake values | Test mocks use obviously fake values, not real credentials. |
 
 **Evidence required:** Grep results for hardcoded values. Read config loading code. Read test fixtures.
 
@@ -99,31 +115,31 @@ Secret management (Telegram API credentials, Google OAuth2 tokens), credential f
 
 | Check | Description |
 |-------|-------------|
-| Credentials in user directory | `credentials.json`, `token.json`, session files are stored in `USER_DIR` (via platformdirs), not in the package directory. |
-| Credentials in `.gitignore` | All credential and session files are listed in `.gitignore`. |
-| No credentials in config templates | `config_example.yaml` contains only placeholder values. |
-| Token file not logged | The path to `token.json` may be logged, but its contents are never logged. |
+| Credentials in user directory | Credential/token/session files are stored in the user's private directory, not in the package directory. |
+| Credentials ignored by VCS | All credential and session files are listed in the version-control ignore file. |
+| No credentials in config templates | Templates contain only placeholder values. |
+| Token contents not logged | The path to a token file may be logged, but its contents are never logged. |
 
-**Evidence required:** Read `.gitignore`. Read config templates. Check file paths in code.
+**Evidence required:** Read the version-control ignore file. Read config templates. Check file paths in code.
 
 ### 3. Logging Security
 
 | Check | Description |
 |-------|-------------|
-| Secrets never logged | `api_hash`, `bot_token`, `api_id`, OAuth2 tokens are never passed to any logger call. |
-| Config models not dumped | Entire Pydantic config models are not logged (they contain secrets). |
+| Secrets never logged | Keys, tokens, passwords, and session identifiers are never passed to any log call. |
+| Config models not dumped | Entire settings models are not logged (they may contain secrets). |
 | Error messages don't leak secrets | Exception messages and error responses don't include credential values. |
-| File paths to secrets are OK | Logging the *path* to a credentials file is acceptable; logging the *contents* is not. |
+| Paths to secrets are OK | Logging the *path* to a credentials file is acceptable; logging the *contents* is not. |
 
-**Evidence required:** Read all logger calls. Search for any logger call near credential-handling code.
+**Evidence required:** Read all log calls. Search for any log call near credential-handling code.
 
 ### 4. Config Security
 
 | Check | Description |
 |-------|-------------|
-| Secrets loaded from files, not env | Credentials are loaded from files in the user's private config directory, not from environment variables (which may be logged or leaked in process listings). |
-| Config validation rejects empty secrets | Pydantic validators reject empty or obviously invalid credential values. |
-| Production config is separate | User config in `~/.config/` is separate from package templates. |
+| Secrets loaded from private files, not env (as appropriate) | Credentials are loaded from files in the user's private config directory, not from environment variables that may be leaked in process listings or logs — unless the project intentionally uses env. |
+| Config validation rejects empty secrets | Validators reject empty or obviously invalid credential values. |
+| Production config is separate | User config is separate from package templates. |
 
 **Evidence required:** Read config models and validators. Verify empty/invalid values are rejected.
 
@@ -131,22 +147,22 @@ Secret management (Telegram API credentials, Google OAuth2 tokens), credential f
 
 | Check | Description |
 |-------|-------------|
-| Path traversal prevention | File paths from Google Sheets (photo paths) are validated before use. No user-supplied path can escape the intended directory. |
-| Photo path validation | Photo paths from config/sheets are checked for existence and validity before processing. |
-| Config value validation | All config values are validated by Pydantic before use (no raw strings passed to file operations). |
-| Spreadsheet ID format | Spreadsheet ID is validated for basic format (non-empty, no path separators). |
+| Path traversal prevention | File paths from external sources are validated before use. No user-supplied path can escape the intended directory. |
+| Path validation | Paths from config/external input are checked for existence and validity before processing. |
+| Config value validation | All config values are validated by the settings model before use (no raw strings passed to file operations). |
+| Identifier format validation | External identifiers are validated for basic format (non-empty, no path separators). |
 
-**Evidence required:** Read photo path handling code. Read config validators. Check for `os.path` or `pathlib` operations on user-supplied paths.
+**Evidence required:** Read external path handling code. Read config validators. Check for path operations on user-supplied paths.
 
-### 6. Telethon Session Security
+### 6. Session / Token Security
 
 | Check | Description |
 |-------|-------------|
-| Session file in user directory | Telethon session file is stored in `USER_DIR`, not in the package directory or a global temp directory. |
-| Session file in `.gitignore` | Session files (`.session`, `.session-journal`) are in `.gitignore`. |
-| Session not shared | Session file is per-user, not shared between different users or environments. |
+| Session file in user directory | Session/token files are stored in the user directory, not in the package directory or a global temp directory. |
+| Session file ignored by VCS | Session files are in the version-control ignore file. |
+| Session not shared | Session files are per-user, not shared between different users or environments. |
 
-**Evidence required:** Read Telethon client creation code. Check session file path. Read `.gitignore`.
+**Evidence required:** Read the client/session creation code. Check the session file path. Read the version-control ignore file.
 
 ---
 
@@ -163,5 +179,5 @@ Use prefix `SEC-` for finding IDs.
 - Do NOT include sections, dimensions, or checklist rows where everything is correct.
 - If after completing all Runtime Verification steps and all Audit Dimensions, no problems were found, write a single line: `No problems found in this phase.`
 - Every finding MUST include:
-  1. **Runtime evidence** — grep results, file:line of problematic code, logger calls that leak secrets, missing .gitignore entries.
+  1. **Runtime evidence** — grep results, file:line of problematic code, log calls that leak secrets, missing ignore entries.
   2. **Not just:** "violates invariant X" — show the exact code, the exact secret at risk, and the exact exposure vector.

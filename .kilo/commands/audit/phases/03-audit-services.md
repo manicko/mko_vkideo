@@ -8,6 +8,19 @@ problems-only: true
 
 # Phase 03 Audit — Service Layer & Business Logic
 
+## Purpose
+
+This phase audits the **core business logic**: service classes, processing units, data
+transformations, and the data models that move between them. The goal is to find
+violations of single responsibility, tangled dependencies, incorrect transformations,
+and dead code.
+
+This file is written as a **reusable handbook** for the service-layer phase of any
+audit. It deliberately avoids naming specific files, function names, or paths — instead
+it describes *what to discover and verify*. Apply it to whatever the system's core
+processing units actually are (extractors, processors, caches, posters, downloaders,
+etc.).
+
 ## Output Mode
 
 `problems-only: true` — **only problems, bugs, and deviations are documented.**
@@ -21,12 +34,12 @@ problems-only: true
 
 ## Discovery Stage
 
-Before performing audit checks, discover the service layer architecture:
+Before performing audit checks, discover the service-layer architecture:
 
-1. **Service Discovery** — Locate all service classes. Map their responsibilities: what does each service class do? What are its dependencies?
+1. **Service Discovery** — Locate all service/processing classes. Map their responsibilities: what does each do? What are its dependencies?
 2. **Class Responsibility Mapping** — For each class: is it a service, a processor, a reader, a cache, a model? Does it have a single responsibility?
 3. **Dependency Graph** — Map how services depend on each other. Identify the composition root (where services are instantiated and wired together).
-4. **Data Transformation Chain** — Trace how raw data (from Google Sheets) is transformed into posts, then into Telegram messages. Identify each transformation step.
+4. **Data Transformation Chain** — Trace how raw external data is transformed into internal models, then into output/side-effects. Identify each transformation step.
 
 ---
 
@@ -60,19 +73,22 @@ Search for functions/methods defined but never called outside tests.
 
 ## Audit Scope
 
-Service classes (TelegramService, PostProcessor, ImageCache, TelegramPoster, GSheetsReader), Task model, business logic, data transformations.
+Service classes, processing units, data models, business logic, and data transformations between layers.
 
 ---
 
 ## Audit Dimensions
 
+> For each dimension, adapt the concrete checks to the processing units the system
+> actually has. A dimension is omitted from the report if no problem is found in it.
+
 ### 1. Single Responsibility
 
 | Check | Description |
 |-------|-------------|
-| Each class has one reason to change | `ImageCache` handles only image caching. `PostProcessor` handles only post extraction. `TelegramPoster` handles only Telegram API communication. |
-| No god classes | No single class handles config loading, data fetching, image processing, AND posting. |
-| Separation of concerns | Image processing is separate from post processing, which is separate from Telegram communication. |
+| Each class has one reason to change | A caching unit handles only caching. A processing unit handles only its transformation. A communication unit handles only external I/O. |
+| No god classes | No single class handles config loading, data fetching, transformation, AND output. |
+| Separation of concerns | Distinct responsibilities live in distinct units (transform vs I/O vs cache). |
 
 **Evidence required:** Read each service class. If a class has methods that belong to different domains, that is a finding.
 
@@ -80,55 +96,55 @@ Service classes (TelegramService, PostProcessor, ImageCache, TelegramPoster, GSh
 
 | Check | Description |
 |-------|-------------|
-| Services depend on abstractions/models | Services receive Pydantic models, not raw dicts or YAML data. |
+| Services depend on models/abstractions | Services receive typed models, not raw dicts or parser output. |
 | No circular dependencies | Service A does not import Service B while Service B imports Service A. |
-| Composition root is clear | The main service (`TelegramService`) composes all sub-services. Sub-services do not compose the main service. |
+| Composition root is clear | The top-level orchestrator composes sub-services; sub-services do not compose the orchestrator. |
 
 **Evidence required:** Trace import chains between service classes. Verify the dependency graph is acyclic.
 
-### 3. Image Processing Correctness
+### 3. Transformation Correctness (per processing unit)
 
 | Check | Description |
 |-------|-------------|
-| Image cache works correctly | Resized images are cached and reused. Cache key is deterministic (same input → same cache path). |
-| Resize handles errors gracefully | If an image cannot be opened/resized, the error is caught and the original path is returned (not a crash). |
-| Cleanup removes unused files | `cleanup_unused()` removes cached files that were not used in the current run. |
-| No orphaned temp files | After posting completes (success or failure), no temporary image files remain. |
+| Caching works correctly | Derived artifacts are cached and reused. Cache keys are deterministic (same input → same cache path). |
+| Errors handled gracefully | If an item cannot be transformed, the error is caught and a safe fallback is used (not a crash). |
+| Cleanup removes unused files | Temporary/cached artifacts not used in the current run are removed. |
+| No orphaned temp files | After the run completes (success or failure), no temporary files remain. |
 
-**Evidence required:** Read `ImageCache` class. Trace the full lifecycle: resize → cache → use → cleanup. Check for `try/finally` around file operations.
+**Evidence required:** Read each processing/cache unit. Trace the full lifecycle: transform → cache → use → cleanup. Check for `try/finally` around file operations.
 
-### 4. Post Processing Correctness
-
-| Check | Description |
-|-------|-------------|
-| Filter logic is correct | Rows are filtered by the configured column and value. Rows where the filter column is out of range are included (not silently dropped). |
-| Photo extraction handles both cases | Photo column content is handled whether it is a directory path (multiple photos) or a single file path. |
-| Max photos limit is enforced | `max_photos` is applied to limit the number of photos per post. |
-| Empty posts handled | Posts with no text and no photos are handled gracefully (not sent as empty messages). |
-
-**Evidence required:** Read `PostProcessor.get_posts()`. Trace the filter logic and photo extraction logic. Check edge cases.
-
-### 5. Telegram Posting Correctness
+### 4. Processing Logic Correctness
 
 | Check | Description |
 |-------|-------------|
-| Retry logic works | `FloodWaitError`, `SlowModeWaitError`, and other transient errors trigger retries with appropriate backoff. |
-| Non-retryable errors fail fast | Permanent errors (e.g., chat not found) do not trigger infinite retries. |
-| Posts are shuffled | Post order is randomized before sending (if configured). |
-| Delay between posts is respected | `delay_minutes` is converted to seconds and applied between posts. |
-| Topic/forum support | `topic_id` is passed correctly to `send_message` and `send_file` for forum topics. |
+| Filter logic is correct | Items are filtered by the configured column/value. Edge cases (out-of-range, empty) are handled as intended, not silently dropped. |
+| Extraction handles variants | Input variants are handled (e.g., single vs multiple values, file vs directory). |
+| Limits are enforced | Configured limits (max items, max size) are applied. |
+| Empty results handled | Units with no data are handled gracefully (no empty/garbage output). |
 
-**Evidence required:** Read `TelegramPoster` and the posting loop. Verify retry logic, delay handling, and topic support.
+**Evidence required:** Read the processing unit's core method. Trace the filter/extraction logic. Check edge cases.
 
-### 6. Task Model Integrity
+### 5. Output / Posting Correctness
 
 | Check | Description |
 |-------|-------------|
-| Task carries all required data | The `Task` model includes chat_id, topic_id, text, photos, chat_name, count, max_count. |
-| Task status tracking | Task has a status field to track success/failure. |
-| No business logic in Task | Task is a data container (dataclass), not a service. |
+| Retry logic works | Transient external errors (rate limits, temporary unavailability) trigger retries with appropriate backoff. |
+| Non-retryable errors fail fast | Permanent errors do not trigger infinite retries. |
+| Ordering/shuffling is correct | Item order is respected or randomized as configured. |
+| Delay between items is respected | Per-item delay is converted to the correct unit and applied. |
+| Target scoping is correct | Target identifiers (chat_id, topic, destination) are passed correctly to the external call. |
 
-**Evidence required:** Read `task.py`. Verify it is a pure data class with no methods that belong in a service.
+**Evidence required:** Read the output/posting unit and its loop. Verify retry logic, delay handling, and target scoping.
+
+### 6. Data Model Integrity
+
+| Check | Description |
+|-------|-------------|
+| Model carries all required data | The unit-of-work model includes all fields needed downstream. |
+| Status tracking present | The model has a status field to track success/failure where relevant. |
+| No business logic in model | The model is a data container, not a service. |
+
+**Evidence required:** Read the model definition. Verify it is a pure data structure with no methods that belong in a service.
 
 ---
 

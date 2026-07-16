@@ -52,11 +52,11 @@ For every finding, verify:
 - Verify the proposed doc change accurately reflects code reality.
 
 **"Dead code" findings — mandatory spec cross-reference:**
-1. Check `docs/SPEC.md` for the feature.
-2. Check Pydantic models / `StrEnum` values.
-3. Check config templates.
+1. Check the project's specification/architecture docs for the feature.
+2. Check the typed data models / enum definitions.
+3. Check config templates / manifests.
 
-If the spec, models, or config reference the component → **reject the "dead code" label** and reclassify as `[SPEC-DEVIATION]` (missing integration, not dead code).
+If the docs, models, or config reference the component → **reject the "dead code" label** and reclassify as `[SPEC-DEVIATION]` (missing integration, not dead code).
 
 #### Rejection Criteria
 

@@ -41,16 +41,16 @@ Before performing audit checks, discover the structural landscape:
 
 **Before evaluating any checklist item, you MUST complete these steps. Skip only if a step is impossible — document why.**
 
-### Step R1 — Run Radon Cyclomatic Complexity
+### Step R1 — Run Cyclomatic Complexity Tool
 
-Run `uv run radon cc src/ -a -nc` to get cyclomatic complexity for all functions and methods.
+Run the project's configured complexity tool (e.g. `radon cc <source_dir> -a -nc`) to get cyclomatic complexity for all functions and methods.
 
 - Record every function with complexity rank C or worse (≥11).
 - Record the total average complexity.
 
-### Step R2 — Run Radon Maintainability Index
+### Step R2 — Run Maintainability Index Tool
 
-Run `uv run radon mi src/ -s` to get the maintainability index.
+Run the project's configured maintainability tool (e.g. `radon mi <source_dir> -s`) to get the maintainability index.
 
 - Record any file with MI rank B or C.
 - Record the actual MI scores.
@@ -75,7 +75,7 @@ Search for structural anti-patterns:
 
 ## Audit Scope
 
-All source code files in `src/**/`. Focus on structural properties: complexity, length, nesting, and control flow patterns.
+All source code files in the project's source directory. Focus on structural properties: complexity, length, nesting, and control flow patterns.
 
 ---
 
