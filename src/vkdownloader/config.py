@@ -111,17 +111,25 @@ def setup_logging(settings: Settings | None = None) -> None:
     if settings is None:
         settings = Settings()
 
+    logging.basicConfig(
+        format="%(message)s",
+        level=settings.log_level.value,
+        handlers=[
+            logging.StreamHandler()
+            if not settings.log_file
+            else logging.FileHandler(settings.log_file)
+        ],
+    )
+
     structlog.configure(
         processors=[
+            structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.add_log_level,
             structlog.processors.JSONRenderer()
             if settings.log_file
             else structlog.dev.ConsoleRenderer(),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelName(settings.log_level.value)
-        ),
-        logger_factory=structlog.PrintLoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
