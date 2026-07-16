@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yt_dlp
 from structlog import get_logger
@@ -337,7 +337,7 @@ async def download_with_ytdlp_with_resume_fallback(
     retry_count = 0
 
     while retry_count <= MAX_RESUME_RETRIES:
-        result = await _download_with_ytdlp(video_url, output_file, quality, settings, cookies)
+        result = await _download_with_ytdlp(video_url, output_file, quality, settings, cookies, progress_callback)
 
         if result:
             if retry_count > 0:
@@ -462,6 +462,7 @@ async def _download_with_ytdlp(
     quality: str,
     settings: Settings,
     cookies: str | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Download using yt-dlp."""
     logger.info(
@@ -473,6 +474,9 @@ async def _download_with_ytdlp(
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
     shutdown_event = get_shutdown_event()
+
+    # Extract video_id for progress callback (matches segment downloader pattern)
+    video_id = video_url.split("_")[-1] if "_" in video_url else video_url
 
     def _download() -> str:
         # Check shutdown before starting download
@@ -489,7 +493,7 @@ async def _download_with_ytdlp(
             else "best"
         )
 
-        ydl_opts = {
+        ydl_opts: dict[str, Any] = {
             "outtmpl": str(output_file),
             "quiet": False,
             "no_warnings": True,
@@ -514,6 +518,18 @@ async def _download_with_ytdlp(
             cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
             cookie_file.write_text(_cookies_to_netscape(cookies))
             ydl_opts["cookiefile"] = str(cookie_file)
+
+        # Add progress hook if callback provided
+        if progress_callback:
+            def _progress_hook(d: dict[str, Any]) -> None:
+                if d.get("status") == "downloading":
+                    downloaded = d.get("downloaded_bytes", 0)
+                    total = d.get("total_bytes_estimate", 0) or d.get("total_bytes", 0)
+                    progress_callback(video_id, downloaded, total or 1)
+                elif d.get("status") == "finished":
+                    progress_callback(video_id, 1, 1)
+
+            ydl_opts["progress_hooks"] = [_progress_hook]
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
