@@ -1,5 +1,6 @@
 """Tests for browser infrastructure: BrowserManager and NetworkMonitor."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -131,3 +132,37 @@ class TestNetworkMonitor:
         monitor._extract_urls_from_json(data)
 
         assert "https://example.com/720p.m3u8" in monitor.m3u8_urls
+
+    @pytest.mark.asyncio
+    async def test_network_monitor_json_decode_error_graceful(self) -> None:
+        """Test NetworkMonitor handles JSONDecodeError gracefully without crashing."""
+        mock_page = MagicMock()
+        mock_page.on = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        mock_response = MagicMock()
+        mock_response.url = "https://api.example.com/video"
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json = AsyncMock(side_effect=json.JSONDecodeError("test", "test", 0))
+
+        # Should not raise - exception handled gracefully
+        await monitor._intercept_response(mock_response)
+        # No URL should be extracted (invalid JSON)
+        assert len(monitor.m3u8_urls) == 0
+
+    @pytest.mark.asyncio
+    async def test_network_monitor_error_graceful(self) -> None:
+        """Test NetworkMonitor handles other errors gracefully without crashing."""
+        mock_page = MagicMock()
+        mock_page.on = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        mock_response = MagicMock()
+        mock_response.url = "https://api.example.com/video"
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json = AsyncMock(side_effect=RuntimeError("network error"))
+
+        # Should not raise - exception handled gracefully
+        await monitor._intercept_response(mock_response)
+        # No URL should be extracted (error)
+        assert len(monitor.m3u8_urls) == 0

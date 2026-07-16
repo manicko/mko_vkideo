@@ -1,5 +1,6 @@
 """Network monitoring infrastructure for VK Video Downloader."""
 
+import json
 import re
 from typing import Any
 
@@ -66,8 +67,18 @@ class NetworkMonitor:
             try:
                 data = await response.json()
                 self._extract_urls_from_json(data)
-            except Exception:
-                pass
+            except json.JSONDecodeError:
+                logger.warning(
+                    "json_parse_error",
+                    url=_strip_auth_params(url),
+                    reason="invalid_json_in_response",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "response_json_error",
+                    url=_strip_auth_params(url),
+                    error=str(e.__class__.__name__),
+                )
 
     def _extract_urls_from_json(self, data: Any) -> None:
         """
