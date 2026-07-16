@@ -178,8 +178,17 @@ async def _run_batch_with_progress(
     tasks = [
         asyncio.create_task(
             _download_single(
-                url, i, quality, output, method, cookie_source, ssl_verify, max_retries,
-                shared_semaphore, backoff_coordinator, callbacks[i]
+                url,
+                i,
+                quality,
+                output,
+                method,
+                cookie_source,
+                ssl_verify,
+                max_retries,
+                shared_semaphore,
+                backoff_coordinator,
+                callbacks[i],
             )
         )
         for i, url in enumerate(urls)
@@ -209,7 +218,6 @@ async def _run_batch_with_progress(
     return [
         r if isinstance(r, tuple) else (urls[i], "", "cancelled") for i, r in enumerate(results)
     ]
-
 
 
 def _print_batch_summary(
@@ -430,11 +438,11 @@ def batch_download(
 
     try:
         results = asyncio.run(
-            _run_batch_with_progress(urls, quality, method, cookie_source, ssl_verify, max_retries, output)
+            _run_batch_with_progress(
+                urls, quality, method, cookie_source, ssl_verify, max_retries, output
+            )
         )
         _print_batch_summary(results, Settings().max_concurrent_downloads)
-
-
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)

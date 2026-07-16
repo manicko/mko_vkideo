@@ -64,8 +64,12 @@ async def _download_segment_sequential(
         True on success, False on failure.
     """
     content = await _retry_429_with_backoff(
-        session, segment_url, headers, segment_index, max_retries=max_retries,
-        download_timeout=download_timeout
+        session,
+        segment_url,
+        headers,
+        segment_index,
+        max_retries=max_retries,
+        download_timeout=download_timeout,
     )
     if content is not None:
         with open(output_path, "wb") as f:
@@ -168,9 +172,15 @@ async def _do_parallel_download_attempt(
     Returns True on success, False for fatal errors.
     """
     result = await _run_parallel_download_with_backoff(
-        session, segment_url, output_path, headers,
-        backoff_coordinator, video_url, attempt, max_retries,
-        download_timeout=download_timeout
+        session,
+        segment_url,
+        output_path,
+        headers,
+        backoff_coordinator,
+        video_url,
+        attempt,
+        max_retries,
+        download_timeout=download_timeout,
     )
     return result is True
 
@@ -189,9 +199,15 @@ async def _try_single_download_attempt(
     """Try a single download attempt, return True on success. Handles exceptions."""
     try:
         return await _do_parallel_download_attempt(
-            session, segment_url, output_path, headers,
-            backoff_coordinator, video_url, attempt, max_retries,
-            download_timeout=download_timeout
+            session,
+            segment_url,
+            output_path,
+            headers,
+            backoff_coordinator,
+            video_url,
+            attempt,
+            max_retries,
+            download_timeout=download_timeout,
         )
     except aiohttp.ClientError as e:
         logger.error("segment_download_error", error=str(e))
@@ -232,9 +248,15 @@ async def _download_segment_parallel(
             return False
 
         if await _try_single_download_attempt(
-            session, segment_url, output_path, headers,
-            backoff_coordinator, video_url, attempt, max_retries,
-            download_timeout=download_timeout
+            session,
+            segment_url,
+            output_path,
+            headers,
+            backoff_coordinator,
+            video_url,
+            attempt,
+            max_retries,
+            download_timeout=download_timeout,
         ):
             return True
 
@@ -272,14 +294,20 @@ async def _download_segment(
     """
     if max_concurrent_downloads == 1:
         return await _download_segment_sequential(
-            session, segment_url, output_path, headers,
+            session,
+            segment_url,
+            output_path,
+            headers,
             segment_index=segment_index,
             max_retries=max_retries,
             download_timeout=download_timeout,
         )
 
     return await _download_segment_parallel(
-        session, segment_url, output_path, headers,
+        session,
+        segment_url,
+        output_path,
+        headers,
         max_retries=max_retries,
         backoff_coordinator=backoff_coordinator,
         video_url=video_url,
@@ -331,7 +359,9 @@ async def _fetch_playlist_with_retry(
 
     for attempt in range(max_retries):
         try:
-            async with session.get(current_url, headers=headers, timeout=client_timeout) as response:
+            async with session.get(
+                current_url, headers=headers, timeout=client_timeout
+            ) as response:
                 if response.status == 200:
                     return await response.text()
                 if response.status in (403, 410) and extractor:
@@ -419,18 +449,12 @@ async def _process_downloaded_segments(
         logger.info("download_cancelled", reason="shutdown_requested")
         return None
 
-    downloaded_count = _load_downloaded_count(metadata_file) + sum(
-        1 for r in download_results if r
-    )
+    downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)
     _save_downloaded_count(metadata_file, downloaded_count)
 
     # Call progress callback for per-URL segment updates
     if progress_callback:
-        video_id = (
-            video_url.split("_")[-1]
-            if "_" in video_url
-            else video_url
-        )
+        video_id = video_url.split("_")[-1] if "_" in video_url else video_url
         progress_callback(video_id, downloaded_count, len(segments))
 
     # All downloaded - merge in batches
@@ -488,7 +512,9 @@ async def _download_segment_concurrent(
         if shutdown_event.is_set():
             raise asyncio.CancelledError("Download cancelled by user")
 
-        full_url = urljoin(m3u8_url, segment_url) if not segment_url.startswith("http") else segment_url
+        full_url = (
+            urljoin(m3u8_url, segment_url) if not segment_url.startswith("http") else segment_url
+        )
 
         segment_path = segments_dir / f"{idx:05d}.ts"
         if segment_path.exists() and segment_path.stat().st_size > 0:
@@ -555,21 +581,23 @@ def _create_segment_download_tasks(
         List of download tasks.
     """
     return [
-        asyncio.create_task(_download_segment_concurrent(
-            session,
-            i,
-            seg,
-            segments_dir,
-            semaphore,
-            m3u8_url,
-            headers,
-            max_concurrent_downloads,
-            backoff_coordinator,
-            video_url,
-            max_retries,
-            is_shared_semaphore,
-            download_timeout,
-        ))
+        asyncio.create_task(
+            _download_segment_concurrent(
+                session,
+                i,
+                seg,
+                segments_dir,
+                semaphore,
+                m3u8_url,
+                headers,
+                max_concurrent_downloads,
+                backoff_coordinator,
+                video_url,
+                max_retries,
+                is_shared_semaphore,
+                download_timeout,
+            )
+        )
         for i, seg in enumerate(segments)
         if not (segments_dir / f"{i:05d}.ts").exists()
         or (segments_dir / f"{i:05d}.ts").stat().st_size == 0
@@ -611,8 +639,13 @@ async def _run_download_session(
 
     async with aiohttp.ClientSession(connector=connector) as session:
         playlist_content = await _fetch_playlist_with_retry(
-            session, video_url, m3u8_url, headers, extractor, settings,
-            max_retries=settings.max_retries
+            session,
+            video_url,
+            m3u8_url,
+            headers,
+            extractor,
+            settings,
+            max_retries=settings.max_retries,
         )
         if not playlist_content:
             return None
@@ -621,7 +654,11 @@ async def _run_download_session(
         downloaded_count = _load_downloaded_count(metadata_file)
         logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
 
-        semaphore_to_use = semaphore if semaphore is not None else asyncio.Semaphore(settings.max_concurrent_downloads)
+        semaphore_to_use = (
+            semaphore
+            if semaphore is not None
+            else asyncio.Semaphore(settings.max_concurrent_downloads)
+        )
         is_shared = semaphore is not None
 
         tasks = _create_segment_download_tasks(

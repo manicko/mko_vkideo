@@ -121,6 +121,3 @@ def setup_logging(settings: Settings | None = None) -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-
-

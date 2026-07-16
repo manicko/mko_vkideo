@@ -122,8 +122,7 @@ class VKVideoExtractor:
 
         if self.settings.cookie_source == CookieSource.FILE:
             raise NotImplementedError(
-                "CookieSource.FILE is not implemented. "
-                "Use --cookie-source browser or none instead."
+                "CookieSource.FILE is not implemented. Use --cookie-source browser or none instead."
             )
 
         # Existing browser launch logic for BROWSER mode or forced

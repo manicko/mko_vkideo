@@ -101,6 +101,7 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
         except ValueError:
             raise ValueError(f"Invalid quality value: {quality}") from None
 
+
 # Re-export for backward compatibility
 __all__ = [
     "FfmpegProgress",
@@ -203,11 +204,15 @@ class HLSDownloader:
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-progress", "pipe:2",
+                "-progress",
+                "pipe:2",
                 "-nostats",
-                "-headers", f"@{headers_file}",  # Safe: only filename in args
-                "-i", m3u8_url,
-                "-c", "copy",
+                "-headers",
+                f"@{headers_file}",  # Safe: only filename in args
+                "-i",
+                m3u8_url,
+                "-c",
+                "copy",
                 str(output_file),
             ]
 
@@ -337,7 +342,9 @@ async def download_with_ytdlp_with_resume_fallback(
     retry_count = 0
 
     while retry_count <= MAX_RESUME_RETRIES:
-        result = await _download_with_ytdlp(video_url, output_file, quality, settings, cookies, progress_callback)
+        result = await _download_with_ytdlp(
+            video_url, output_file, quality, settings, cookies, progress_callback
+        )
 
         if result:
             if retry_count > 0:
@@ -353,11 +360,20 @@ async def download_with_ytdlp_with_resume_fallback(
 
         # Attempt segment resume with fresh token
         if retry_count <= MAX_RESUME_RETRIES:
-            if (segment_result := await _attempt_segment_resume(
-                video_url, m3u8_url, validated_output, quality,
-                retry_count, extractor, settings, backoff_coordinator, semaphore,
-                progress_callback,
-            )) is not None:
+            if (
+                segment_result := await _attempt_segment_resume(
+                    video_url,
+                    m3u8_url,
+                    validated_output,
+                    quality,
+                    retry_count,
+                    extractor,
+                    settings,
+                    backoff_coordinator,
+                    semaphore,
+                    progress_callback,
+                )
+            ) is not None:
                 return segment_result
 
     # All retries exhausted without success
@@ -488,9 +504,7 @@ async def _download_with_ytdlp(
 
         # Build format selector: use height filter for numeric quality, bare 'best' otherwise
         format_selector = (
-            f"best[height<={quality_str}]"
-            if quality_str and quality_str.isdigit()
-            else "best"
+            f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
         )
 
         ydl_opts: dict[str, Any] = {
@@ -521,6 +535,7 @@ async def _download_with_ytdlp(
 
         # Add progress hook if callback provided
         if progress_callback:
+
             def _progress_hook(d: dict[str, Any]) -> None:
                 if d.get("status") == "downloading":
                     downloaded = d.get("downloaded_bytes", 0)
@@ -676,18 +691,21 @@ async def perform_download(
 
     match method:
         case DownloadMethod.YTDLP:
-            m3u8_url, cookies = await _resolve_cookies(
-                extractor, settings, url, m3u8_url, quality
-            )
+            m3u8_url, cookies = await _resolve_cookies(extractor, settings, url, m3u8_url, quality)
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings, cookies=cookies,
-                backoff_coordinator=backoff_coordinator, semaphore=semaphore,
+                url,
+                m3u8_url,
+                output_file,
+                quality,
+                extractor,
+                settings,
+                cookies=cookies,
+                backoff_coordinator=backoff_coordinator,
+                semaphore=semaphore,
                 progress_callback=progress_callback,
             )
         case DownloadMethod.FFMPEG:
-            m3u8_url, cookies = await _resolve_cookies(
-                extractor, settings, url, m3u8_url, quality
-            )
+            m3u8_url, cookies = await _resolve_cookies(extractor, settings, url, m3u8_url, quality)
             downloader = HLSDownloader(settings=settings)
             result = await downloader.download_with_ffmpeg(m3u8_url, output_file, quality, cookies)
             if result is None:
@@ -710,8 +728,14 @@ async def perform_download(
         case DownloadMethod.AUTO:
             # Auto: try yt-dlp first (more reliable), segment download for resume
             return await download_with_ytdlp_with_resume_fallback(
-                url, m3u8_url, output_file, quality, extractor, settings,
-                backoff_coordinator=backoff_coordinator, semaphore=semaphore,
+                url,
+                m3u8_url,
+                output_file,
+                quality,
+                extractor,
+                settings,
+                backoff_coordinator=backoff_coordinator,
+                semaphore=semaphore,
                 progress_callback=progress_callback,
             )
         case _:
