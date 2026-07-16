@@ -40,7 +40,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management |
+| BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management with stealth configuration (user agent, locale, timezone) |
 | NetworkMonitor | `infrastructure/network_monitor.py` | Captures m3u8 URLs from browser network traffic |
 | **_retry_429_with_backoff** | `services/downloader_throttle.py` | AWS Full Jitter backoff for rate-limited segment downloads |
 
@@ -61,7 +61,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `StreamFormat` | `models/enums.py` | Stream format types (HLS, DASH, MP4) |
 | `DownloadStatus` | `models/enums.py` | Download state tracking (pending, downloading, completed, failed) |
 | `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
-| `CookieSource` | `models/enums.py` | Cookie acquisition strategy (none, browser, file) |
+| `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` is not implemented and raises `NotImplementedError`) |
 | `LogLevel` | `models/enums.py` | Logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 
 ### Exceptions
@@ -132,7 +132,7 @@ Both commands support:
 
 - `--quality`: Quality selection (240, 360, 480, 720, 1080, 1440, 2160, best, worst)
 - `--method`: Download method (yt-dlp, ffmpeg, auto)
-- `--output/-o`: Output directory
+- `--output/-o`: Output directory (defaults to `Settings.download_dir` when not provided)
 
 ## Download Methods
 

@@ -5,7 +5,7 @@ source_finding: CFG-001
 
 title: Wire settings.download_dir into CLI output path defaults
 priority: high
-status: pending
+status: done
 
 description: >
   The Settings.download_dir field is documented and configured but never consumed. CLI download/batch
@@ -32,18 +32,12 @@ files:
 changes:
   - action: modify_logic
     description: >
-      Change --output default from "." to use settings.download_dir, resolving to absolute path.
-    code_hint: |
-      # In download command:
-      output = output or str(settings.download_dir)
-      output = str(Path(output).resolve())
-
+      Changed --output default from "." to use settings.download_dir, resolving to absolute path.
+      Added logic in download command to apply settings.download_dir when output is ".".
   - action: modify_logic
     description: >
       Same change in batch_download command.
-    code_hint: |
-      # In batch_download:
-      output = output or str(settings.download_dir)
+      Added logic in _download_single to apply settings.download_dir when output is ".".
 
 acceptance_criteria:
   - --output defaults to configured download_dir

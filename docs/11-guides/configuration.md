@@ -31,7 +31,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Segment-level concurrency limit shared across all batch URLs (1-16); 1 enables anti-detection delay |
 | `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec before throttling triggers re-extract |
 | `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
-| `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser, or file |
+| `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser (file is not implemented) |
 | `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
 | `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
 
@@ -43,7 +43,7 @@ Controls how cookies are acquired for authenticated video downloads:
 
 - **`none`** (default) — No browser launch, fastest downloads for public videos only
 - **`browser`** — Launch browser to extract real cookies for authenticated content
-- **`file`** — Load cookies from a file (future enhancement)
+- **`file`** — Not implemented; selecting it raises `NotImplementedError`. Use `none` or `browser` instead.
 
 **Download Method Behavior:**
 | Method | cookie_source=NONE | cookie_source=BROWSER |

@@ -10,10 +10,11 @@ from structlog import get_logger
 from .config import Settings, setup_logging
 from .exceptions import QualityNotAvailableError
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
-from .services.downloader import perform_download, setup_signal_handlers
+from .services.downloader import perform_download
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
+from .services.signal_handlers import setup_signal_handlers
 from .utils.security import _sanitize_title, validate_output_path
 
 logger = get_logger(__name__)

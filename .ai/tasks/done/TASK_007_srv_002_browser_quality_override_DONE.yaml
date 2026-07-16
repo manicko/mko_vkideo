@@ -7,7 +7,7 @@ secondary_section: DF-001
 
 title: Fix BROWSER mode quality override in perform_download
 priority: high
-status: pending
+status: done
 
 description: >
   When cookie_source=BROWSER, perform_download() re-extracts via the browser and overwrites the

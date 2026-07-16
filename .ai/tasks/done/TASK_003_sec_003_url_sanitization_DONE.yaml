@@ -5,7 +5,7 @@ source_finding: SEC-003
 
 title: Replace blocklist URL sanitization with allowlist redaction
 priority: high
-status: pending
+status: completed
 
 description: >
   _strip_auth_params uses a blocklist of known-sensitive query parameter names, which fails to redact
@@ -43,3 +43,10 @@ acceptance_criteria:
   - Signed URLs no longer appear in logs
   - Log format remains parseable (URL structure preserved with redaction)
   - All existing log emission sites work with new sanitization
+
+implementation_notes:
+  - Removed AUTH_PARAMS frozenset (blocklist approach)
+  - Changed to urlsplit for simpler parsing
+  - Now returns only scheme://host/***REDACTED*** for any URL
+  - Invalid/malformed URLs return ***REDACTED*** as fallback
+  - Updated tests to match new behavior

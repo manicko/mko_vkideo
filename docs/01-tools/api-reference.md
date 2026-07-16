@@ -867,8 +867,7 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
 | `throttled_rate` | `100000` | Minimum bytes/sec before throttling triggers re-extract |
 | `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
-| `download_method` | `AUTO` | Download method: yt-dlp, ffmpeg, or auto |
-| `cookie_source` | `NONE` | Cookie acquisition strategy: none, browser, or file |
+| `cookie_source` | `NONE` | Cookie acquisition strategy: none, browser (file is not implemented) |
 | `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | `log_file` | `None` | Optional log file path for file output |
 

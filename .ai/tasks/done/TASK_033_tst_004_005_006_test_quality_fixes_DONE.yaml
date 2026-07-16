@@ -5,7 +5,7 @@ source_finding: TST-004, TST-005, TST-006
 
 title: Remove tautological tests and implement placeholder security test
 priority: low
-status: pending
+status: completed
 
 description: >
   TST-004: tests/integration/test_mock_vk_server.py contains tautological no-ops.
