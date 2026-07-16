@@ -8,6 +8,7 @@ from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
 from vkdownloader.models.enums import CookieSource, StreamFormat
 from vkdownloader.models.video import Stream
+from vkdownloader.services.cookies import _cookies_to_netscape
 from vkdownloader.services.extractor import VKVideoExtractor
 
 
@@ -75,7 +76,7 @@ class TestExtractionErrors:
         extractor = VKVideoExtractor(settings=settings)
 
         with patch.object(
-            extractor, "_extract_with_browser", return_value=([], None)
+            extractor, "_extract_with_browser", return_value=([], None, None)
         ):
             with pytest.raises(VideoNotFoundError, match="No streams found"):
                 await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-12345_67890")
@@ -140,6 +141,48 @@ class TestExtractionErrors:
         assert "value" in result
 
     @pytest.mark.asyncio
+    async def test_format_cookies_for_ffmpeg_all_cookies_included(self) -> None:
+        """Test that _format_cookies_for_ffmpeg includes all cookies without truncation."""
+        extractor = VKVideoExtractor()
+
+        # Create 50 cookies to verify no limit
+        cookies = [{"name": f"c{i}", "value": f"v{i}"} for i in range(50)]
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+
+        # All cookies should be present (no 20-cookie truncation)
+        assert result.count("=") == 50  # 50 cookies
+        assert "c49=v49" in result  # Last cookie should be present
+
+    @pytest.mark.asyncio
+    async def test_cookies_to_netscape_preserves_domain(self) -> None:
+        """Test that _cookies_to_netscape preserves cookie domains from Cookie objects."""
+        cookies = [
+            {"name": "session", "value": "abc", "domain": ".vk.com"},
+            {"name": "token", "value": "xyz", "domain": ".userapi.com"},
+            {"name": "user", "value": "123", "domain": "vkvideo.ru"},
+        ]
+        result = _cookies_to_netscape(cookies)
+
+        # Verify each cookie has its correct domain preserved
+        assert ".vk.com" in result
+        assert ".userapi.com" in result
+        assert "vkvideo.ru" in result
+        # The hardcoded ".vkvideo.ru" should NOT be used for all cookies
+        lines = result.split("\n")
+        cookie_lines = [line for line in lines if "\t" in line and not line.startswith("#")]
+        assert len(cookie_lines) == 3
+
+    @pytest.mark.asyncio
+    async def test_cookies_to_netscape_backward_compatible(self) -> None:
+        """Test that _cookies_to_netscape still works with string input (backward compat)."""
+        cookies = "vk=abc123; session=xyz789"
+        result = _cookies_to_netscape(cookies)
+
+        # Should use hardcoded domain for backward compatibility
+        assert ".vkvideo.ru\tTRUE\t/\tFALSE\t0\tvk\tabc123" in result
+        assert ".vkvideo.ru\tTRUE\t/\tFALSE\t0\tsession\txyz789" in result
+
+    @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_success(self) -> None:
         """Test extract_streams_with_cookies returns streams and formatted cookies."""
         # Use BROWSER cookie_source to test browser extraction path
@@ -150,17 +193,23 @@ class TestExtractionErrors:
         mock_stream = MagicMock()
         mock_stream.format = StreamFormat.HLS
 
+        raw_cookies = [
+            {"name": "session_id", "value": "abc123", "domain": ".vkvideo.ru"},
+            {"name": "user_token", "value": "xyz789", "domain": ".vkvideo.ru"},
+        ]
         with patch.object(
             extractor,
             "_extract_with_browser",
-            return_value=([mock_stream], "session_id=abc123; user_token=xyz789"),
+            return_value=([mock_stream], "session_id=abc123; user_token=xyz789", raw_cookies),
         ):
-            streams, cookies = await extractor.extract_streams_with_cookies(url)
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(url)
 
             assert len(streams) == 1
             assert streams[0].format == StreamFormat.HLS
             assert "session_id=abc123" in cookies
             assert "user_token=xyz789" in cookies
+            assert raw is not None
+            assert len(raw) == 2
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_none_skips_browser(self) -> None:
@@ -177,10 +226,11 @@ class TestExtractionErrors:
             "_extract_with_ytdlp",
             return_value=([mock_stream], None),
         ):
-            streams, cookies = await extractor.extract_streams_with_cookies(url)
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(url)
 
             assert len(streams) == 1
-            assert cookies is None  # No cookies when cookie_source=NONE
+            assert cookies is None
+            assert raw is None  # No cookies when cookie_source=NONE
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_force_browser(self) -> None:
@@ -192,15 +242,17 @@ class TestExtractionErrors:
         mock_stream = MagicMock()
         mock_stream.format = StreamFormat.HLS
 
+        raw_cookies = [{"name": "forced", "value": "cookies", "domain": ".vkvideo.ru"}]
         with patch.object(
             extractor,
             "_extract_with_browser",
-            return_value=([mock_stream], "forced_cookies"),
+            return_value=([mock_stream], "forced_cookies", raw_cookies),
         ):
-            streams, cookies = await extractor.extract_streams_with_cookies(url, force_browser=True)
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(url, force_browser=True)
 
             assert len(streams) == 1
             assert cookies == "forced_cookies"  # Cookies returned when forced
+            assert raw is not None
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_file_mode_raises_not_implemented(self) -> None:
@@ -238,7 +290,7 @@ class TestExtractionErrors:
         with patch.object(
             extractor, "_extract_with_ytdlp", return_value=([mock_stream], None)
         ) as mock_extract:
-            streams, cookies = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+            streams, cookies, raw = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
 
             mock_extract.assert_called_once()
             assert cookies is None
@@ -252,10 +304,11 @@ class TestExtractionErrors:
         mock_stream = MagicMock()
         mock_stream.format = StreamFormat.HLS
 
+        raw_cookies = [{"name": "test", "value": "cookie", "domain": ".vkvideo.ru"}]
         with patch.object(
-            extractor, "_extract_with_browser", return_value=([mock_stream], "cookies")
+            extractor, "_extract_with_browser", return_value=([mock_stream], "cookies", raw_cookies)
         ) as mock_browser:
-            streams, cookies = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+            streams, cookies, raw = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
 
             mock_browser.assert_called_once()
             assert cookies == "cookies"

@@ -91,7 +91,7 @@ class VKVideoExtractor:
 
     async def extract_streams_with_cookies(
         self, url: str, force_browser: bool = False
-    ) -> tuple[list[Stream], str | None]:
+    ) -> tuple[list[Stream], str | None, list[Cookie] | None]:
         """
         Extract streams using browser automation to capture cookies for ffmpeg.
 
@@ -100,7 +100,7 @@ class VKVideoExtractor:
             force_browser: Force browser launch even when cookie_source=NONE (for token refresh).
 
         Returns:
-            Tuple of (streams list, cookies string for ffmpeg headers).
+            Tuple of (streams list, cookies string for ffmpeg headers, raw cookies for Netscape).
 
         Raises:
             ValueError: If URL does not contain valid video identifier.
@@ -118,7 +118,7 @@ class VKVideoExtractor:
             if not streams:
                 raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
             logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
-            return streams, None
+            return streams, None, None
 
         if self.settings.cookie_source == CookieSource.FILE:
             raise NotImplementedError(
@@ -126,15 +126,17 @@ class VKVideoExtractor:
             )
 
         # Existing browser launch logic for BROWSER mode or forced
-        streams, cookies = await self._extract_with_browser(url, video_id_full)
+        streams, cookies, raw_cookies = await self._extract_with_browser(url, video_id_full)
 
         if not streams:
             raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
 
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
-        return streams, cookies
+        return streams, cookies, raw_cookies
 
-    async def _extract_with_ytdlp(self, url: str, video_id: str) -> tuple[list[Stream], str | None]:
+    async def _extract_with_ytdlp(
+        self, url: str, video_id: str
+    ) -> tuple[list[Stream], str | None]:
         """Extract streams and title using yt-dlp (handles VK protections)."""
         ydl_opts = {
             "quiet": True,
@@ -194,10 +196,11 @@ class VKVideoExtractor:
 
     async def _extract_with_browser(
         self, url: str, video_id_full: str
-    ) -> tuple[list[Stream], str | None]:
+    ) -> tuple[list[Stream], str | None, list[Cookie] | None]:
         """Extract streams using Playwright browser automation with cookies capture."""
         streams: list[Stream] = []
         cookies_str: str | None = None
+        raw_cookies: list[Cookie] | None = None
 
         async with BrowserManager(self.settings) as browser:
             page = await browser.create_stealth_page()
@@ -209,8 +212,8 @@ class VKVideoExtractor:
             await asyncio.sleep(8)
 
             try:
-                cookies = await page.context.cookies()
-                cookies_str = self._format_cookies_for_ffmpeg(cookies)
+                raw_cookies = await page.context.cookies()
+                cookies_str = self._format_cookies_for_ffmpeg(raw_cookies)
             except Exception as e:
                 logger.debug("failed_to_capture_cookies", error=str(e))
 
@@ -228,20 +231,20 @@ class VKVideoExtractor:
                 )
                 streams.append(stream)
 
-        return streams, cookies_str
+        return streams, cookies_str, raw_cookies
 
     def _format_cookies_for_ffmpeg(self, cookies: list[Cookie]) -> str:
         """Format cookies list for ffmpeg HTTP cookie header.
 
         Strips CRLF characters from cookie names and values to prevent header injection.
+        Includes all cookies to ensure proper CDN authentication.
         """
         cookie_parts = []
         for cookie in cookies:
             name = cookie.get("name", "").replace("\r", "").replace("\n", "")
             value = cookie.get("value", "").replace("\r", "").replace("\n", "")
-            # Include all cookies - they may be needed for CDN authentication
             cookie_parts.append(f"{name}={value}")
-        return "; ".join(cookie_parts[:20])  # Limit to avoid header size issues
+        return "; ".join(cookie_parts)
 
     async def _simulate_video_interaction(self, page: Page) -> None:
         """

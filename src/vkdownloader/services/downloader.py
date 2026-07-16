@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yt_dlp
+from playwright.async_api import Cookie
 from structlog import get_logger
 
 from ..config import Settings
@@ -309,6 +310,7 @@ async def download_with_ytdlp_with_resume_fallback(
     extractor: VKVideoExtractor | None,
     settings: Settings | None = None,
     cookies: str | None = None,
+    raw_cookies: list[Cookie] | None = None,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     semaphore: asyncio.Semaphore | None = None,
@@ -328,7 +330,8 @@ async def download_with_ytdlp_with_resume_fallback(
         quality: Quality string.
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
-        cookies: Optional cookies string for authenticated downloads.
+        cookies: Optional cookies string for ffmpeg headers.
+        raw_cookies: Optional raw Cookie objects for Netscape format (preserves domain).
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
         semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
@@ -343,7 +346,7 @@ async def download_with_ytdlp_with_resume_fallback(
 
     while retry_count <= MAX_RESUME_RETRIES:
         result = await _download_with_ytdlp(
-            video_url, output_file, quality, settings, cookies, progress_callback
+            video_url, output_file, quality, settings, cookies, raw_cookies, progress_callback
         )
 
         if result:
@@ -425,7 +428,7 @@ async def _attempt_segment_resume(
         if extractor is None:
             extractor = VKVideoExtractor(settings=settings)
         # Force browser for token refresh during resume (recovery scenario)
-        browser_streams, cookies = await extractor.extract_streams_with_cookies(
+        browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(
             video_url, force_browser=True
         )
         if browser_streams:
@@ -478,6 +481,7 @@ async def _download_with_ytdlp(
     quality: str,
     settings: Settings,
     cookies: str | None = None,
+    raw_cookies: list[Cookie] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Download using yt-dlp."""
@@ -528,7 +532,13 @@ async def _download_with_ytdlp(
 
         # Add cookies file generation if cookies provided
         cookie_file: Path | None = None
-        if cookies:
+        if raw_cookies:
+            # Use raw cookies to preserve domain information
+            cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
+            cookie_file.write_text(_cookies_to_netscape(raw_cookies))
+            ydl_opts["cookiefile"] = str(cookie_file)
+        elif cookies:
+            # Fall back to string format (backward compatible, but uses hardcoded domain)
             cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
             cookie_file.write_text(_cookies_to_netscape(cookies))
             ydl_opts["cookiefile"] = str(cookie_file)
@@ -587,7 +597,7 @@ async def _resolve_cookies(
     url: str,
     m3u8_url: str,
     quality: str,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, list[Cookie] | None]:
     """Resolve cookies and update m3u8_url based on cookie_source setting.
 
     Args:
@@ -598,13 +608,13 @@ async def _resolve_cookies(
         quality: Quality string for stream selection.
 
     Returns:
-        Tuple of (updated m3u8_url, cookies string or None).
+        Tuple of (updated m3u8_url, cookies string, raw cookies for Netscape format).
 
     Raises:
         QualityNotAvailableError: If requested quality not available in browser streams.
     """
     if settings.cookie_source == CookieSource.BROWSER:
-        browser_streams, cookies = await extractor.extract_streams_with_cookies(url)
+        browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
         if browser_streams:
             try:
                 quality_enum = _parse_quality_to_enum(quality)
@@ -625,8 +635,9 @@ async def _resolve_cookies(
                 raise
         else:
             cookies = None
-        return m3u8_url, cookies
-    return m3u8_url, None
+            raw_cookies = None
+        return m3u8_url, cookies, raw_cookies
+    return m3u8_url, None, None
 
 
 async def perform_download(
@@ -691,7 +702,9 @@ async def perform_download(
 
     match method:
         case DownloadMethod.YTDLP:
-            m3u8_url, cookies = await _resolve_cookies(extractor, settings, url, m3u8_url, quality)
+            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                extractor, settings, url, m3u8_url, quality
+            )
             return await download_with_ytdlp_with_resume_fallback(
                 url,
                 m3u8_url,
@@ -700,12 +713,15 @@ async def perform_download(
                 extractor,
                 settings,
                 cookies=cookies,
+                raw_cookies=raw_cookies,
                 backoff_coordinator=backoff_coordinator,
                 semaphore=semaphore,
                 progress_callback=progress_callback,
             )
         case DownloadMethod.FFMPEG:
-            m3u8_url, cookies = await _resolve_cookies(extractor, settings, url, m3u8_url, quality)
+            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                extractor, settings, url, m3u8_url, quality
+            )
             downloader = HLSDownloader(settings=settings)
             result = await downloader.download_with_ffmpeg(m3u8_url, output_file, quality, cookies)
             if result is None:
