@@ -1,0 +1,34 @@
+id: narrow_download_single_exception_handling
+source_reference: .ai/audit/99-validation/01-cli-validated-findings.md
+source_section: CLI-004
+priority: medium
+
+title: Narrow broad exception handling in _download_single
+
+description: >
+  _download_single catches Exception and returns ("url", "", "error: ..."), hiding
+  real bugs and preventing consistent error handling with the download command.
+  Structured exceptions like QualityNotAvailableError lose their typed fields.
+
+goals:
+  - catch specific exception types instead of Exception
+  - let unexpected exceptions propagate or log them
+  - provide actionable error messages like download command
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: _download_single
+
+changes:
+  - action: modify_control_flow
+    description: >
+      Replace `except Exception as e: return (url, "", f"error: {e}")` with
+      specific catches for VKDownloadError, QualityNotAvailableError, ValueError,
+      etc. Log unexpected exceptions before returning.
+
+acceptance_criteria:
+  - specific exceptions handled appropriately
+  - bug exceptions surface as tracebacks
+  - batch error messages are actionable

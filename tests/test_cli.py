@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from vkdownloader.cli import app
-from vkdownloader.exceptions import QualityNotAvailableError
+from vkdownloader.exceptions import QualityNotAvailableError, VideoNotFoundError
 
 runner = CliRunner()
 
@@ -163,7 +163,7 @@ class TestBatchCommand:
             call_count[0] += 1
             if call_count[0] == 1:
                 return MagicMock(id="video1", streams=[])
-            raise Exception("Network error")
+            raise VideoNotFoundError("Video not found")
 
         with (
             patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,

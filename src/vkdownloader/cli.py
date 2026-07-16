@@ -8,7 +8,11 @@ import typer
 from structlog import get_logger
 
 from .config import Settings, setup_logging
-from .exceptions import QualityNotAvailableError
+from .exceptions import (
+    QualityNotAvailableError,
+    VideoNotFoundError,
+    VKDownloadError,
+)
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .services.downloader import perform_download
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
@@ -136,8 +140,23 @@ async def _download_single(
     except asyncio.CancelledError:
         # Re-raise CancelledError to allow batch cancellation
         raise
-    except Exception as e:
-        return (url, "", f"error: {e}")
+    except ValueError as e:
+        return (url, "", f"invalid_url: {e}")
+    except QualityNotAvailableError as e:
+        # Return actionable message with available qualities
+        return (
+            url,
+            "",
+            f"quality_not_available: requested {e.requested}p, available: {', '.join(e.available)}",
+        )
+    except VideoNotFoundError as e:
+        return (url, "", f"video_not_found: {e}")
+    except VKDownloadError as e:
+        return (url, "", f"download_error: {e}")
+    except Exception:
+        # Log unexpected exceptions to surface bugs instead of silently swallowing them
+        logger.exception("unexpected_error_in_batch_download", url=url)
+        raise
 
 
 async def _run_batch_with_progress(
