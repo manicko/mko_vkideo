@@ -32,7 +32,7 @@ class BrowserManager:
         playwright_instance = await async_playwright().start()
         self.playwright = playwright_instance
         self.browser = await playwright_instance.chromium.launch(
-            headless=False,
+            headless=self.settings.headless,
             args=["--disable-blink-features=AutomationControlled"],
         )
 

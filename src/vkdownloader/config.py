@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     """Application settings with defaults and environment variable support."""
 
     # Browser Automation settings
+    headless: bool = Field(
+        default=False,
+        description="Run browser in headless mode (no GUI)",
+    )
     user_agent: str = Field(
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         description="User agent string for browser requests",

@@ -1,0 +1,36 @@
+id: add_headless_config_option
+source_reference: .ai/audit/99-validation/05-integrations-validated-findings.md
+source_section: INT-004
+priority: medium
+
+title: Add configurable headless mode for Playwright browser
+
+description: >
+  BrowserManager.__aenter__ hardcodes headless=False, preventing the tool from
+  running on servers, CI, or Docker containers without a display.
+
+goals:
+  - add headless setting to Settings configuration
+  - wire headless setting through to BrowserManager
+  - maintain backward compatibility with default False
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+  - path: src/vkdownloader/infrastructure/browser.py
+    targets:
+      - type: method
+        name: BrowserManager.__aenter__
+
+changes:
+  - action: add_code
+    description: >
+      Add headless: bool = False field to Settings with VKDOWNLOADER_HEADLESS env var.
+      Pass settings.headless to playwright.chromium.launch() call.
+
+acceptance_criteria:
+  - VKDOWNLOADER_HEADLESS=true enables headless mode
+  - default behavior unchanged (headless=False)
+  - browser launches successfully in both modes
