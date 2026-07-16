@@ -250,6 +250,54 @@ class TestHLSDownloaderDownload:
 
             assert result == output_path
 
+    @pytest.mark.asyncio
+    async def test_download_with_ffmpeg_uses_header_file_syntax(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test download_with_ffmpeg uses @file syntax to avoid cookie exposure."""
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = tmp_path / "video.mp4"
+        cookies = "vk=secret123; session=xyz789"
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
+
+        captured_args: list[str] = []
+
+        async def mock_create_subprocess_exec(*args: str, **kwargs: Any) -> AsyncMock:
+            captured_args.extend(args)
+            return mock_process
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            result = await downloader.download_with_ffmpeg(
+                "https://example.com/video.m3u8", output_path, "720",
+                cookies=cookies,
+            )
+
+        assert result == output_path
+        # Verify @file syntax is used (filename starts with ./ or /)
+        headers_idx = captured_args.index("-headers")
+        headers_arg = captured_args[headers_idx + 1]
+        assert headers_arg.startswith("@") or headers_arg.startswith("/"), \
+            f"Headers should use @file syntax, got: {headers_arg}"
+        # Verify actual cookies are NOT in the command arguments
+        all_args_str = " ".join(captured_args)
+        assert "secret123" not in all_args_str, \
+            "Cookie value should not appear in process arguments"
+        assert "xyz789" not in all_args_str, \
+            "Session value should not appear in process arguments"
+
 
 class TestDownloadHlsWithResume:
     """Tests for download_hls_with_resume segment-level resume functionality."""

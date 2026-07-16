@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import os
+import tempfile
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,6 +53,28 @@ logger = get_logger(__name__)
 
 # Maximum retry attempts for getting new token on resume failure
 MAX_RESUME_RETRIES = 3
+
+
+@asynccontextmanager
+async def _temp_headers_file(headers: str) -> AsyncIterator[Path]:
+    """Async context manager for temporary headers file for ffmpeg @file syntax.
+
+    Creates a temporary file with headers content, ensuring proper cleanup
+    after use. This prevents cookies from appearing in process argument lists.
+
+    Args:
+        headers: Header string to write to temporary file.
+
+    Yields:
+        Path to the temporary file.
+    """
+    fd, path = tempfile.mkstemp(suffix=".headers", prefix="vk_ffmpeg_")
+    try:
+        os.write(fd, headers.encode())
+        os.close(fd)
+        yield Path(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
 
 
 def _parse_quality_to_enum(quality: str) -> QualityEnum:
@@ -166,91 +191,109 @@ class HLSDownloader:
             has_cookies=bool(cookies),
         )
 
-        cmd = self._build_ffmpeg_cmd(m3u8_url, output_file, cookies)
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Build headers content
+        cookie_part = f"Cookie: {cookies}\r\n" if cookies else ""
+        headers_content = (
+            f"User-Agent: {self.settings.user_agent}\r\n"
+            f"Referer: https://vkvideo.ru/\r\n"
+            f"{cookie_part}"
         )
 
-        # Track process for cleanup on shutdown
-        _active_processes.add(process)
+        async with _temp_headers_file(headers_content) as headers_file:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-progress", "pipe:2",
+                "-nostats",
+                "-headers", f"@{headers_file}",  # Safe: only filename in args
+                "-i", m3u8_url,
+                "-c", "copy",
+                str(output_file),
+            ]
 
-        stderr_chunks: list[bytes] = []
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
-        shutdown_event = get_shutdown_event()
+            # Track process for cleanup on shutdown
+            _active_processes.add(process)
 
-        async def _monitor_progress() -> None:
-            """Read progress and call callback, while collecting stderr for error handling."""
-            assert process.stderr is not None
-            async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
-                if shutdown_event.is_set():
-                    await cancel_ffmpeg_process(process)
-                    break
+            stderr_chunks: list[bytes] = []
+
+            shutdown_event = get_shutdown_event()
+
+            async def _monitor_progress() -> None:
+                """Read progress and call callback, while collecting stderr for error handling."""
+                assert process.stderr is not None
+                async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
+                    if shutdown_event.is_set():
+                        await cancel_ffmpeg_process(process)
+                        break
+                    if progress_callback:
+                        progress_callback(progress)
+
+            async def _drain_stderr() -> None:
+                """Drain stderr to prevent buffer deadlock when no callback is provided."""
+                assert process.stderr is not None
+                while True:
+                    if shutdown_event.is_set():
+                        await cancel_ffmpeg_process(process)
+                        break
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    stderr_chunks.append(line)
+
+            try:
+                # Run both process wait and stderr reading concurrently
                 if progress_callback:
-                    progress_callback(progress)
+                    process_task = asyncio.create_task(process.wait())
+                    monitor_task = asyncio.create_task(_monitor_progress())
+                    done, pending = await asyncio.wait(
+                        [process_task, monitor_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    # Cancel pending tasks
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                else:
+                    process_task = asyncio.create_task(process.wait())
+                    drain_task = asyncio.create_task(_drain_stderr())
+                    done, pending = await asyncio.wait(
+                        [process_task, drain_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    # Cancel pending tasks
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
 
-        async def _drain_stderr() -> None:
-            """Drain stderr to prevent buffer deadlock when no callback is provided."""
-            assert process.stderr is not None
-            while True:
+                stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
+
                 if shutdown_event.is_set():
                     await cancel_ffmpeg_process(process)
-                    break
-                line = await process.stderr.readline()
-                if not line:
-                    break
-                stderr_chunks.append(line)
+                    return None
 
-        try:
-            # Run both process wait and stderr reading concurrently
-            if progress_callback:
-                process_task = asyncio.create_task(process.wait())
-                monitor_task = asyncio.create_task(_monitor_progress())
-                done, pending = await asyncio.wait(
-                    [process_task, monitor_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                # Cancel pending tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-            else:
-                process_task = asyncio.create_task(process.wait())
-                drain_task = asyncio.create_task(_drain_stderr())
-                done, pending = await asyncio.wait(
-                    [process_task, drain_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                # Cancel pending tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                if process.returncode != 0:
+                    error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
+                    logger.error(
+                        "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
+                    )
+                    return None
 
-            stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
-
-            if shutdown_event.is_set():
-                await cancel_ffmpeg_process(process)
-                return None
-
-            if process.returncode != 0:
-                error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
-                logger.error(
-                    "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
-                )
-                return None
-
-            logger.info("ffmpeg_download_completed", output=str(output_file))
-            return output_file
-        finally:
-            _active_processes.discard(process)
+                logger.info("ffmpeg_download_completed", output=str(output_file))
+                return output_file
+            finally:
+                _active_processes.discard(process)
 
 
 async def download_with_ytdlp_with_resume_fallback(
