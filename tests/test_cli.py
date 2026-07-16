@@ -193,13 +193,51 @@ class TestBatchCommand:
                         catch_exceptions=False,
                     )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "Download Summary:" in result.output
         assert "Total connections:" in result.output
         assert "Peak concurrency:" in result.output
         assert "Successful:" in result.output
         assert "Failed:" in result.output
 
+    def test_batch_all_success_exits_zero(self, tmp_path: Path) -> None:
+        """Check that batch exits with code 0 when all downloads succeed."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-1_1\n")
+
+        with (
+            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.cli.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="video1", streams=[])
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video1.mp4"
+
+            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                    )
+
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert "Download Summary:" in result.output
+        assert "Successful:" in result.output
 
 class TestQualityOptionValidation:
     """Tests for quality enum validation in CLI."""

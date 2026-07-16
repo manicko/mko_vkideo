@@ -243,6 +243,10 @@ def _print_batch_summary(
         for url, status in failed_urls:
             typer.echo(f"    - {url}: {status}")
 
+    # Exit with code 1 if any downloads failed
+    if failed > 0:
+        raise typer.Exit(code=1)
+
 
 app = typer.Typer(
     name="vkdownloader",
