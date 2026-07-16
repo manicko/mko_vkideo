@@ -2,14 +2,17 @@
 
 import json
 import re
-from typing import Any
 
-from playwright.async_api import Page
+from playwright.async_api import Page, Response
 from structlog import get_logger
 
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
+
+
+# Type alias for JSON values (recursive structure)
+type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float | bool | None
 
 
 class NetworkMonitor:
@@ -45,7 +48,7 @@ class NetworkMonitor:
             return f"https:{url}"
         return f"https://{url}"
 
-    async def _intercept_response(self, response: Any) -> None:
+    async def _intercept_response(self, response: Response) -> None:
         """
         Intercept network responses and capture m3u8 URLs.
 
@@ -80,7 +83,7 @@ class NetworkMonitor:
                     error=str(e.__class__.__name__),
                 )
 
-    def _extract_urls_from_json(self, data: Any) -> None:
+    def _extract_urls_from_json(self, data: JsonValue) -> None:
         """
         Recursively extract m3u8 URLs from JSON data.
 

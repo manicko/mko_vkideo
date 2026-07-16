@@ -7,7 +7,7 @@ import pytest
 
 from vkdownloader.config import Settings
 from vkdownloader.infrastructure.browser import BrowserManager
-from vkdownloader.infrastructure.network_monitor import NetworkMonitor
+from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor
 
 
 class TestBrowserManager:
@@ -114,7 +114,7 @@ class TestNetworkMonitor:
         mock_page = MagicMock()
         monitor = NetworkMonitor(mock_page)
 
-        data = {"stream": "https://example.com/video.m3u8", "other": "value"}
+        data: JsonValue = {"stream": "https://example.com/video.m3u8", "other": "value"}
         monitor._extract_urls_from_json(data)
 
         assert "https://example.com/video.m3u8" in monitor.m3u8_urls
@@ -124,7 +124,7 @@ class TestNetworkMonitor:
         mock_page = MagicMock()
         monitor = NetworkMonitor(mock_page)
 
-        data = {
+        data: JsonValue = {
             "video": {
                 "quality": [{"url": "https://example.com/720p.m3u8"}]
             }
