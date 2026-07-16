@@ -1,0 +1,34 @@
+id: fix_settings_instantiation
+source_reference: .ai/audit/99-validation/06-data-flow-validated-findings.md
+source_section: DF-002
+priority: medium
+
+title: Consolidate Settings instantiation in CLI
+
+description: >
+  Settings() is constructed repeatedly in cli.py just to read default values.
+  This drops environment-configured values and is wasteful.
+
+goals:
+  - construct Settings once per invocation in download()/batch_download()
+  - pass single Settings instance down through all layers
+  - merge CLI overrides with environment-loaded values
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: batch_download
+
+changes:
+  - action: refactor
+    description: >
+      Create single Settings instance early in each command and thread it
+      through downstream functions instead of re-instantiating.
+
+acceptance_criteria:
+  - Settings constructed only once per command invocation
+  - environment values propagate correctly
+  - all tests pass

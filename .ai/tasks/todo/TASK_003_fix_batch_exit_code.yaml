@@ -1,0 +1,40 @@
+id: fix_batch_exit_code
+source_reference: .ai/audit/99-validation/01-cli-validated-findings.md
+source_section: CLI-001
+priority: high
+
+title: Fix batch command exit code for failed downloads
+
+description: >
+  The batch command always exits 0 even when all downloads fail.
+  Currently _print_batch_summary prints failures but never raises
+  typer.Exit(code=1). This makes batch exit codes inconsistent with download
+  command and documented behavior.
+
+goals:
+  - raise typer.Exit(code=1) when failed > 0 in batch_download
+  - maintain consistency with download command exit behavior
+  - enable automation/scripts to detect failed batches
+
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: _print_batch_summary
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: typer.echo
+      insert_before:
+        type: return_statement
+
+changes:
+  - action: modify_control_flow
+    description: >
+      After printing batch summary, check if any downloads failed and
+      raise typer.Exit(code=1) for failure consistency
+
+acceptance_criteria:
+  - batch exits with code 1 when any download fails
+  - batch exits with code 0 when all downloads succeed
+  - no regression in existing test suite

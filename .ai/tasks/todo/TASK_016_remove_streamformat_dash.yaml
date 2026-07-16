@@ -1,0 +1,30 @@
+id: remove_unused_streamformat_dash
+source_reference: .ai/audit/99-validation/08-quality-validated-findings.md
+source_section: QLT-005
+priority: low
+
+title: Remove unused StreamFormat.DASH enum member
+
+description: >
+  StreamFormat.DASH is never assigned or read anywhere in production code. The
+  extractor hardcodes StreamFormat.HLS or MP4, but DASH is unused.
+
+goals:
+  - remove DASH from StreamFormat enum
+  - maintain consistency with actual capabilities
+  - reduce dead enum weight
+
+files:
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: class
+        name: StreamFormat
+
+changes:
+  - action: remove_code
+    description: >
+      Remove DASH from StreamFormat StrEnum definition.
+
+acceptance_criteria:
+  - ruff/mypy pass
+  - no references to StreamFormat.DASH in codebase

@@ -1,0 +1,30 @@
+id: update_cli_reference_docs
+source_reference: .ai/audit/99-validation/01-cli-validated-findings.md
+source_section: CLI-005
+priority: low
+
+title: Correct CLI reference documentation claims
+
+description: >
+  The CLI reference documentation incorrectly claims progress bars exist
+  and that download uses FFmpeg. Correct to describe actual behavior.
+
+goals:
+  - remove progress bars claim (no rich/tqdm or Typer Progress used)
+  - correct download method description (default is auto, not FFmpeg)
+  - align docs with production code
+
+files:
+  - path: docs/99-reference/cli-reference.md
+
+changes:
+  - action: modify_text
+    description: >
+      Replace "uses progress bars" with description of text-based per-URL progress.
+      Replace "Downloads the video using FFmpeg" with "Downloads using selected
+      method (default: auto)".
+
+acceptance_criteria:
+  - documentation matches actual CLI behavior
+  - no false claims about progress bars
+  - accurate method description

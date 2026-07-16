@@ -1,0 +1,34 @@
+id: fix_formatting_compliance
+source_reference: .ai/audit/99-validation/02-config-validated-findings.md
+source_section: CFG-002
+priority: medium
+
+title: Apply ruff formatting to source files
+
+description: >
+  The project enforces ruff format as a verification gate but 7 source files
+  would be reformatted. This fix ensures coding standard compliance.
+
+goals:
+  - run ruff format on all source files
+  - ensure CI quality gate passes
+  - maintain consistent line breaking per project standards
+
+files:
+  - path: src/vkdownloader/cli.py
+  - path: src/vkdownloader/config.py
+  - path: src/vkdownloader/services/downloader.py
+  - path: src/vkdownloader/services/downloader_throttle.py
+  - path: src/vkdownloader/services/extractor.py
+  - path: src/vkdownloader/services/quality.py
+  - path: src/vkdownloader/services/segment_downloader.py
+
+changes:
+  - action: format_code
+    description: >
+      Run `ruff format` on all listed files to normalize formatting
+
+acceptance_criteria:
+  - `uv run ruff format --check src/vkdownloader/` returns 0
+  - no functional changes to code behavior
+  - all 216 tests pass

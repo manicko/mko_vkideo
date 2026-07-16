@@ -186,9 +186,7 @@ maintenance surface that can silently drift from the string-based reality.
 - Grep for `DownloadStatus` across `src/` returns only those two definition/export
   sites (no usage).
 
-**Recommendation:** Either (a) adopt `DownloadStatus` in `cli.py`/`downloader.py`
-result tuples so the enum is the single source of truth, or (b) remove it until a
-consumer exists. Avoid keeping an enum that parallels string literals used elsewhere.
+**Recommendation:** Remove `DownloadStatus` enum from `enums.py`, its export from `models/__init__.py`, and its documentation references in `api-reference.md` (lines 660-672) and `vkdownloader-overview.md` (line 62). The CLI's plain string status (`"success"`, `"failed"`, `"error: ..."`) reflects the actual implementation — adopting the enum would require threading typed status values through the async service layer without benefit, violating the 'Avoid Overengineering' rule.
 
 > **Validation Note:**
 > - **Action:** reclassified
@@ -300,10 +298,7 @@ unused model surface.
 - Grep for `.description`, `.duration`, `.thumbnail`, `.upload_date`, `.views`
   across `src/` — zero matches.
 
-**Recommendation:** Remove the unused fields, or, if metadata is intended for future
-output, populate and consume them deliberately and document the purpose. Per the
-"Production Code is King" rule, avoid carrying fields that nothing reads.
-
+**Recommendation:** Remove the five unused fields (description, duration, thumbnail, upload_date, views) from the Video model in video.py, and update test_models.py to remove assertions on these fields. Per rule #2 (Production Code is King), tests must align with production reality; per rule #15 (small modules/functions), removing dead fields reduces model surface without any benefit. No CLI output, JSON export, or logging surfaces this metadata, so retention represents pure dead weight.
 > **Validation Note:**
 > - **Action:** reclassified
 > - **Detail:** Changed from BEST-PRACTICE to SPEC-DEVIATION. Project rule #2 states
@@ -473,8 +468,7 @@ None detected - no conflicting evidence across phases in this single-phase repor
 - **QLT-001 (formatting)**: Safe - purely cosmetic, no behavior change.
 - **QLT-002 (Any types)**: Safe - adding type hints, no runtime change.
 - **QLT-003 (dead function)**: Safe - removing unused code.
-- **QLT-004 (DownloadStatus)**: Depends on decision to remove vs. adopt. Removing is safe;
-  adopting would require CLI string status → enum migration.
+- **QLT-004 (DownloadStatus)**: Remove enum + exports + doc refs. Safe and aligns with Production Code is King rule.
 - **QLT-005 (DASH)**: Safe if removing - unused member with no references.
 - **QLT-006 (PrintLoggerFactory)**: Low risk - behavior change but functionally equivalent.
 - **QLT-007 (Video unused fields)**: Safe if removing - no production usage.
@@ -523,7 +517,7 @@ project architectural rules:
 |----|----------|-----------------|
 | QLT-001 | MEDIUM | Run `ruff format src/` to normalize formatting and align with project tooling |
 | QLT-002 | MEDIUM | Replace `Any` with `playwright.async_api.Response` and typed JSON alias in network_monitor.py |
-| QLT-004 | LOW | Either remove `DownloadStatus` enum or adopt it in CLI for status tracking |
+| QLT-004 | LOW | Remove `DownloadStatus` enum, its export, and documentation references |
 | QLT-006 | LOW | Replace `PrintLoggerFactory` with `WriteLoggerFactory` or `stdlib.LoggerFactory` |
 | QLT-007 | LOW | Remove unused Video fields (description, duration, thumbnail, upload_date, views) |
 

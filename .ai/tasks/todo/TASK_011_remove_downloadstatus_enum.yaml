@@ -1,0 +1,38 @@
+id: remove_unused_downloadstatus_enum
+source_reference: .ai/audit/99-validation/08-quality-validated-findings.md
+source_section: QLT-004
+priority: low
+
+title: Remove unused DownloadStatus enum and exports
+
+description: >
+  DownloadStatus enum (PENDING/DOWNLOADING/COMPLETED/FAILED) is documented but
+  never used - the CLI tracks status via plain strings. This represents dead
+  weight per project rules #2 and #15.
+
+goals:
+  - remove DownloadStatus enum from enums.py
+  - remove export from models/__init__.py
+  - update documentation references
+
+files:
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: class
+        name: DownloadStatus
+  - path: src/vkdownloader/models/__init__.py
+    targets:
+      - type: exports
+  - path: docs/01-tools/api-reference.md
+  - path: docs/01-tools/vkdownloader-overview.md
+
+changes:
+  - action: remove_code
+    description: >
+      Remove DownloadStatus class definition and its export. Update docs to remove
+      references to this unused enum.
+
+acceptance_criteria:
+  - no ImportErrors for downstream imports
+  - mypy and ruff checks pass
+  - documentation no longer mentions DownloadStatus

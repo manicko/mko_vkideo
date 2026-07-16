@@ -1,0 +1,32 @@
+id: reduce_fetch_playlist_nesting
+source_reference: .ai/audit/99-validation/09-structural-quality-validated-findings.md
+source_section: STR-001
+priority: medium
+
+title: Reduce nesting depth in _fetch_playlist_with_retry
+
+description: >
+  _fetch_playlist_with_retry reaches nesting depth 5, violating the ≤3
+  guideline from project rule #15. The token-refresh branch nests to depth 5.
+
+goals:
+  - extract token-refresh logic into helper coroutine
+  - flatten control flow to ≤3 nesting levels
+  - maintain retry semantics
+
+files:
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: function
+        name: _fetch_playlist_with_retry
+
+changes:
+  - action: refactor
+    description: >
+      Extract the 403/410 token-refresh branch into a helper coroutine
+      _refresh_token_and_retry that returns the new URL or None.
+
+acceptance_criteria:
+  - nesting depth ≤3 after refactoring
+  - retry logic preserved
+  - all tests pass

@@ -85,8 +85,8 @@ This is corroborated by the test suite: `tests/test_hls_downloader.py` either mo
 # downloader.py:401-417
 downloader.py:402   output_file.unlink()          # delete the partial file
 ...                 return await download_hls_with_resume(
-                        HLSDownloadRequest(video_url=..., output_file=output_file, ...)
-                    )   # fresh segments_dir, no reuse of yt-dlp bytes
+    HLSDownloadRequest(video_url=..., output_file=output_file, ...)
+)   # fresh segments_dir, no reuse of yt-dlp bytes
 ```
 
 `download_hls_with_resume` (segment_downloader.py:629-697) creates a **new** `.{stem}_segments` directory and downloads every segment from scratch. The bytes yt-dlp had already fetched are thrown away. The function/module docstrings claim "Segment download resumes from last checkpoint" (downloader.py:285), but the yt-dlp→segment fallback never reuses any prior progress — it is a clean restart wrapped in "resume" naming.
@@ -98,7 +98,7 @@ downloader.py:402   output_file.unlink()          # delete the partial file
 
 **Impact:** Misleading behavior: users expect interrupted downloads to continue from where they stopped. In reality the tool either fails silently (SRV-001) or restarts a full segment download, doubling network usage on a flaky connection. Maintainability risk: the "resume" contract is documented but not implemented, which will confuse future maintainers.
 
-**Recommendation:** Either (a) rename the function/flow to reflect that it is a *fresh segment fallback*, or (b) make it genuinely resume by feeding any recoverable partial bytes into the segment pipeline. Clarify the behavior in docs. Effort: small–medium. Priority: recommended.
+**Recommendation:** Rename `_attempt_segment_resume` to `_attempt_fresh_segment_fallback` and update its docstring to state "Initiates a fresh segment download when yt-dlp fails; does NOT resume partial bytes (yt-dlp partial files cannot be reused in segment pipeline)." Update `download_with_ytdlp_with_resume_fallback` docstring to remove "resumes from last checkpoint" claim. Effort: small. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** validated
@@ -270,7 +270,7 @@ except asyncio.CancelledError:
 
 ## Advisory Recommendations
 
-- **SRV-002** (MEDIUM): `_attempt_segment_resume` discards the partial and restarts clean — rename or make it genuinely resume.
+- **SRV-002** (MEDIUM): Rename `_attempt_segment_resume` to `_attempt_fresh_segment_fallback`; remove misleading 'resumes from last checkpoint' claims in docstrings.
 - **SRV-003** (MEDIUM): resume loop re-runs yt-dlp after irrecoverable segment resume — break early on `None`.
 - **SRV-004** (LOW): dead code `_should_abort_retry`.
 - **SRV-005** (LOW): unused thread-safe `ProgressManager.update`/`get_progress`; threading contract unstated.

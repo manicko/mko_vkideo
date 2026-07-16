@@ -1,0 +1,33 @@
+id: fix_network_monitor_exception_handling
+source_reference: .ai/audit/99-validation/05-integrations-validated-findings.md
+source_section: INT-005
+priority: medium
+
+title: Fix broad exception handling in network_monitor JSON parsing
+
+description: >
+  _intercept_response catches Exception and passes silently around response.json()
+  calls, masking programming errors and making it impossible to distinguish
+  malformed responses from code defects.
+
+goals:
+  - narrow exception handling to specific cases
+  - add logging for JSON parse errors
+  - maintain network interception functionality
+
+files:
+  - path: src/vkdownloader/infrastructure/network_monitor.py
+    targets:
+      - type: function
+        name: _intercept_response
+
+changes:
+  - action: modify_control_flow
+    description: >
+      Replace `except Exception: pass` with specific catches for JSONDecodeError,
+      aiohttp errors, etc. Add logger.warning for parse failures.
+
+acceptance_criteria:
+  - JSON parse errors are logged
+  - specific exceptions handled
+  - network interception still works

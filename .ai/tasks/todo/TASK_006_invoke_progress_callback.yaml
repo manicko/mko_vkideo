@@ -1,0 +1,37 @@
+id: invoke_progress_callback_yt_dlp
+source_reference: .ai/audit/99-validation/06-data-flow-validated-findings.md
+source_section: DF-001
+priority: high
+
+title: Invoke progress callback during yt-dlp downloads
+
+description: >
+  The progress callback is threaded through the download pipeline but is never
+  invoked for successful yt-dlp downloads. Only _download_with_ytdlp needs
+  to be modified to call the callback during/after download.
+
+goals:
+  - add progress callback invocation to _download_with_ytdlp
+  - ensure segment path continues to work after changes
+  - provide meaningful progress values for download path
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: _download_with_ytdlp
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_with_ytdlp_with_resume_fallback
+
+changes:
+  - action: modify_control_flow
+    description: >
+      Add progress_callback parameter to _download_with_ytdlp signature and
+      invoke it at download completion or use yt-dlp progress hook
+
+acceptance_criteria:
+  - progress callback fires on successful yt-dlp downloads
+  - batch progress shows actual download progress
+  - no regression in download functionality

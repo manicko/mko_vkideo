@@ -1,0 +1,39 @@
+id: research_ffmpeg_header_safety
+source_reference: .ai/audit/99-validation/04-security-validated-findings.md
+source_section: SEC-001
+priority: high
+
+title: Research ffmpeg header safety patterns and temp file options
+
+description: >
+  Investigate safe patterns for passing headers to ffmpeg subprocess without
+  exposing secrets in the process argument list. Document safe implementation
+  approach and validate options.
+
+goals:
+  - document ffmpeg @file syntax for header input
+  - identify temporary file lifecycle and cleanup patterns
+  - assess impact on download_with_ffmpeg method
+  - produce go/no-go recommendation for implementation
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: _build_ffmpeg_cmd
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_with_ffmpeg
+
+changes:
+  - action: research
+    description: >
+      Document safe patterns for ffmpeg header input via temporary file.
+      The @file syntax allows ffmpeg to read headers from a file, avoiding
+      exposure in process listings.
+
+acceptance_criteria:
+  - implementation approach documented
+  - temp file cleanup strategy identified
+  - go/no-go recommendation provided
