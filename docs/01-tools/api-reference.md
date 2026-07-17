@@ -591,7 +591,6 @@ Stream format types.
 | Value | Description |
 |-------|-------------|
 | `HLS` | "hls" |
-| `DASH` | "dash" |
 | `MP4` | "mp4" |
 
 ### LogLevel

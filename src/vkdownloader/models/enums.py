@@ -21,7 +21,6 @@ class StreamFormat(StrEnum):
     """Stream format types."""
 
     HLS = "hls"
-    DASH = "dash"
     MP4 = "mp4"
 
 
