@@ -487,6 +487,75 @@ def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnecto
     return aiohttp.TCPConnector(ssl=ssl_context, limit=10)
 
 
+async def _await_and_cancel(
+    tasks: list[asyncio.Task[bool]],
+) -> list[bool] | None:
+    """Await segment download tasks with cancellation handling.
+
+    Args:
+        tasks: List of download tasks to await.
+
+    Returns:
+        List of download results on success, None if cancelled.
+    """
+    if not tasks:
+        return None
+
+    try:
+        return await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        # Cancel any still-running tasks on interruption
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        # Wait for cancellation to propagate
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("download_cancelled", reason="shutdown_requested")
+        return None
+
+
+async def _tally_and_merge(
+    download_results: list[bool],
+    metadata_file: Path,
+    segments: list[str],
+    segments_dir: Path,
+    output_file: Path,
+    progress_callback: Callable[[str, int, int], None] | None,
+    video_url: str,
+) -> Path | None:
+    """Tally download results and merge if all segments downloaded.
+
+    Args:
+        download_results: Results from completed download tasks.
+        metadata_file: Path to progress metadata file.
+        segments: List of all segment URLs.
+        segments_dir: Directory containing downloaded segments.
+        output_file: Final output file path.
+        progress_callback: Optional callback for progress updates.
+        video_url: Video URL for progress callback video_id extraction.
+
+    Returns:
+        Path to merged file on success, None otherwise.
+    """
+    downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)
+    _save_downloaded_count(metadata_file, downloaded_count)
+
+    # Call progress callback for per-URL segment updates
+    if progress_callback:
+        video_id = video_url.split("_")[-1] if "_" in video_url else video_url
+        progress_callback(video_id, downloaded_count, len(segments))
+
+    # All downloaded - merge in batches
+    if downloaded_count == len(segments):
+        logger.info("merging_segments", count=len(segments))
+        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+        if result:
+            _cleanup_segments(segments_dir, metadata_file)
+        return result
+
+    return None
+
+
 async def _process_downloaded_segments(
     tasks: list[asyncio.Task[bool]],
     metadata_file: Path,
@@ -510,39 +579,18 @@ async def _process_downloaded_segments(
     Returns:
         Path to merged file on success, None otherwise.
     """
-    if not tasks:
+    download_results = await _await_and_cancel(tasks)
+    if download_results is None:
         return None
-
-    try:
-        # Wait for all tasks to complete, but allow shutdown interruption
-        download_results = await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        # Cancel any still-running tasks on interruption
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        # Wait for cancellation to propagate
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info("download_cancelled", reason="shutdown_requested")
-        return None
-
-    downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)
-    _save_downloaded_count(metadata_file, downloaded_count)
-
-    # Call progress callback for per-URL segment updates
-    if progress_callback:
-        video_id = video_url.split("_")[-1] if "_" in video_url else video_url
-        progress_callback(video_id, downloaded_count, len(segments))
-
-    # All downloaded - merge in batches
-    if downloaded_count == len(segments):
-        logger.info("merging_segments", count=len(segments))
-        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
-        if result:
-            _cleanup_segments(segments_dir, metadata_file)
-        return result
-
-    return None
+    return await _tally_and_merge(
+        download_results,
+        metadata_file,
+        segments,
+        segments_dir,
+        output_file,
+        progress_callback,
+        video_url,
+    )
 
 
 async def _download_segment_concurrent(

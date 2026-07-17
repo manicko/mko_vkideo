@@ -127,6 +127,83 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
             raise ValueError(f"Invalid quality value: {quality}") from None
 
 
+def _build_ytdlp_options(
+    output_file: Path,
+    quality_str: str,
+    user_agent: str,
+    settings: Settings,
+    cookies: str | None,
+    raw_cookies: list[Cookie] | None,
+    video_id: str,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> tuple[dict[str, Any], Path | None]:
+    """
+    Build yt-dlp options dictionary for video download.
+
+    Args:
+        output_file: Path to save downloaded video.
+        quality_str: Quality string without p suffix (e.g., 720).
+        user_agent: User agent string for requests.
+        settings: Application settings.
+        cookies: Optional cookies string for backward compatibility.
+        raw_cookies: Optional raw Cookie objects for Netscape format.
+        video_id: Video ID for progress callback.
+        progress_callback: Optional callback for download progress.
+
+    Returns:
+        Tuple of (ydl_opts dict, cookie_file Path or None).
+    """
+    # Build format selector: use height filter for numeric quality, bare best otherwise
+    format_selector = (
+        f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
+    )
+
+    ydl_opts: dict[str, Any] = {
+        "outtmpl": str(output_file),
+        "quiet": False,
+        "no_warnings": True,
+        "format": format_selector,
+        "nocheckcertificate": not settings.ssl_verify,
+        "hls_prefer_native": True,
+        "concurrent_fragments": settings.max_concurrent_downloads,
+        "throttledratelimit": settings.throttled_rate,
+        "http_chunk_size": settings.http_chunk_size,
+        "http_headers": {
+            "User-Agent": user_agent,
+            "Referer": "https://vkvideo.ru/",
+        },
+        "socket_timeout": settings.download_timeout,
+        "retries": settings.max_retries,
+        "fragment_retries": settings.max_retries,
+    }
+
+    # Add cookies file generation if cookies provided
+    cookie_file: Path | None = None
+    if raw_cookies:
+        cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
+        cookie_file.write_text(_cookies_to_netscape(raw_cookies))
+        ydl_opts["cookiefile"] = str(cookie_file)
+    elif cookies:
+        cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
+        cookie_file.write_text(_cookies_to_netscape(cookies))
+        ydl_opts["cookiefile"] = str(cookie_file)
+
+    # Add progress hook if callback provided
+    if progress_callback:
+
+        def _progress_hook(d: dict[str, Any]) -> None:
+            if d.get("status") == "downloading":
+                downloaded = d.get("downloaded_bytes", 0)
+                total = d.get("total_bytes_estimate", 0) or d.get("total_bytes", 0)
+                progress_callback(video_id, downloaded, total or 1)
+            elif d.get("status") == "finished":
+                progress_callback(video_id, 1, 1)
+
+        ydl_opts["progress_hooks"] = [_progress_hook]
+
+    return ydl_opts, cookie_file
+
+
 # Re-export for backward compatibility
 __all__ = [
     "FfmpegProgress",
@@ -139,6 +216,7 @@ __all__ = [
     "read_progress",
     "_await_first_and_cancel_others",
     "_build_ffmpeg_concat_command",
+    "_build_ytdlp_options",
     "_cleanup_segments",
     "_cookies_to_netscape",
     "_download_segment",
@@ -473,6 +551,18 @@ async def _download_with_ytdlp(
     # Extract video_id for progress callback (matches segment downloader pattern)
     video_id = video_url.split("_")[-1] if "_" in video_url else video_url
 
+    # Build yt-dlp options using extracted helper (must happen before _download closure captures it)
+    ydl_opts, cookie_file = _build_ytdlp_options(
+        output_file,
+        quality_str,
+        user_agent,
+        settings,
+        cookies,
+        raw_cookies,
+        video_id,
+        progress_callback,
+    )
+
     def _download() -> str:
         # Check shutdown before starting download
         if shutdown_event.is_set():
@@ -480,56 +570,6 @@ async def _download_with_ytdlp(
 
         if not settings.ssl_verify:
             logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
-
-        # Build format selector: use height filter for numeric quality, bare 'best' otherwise
-        format_selector = (
-            f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
-        )
-
-        ydl_opts: dict[str, Any] = {
-            "outtmpl": str(output_file),
-            "quiet": False,
-            "no_warnings": True,
-            "format": format_selector,
-            "nocheckcertificate": not settings.ssl_verify,
-            "hls_prefer_native": True,
-            "concurrent_fragments": settings.max_concurrent_downloads,
-            "throttledratelimit": settings.throttled_rate,
-            "http_chunk_size": settings.http_chunk_size,
-            "http_headers": {
-                "User-Agent": user_agent,
-                "Referer": "https://vkvideo.ru/",
-            },
-            "socket_timeout": settings.download_timeout,
-            "retries": settings.max_retries,
-            "fragment_retries": settings.max_retries,
-        }
-
-        # Add cookies file generation if cookies provided
-        cookie_file: Path | None = None
-        if raw_cookies:
-            # Use raw cookies to preserve domain information
-            cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-            cookie_file.write_text(_cookies_to_netscape(raw_cookies))
-            ydl_opts["cookiefile"] = str(cookie_file)
-        elif cookies:
-            # Fall back to string format (backward compatible, but uses hardcoded domain)
-            cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-            cookie_file.write_text(_cookies_to_netscape(cookies))
-            ydl_opts["cookiefile"] = str(cookie_file)
-
-        # Add progress hook if callback provided
-        if progress_callback:
-
-            def _progress_hook(d: dict[str, Any]) -> None:
-                if d.get("status") == "downloading":
-                    downloaded = d.get("downloaded_bytes", 0)
-                    total = d.get("total_bytes_estimate", 0) or d.get("total_bytes", 0)
-                    progress_callback(video_id, downloaded, total or 1)
-                elif d.get("status") == "finished":
-                    progress_callback(video_id, 1, 1)
-
-            ydl_opts["progress_hooks"] = [_progress_hook]
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
