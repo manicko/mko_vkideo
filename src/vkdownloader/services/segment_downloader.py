@@ -7,6 +7,7 @@ import json
 import random
 import ssl
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
@@ -25,6 +26,39 @@ if TYPE_CHECKING:
     from ..models.dtos import HLSDownloadRequest
     from ..services.extractor import VKVideoExtractor
     from .downloader_throttle import URLBackoffCoordinator
+
+
+@dataclass
+class SegmentTask:
+    """Identity and location for a single segment download task.
+
+    Contains the segment's position, URL, and where to save it.
+    """
+
+    idx: int
+    segment_url: str
+    segments_dir: Path
+
+
+@dataclass
+class DownloadPolicy:
+    """Download policy configuration for segment downloads.
+
+    Bundles HTTP session, rate-limiting, and retry settings.
+    """
+
+    session: aiohttp.ClientSession
+    semaphore: asyncio.Semaphore
+    headers: dict[str, str]
+    max_concurrent_downloads: int
+    backoff_coordinator: URLBackoffCoordinator | None
+    video_url: str
+    max_retries: int
+    download_timeout: int = 300
+    is_shared_semaphore: bool = False
+    m3u8_url: str = ""
+    segments_dir: Path = Path()
+
 
 logger = get_logger(__name__)
 
@@ -512,36 +546,14 @@ async def _process_downloaded_segments(
 
 
 async def _download_segment_concurrent(
-    session: aiohttp.ClientSession,
-    idx: int,
-    segment_url: str,
-    segments_dir: Path,
-    semaphore: asyncio.Semaphore,
-    m3u8_url: str,
-    headers: dict[str, str],
-    max_concurrent_downloads: int,
-    backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str,
-    max_retries: int,
-    is_shared_semaphore: bool,
-    download_timeout: int = 300,
+    task: SegmentTask,
+    policy: DownloadPolicy,
 ) -> bool:
     """Download a segment with semaphore rate limiting.
 
     Args:
-        session: aiohttp ClientSession for HTTP requests.
-        idx: Index of the segment being downloaded.
-        segment_url: URL of the segment to download.
-        segments_dir: Directory to save downloaded segments.
-        semaphore: Semaphore for rate limiting.
-        m3u8_url: Base m3u8 URL for resolving relative segment URLs.
-        headers: Request headers to use.
-        max_concurrent_downloads: Maximum concurrent downloads.
-        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
-        video_url: Original video URL for coordinator keying.
-        max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
-        is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
-        download_timeout: Total timeout for HTTP request in seconds.
+        task: SegmentTask containing segment identity and location.
+        policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
 
     Returns:
         True on success, False on failure.
@@ -551,29 +563,31 @@ async def _download_segment_concurrent(
     if shutdown_event.is_set():
         raise asyncio.CancelledError("Download cancelled by user")
 
-    async with semaphore:
+    async with policy.semaphore:
         if shutdown_event.is_set():
             raise asyncio.CancelledError("Download cancelled by user")
 
         full_url = (
-            urljoin(m3u8_url, segment_url) if not segment_url.startswith("http") else segment_url
+            urljoin(policy.m3u8_url, task.segment_url)
+            if not task.segment_url.startswith("http")
+            else task.segment_url
         )
 
-        segment_path = segments_dir / f"{idx:05d}.ts"
+        segment_path = task.segments_dir / f"{task.idx:05d}.ts"
         result = await _download_segment(
-                session,
-                full_url,
-                segment_path,
-                headers,
-                max_concurrent_downloads=max_concurrent_downloads,
-                segment_index=idx,
-                backoff_coordinator=backoff_coordinator,
-                video_url=video_url,
-                max_retries=max_retries,
-                download_timeout=download_timeout,
-            )
+            policy.session,
+            full_url,
+            segment_path,
+            policy.headers,
+            max_concurrent_downloads=policy.max_concurrent_downloads,
+            segment_index=task.idx,
+            backoff_coordinator=policy.backoff_coordinator,
+            video_url=policy.video_url,
+            max_retries=policy.max_retries,
+            download_timeout=policy.download_timeout,
+        )
 
-        if result and not is_shared_semaphore and max_concurrent_downloads == 1:
+        if result and not policy.is_shared_semaphore and policy.max_concurrent_downloads == 1:
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
 
@@ -588,34 +602,14 @@ async def _download_segment_concurrent(
 
 
 def _create_segment_download_tasks(
-    session: aiohttp.ClientSession,
     segments: list[str],
-    segments_dir: Path,
-    semaphore: asyncio.Semaphore,
-    m3u8_url: str,
-    headers: dict[str, str],
-    max_concurrent_downloads: int,
-    backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str,
-    max_retries: int,
-    is_shared_semaphore: bool,
-    download_timeout: int = 300,
+    policy: DownloadPolicy,
 ) -> list[asyncio.Task[bool]]:
     """Create tasks for downloading missing segments.
 
     Args:
-        session: aiohttp ClientSession for HTTP requests.
         segments: List of segment URLs to download.
-        segments_dir: Directory to save downloaded segments.
-        semaphore: Semaphore for rate limiting.
-        m3u8_url: Base m3u8 URL for resolving relative segment URLs.
-        headers: Request headers to use.
-        max_concurrent_downloads: Maximum concurrent downloads.
-        backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
-        video_url: Original video URL for coordinator keying.
-        max_retries: Maximum retry attempts for parallel mode on 429/5xx responses.
-        is_shared_semaphore: Whether the semaphore is shared (skips anti-detection delay).
-        download_timeout: Total timeout for HTTP request in seconds.
+        policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
 
     Returns:
         List of download tasks.
@@ -623,19 +617,12 @@ def _create_segment_download_tasks(
     return [
         asyncio.create_task(
             _download_segment_concurrent(
-                session,
-                i,
-                seg,
-                segments_dir,
-                semaphore,
-                m3u8_url,
-                headers,
-                max_concurrent_downloads,
-                backoff_coordinator,
-                video_url,
-                max_retries,
-                is_shared_semaphore,
-                download_timeout,
+                SegmentTask(
+                    idx=i,
+                    segment_url=seg,
+                    segments_dir=policy.segments_dir,
+                ),
+                policy,
             )
         )
         for i, seg in enumerate(segments)
@@ -699,20 +686,21 @@ async def _run_download_session(
         )
         is_shared = semaphore is not None
 
-        tasks = _create_segment_download_tasks(
-            session,
-            segments,
-            segments_dir,
-            semaphore_to_use,
-            m3u8_url,
-            headers,
-            settings.max_concurrent_downloads,
-            backoff_coordinator,
-            video_url,
-            settings.max_retries,
-            is_shared,
+        policy = DownloadPolicy(
+            session=session,
+            semaphore=semaphore_to_use,
+            headers=headers,
+            max_concurrent_downloads=settings.max_concurrent_downloads,
+            backoff_coordinator=backoff_coordinator,
+            video_url=video_url,
+            max_retries=settings.max_retries,
             download_timeout=settings.download_timeout,
+            is_shared_semaphore=is_shared,
+            m3u8_url=m3u8_url,
+            segments_dir=segments_dir,
         )
+
+        tasks = _create_segment_download_tasks(segments, policy)
 
         return await _process_downloaded_segments(
             tasks,
