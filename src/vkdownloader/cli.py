@@ -1,7 +1,10 @@
 """CLI interface for VK Video Downloader using Typer."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import typer
@@ -25,6 +28,16 @@ logger = get_logger(__name__)
 
 # Module-level progress manager for thread-safe per-URL progress tracking
 _progress_manager = ProgressManager()
+
+
+@dataclass
+class DownloadContext:
+    """Context for batch download operations, bundling batch-scoped state."""
+
+    index: int
+    shared_semaphore: asyncio.Semaphore | None = None
+    backoff_coordinator: URLBackoffCoordinator | None = None
+    progress_callback: Callable[[str, int, int], None] | None = None
 
 
 def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]:
@@ -63,33 +76,33 @@ async def _format_progress(url_count: int) -> str:
 
 async def _download_single(
     url: str,
-    index: int,
     quality: QualityEnum,
     output: Path,
     method: DownloadMethod,
     settings: Settings,
     max_retries_override: int | None = None,
-    shared_semaphore: asyncio.Semaphore | None = None,
-    backoff_coordinator: URLBackoffCoordinator | None = None,
-    progress_callback: Callable[[str, int, int], None] | None = None,
+    context: DownloadContext | None = None,
 ) -> tuple[str, str, str]:
     """Download a single video and return result tuple.
 
     Args:
         url: Video URL to download.
-        index: Index of the URL in the batch.
         quality: Video quality selection.
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings with environment-loaded values.
         max_retries_override: Optional max_retries override from CLI.
-        shared_semaphore: Optional semaphore for concurrency control.
-        backoff_coordinator: Optional coordinator for rate limiting.
-        progress_callback: Optional callback for progress updates.
+        context: Optional context for batch download operations.
 
     Returns:
         Tuple of (url, output_path, status).
     """
+    # Extract batch-scoped values from context
+    index = context.index if context else 0
+    shared_semaphore = context.shared_semaphore if context else None
+    backoff_coordinator = context.backoff_coordinator if context else None
+    progress_callback = context.progress_callback if context else None
+
     try:
         # Merge CLI max_retries override with settings object
         if max_retries_override is not None:
@@ -193,15 +206,17 @@ async def _run_batch_with_progress(
         asyncio.create_task(
             _download_single(
                 url,
-                i,
                 quality,
                 output,
                 method,
                 settings,
                 max_retries,
-                shared_semaphore,
-                backoff_coordinator,
-                callbacks[i],
+                DownloadContext(
+                    index=i,
+                    shared_semaphore=shared_semaphore,
+                    backoff_coordinator=backoff_coordinator,
+                    progress_callback=callbacks[i],
+                ),
             )
         )
         for i, url in enumerate(urls)
