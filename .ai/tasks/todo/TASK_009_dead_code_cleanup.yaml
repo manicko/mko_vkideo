@@ -1,0 +1,42 @@
+id: task_dead_code_cleanup
+title: Remove dead _build_ffmpeg_cmd method and associated tests
+priority: medium
+source_reference: .ai/audit/99-validation/08-quality-validated-findings.md
+source_section: QLT-001
+cross_reference:
+  - .ai/audit/99-validation/05-integrations-validated-findings.md INT-008
+  - .ai/audit/99-validation/03-services-validated-findings.md SRV-002
+description: >
+  HLSDownloader._build_ffmpeg_cmd is dead production code (only called from
+  tests) and uses insecure cookie-in-argv pattern. The actual download_with_ffmpeg
+  uses secure temp-file header pattern. Remove the dead method and its tests.
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: _build_ffmpeg_cmd
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: test_class
+        name: TestFFmpegCommand
+semantic_anchors:
+  - after:
+      type: method
+      name: _temp_headers_file
+changes:
+  - action: remove_code
+    description: >
+      Delete HLSDownloader._build_ffmpeg_cmd (downloader.py lines 144-166) with its
+      insecure cookie-in-argv pattern.
+  - action: remove_tests
+    description: >
+      Delete TestFFmpegCommand class (tests/test_hls_downloader.py lines 50-126).
+goals:
+  - Dead code removed from downloader.py
+  - Insecure cookie pattern eliminated
+  - Test file cleaned up
+acceptance_criteria:
+  - No production callers of _build_ffmpeg_cmd exist
+  - download_with_ffmpeg remains unchanged
+  - Test suite passes
+  - Ruff/mypy pass

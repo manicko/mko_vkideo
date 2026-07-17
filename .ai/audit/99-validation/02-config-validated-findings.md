@@ -177,9 +177,9 @@ None detected. All findings are internally consistent and corroborated by runtim
 
 1. **CFG-001** — Add `field_validator` on `download_dir` and `log_file` to call `Path.expanduser().resolve()`; update docs to either support tilde or require absolute paths.
 2. **CFG-002** — Fix `installation.md` `.env` block to use `VKDOWNLOADER_` prefix for all real fields.
-3. **CFG-004** — Either add `download_method` and `concurrent_fragments` fields to `Settings`, or remove them from all documentation and `.env`.
+3. **CFG-004** — Remove `DOWNLOAD_METHOD=auto` and `CONCURRENT_FRAGMENTS=4` from `docs/01-tools/installation.md` (lines 120, 123) and the `# VKDOWNLOADER_DOWNLOAD_METHOD=auto` line from `.env` (line 26). Neither field exists in `Settings` (download method is CLI-only via `--method`; `concurrent_fragments` is not implemented), and `extra="forbid"` makes the documented env var a latent crash. Documentation-only fix; no code change. (Consistent with QLT-002.)
 
 ## Advisory Recommendations
 
-1. **CFG-003** — Remove `accept_language` field or implement actual Accept-Language header injection in browser context.
+1. **CFG-003** — Remove `accept_language` field (config.py:27-30) and its docs/.env references; Playwright's `locale` already controls the Accept-Language header, making the field redundant. (Consistent with INT-002 / QLT-003.)
 2. **CFG-005** — Add note to configuration docs stating this tool is env/CLI-configured only.

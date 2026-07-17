@@ -1,0 +1,37 @@
+id: task_cookies_netscape_format
+title: Fix Netscape cookie field order in _cookies_to_netscape
+priority: medium
+source_reference: .ai/audit/99-validation/03-services-validated-findings.md
+source_section: SRV-001
+description: >
+  _cookies_to_netscape builds Netscape cookie-file lines with secure and
+  include-subdomains fields transposed. The spec requires: domain,
+  include-subdomains, path, secure, expires, name, value. Fix the list branch.
+files:
+  - path: src/vkdownloader/services/cookies.py
+    targets:
+      - type: function
+        name: _cookies_to_netscape
+    semantic_anchors:
+      after:
+        type: function_signature
+semantic_anchors:
+  - type: string_literal
+    value: f"{domain}\\t{secure}\\t{path}\\tFALSE\\t{expires}"
+changes:
+  - action: modify_code
+    description: >
+      Reorder fields in the list branch to match Netscape spec: domain,
+      include-subdomains (TRUE), path, secure, expires, name, value. The string
+      branch at line 52 is correct and should be used as reference.
+    code_hint: |
+      lines.append(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}")
+goals:
+  - Netscape cookie format follows spec correctly
+  - Secure cookies properly set for HTTPS
+  - Both code paths produce consistent format
+acceptance_criteria:
+  - Cookie line splits into correct positional fields
+  - Secure flag position matches spec
+  - Include-subdomains flag is TRUE (as intended)
+  - Tests updated/created for Netscape format

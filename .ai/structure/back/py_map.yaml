@@ -69,7 +69,6 @@
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.network_monitor
   layer: unknown
   imports:
-  - typing
   - playwright.async_api
   - structlog
   - utils.url_sanitizer
@@ -113,7 +112,6 @@
   - QualityEnum
   - StreamFormat
   - LogLevel
-  - DownloadStatus
   - DownloadMethod
   - CookieSource
   functions: []
@@ -142,6 +140,8 @@
   layer: unknown
   imports:
   - __future__
+  - typing
+  - playwright.async_api
   classes: []
   functions:
   - _cookies_to_netscape
@@ -151,8 +151,10 @@
   imports:
   - __future__
   - collections.abc
+  - contextlib
   - pathlib
   - typing
+  - playwright.async_api
   - structlog
   - config
   - exceptions
@@ -176,6 +178,7 @@
   - __init__
   - _build_ffmpeg_cmd
   - _download
+  - _progress_hook
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader_throttle
   layer: unknown
@@ -268,7 +271,6 @@
   - _parse_m3u8_segments
   - _is_retryable_status
   - _should_continue_on_retry
-  - _should_abort_retry
   - _load_downloaded_count
   - _save_downloaded_count
   - _cleanup_segments

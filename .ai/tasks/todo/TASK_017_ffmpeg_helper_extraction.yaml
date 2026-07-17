@@ -1,0 +1,35 @@
+id: task_ffmpeg_helper_extraction
+title: Extract shared helper from download_with_ffmpeg cancellation logic
+priority: medium
+source_reference: .ai/audit/99-validation/09-structural-quality-validated-findings.md
+source_section: STR-001
+description: >
+  download_with_ffmpeg has duplicated task cancellation logic (lines 260-270
+  and 274-284). Extract into _await_first_and_cancel_others helper to reduce
+  nesting and code duplication.
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_with_ffmpeg
+semantic_anchors:
+      - after:
+          type: function
+          name: cancel_ffmpeg_process
+changes:
+  - action: add_code
+    description: >
+      Create _await_first_and_cancel_others helper function that encapsulates
+      "launch two coroutines, await FIRST_COMPLETED, cancel the loser" pattern.
+  - action: modify_code
+    description: >
+      Replace duplicated cancellation blocks with calls to the helper.
+goals:
+  - Code duplication removed
+  - Nesting depth reduced by approximately 1 level
+  - Shared pattern for async cancellation
+acceptance_criteria:
+  - Helper function extracted
+  - Both branches use same cancellation logic
+  - Function length/maintainability improved
+  - Tests pass

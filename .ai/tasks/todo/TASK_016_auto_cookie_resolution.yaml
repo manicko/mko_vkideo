@@ -1,0 +1,36 @@
+id: task_auto_cookie_resolution
+title: Add cookie resolution to AUTO download method branch
+priority: low
+source_reference: .ai/audit/99-validation/06-data-flow-validated-findings.md
+source_section: DF-005
+description: >
+  AUTO branch in perform_download calls download_with_ytdlp_with_resume_fallback
+  directly without _resolve_cookies, while YTDLP and FFMPEG branches do. This
+  causes first attempt without cookies when cookie_source=BROWSER.
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: perform_download
+    semantic_anchors:
+      - type: branch
+        value: AUTO
+changes:
+  - action: modify_code
+    description: >
+      Add _resolve_cookies call in the AUTO branch (around line 744) before
+      calling download_with_ytdlp_with_resume_fallback, matching YTDLP/FFMPEG
+      branch patterns.
+    code_hint: |
+      if download_method == DownloadMethod.AUTO:
+          cookies = await self._resolve_cookies(cookie_source, extractor, backoff_coordinator)
+          result = await self.download_with_ytdlp_with_resume_fallback(
+              output_file=output_file, url=url, cookies=cookies, ...
+          )
+goals:
+  - AUTO branch applies cookie auth on first attempt
+  - Consistent behavior across all download methods
+acceptance_criteria:
+  - Cookie resolution added to AUTO branch
+  - Behavior matches YTDLP/FFMPEG branches
+  - Tests pass

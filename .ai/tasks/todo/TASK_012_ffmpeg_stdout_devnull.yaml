@@ -1,0 +1,31 @@
+id: task_ffmpeg_stdout_devnull
+title: Set stdout to DEVNULL in download_with_ffmpeg
+priority: medium
+source_reference: .ai/audit/99-validation/05-integrations-validated-findings.md
+source_section: INT-004
+description: >
+  download_with_ffmpeg creates subprocess with stdout=PIPE but never reads it.
+  Only stderr is read via _monitor_progress or _drain_stderr. This creates
+  latent deadlock risk. Set stdout=DEVNULL since ffmpeg progress goes to stderr.
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: method
+        name: download_with_ffmpeg
+    semantic_anchors:
+      - type: subprocess_create
+        value: asyncio.create_subprocess_exec
+changes:
+  - action: modify_code
+    description: >
+      Change stdout=asyncio.subprocess.PIPE to stdout=asyncio.subprocess.DEVNULL
+      in download_with_ffmpeg (around line 222).
+    code_hint: |
+      stdout=asyncio.subprocess.DEVNULL,
+goals:
+  - Deadlock risk eliminated
+  - Resource cleanup improved
+acceptance_criteria:
+  - stdout set to DEVNULL
+  - Progress output still works via stderr
+  - No functional change to download behavior

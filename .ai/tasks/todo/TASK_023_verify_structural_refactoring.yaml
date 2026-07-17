@@ -1,0 +1,22 @@
+id: task_verify_structural_refactoring
+title: Verify Structural Refactoring Completeness
+type: verification
+status: pending
+depends_on:
+  - task_hls_download_request_refactor
+verifies:
+  - task_ffmpeg_helper_extraction
+  - task_download_context_dataclass
+  - task_segment_task_dataclass
+  - task_ytdlp_opts_extraction
+  - task_hls_download_request_refactor
+verification_steps:
+  - build: uv run ruff check src/vkdownloader/ && uv run mypy src/vkdownloader/
+  - test: uv run pytest tests/ -q
+  - smoke_check: uv run vkdownloader --help
+pass_criteria:
+  - Ruff linting passes with no errors
+  - Mypy type checking passes
+  - All 223+ tests pass
+  - CLI commands functional
+failure_action: return task_hls_download_request_refactor to rework

@@ -1,0 +1,35 @@
+id: task_browser_wait_config
+title: Add configurable browser wait times to Settings
+priority: medium
+source_reference: .ai/audit/99-validation/05-integrations-validated-findations.md
+source_section: INT-007
+description: >
+  _extract_with_browser uses hardcoded await asyncio.sleep(5) and sleep(8)
+  for interaction waits. These should be configurable via Settings for
+  operational tuning without code changes.
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: class
+        name: Settings
+semantic_anchors:
+  - after:
+      type: field
+      name: download_timeout
+changes:
+  - action: add_code
+    description: >
+      Add browser_pre_interaction_wait and browser_post_interaction_wait int
+      fields (default 5 and 8, ge=1, le=30) to Settings under Browser Automation.
+  - action: modify_code
+    description: >
+      Replace hardcoded sleeps in extractor.py with settings values.
+goals:
+  - Browser wait times configurable
+  - Defaults match current hardcoded values
+  - Operators can tune without code changes
+acceptance_criteria:
+  - Settings accepts browser_pre_interaction_wait
+  - Settings accepts browser_post_interaction_wait
+  - extractor.py uses settings values
+  - CLI behavior unchanged with defaults

@@ -76,7 +76,7 @@ context = await self.browser.new_context(
 )
 ```
 
-**Recommendation:** Either pass `accept_language=self.settings.accept_language` into `new_context()`, or remove the field and its docs. Effort: trivial. Priority: recommended.
+**Recommendation (clarified):** Remove `Settings.accept_language` (config.py:27-30) and delete all references to it. Playwright's `locale` parameter already controls the `Accept-Language` header internally when passed to `new_context()` (browser.py:67), so `accept_language` is redundant dead configuration. Delete the `accept_language` row from docs/11-guides/configuration.md:25, the Settings entry in docs/01-tools/api-reference.md:847, and the `VKDOWNLOADER_ACCEPT_LANGUAGE` line in .env:10. Effort: trivial. (Consistent with CFG-003 and QLT-003.)
 
 ---
 
@@ -193,7 +193,7 @@ if response.status not in RETRYABLE_STATUS_CODES:
     return None          # same None as retry-exhausted / exception path
 ```
 
-**Recommendation:** Return a typed result distinguishing permanent vs transient failures. Effort: small. Priority: recommended.
+**Recommendation (clarified):** Add `SegmentRetryResult(StrEnum)` to `src/vkdownloader/models/enums.py` with values `SUCCESS`, `PERMANENT_FAILURE`, `RETRY_EXHAUSTED`. Modify `_retry_429_with_backoff` (downloader_throttle.py) to return `SegmentRetryResult` instead of `bytes | None`: `SUCCESS` for HTTP 200, `PERMANENT_FAILURE` for non-retryable status (lines 196-203), `RETRY_EXHAUSTED` for exhausted retries. Update callers in `segment_downloader.py` (`_download_segment_sequential` lines 66-78, `_process_downloaded_segments` line 495) to check `result is SegmentRetryResult.SUCCESS` and count successes accordingly. Effort: small.
 
 ---
 
@@ -222,7 +222,7 @@ await self._simulate_video_interaction(page)
 await asyncio.sleep(8)   # fixed; no config, no event-based wait
 ```
 
-**Recommendation:** Replace with condition-based waits or expose via `Settings`. Effort: small. Priority: recommended.
+**Recommendation (clarified):** Add two Settings fields under "Browser Automation settings" in `config.py`: `browser_pre_interaction_wait: int = Field(default=5, ge=1, le=30, description="Seconds to wait after page load before simulating video interaction")` and `browser_post_interaction_wait: int = Field(default=8, ge=1, le=30, description="Seconds to wait after interaction for stream URLs to be captured")`. Replace the hardcoded `await asyncio.sleep(5)` / `await asyncio.sleep(8)` in `extractor.py:200,202` with `self.settings.browser_pre_interaction_wait` and `self.settings.browser_post_interaction_wait`. Effort: small.
 
 ---
 
@@ -249,7 +249,7 @@ await asyncio.sleep(8)   # fixed; no config, no event-based wait
 cookie_part = f"Cookie: {cookies}\r\n" if cookies else ""  # inlined in argv
 ```
 
-**Recommendation:** Remove `_build_ffmpeg_cmd` or make it use the secure temp-file mechanism. Effort: small.
+**Recommendation (clarified):** Delete `HLSDownloader._build_ffmpeg_cmd` (downloader.py:144-166) and its 6 dead tests in `tests/test_hls_downloader.py:50-126`; the production `download_with_ffmpeg` already uses the secure temp-file header pattern. Effort: small. (Consistent with SRV-002 / QLT-001, same dead-code root cause.)
 
 ---
 

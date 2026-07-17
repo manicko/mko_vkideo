@@ -50,7 +50,7 @@ alwaysApply: false
 > **Action:** validated
 > **Detail:** Finding is technically correct. The method exists, is unused in production, and contains the cookie-in-argv pattern that was intentionally removed from the actual implementation. The tests exclusively exercise this dead code path.
 
-**Recommendation:** Investigate why the method exists (likely a leftover from before the temp-headers refactor). If it is truly unused, remove it and its tests, or if a shared command-builder is desired, refactor `download_with_ffmpeg` to use a single builder that itself uses the temp-file pattern. Keeping a second, less-safe command builder alive via tests risks it being reintroduced into production. Effort: small.
+**Recommendation (clarified):** Delete `HLSDownloader._build_ffmpeg_cmd` (downloader.py:144-166) — it is dead production code using an insecure cookie-in-argv pattern that the actual `download_with_ffmpeg` method (downloader.py:204-218) deliberately replaced with the temp-file `@{headers_file}` pattern. Remove the 6 tests in `TestFFmpegCommand` (tests/test_hls_downloader.py:50-126) that exclusively validate this dead path; the production method is already covered by `test_download_with_ffmpeg_uses_header_file_syntax` which verifies the secure temp-file approach. Effort: small. (Consistent with SRV-002 / INT-008, same dead-code root cause.)
 
 ---
 
@@ -76,7 +76,7 @@ alwaysApply: false
 > **Action:** validated
 > **Detail:** Finding is correct. The `.env` documentation claims an env var exists that would crash the application if enabled. The `extra="forbid"` setting causes Pydantic to reject unknown fields. This is a documentation-code mismatch that creates a latent crash scenario.
 
-**Recommendation:** Resolve the doc/code mismatch. Either (a) remove the `VKDOWNLOADER_DOWNLOAD_METHOD` line from `.env` and note that method is CLI-only, or (b) add a real `download_method: DownloadMethod` field to `Settings` and have `download`/`batch` fall back to it when `--method` is not overridden. Option (a) is `[DOC-UPDATE]` and trivial; option (b) is small and makes the documented behavior real. Given `extra="forbid"`, leaving the doc as-is is a latent crash. Effort: trivial–small.
+**Recommendation (clarified):** Remove the misleading `# VKDOWNLOADER_DOWNLOAD_METHOD=auto` line from `.env` (line 26) and the `DOWNLOAD_METHOD=auto` line from `docs/01-tools/installation.md` (line 123). Add a note to `docs/11-guides/configuration.md` stating that `--method/-m` is CLI-only with no env-var equivalent. Download method is an intentional per-invocation operational choice, not a persistent preference; a documentation-only fix makes the documented behavior crash-proof under `extra="forbid"` without adding unnecessary code. Effort: trivial. (Consistent with CFG-004, which also removes the non-existent `CONCURRENT_FRAGMENTS=4` from installation.md:120.)
 
 ---
 
@@ -101,7 +101,7 @@ alwaysApply: false
 > **Action:** validated
 > **Detail:** Confirmed. The field is defined with a descriptive docstring about setting the Accept-Language header, but `BrowserManager.create_stealth_page` never uses it. The `.env` documentation (line 10) also references this setting, creating a false promise of functionality.
 
-**Recommendation:** Investigate intended purpose. Either wire `accept_language` into the browser context (e.g. `extra_http_headers={"Accept-Language": self.settings.accept_language}`), which improves the stealth consistency the field was clearly meant for, or remove the unused field and its `.env` documentation. Effort: trivial.
+**Recommendation (clarified):** Remove `Settings.accept_language` (config.py:27-30) and its `.env` documentation (line 10). Playwright's `locale` parameter already controls the `Accept-Language` header internally when passed to `new_context()` (browser.py:67), so `accept_language` is redundant dead configuration. Delete the `accept_language` row from docs/11-guides/configuration.md:25 and the Settings entry in docs/01-tools/api-reference.md:847. Effort: trivial. (Consistent with CFG-003 and INT-002.)
 
 ---
 

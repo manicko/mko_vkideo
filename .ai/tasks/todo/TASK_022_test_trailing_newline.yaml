@@ -1,0 +1,24 @@
+id: task_test_trailing_newline
+title: Fix trailing newline in test_url_sanitizer.py
+priority: low
+source_reference: .ai/audit/99-validation/07-tests-validated-findings.md
+source_section: TST-004
+description: >
+  test_url_sanitizer.py is missing a trailing newline (line 74 is final line).
+  This is a trivial formatting defect that should be fixed.
+files:
+  - path: tests/test_url_sanitizer.py
+    targets:
+      - type: file
+semantic_anchors:
+      - after:
+          type: last_line
+changes:
+  - action: add_code
+    description: >
+      Add newline at end of file to satisfy ruff linting.
+goals:
+  - No ruff errors on tests/
+acceptance_criteria:
+  - ruff check tests/ passes
+  - File ends with single newline

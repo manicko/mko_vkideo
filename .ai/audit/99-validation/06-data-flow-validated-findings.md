@@ -41,7 +41,7 @@
 - `segment_downloader.py:645-646`: tasks only created for segments that do not exist OR have `st_size == 0`, so a partial non-empty file is never re-fetched.
 - `_process_downloaded_segments:504-511`: merge proceeds when `downloaded_count == len(segments)`; a corrupt segment counts toward completion.
 
-**Recommendation:** Validate segment integrity before accepting a cached `.ts` (e.g. compare expected size from the playlist `#EXTINF`/byte-range, or re-fetch if a known-good size is available), or at minimum verify ffmpeg merge return code and treat merge failure as a retryable error rather than returning the corrupt output. At a minimum, do not treat `size > 0` as "complete" for resume.
+**Recommendation (clarified):** Replace the size-based early-return in `_download_segment_concurrent` (segment_downloader.py:563-564, `if segment_path.exists() and segment_path.stat().st_size > 0: result = True`) with an unconditional re-download attempt, and remove the `size > 0` filter in `_create_segment_download_tasks` (segment_downloader.py:645-646) so partially-written `.ts` files are always re-fetched. Segment download functions open files in `"wb"` mode (overwrite), so a re-download replaces any corrupt file. This degrades gracefully when the m3u8 provides no byte-range metadata (do not attempt `#EXTINF`/byte-range size parsing, which m3u8 does not reliably supply) and eliminates the silent-corruption invariant that `size > 0` implies integrity. Effort: small. (Independent of INT-006.)
 
 ---
 

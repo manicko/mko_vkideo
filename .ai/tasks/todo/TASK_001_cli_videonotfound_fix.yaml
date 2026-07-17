@@ -1,0 +1,40 @@
+id: task_cli_videonotfound
+title: Add VideoNotFoundError handler to download command
+priority: high
+source_reference: .ai/audit/99-validation/01-cli-validated-findings.md
+source_section: CLI-001
+description: >
+  The download command's except chain does not catch VideoNotFoundError, causing it to
+  fall through to generic Exception handler with non-actionable error message. Add an
+  explicit except VideoNotFoundError branch mirroring the batch handler.
+files:
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download
+    semantic_anchors:
+      insert_after:
+        type: except_handler
+        value: QualityNotAvailableError
+      insert_before:
+        type: except_handler
+        value: Exception
+changes:
+  - action: add_code
+    description: >
+      Add explicit VideoNotFoundError exception handler in download() function that
+      prints actionable message (e.g. "Video not found: <url>. Verify the URL is
+      correct and the video is public.") and exits with code 1.
+    code_hint: |
+      except VideoNotFoundError as e:
+          typer.echo(f"Video not found: {url}. Verify the URL is correct and the video is public.")
+          raise typer.Exit(code=1)
+goals:
+  - Create explicit VideoNotFoundError handler for download command
+  - Print actionable error message for missing streams/video removed/private
+  - Exit with code 1 consistent with documented CLI contract
+acceptance_criteria:
+  - VideoNotFoundError caught and handled with clear message
+  - Exit code 1 on video not found
+  - Existing QualityNotAvailableError handling unchanged
+  - Tests pass
