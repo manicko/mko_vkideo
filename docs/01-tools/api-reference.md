@@ -842,6 +842,7 @@ Application settings with defaults and environment variable support. Uses Pydant
 **Key Attributes:**
 | Name | Default | Description |
 |------|---------|-------------|
+| `headless` | `False` | Run Playwright browser in headless mode (no visible GUI); enables server, CI, and Docker usage |
 | `user_agent` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
 | `accept_language` | `ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7` | Accept-Language header for browser requests |
 | `timezone` | `Europe/Moscow` | Timezone for stealth configuration |

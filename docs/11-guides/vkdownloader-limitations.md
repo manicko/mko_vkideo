@@ -61,7 +61,7 @@ https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 
 **Finding:** CDN segments require cookies from the browser session.
 
-**Workaround:** Extract cookies from active browser session and pass to ffmpeg via `-headers` option.
+**Workaround:** Extract cookies from active browser session and pass to ffmpeg. Cookies are written to a temporary headers file and supplied via ffmpeg's `@file` syntax (not as command-line `-headers` arguments) so session tokens never appear in process listings.
 
 ## Download Methods Comparison
 

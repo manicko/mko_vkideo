@@ -20,6 +20,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 
 | Setting | Environment Variable | Default | Description |
 |---------|---------------------|---------|-------------|
+| `headless` | `VKDOWNLOADER_HEADLESS` | false | Run Playwright browser in headless mode (no visible GUI); required for server, CI, and Docker usage |
 | `user_agent` | `VKDOWNLOADER_USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for browser requests |
 | `accept_language` | `VKDOWNLOADER_ACCEPT_LANGUAGE` | ru-RU,... | Accept-Language header for browser |
 | `timezone` | `VKDOWNLOADER_TIMEZONE` | Europe/Moscow | Timezone for stealth configuration |
@@ -34,6 +35,24 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser (file is not implemented) |
 | `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
 | `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
+
+## Headless Mode
+
+### headless
+
+Controls whether the Playwright browser runs with a visible window or headless:
+
+- **`false`** (default) — Browser launches with a visible GUI window. Required for VK video pages that apply headless detection (see [Limitations](vkdownloader-limitations.md)).
+- **`true`** — Browser runs headless (no GUI). Required for server, CI, and Docker environments without a display.
+
+**Environment Variable:** `VKDOWNLOADER_HEADLESS`
+
+```env
+# For server / CI / Docker (no display)
+VKDOWNLOADER_HEADLESS=true
+```
+
+> Note: VK applies multi-layer headless detection. Headless mode may be blocked for some videos; use non-headless (`false`) on a desktop when browser-based extraction fails.
 
 ## Cookie Source Settings
 

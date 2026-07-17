@@ -115,7 +115,7 @@ User Request
 
 The `Settings` class in `config.py` provides:
 
-- **Browser settings**: User agent, locale, timezone for stealth
+- **Browser settings**: User agent, locale, timezone for stealth; `headless` mode toggle for server/CI/Docker
 - **Download settings**: Timeout, concurrent downloads, output directory, download method
 - **Security settings**: SSL verification (enabled by default)
 - **Logging settings**: Log level and optional file output
@@ -148,6 +148,7 @@ Both commands support:
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
 - Title sanitization for filesystem safety via `_sanitize_title()`
+- **Secret-safe ffmpeg cookie passing**: VK session cookies (including `remixsid`) are written to a temporary headers file and passed to ffmpeg via the `@file` syntax instead of command-line `-headers` arguments. This prevents session tokens from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is removed automatically after the download completes.
 
 ## Rate Limiting & Throttling
 
