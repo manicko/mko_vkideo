@@ -77,6 +77,31 @@ async def _temp_headers_file(headers: str) -> AsyncIterator[Path]:
         Path(path).unlink(missing_ok=True)
 
 
+async def _await_first_and_cancel_others(
+    *tasks: asyncio.Task[Any],
+) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
+    """Launch tasks concurrently, await first completion, cancel remaining.
+
+    Args:
+        *tasks: Tasks to await concurrently.
+
+    Returns:
+        Tuple of (done_tasks, pending_tasks) after cancellation.
+    """
+    done, pending = await asyncio.wait(
+        tasks,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    # Cancel pending tasks
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    return done, pending
+
+
 def _parse_quality_to_enum(quality: str) -> QualityEnum:
     """
     Parse quality string to QualityEnum for stream selection.
@@ -112,6 +137,7 @@ __all__ = [
     "download_with_ytdlp_with_resume_fallback",
     "perform_download",
     "read_progress",
+    "_await_first_and_cancel_others",
     "_build_ffmpeg_concat_command",
     "_cleanup_segments",
     "_cookies_to_netscape",
@@ -224,35 +250,15 @@ class HLSDownloader:
                         break
                     stderr_chunks.append(line)
 
-            # Run both process wait and stderr reading concurrently
+            # Run process wait and stderr reading concurrently
             if progress_callback:
                 process_task = asyncio.create_task(process.wait())
                 monitor_task = asyncio.create_task(_monitor_progress())
-                done, pending = await asyncio.wait(
-                    [process_task, monitor_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                # Cancel pending tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                await _await_first_and_cancel_others(process_task, monitor_task)
             else:
                 process_task = asyncio.create_task(process.wait())
                 drain_task = asyncio.create_task(_drain_stderr())
-                done, pending = await asyncio.wait(
-                    [process_task, drain_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                # Cancel pending tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                await _await_first_and_cancel_others(process_task, drain_task)
 
             stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
