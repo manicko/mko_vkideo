@@ -1,0 +1,33 @@
+id: task_active_processes_cleanup
+title: Remove unused _active_processes set from ffmpeg_utils
+priority: medium
+source_reference: .ai/audit/99-validation/05-integrations-validated-findings.md
+source_section: INT-001
+description: >
+  _active_processes is a module-global set declared with a comment promising cleanup,
+  but no cleanup code iterates this set. The per-coroutine cleanup handles the
+  normal path. Remove the misleading global and its comment.
+files:
+  - path: src/vkdownloader/services/ffmpeg_utils.py
+    targets:
+      - type: variable
+        name: _active_processes
+semantic_anchors:
+  - after:
+      type: imports
+  - before:
+      type: function
+      name: _await_first_and_cancel_others
+changes:
+  - action: remove_code
+    description: >
+      Remove module-global _active_processes declaration and its comment at
+      line 15. The set serves no purpose as cleanup is handled per-coroutine.
+goals:
+  - Dead variable removed
+  - Module comment matches implementation
+  - No functional impact
+acceptance_criteria:
+  - Variable removed
+  - All ffmpeg process management unchanged
+  - Tests pass
