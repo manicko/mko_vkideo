@@ -134,15 +134,6 @@ async def _run_parallel_download_with_backoff(
         return False
 
 
-def _should_abort_retry(
-    backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str | None,
-    shutdown_event: asyncio.Event,
-) -> bool:
-    """Check if retry should be aborted due to backoff/shutdown."""
-    return backoff_coordinator is not None and video_url is not None
-
-
 async def _check_backoff_before_attempt(
     backoff_coordinator: URLBackoffCoordinator | None,
     video_url: str | None,
