@@ -35,15 +35,6 @@ class LogLevel(StrEnum):
     CRITICAL = "CRITICAL"
 
 
-class DownloadStatus(StrEnum):
-    """Download status states."""
-
-    PENDING = "pending"
-    DOWNLOADING = "downloading"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
 class DownloadMethod(StrEnum):
     """Download method options."""
 

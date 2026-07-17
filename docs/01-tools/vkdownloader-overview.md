@@ -59,7 +59,6 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 |------|--------|-------------|
 | `QualityEnum` | `models/enums.py` | Quality options (240, 360, 480, 720, 1080, 1440, 2160, best, worst) |
 | `StreamFormat` | `models/enums.py` | Stream format types (HLS, DASH, MP4) |
-| `DownloadStatus` | `models/enums.py` | Download state tracking (pending, downloading, completed, failed) |
 | `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
 | `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` is not implemented and raises `NotImplementedError`) |
 | `LogLevel` | `models/enums.py` | Logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) |

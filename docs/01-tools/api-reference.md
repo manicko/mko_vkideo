@@ -657,19 +657,6 @@ Cookie acquisition strategy for video downloads. Controls whether browser is lau
 | `BROWSER` | "browser" — Launch browser to extract real cookies for authenticated content |
 | `FILE` | "file" — Load cookies from external file (placeholder for future enhancement) |
 
-### DownloadStatus
-
-Location: `vkdownloader.models.enums`
-
-Download status states.
-
-| Value | Description |
-|-------|-------------|
-| `PENDING` | "pending" |
-| `DOWNLOADING` | "downloading" |
-| `COMPLETED` | "completed" |
-| `FAILED` | "failed" |
-
 ---
 
 ## Infrastructure
