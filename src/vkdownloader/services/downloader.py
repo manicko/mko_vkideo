@@ -512,12 +512,12 @@ async def _attempt_segment_resume(
                     output_file=output_file,
                     quality=quality,
                     cookies=cookies,
-                    settings=settings,
-                    extractor=extractor,
-                    backoff_coordinator=backoff_coordinator,
-                    semaphore=semaphore,
                     progress_callback=progress_callback,
-                )
+                ),
+                settings=settings,
+                extractor=extractor,
+                backoff_coordinator=backoff_coordinator,
+                semaphore=semaphore,
             )
     except (ExtractionError, OSError) as e:
         logger.warning("failed_to_refresh_token", error=str(e))
@@ -748,12 +748,12 @@ async def perform_download(
                         output_file=output_file,
                         quality=quality,
                         cookies=cookies,
-                        settings=settings,
-                        extractor=extractor,
-                        backoff_coordinator=backoff_coordinator,
-                        semaphore=semaphore,
                         progress_callback=progress_callback,
-                    )
+                    ),
+                    settings=settings,
+                    extractor=extractor,
+                    backoff_coordinator=backoff_coordinator,
+                    semaphore=semaphore,
                 )
             return result
         case DownloadMethod.AUTO:

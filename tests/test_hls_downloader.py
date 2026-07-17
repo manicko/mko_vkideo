@@ -244,8 +244,8 @@ class TestDownloadHlsWithResume:
                     video_url="https://vkvideo.ru/video-12345_67890",
                     m3u8_url="https://example.com/video.m3u8",
                     output_file=output_path,
-                    settings=test_settings,
-                )
+                ),
+                settings=test_settings,
             )
 
         assert result is None
@@ -280,8 +280,8 @@ class TestDownloadHlsWithResume:
                         video_url="https://vkvideo.ru/video-12345_67890",
                         m3u8_url="https://example.com/video.m3u8",
                         output_file=output_path,
-                        settings=test_settings,
-                    )
+                    ),
+                    settings=test_settings,
                 )
 
         assert result is None
@@ -523,8 +523,8 @@ class TestParallelSegmentsDownload:
                             video_url="https://vkvideo.ru/video-12345_67890",
                             m3u8_url="https://example.com/video.m3u8",
                             output_file=output_path,
-                            settings=test_settings,
-                        )
+                        ),
+                        settings=test_settings,
                     )
 
         # Verify all segments were downloaded
@@ -568,8 +568,8 @@ class TestParallelSegmentsDownload:
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
                                 output_file=output_path,
-                                settings=test_settings,
-                            )
+                            ),
+                            settings=test_settings,
                         )
 
         assert gather_called, "asyncio.gather should be called for concurrent downloads"
@@ -622,8 +622,8 @@ class TestParallelSegmentsDownload:
                             video_url="https://vkvideo.ru/video-12345_67890",
                             m3u8_url="https://example.com/video.m3u8",
                             output_file=output_path,
-                            settings=test_settings,
                         ),
+                        settings=test_settings,
                         semaphore=shared_semaphore,
                     )
 
@@ -783,12 +783,12 @@ class TestSequentialDownloadMode:
                     with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
                         with patch("asyncio.wait_for", side_effect=mock_wait_for):
                             await download_hls_with_resume(
-                                HLSDownloadRequest(
+                            HLSDownloadRequest(
                                 video_url="https://vkvideo.ru/video-12345_67890",
                                 m3u8_url="https://example.com/video.m3u8",
                                 output_file=output_path,
-                                settings=test_settings,
-                            )
+                            ),
+                            settings=test_settings,
                         )
 
         # Verify delay was called for each segment in sequential mode (max_concurrent_downloads=1)
@@ -857,13 +857,13 @@ class TestSequentialDownloadMode:
                             return_value=output_path,
                         ):
                             await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
+                                HLSDownloadRequest(
+                                    video_url="https://vkvideo.ru/video-12345_67890",
+                                    m3u8_url="https://example.com/video.m3u8",
+                                    output_file=output_path,
+                                ),
                                 settings=test_settings,
                             )
-                        )
 
         # Verify _retry_429_with_backoff was called for sequential mode
         assert len(backoff_calls) == 1
@@ -930,13 +930,13 @@ class TestSequentialDownloadMode:
                     with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
                         with patch("asyncio.wait_for", side_effect=mock_wait_for):
                             await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
+                                HLSDownloadRequest(
+                                    video_url="https://vkvideo.ru/video-12345_67890",
+                                    m3u8_url="https://example.com/video.m3u8",
+                                    output_file=output_path,
+                                ),
                                 settings=test_settings,
                             )
-                        )
 
         # Parallel mode should not have anti-detection wait_for calls
         assert len(wait_for_calls) == 0, "Parallel mode should not have inter-segment delay"
@@ -1023,13 +1023,13 @@ class TestDownloadMethodLogging:
                     with patch("vkdownloader.services.segment_downloader.get_shutdown_event", return_value=mock_shutdown_event):
                         with patch("vkdownloader.services.segment_downloader.logger.info", side_effect=capture_log):
                             result = await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_file,
+                                HLSDownloadRequest(
+                                    video_url="https://vkvideo.ru/video-12345_67890",
+                                    m3u8_url="https://example.com/video.m3u8",
+                                    output_file=output_file,
+                                ),
                                 settings=test_settings,
                             )
-                        )
 
         assert result == output_file
         # Check that starting_segment_download was logged

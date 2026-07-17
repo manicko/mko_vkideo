@@ -763,6 +763,9 @@ async def _run_download_session(
 
 async def download_hls_with_resume(
     request: HLSDownloadRequest,
+    settings: Settings | None = None,
+    extractor: VKVideoExtractor | None = None,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
     semaphore: asyncio.Semaphore | None = None,
 ) -> Path | None:
     """
@@ -773,7 +776,10 @@ async def download_hls_with_resume(
     to handle large number of segments.
 
     Args:
-        request: HLSDownloadRequest containing all download parameters.
+        request: HLSDownloadRequest containing download parameters.
+        settings: Application settings. Uses default if not provided.
+        extractor: Optional VKVideoExtractor for token refresh.
+        backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
         semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
             When None, creates a local semaphore based on settings.max_concurrent_downloads.
 
@@ -787,7 +793,8 @@ async def download_hls_with_resume(
         quality=request.quality,
     )
 
-    settings = request.settings if request.settings is not None else Settings()
+    if settings is None:
+        settings = Settings()
     output_file = validate_output_path(request.output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
@@ -811,8 +818,8 @@ async def download_hls_with_resume(
             output_file,
             request.progress_callback,
             request.video_url,
-            request.extractor,
-            request.backoff_coordinator,
+            extractor,
+            backoff_coordinator,
             semaphore,
         )
     except Exception:
