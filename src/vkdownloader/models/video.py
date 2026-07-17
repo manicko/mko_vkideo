@@ -1,6 +1,6 @@
 """Core domain models for VK Video Downloader."""
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 from .enums import StreamFormat
 
@@ -10,11 +10,6 @@ class Video(BaseModel):
 
     id: str
     title: str | None = None
-    description: str | None = None
-    duration: int | None = None
-    thumbnail: HttpUrl | None = None
-    upload_date: str | None = None
-    views: int | None = None
 
 
 class Stream(BaseModel):

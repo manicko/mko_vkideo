@@ -7,19 +7,10 @@ from vkdownloader.models.video import Stream, Video, VideoWithStreams
 
 def test_video_model_creation() -> None:
     """Test Video model creates with required fields."""
-    video = Video(
-        id="12345_67890",
-        title="Test Video",
-        description="Test description",
-        duration=120,
-        views=1000,
-    )
+    video = Video(id="12345_67890", title="Test Video")
 
     assert video.id == "12345_67890"
     assert video.title == "Test Video"
-    assert video.description == "Test description"
-    assert video.duration == 120
-    assert video.views == 1000
 
 
 def test_video_model_optional_fields() -> None:
@@ -28,11 +19,6 @@ def test_video_model_optional_fields() -> None:
 
     assert video.id == "12345_67890"
     assert video.title is None
-    assert video.description is None
-    assert video.duration is None
-    assert video.thumbnail is None
-    assert video.upload_date is None
-    assert video.views is None
 
 
 def test_stream_model_with_quality() -> None:

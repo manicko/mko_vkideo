@@ -1,0 +1,37 @@
+id: remove_unused_video_fields
+source_reference: .ai/audit/99-validation/08-quality-validated-findings.md
+source_section: QLT-007
+priority: low
+
+title: Remove unused Video model fields
+
+description: >
+  Video model declares description, duration, thumbnail, upload_date, views
+  fields that are never read in production code. Extractor only populates
+  id, streams, and title. These unused fields represent dead weight.
+
+goals:
+  - remove 5 unused fields from Video model
+  - update test assertions that reference these fields
+  - maintain minimal model surface per rule #15
+
+files:
+  - path: src/vkdownloader/models/video.py
+    targets:
+      - type: class
+        name: Video
+  - path: tests/test_models.py
+    targets:
+      - type: test
+        name: TestVideo
+
+changes:
+  - action: remove_code
+    description: >
+      Remove description, duration, thumbnail, upload_date, views fields from
+      Video model. Update tests to not assert on these removed fields.
+
+acceptance_criteria:
+  - all tests pass
+  - mypy passes
+  - Video model only contains actively used fields
