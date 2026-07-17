@@ -50,6 +50,7 @@ class TestDownloadCommand:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
                         download_dir=tmp_path,
+                        log_file=None,
                     )
 
                     result = runner.invoke(
@@ -66,7 +67,8 @@ class TestDownloadCommand:
         invalid_url = "https://example.com/invalid"
 
         with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
-            with patch("vkdownloader.cli.Settings"):
+            with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                mock_settings_cls.return_value = MagicMock(log_file=None)
                 result = runner.invoke(
                     app,
                     ["download", invalid_url],
@@ -96,7 +98,8 @@ class TestDownloadCommand:
             mock_selector_cls.return_value = mock_selector
 
             with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
-                with patch("vkdownloader.cli.Settings"):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
                         app,
                         ["download", sample_video_url],
@@ -185,6 +188,7 @@ class TestBatchCommand:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
                         max_retries=3,
+                        log_file=None,
                     )
 
                     result = runner.invoke(
@@ -227,6 +231,7 @@ class TestBatchCommand:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
                         max_retries=3,
+                        log_file=None,
                     )
 
                     result = runner.invoke(
@@ -238,6 +243,7 @@ class TestBatchCommand:
         assert result.exit_code == 0
         assert "Download Summary:" in result.output
         assert "Successful:" in result.output
+
 
 class TestQualityOptionValidation:
     """Tests for quality enum validation in CLI."""
@@ -271,7 +277,8 @@ class TestQualityOptionValidation:
             mock_selector_cls.return_value = mock_selector
 
             with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
-                with patch("vkdownloader.cli.Settings"):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
                         app,
                         ["download", sample_video_url, "--quality", "1440"],
@@ -321,7 +328,8 @@ class TestQualityOptionValidation:
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
             with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
-                with patch("vkdownloader.cli.Settings"):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
                         app,
                         ["download", sample_video_url, "--quality", "720"],
@@ -373,7 +381,8 @@ class TestMethodOptionValidation:
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
             with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
-                with patch("vkdownloader.cli.Settings"):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
                         app,
                         ["download", sample_video_url, "--method", "yt-dlp"],
@@ -420,6 +429,7 @@ class TestSslVerifyOption:
                         max_concurrent_downloads=4,
                         download_dir=tmp_path,
                         ssl_verify=True,
+                        log_file=None,
                     )
 
                     result = runner.invoke(
@@ -433,7 +443,7 @@ class TestSslVerifyOption:
                     call_kwargs = mock_settings_cls.call_args[1]
                     assert call_kwargs.get("ssl_verify", True) is True
 
-            assert result.exit_code == 0
+        assert result.exit_code == 0
 
     def test_no_ssl_verify_flag(self, tmp_path: Path, sample_video_url: str) -> None:
         """Check that --no-ssl-verify flag sets ssl_verify to False."""
@@ -469,6 +479,7 @@ class TestSslVerifyOption:
                         max_concurrent_downloads=4,
                         download_dir=tmp_path,
                         ssl_verify=False,
+                        log_file=None,
                     )
 
                     result = runner.invoke(
@@ -482,7 +493,7 @@ class TestSslVerifyOption:
                     call_kwargs = mock_settings_cls.call_args[1]
                     assert call_kwargs.get("ssl_verify") is False
 
-            assert result.exit_code == 0
+        assert result.exit_code == 0
 
 
 class TestCliHelp:

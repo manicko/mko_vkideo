@@ -67,9 +67,8 @@ async def _download_single(
     quality: QualityEnum,
     output: Path,
     method: DownloadMethod,
-    cookie_source: CookieSource,
-    ssl_verify: bool,
-    max_retries: int | None,
+    settings: Settings,
+    max_retries_override: int | None = None,
     shared_semaphore: asyncio.Semaphore | None = None,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -82,9 +81,8 @@ async def _download_single(
         quality: Video quality selection.
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
-        cookie_source: Cookie acquisition strategy.
-        ssl_verify: Whether to verify SSL certificates.
-        max_retries: Maximum retry attempts, or None to use default.
+        settings: Application settings with environment-loaded values.
+        max_retries_override: Optional max_retries override from CLI.
         shared_semaphore: Optional semaphore for concurrency control.
         backoff_coordinator: Optional coordinator for rate limiting.
         progress_callback: Optional callback for progress updates.
@@ -93,10 +91,9 @@ async def _download_single(
         Tuple of (url, output_path, status).
     """
     try:
-        actual_max_retries = max_retries if max_retries is not None else Settings().max_retries
-        settings = Settings(
-            cookie_source=cookie_source, max_retries=actual_max_retries, ssl_verify=ssl_verify
-        )
+        # Merge CLI max_retries override with settings object
+        if max_retries_override is not None:
+            settings = settings.model_copy(update={"max_retries": max_retries_override})
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
@@ -163,8 +160,7 @@ async def _run_batch_with_progress(
     urls: list[str],
     quality: QualityEnum,
     method: DownloadMethod,
-    cookie_source: CookieSource,
-    ssl_verify: bool,
+    settings: Settings,
     max_retries: int | None,
     output: Path,
 ) -> list[tuple[str, str, str]]:
@@ -174,8 +170,7 @@ async def _run_batch_with_progress(
         urls: List of video URLs to download.
         quality: Video quality selection for all downloads.
         method: Download method (yt-dlp, ffmpeg, or auto).
-        cookie_source: Cookie acquisition strategy.
-        ssl_verify: Whether to verify SSL certificates.
+        settings: Application settings.
         max_retries: Maximum retry attempts for failed segment downloads.
         output: Output directory for downloaded videos.
 
@@ -185,7 +180,7 @@ async def _run_batch_with_progress(
     # Setup signal handlers inside async context
     setup_signal_handlers()
     # Create shared semaphore and backoff coordinator at batch level
-    shared_semaphore = asyncio.Semaphore(Settings().max_concurrent_downloads)
+    shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
     backoff_coordinator = URLBackoffCoordinator()
 
     # Clear progress state for this batch
@@ -202,8 +197,7 @@ async def _run_batch_with_progress(
                 quality,
                 output,
                 method,
-                cookie_source,
-                ssl_verify,
+                settings,
                 max_retries,
                 shared_semaphore,
                 backoff_coordinator,
@@ -314,13 +308,14 @@ def download(
     Extracts available streams, selects the requested quality, and downloads the video
     to the specified output directory.
     """
-    setup_logging()
+    # Create Settings once with environment-loaded values, merging CLI overrides
+    settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+    setup_logging(settings)
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
         # Setup signal handlers inside async context
         setup_signal_handlers()
-        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
@@ -442,7 +437,9 @@ def batch_download(
     Reads video URLs from a file (one URL per line) and downloads each video
     with the specified quality to the output directory.
     """
-    setup_logging()
+    # Create Settings once with environment-loaded values, merging CLI overrides
+    settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+    setup_logging(settings)
 
     # Read URLs from file
     urls = [
@@ -458,10 +455,10 @@ def batch_download(
     try:
         results = asyncio.run(
             _run_batch_with_progress(
-                urls, quality, method, cookie_source, ssl_verify, max_retries, output
+                urls, quality, method, settings, max_retries, output
             )
         )
-        _print_batch_summary(results, Settings().max_concurrent_downloads)
+        _print_batch_summary(results, settings.max_concurrent_downloads)
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)
