@@ -560,10 +560,7 @@ async def _download_segment_concurrent(
         )
 
         segment_path = segments_dir / f"{idx:05d}.ts"
-        if segment_path.exists() and segment_path.stat().st_size > 0:
-            result = True
-        else:
-            result = await _download_segment(
+        result = await _download_segment(
                 session,
                 full_url,
                 segment_path,
@@ -642,8 +639,6 @@ def _create_segment_download_tasks(
             )
         )
         for i, seg in enumerate(segments)
-        if not (segments_dir / f"{i:05d}.ts").exists()
-        or (segments_dir / f"{i:05d}.ts").stat().st_size == 0
     ]
 
 

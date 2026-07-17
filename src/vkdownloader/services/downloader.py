@@ -27,7 +27,6 @@ from .downloader_throttle import _retry_429_with_backoff, get_shutdown_event
 from .ffmpeg_utils import (
     FfmpegProgress,
     ProgressParser,
-    _active_processes,
     _build_ffmpeg_concat_command,
     _merge_segments_batched,
     cancel_ffmpeg_process,
@@ -141,30 +140,6 @@ class HLSDownloader:
         """
         self.settings = settings if settings is not None else Settings()
 
-    def _build_ffmpeg_cmd(
-        self, m3u8_url: str, output_file: Path, cookies: str | None = None
-    ) -> list[str]:
-        """Build ffmpeg command for HLS to MP4 conversion."""
-        cookie_part = f"Cookie: {cookies}\r\n" if cookies else ""
-        headers = f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n{cookie_part}"
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-progress",
-            "pipe:2",
-            "-nostats",
-            "-headers",
-            headers,
-            "-i",
-            m3u8_url,
-            "-c",
-            "copy",
-            str(output_file),
-        ]
-
-        return cmd
-
     async def download_with_ffmpeg(
         self,
         m3u8_url: str,
@@ -219,12 +194,9 @@ class HLSDownloader:
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdout=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-
-            # Track process for cleanup on shutdown
-            _active_processes.add(process)
 
             stderr_chunks: list[bytes] = []
 
@@ -252,54 +224,51 @@ class HLSDownloader:
                         break
                     stderr_chunks.append(line)
 
-            try:
-                # Run both process wait and stderr reading concurrently
-                if progress_callback:
-                    process_task = asyncio.create_task(process.wait())
-                    monitor_task = asyncio.create_task(_monitor_progress())
-                    done, pending = await asyncio.wait(
-                        [process_task, monitor_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    # Cancel pending tasks
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                else:
-                    process_task = asyncio.create_task(process.wait())
-                    drain_task = asyncio.create_task(_drain_stderr())
-                    done, pending = await asyncio.wait(
-                        [process_task, drain_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    # Cancel pending tasks
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
+            # Run both process wait and stderr reading concurrently
+            if progress_callback:
+                process_task = asyncio.create_task(process.wait())
+                monitor_task = asyncio.create_task(_monitor_progress())
+                done, pending = await asyncio.wait(
+                    [process_task, monitor_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                process_task = asyncio.create_task(process.wait())
+                drain_task = asyncio.create_task(_drain_stderr())
+                done, pending = await asyncio.wait(
+                    [process_task, drain_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
-                stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
+            stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
-                if shutdown_event.is_set():
-                    await cancel_ffmpeg_process(process)
-                    return None
+            if shutdown_event.is_set():
+                await cancel_ffmpeg_process(process)
+                return None
 
-                if process.returncode != 0:
-                    error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
-                    logger.error(
-                        "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
-                    )
-                    return None
+            if process.returncode != 0:
+                error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
+                logger.error(
+                    "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
+                )
+                return None
 
-                logger.info("ffmpeg_download_completed", output=str(output_file))
-                return output_file
-            finally:
-                _active_processes.discard(process)
+            logger.info("ffmpeg_download_completed", output=str(output_file))
+            return output_file
 
 
 async def download_with_ytdlp_with_resume_fallback(
@@ -525,7 +494,7 @@ async def _download_with_ytdlp(
                 "User-Agent": user_agent,
                 "Referer": "https://vkvideo.ru/",
             },
-            "socket_timeout": 180,
+            "socket_timeout": settings.download_timeout,
             "retries": settings.max_retries,
             "fragment_retries": settings.max_retries,
         }
@@ -743,6 +712,9 @@ async def perform_download(
             return result
         case DownloadMethod.AUTO:
             # Auto: try yt-dlp first (more reliable), segment download for resume
+            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                extractor, settings, url, m3u8_url, quality
+            )
             return await download_with_ytdlp_with_resume_fallback(
                 url,
                 m3u8_url,

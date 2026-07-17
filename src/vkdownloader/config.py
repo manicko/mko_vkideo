@@ -24,10 +24,6 @@ class Settings(BaseSettings):
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         description="User agent string for browser requests",
     )
-    accept_language: str = Field(
-        default="ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        description="Accept-Language header for browser requests",
-    )
     timezone: str = Field(
         default="Europe/Moscow",
         description="Timezone for browser stealth configuration",
@@ -47,6 +43,18 @@ class Settings(BaseSettings):
         ge=30,
         le=3600,
         description="Download timeout in seconds",
+    )
+    browser_pre_interaction_wait: int = Field(
+        default=5,
+        ge=1,
+        le=30,
+        description="Seconds to wait before video interaction in browser extraction",
+    )
+    browser_post_interaction_wait: int = Field(
+        default=8,
+        ge=1,
+        le=30,
+        description="Seconds to wait after video interaction in browser extraction",
     )
     ssl_verify: bool = Field(
         default=True,
@@ -90,6 +98,13 @@ class Settings(BaseSettings):
         default=None,
         description="Optional log file path",
     )
+
+    @field_validator("download_dir", "log_file", mode="after")
+    @classmethod
+    def expand_tilde_paths(cls, v: Path | None) -> Path | None:
+        if v is None:
+            return v
+        return v.expanduser().resolve()
 
     @field_validator("log_level", mode="before")
     @classmethod

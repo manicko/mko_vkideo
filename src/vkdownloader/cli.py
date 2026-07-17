@@ -222,6 +222,9 @@ async def _run_batch_with_progress(
             # Wait for cancellation to propagate
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        except Exception:
+            # Log unexpected exceptions and continue - errors captured in gather results
+            logger.exception("unexpected_error_in_batch_progress")
         # Update progress display with \r overwrite
         typer.echo(f"\r{await _format_progress(total)}", nl=False)
 
@@ -384,6 +387,9 @@ def download(
             err=True,
         )
         typer.echo(f"Available qualities: {', '.join(available_qualities)}", err=True)
+        raise typer.Exit(code=1) from None
+    except VideoNotFoundError:
+        typer.echo("Video not found. Verify the URL is correct and the video is public.", err=True)
         raise typer.Exit(code=1) from None
     except Exception:
         logger.exception("download_failed")

@@ -11,9 +11,6 @@ from structlog import get_logger
 
 logger = get_logger(__name__)
 
-# Track active ffmpeg processes for cleanup
-_active_processes: set[asyncio.subprocess.Process] = set()
-
 
 @dataclass
 class FfmpegProgress:

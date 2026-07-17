@@ -205,9 +205,9 @@ class VKVideoExtractor:
             monitor = NetworkMonitor(page)
 
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(5)
+            await asyncio.sleep(self.settings.browser_pre_interaction_wait)
             await self._simulate_video_interaction(page)
-            await asyncio.sleep(8)
+            await asyncio.sleep(self.settings.browser_post_interaction_wait)
 
             try:
                 raw_cookies = await page.context.cookies()

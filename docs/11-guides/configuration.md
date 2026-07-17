@@ -22,7 +22,6 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 |---------|---------------------|---------|-------------|
 | `headless` | `VKDOWNLOADER_HEADLESS` | false | Run Playwright browser in headless mode (no visible GUI); required for server, CI, and Docker usage |
 | `user_agent` | `VKDOWNLOADER_USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for browser requests |
-| `accept_language` | `VKDOWNLOADER_ACCEPT_LANGUAGE` | ru-RU,... | Accept-Language header for browser |
 | `timezone` | `VKDOWNLOADER_TIMEZONE` | Europe/Moscow | Timezone for stealth configuration |
 | `locale` | `VKDOWNLOADER_LOCALE` | ru-RU | Locale for browser stealth |
 | `max_retries` | `VKDOWNLOADER_MAX_RETRIES` | 3 | Maximum retry attempts for failed segment downloads during batch processing (1-10) |

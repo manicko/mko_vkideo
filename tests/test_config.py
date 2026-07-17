@@ -12,7 +12,6 @@ def test_settings_creates_with_defaults() -> None:
     settings = Settings(ssl_verify=True)
 
     assert settings.user_agent is not None
-    assert settings.accept_language == "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
     assert settings.timezone == "Europe/Moscow"
     assert settings.locale == "ru-RU"
     assert settings.max_retries == 3
@@ -27,7 +26,6 @@ def test_settings_accepts_valid_fields() -> None:
     """Test Settings accepts all valid configuration fields."""
     settings = Settings(
         user_agent="CustomAgent/1.0",
-        accept_language="en-US,en;q=0.9",
         timezone="America/New_York",
         locale="en-US",
         max_retries=5,
@@ -38,7 +36,6 @@ def test_settings_accepts_valid_fields() -> None:
     )
 
     assert settings.user_agent == "CustomAgent/1.0"
-    assert settings.accept_language == "en-US,en;q=0.9"
     assert settings.timezone == "America/New_York"
     assert settings.locale == "en-US"
     assert settings.max_retries == 5

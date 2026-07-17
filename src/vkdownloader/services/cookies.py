@@ -42,7 +42,7 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
             expires = int(cookie_item.get("expires", 0))
 
             if name and value:
-                lines.append(f"{domain}\t{secure}\t{path}\tFALSE\t{expires}\t{name}\t{value}")
+                lines.append(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}")
         return "\n".join(lines)
 
     # Handle string format (backward compatible)
