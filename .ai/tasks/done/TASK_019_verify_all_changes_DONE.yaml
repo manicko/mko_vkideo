@@ -1,0 +1,38 @@
+id: verify_all_changes
+type: verification
+status: pending
+
+title: Verify complete implementation suite
+
+depends_on:
+  - fix_formatting_compliance
+  - add_headless_config_option
+  - narrow_exception_handling
+  - replace_any_types
+  - remove_unused_downloadstatus_enum
+  - remove_unused_video_fields
+  - remove_unused_streamformat_dash
+  - fix_print_logger_factory
+
+verifies:
+  - TASK_007_apply_ruff_formatting
+  - TASK_008_add_headless_config
+  - TASK_015_narrow_exception_handling
+  - TASK_009_replace_any_types
+  - TASK_011_remove_downloadstatus_enum
+  - TASK_013_remove_unused_video_fields
+  - TASK_016_remove_streamformat_dash
+  - TASK_012_fix_print_logger_factory
+
+verification_steps:
+  - build: uv run ruff check src/ && uv run mypy src/ && uv run ruff format --check src/
+  - test: uv run pytest tests/ -q
+  - smoke_check: uv run python -c "import vkdownloader; print('All imports OK')"
+
+pass_criteria:
+  - all linter checks pass (ruff check, mypy strict)
+  - formatting check passes (ruff format --check)
+  - all 216 tests pass
+  - no import errors
+
+failure_action: rerun_failed_verification

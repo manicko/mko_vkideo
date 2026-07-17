@@ -134,9 +134,7 @@ class VKVideoExtractor:
         logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
         return streams, cookies, raw_cookies
 
-    async def _extract_with_ytdlp(
-        self, url: str, video_id: str
-    ) -> tuple[list[Stream], str | None]:
+    async def _extract_with_ytdlp(self, url: str, video_id: str) -> tuple[list[Stream], str | None]:
         """Extract streams and title using yt-dlp (handles VK protections)."""
         ydl_opts = {
             "quiet": True,

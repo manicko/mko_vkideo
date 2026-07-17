@@ -432,6 +432,7 @@ async def _fetch_playlist_with_retry(
 
     return None
 
+
 def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnector:
     """Create aiohttp connector with SSL settings.
 

@@ -454,9 +454,7 @@ def batch_download(
 
     try:
         results = asyncio.run(
-            _run_batch_with_progress(
-                urls, quality, method, settings, max_retries, output
-            )
+            _run_batch_with_progress(urls, quality, method, settings, max_retries, output)
         )
         _print_batch_summary(results, settings.max_concurrent_downloads)
 
