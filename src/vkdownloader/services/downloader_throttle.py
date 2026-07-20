@@ -9,12 +9,13 @@ from datetime import UTC, datetime
 import aiohttp
 from structlog import get_logger
 
+from ..config import Settings
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
-# Default download timeout in seconds (matches Settings.download_timeout default)
-DEFAULT_DOWNLOAD_TIMEOUT = 300
+# Single source of truth: the download timeout default is owned by Settings.download_timeout.
+_DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].default
 
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -147,7 +148,7 @@ async def _retry_429_with_backoff(
     headers: dict[str, str],
     segment_index: int,
     max_retries: int = 3,
-    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
+    download_timeout: int = _DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bytes | None:
     """Download segment with AWS Full Jitter exponential backoff for 429/5xx errors.
 

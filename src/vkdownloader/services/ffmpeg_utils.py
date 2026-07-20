@@ -63,14 +63,12 @@ class ProgressParser:
 
 async def read_progress(
     stderr: asyncio.StreamReader,
-    duration_ms: int | None = None,
     stderr_collector: list[bytes] | None = None,
 ) -> AsyncIterator[FfmpegProgress]:
     """Read ffmpeg progress output in real-time.
 
     Args:
         stderr: StreamReader from ffmpeg process stderr.
-        duration_ms: Optional video duration in milliseconds for percentage calculation.
         stderr_collector: Optional list to collect raw stderr lines for error handling.
 
     Yields:

@@ -158,6 +158,9 @@ def _build_ytdlp_options(
         f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
     )
 
+    # yt-dlp boundary: its options mapping accepts heterogeneous values (str, int,
+    # bool, nested dicts, callables) and is not statically typed upstream, so `Any`
+    # is the pragmatic value type at this integration edge.
     ydl_opts: dict[str, Any] = {
         "outtmpl": str(output_file),
         "quiet": False,
@@ -204,7 +207,33 @@ def _build_ytdlp_options(
     return ydl_opts, cookie_file
 
 
-# Re-export for backward compatibility
+# Backward-compatibility re-export facade.
+#
+# This module intentionally re-exports symbols that were historically importable
+# from ``vkdownloader.services.downloader``. Downstream code (and tests) still
+# import from here, so the names below are kept as a stable public surface even
+# though most implementations now live in focused sibling modules.
+#
+# Symbol ownership (where each name is actually defined):
+#   * Owned by this module (downloader.py):
+#       HLSDownloader, perform_download,
+#       download_with_ytdlp_with_resume_fallback,
+#       _build_ytdlp_options, _await_first_and_cancel_others
+#   * ffmpeg_utils.py:
+#       FfmpegProgress, ProgressParser, read_progress,
+#       cancel_ffmpeg_process, _build_ffmpeg_concat_command,
+#       _merge_segments_batched
+#   * segment_downloader.py:
+#       download_hls_with_resume, _cleanup_segments, _download_segment,
+#       _download_segment_parallel, _download_segment_sequential,
+#       _fetch_playlist_with_retry, _load_downloaded_count,
+#       _parse_m3u8_segments, _save_downloaded_count
+#   * downloader_throttle.py:
+#       _retry_429_with_backoff
+#   * cookies.py:
+#       _cookies_to_netscape
+#   * signal_handlers.py:
+#       setup_signal_handlers
 __all__ = [
     "FfmpegProgress",
     "HLSDownloader",
