@@ -30,12 +30,18 @@ class BrowserManager:
         logger.info("starting_browser")
 
         playwright_instance = await async_playwright().start()
-        self.playwright = playwright_instance
-        self.browser = await playwright_instance.chromium.launch(
-            headless=self.settings.headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        try:
+            browser = await playwright_instance.chromium.launch(
+                headless=self.settings.headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        except Exception:
+            logger.error("browser_launch_failed", exc_info=True)
+            await playwright_instance.stop()
+            raise
 
+        self.playwright = playwright_instance
+        self.browser = browser
         return self
 
     async def __aexit__(

@@ -13,6 +13,7 @@ from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import CookieSource, StreamFormat
 from ..models.video import Stream, VideoWithStreams
+from ..services.downloader_throttle import get_shutdown_event
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -211,6 +212,11 @@ class VKVideoExtractor:
             await asyncio.sleep(self.settings.browser_pre_interaction_wait)
             await self._simulate_video_interaction(page)
             await asyncio.sleep(self.settings.browser_post_interaction_wait)
+
+            shutdown_event = get_shutdown_event()
+            if shutdown_event.is_set():
+                logger.info("browser_extraction_cancelled")
+                raise asyncio.CancelledError("Browser extraction cancelled by user")
 
             try:
                 raw_cookies = await page.context.cookies()
