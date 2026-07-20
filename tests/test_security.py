@@ -78,11 +78,11 @@ class TestValidateOutputPath:
 class TestValidateOutputPathEdgeCases:
     """Edge case tests for path validation."""
 
-    def test_empty_path_rejected(self) -> None:
-        """Test that empty path is handled safely."""
+    def test_empty_path_resolves_to_cwd(self) -> None:
+        """Test that '.' (empty/current path) is accepted and resolves to cwd."""
         path = Path(".")
 
-        # Current directory should not raise, but let's verify it works
+        # "." is a valid path with no traversal, so it is accepted and resolves to cwd
         with patch("vkdownloader.utils.security.logger"):
             result = validate_output_path(path)
             assert result == Path.cwd()

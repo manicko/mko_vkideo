@@ -335,50 +335,8 @@ class TestRetry429WithBackoff:
             assert result is None, f"Failed for status code {status_code}"
 
     @pytest.mark.asyncio
-    async def test_delay_capped_at_30_seconds(self) -> None:
-        """Test delay is capped at 30 seconds maximum."""
-        mock_session = AsyncMock()
-        mock_response_429 = AsyncMock()
-        mock_response_429.status = 429
-        mock_response_429.headers = {}
-        mock_response_429.read = AsyncMock()
-
-        mock_response_200 = AsyncMock()
-        mock_response_200.status = 200
-        mock_response_200.read = AsyncMock(return_value=b"segment content")
-
-        call_count = 0
-
-        def get_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_context = AsyncMock()
-            if call_count == 1:
-                mock_context.__aenter__ = AsyncMock(return_value=mock_response_429)
-            else:
-                mock_context.__aenter__ = AsyncMock(return_value=mock_response_200)
-            mock_context.__aexit__ = AsyncMock(return_value=None)
-            return mock_context
-
-        mock_session.get = MagicMock(side_effect=get_side_effect)
-
-        # Mock random.uniform to return 0 for instant timeout simulation
-        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=0.0):
-            result = await _retry_429_with_backoff(
-                mock_session,
-                "https://example.com/segment.ts",
-                {"User-Agent": "test"},
-                segment_index=0,
-                max_retries=3,
-            )
-
-        assert result == b"segment content"
-        # 500 error uses base_delay=0.05, for attempt 0 upper_bound = min(0.05, 30) = 0.05
-        # But we mocked uniform to return 0, so the code path still works
-
-    @pytest.mark.asyncio
     async def test_structured_logging_on_retry(self) -> None:
-        """Test structured logging fields: attempt, status, retry_after, segment_index, url."""
+        """Test structured logging fields on 429 retry: attempt, status, retry_after, segment_index, url."""
         mock_session = AsyncMock()
         mock_response_429 = AsyncMock()
         mock_response_429.status = 429
@@ -410,16 +368,29 @@ class TestRetry429WithBackoff:
                 "vkdownloader.services.downloader_throttle._strip_auth_params",
                 return_value="https://example.com/segment.ts",
             ):
-                result = await _retry_429_with_backoff(
-                    mock_session,
-                    "https://example.com/segment.ts?token=secret",
-                    {"User-Agent": "test"},
-                    segment_index=5,
-                    max_retries=3,
-                )
+                with patch(
+                    "vkdownloader.services.downloader_throttle.logger.warning"
+                ) as mock_warning:
+                    result = await _retry_429_with_backoff(
+                        mock_session,
+                        "https://example.com/segment.ts?token=secret",
+                        {"User-Agent": "test"},
+                        segment_index=5,
+                        max_retries=3,
+                    )
 
         assert result == b"segment content"
-        # Verify structured logging was verified in separate test
+        # Verify structured logging actually recorded the 429 retry with expected fields
+        mock_warning.assert_called_once()
+        assert mock_warning.call_args[0][0] == "segment_retry_429"
+        call_kwargs = mock_warning.call_args[1]
+        assert call_kwargs["attempt"] == 1
+        assert call_kwargs["status"] == 429
+        assert call_kwargs["retry_after"] == 2.0
+        assert call_kwargs["segment_index"] == 5
+        # Sanitized URL must not leak auth params
+        assert call_kwargs["url"] == "https://example.com/segment.ts"
+        assert "token=secret" not in call_kwargs["url"]
 
     @pytest.mark.asyncio
     async def test_structured_logging_on_non_retryable(self) -> None:

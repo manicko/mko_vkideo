@@ -1142,6 +1142,50 @@ class TestDownloadMethodLogging:
         assert len(starting_logs) >= 1, "Should log starting_download"
         assert starting_logs[0]["kwargs"].get("method") == "ffmpeg"
 
+    @pytest.mark.asyncio
+    async def test_perform_download_ffmpeg_falls_back_to_segment_download(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test perform_download falls back to segment download when ffmpeg returns None."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        output_file = tmp_path / "video_720p.mp4"
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=MagicMock(streams=[MagicMock(url="https://example.com/video.m3u8", quality="720")]),
+        ):
+            with patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
+                return_value=([MagicMock(url="https://example.com/video.m3u8", quality="720")], "cookies"),
+            ):
+                # ffmpeg branch returns None -> should trigger segment-download fallback
+                with patch(
+                    "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
+                    return_value=None,
+                ) as mock_ffmpeg:
+                    with patch(
+                        "vkdownloader.services.downloader.download_hls_with_resume",
+                        return_value=output_file,
+                    ) as mock_segment_fallback:
+                        result = await perform_download(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "720",
+                            output_file,
+                            DownloadMethod.FFMPEG,
+                            settings=test_settings,
+                        )
+
+        # ffmpeg branch was attempted first
+        mock_ffmpeg.assert_awaited_once()
+        # segment-download fallback ran and produced the result
+        mock_segment_fallback.assert_awaited_once()
+        request = mock_segment_fallback.call_args[0][0]
+        assert isinstance(request, HLSDownloadRequest)
+        assert request.output_file == output_file
+        assert result == output_file
+
 
 class TestFfmpegProgress:
     """Tests for FfmpegProgress dataclass."""
