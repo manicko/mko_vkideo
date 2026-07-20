@@ -114,8 +114,11 @@ vkdownloader download --cookie-source browser "VIDEO_URL"
 
 For fastest download with authentication (~1MB/s):
 ```bash
-vkdownloader download --method ffmpeg --cookie-source browser "VIDEO_URL"
+vkdownloader download --method ffmpeg --cookie-source browser --quality 720 "VIDEO_URL"
 ```
+- Works with numeric quality values (`--quality 720`, `--quality 1080`, etc.)
+- Stream URL is captured fresh from browser and reused for the quality selection
+- Falls back to yt-dlp if ffmpeg fails
 
 For most reliable download (~100KB/s):
 ```bash

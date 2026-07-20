@@ -95,6 +95,9 @@ vkdownloader download "https://vkvideo.ru/video-123_456" --quality worst
 # Use ffmpeg for faster download (~1MB/s)
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method ffmpeg
 
+# Use ffmpeg with browser cookies for authenticated content
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method ffmpeg --cookie-source browser
+
 # Use yt-dlp for higher reliability (~100KB/s)
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method yt-dlp
 ```

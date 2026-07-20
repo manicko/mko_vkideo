@@ -654,7 +654,7 @@ Cookie acquisition strategy for video downloads. Controls whether browser is lau
 |-------|-------------|
 | `NONE` | "none" — No browser launch, fastest for public videos only (default) |
 | `BROWSER` | "browser" — Launch browser to extract real cookies for authenticated content |
-| `FILE` | "file" — Load cookies from external file (placeholder for future enhancement) |
+| `FILE` | "file" — **Rejected with ValueError**. Not implemented; use `none` or `browser` instead |
 
 ---
 
