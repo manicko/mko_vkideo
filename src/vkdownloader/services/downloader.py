@@ -415,22 +415,21 @@ async def download_with_ytdlp_with_resume_fallback(
             return None
 
         # Attempt segment resume with fresh token
-        if retry_count <= MAX_RESUME_RETRIES:
-            if (
-                segment_result := await _attempt_segment_resume(
-                    video_url,
-                    m3u8_url,
-                    validated_output,
-                    quality,
-                    retry_count,
-                    extractor,
-                    settings,
-                    backoff_coordinator,
-                    semaphore,
-                    progress_callback,
-                )
-            ) is not None:
-                return segment_result
+        if (
+            segment_result := await _attempt_segment_resume(
+                video_url,
+                m3u8_url,
+                validated_output,
+                quality,
+                retry_count,
+                extractor,
+                settings,
+                backoff_coordinator,
+                semaphore,
+                progress_callback,
+            )
+        ) is not None:
+            return segment_result
 
     # All retries exhausted without success
     logger.error("max_retries_exceeded")
