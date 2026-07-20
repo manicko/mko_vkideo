@@ -24,16 +24,25 @@ class QualityNotAvailableError(VKDownloadError):
     requested: str
     available: list[str]
 
-    def __init__(self, requested: str, available: list[str]) -> None:
+    def __init__(
+        self,
+        requested: str,
+        available: list[str],
+        message: str | None = None,
+    ) -> None:
         """Initialize the exception with requested and available qualities.
 
         Args:
             requested: The quality string that was requested.
             available: List of available quality strings.
+            message: Optional custom message. If None, uses default format.
         """
         self.requested = requested
         self.available = available
-        super().__init__(f"Quality '{requested}' not available. Available: {available}")
+        if message is not None:
+            super().__init__(message)
+        else:
+            super().__init__(f"Quality '{requested}' not available. Available: {available}")
 
 
 class ExtractionError(VKDownloadError):

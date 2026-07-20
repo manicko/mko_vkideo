@@ -178,6 +178,7 @@ class TestBatchCommand:
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["720"]
             mock_selector.select.return_value = MagicMock(quality="720")
             mock_selector_cls.return_value = mock_selector
 
@@ -216,7 +217,7 @@ class TestBatchCommand:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[])
+                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
             )
             mock_extractor_cls.return_value = mock_extractor
 

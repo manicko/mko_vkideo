@@ -119,6 +119,14 @@ async def _download_single(
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
+        # Guard against empty streams to provide accurate error message
+        if not video.streams:
+            raise QualityNotAvailableError(
+                str(quality),
+                [],
+                'No streams found for this video; the video may be private or unavailable'
+            )
+
         selector = QualitySelector()
         stream = selector.select(video.streams, quality)
 
@@ -159,10 +167,10 @@ async def _download_single(
     except asyncio.CancelledError:
         # Re-raise CancelledError to allow batch cancellation
         raise
-    except ValueError as e:
-        return (url, "", f"invalid_url: {e}")
     except QualityNotAvailableError as e:
-        # Return actionable message with available qualities
+        # Return actionable message: distinguish empty-stream case from missing quality
+        if not e.available and e.requested:
+            return (url, "", f"no_streams: {e}")
         return (
             url,
             "",
@@ -351,14 +359,19 @@ def download(
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
 
-        # Print available qualities
-        if video.streams:
-            logger.info("available_streams", count=len(video.streams))
-            selector = QualitySelector()
-            available = selector.list_available_qualities(video.streams)
-            logger.info("available_qualities", qualities=available[:8])
+        # Guard against empty streams to provide accurate error message
+        if not video.streams:
+            raise QualityNotAvailableError(
+                str(quality),
+                [],
+                'No streams found for this video; the video may be private or unavailable'
+            )
 
         selector = QualitySelector()
+        available = selector.list_available_qualities(video.streams)
+        logger.info("available_streams", count=len(video.streams))
+        logger.info("available_qualities", qualities=available[:8])
+
         stream = selector.select(video.streams, quality)
 
         # Apply settings download_dir as default output path
@@ -411,11 +424,18 @@ def download(
         # Access structured fields directly instead of parsing error message
         requested = e.requested
         available_qualities = e.available
-        typer.echo(
-            f"\nRequested quality '{requested}p' is not available for this video.",
-            err=True,
-        )
-        typer.echo(f"Available qualities: {', '.join(available_qualities)}", err=True)
+        # Distinguish empty-stream case (available is empty) from missing quality
+        if not available_qualities:
+            typer.echo(
+                "\nNo streams found for this video; the video may be private or unavailable.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"\nRequested quality '{requested}p' is not available for this video.",
+                err=True,
+            )
+            typer.echo(f"Available qualities: {', '.join(available_qualities)}", err=True)
         raise typer.Exit(code=1) from None
     except VideoNotFoundError:
         typer.echo("Video not found. Verify the URL is correct and the video is public.", err=True)
@@ -503,3 +523,4 @@ def batch_download(
 def cli() -> None:
     """Entry point for CLI execution."""
     app()
+
