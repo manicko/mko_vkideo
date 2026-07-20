@@ -369,12 +369,12 @@ async def download_with_ytdlp_with_resume_fallback(
     semaphore: asyncio.Semaphore | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
-    """Download using yt-dlp with automatic segment-based resume on failure.
+    """Download using yt-dlp with automatic segment-based fallback on failure.
 
     Flow:
     1. Try yt-dlp download
     2. On failure with partial file: get fresh token via browser + switch to segment download
-    3. Segment download resumes from last checkpoint
+    3. Falls back to a fresh segment-based download via HLS; the partial yt-dlp file is discarded
 
     Args:
         video_url: Original VK video URL.
@@ -451,12 +451,13 @@ async def _attempt_segment_resume(
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
     Called when yt-dlp fails and partial file exists. Forces browser extraction
-    to get fresh token, then switches to segment download to resume.
+    to get fresh token, then falls back to a fresh segment-based download via HLS.
+    The partial yt-dlp file is discarded; segment download starts from the beginning.
 
     Args:
         video_url: Original VK video URL.
         m3u8_url: HLS playlist URL (may be stale).
-        output_file: Output file path with partial download.
+        output_file: Output file path (partial file is discarded, segment download starts fresh).
         quality: Quality string.
         retry_count: Current retry attempt number.
         extractor: VKVideoExtractor for token refresh.
