@@ -1005,8 +1005,19 @@ class TestDownloadMethodLogging:
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
-                return_value=True,
-            ):
+            ) as mock_download:
+                # Create a side effect that writes segment files (needed for on-disk count)
+                def download_side_effect(
+                    session: Any,
+                    segment_url: str,
+                    output_path: Path,
+                    headers: dict[str, str],
+                    **kwargs: Any,
+                ) -> bool:
+                    output_path.write_bytes(b"segment data")
+                    return True
+
+                mock_download.side_effect = download_side_effect
                 with patch(
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_file,

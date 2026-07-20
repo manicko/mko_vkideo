@@ -537,17 +537,15 @@ async def _tally_and_merge(
     Returns:
         Path to merged file on success, None otherwise.
     """
-    downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)
-    _save_downloaded_count(metadata_file, downloaded_count)
-
-    # Call progress callback for per-URL segment updates
+    downloaded_count = len(list(segments_dir.glob("*.ts")))
     if progress_callback:
         video_id = video_url.split("_")[-1] if "_" in video_url else video_url
         progress_callback(video_id, downloaded_count, len(segments))
 
-    # All downloaded - merge in batches
+    # All downloaded - merge in batches and persist metadata on completion
     if downloaded_count == len(segments):
         logger.info("merging_segments", count=len(segments))
+        _save_downloaded_count(metadata_file, downloaded_count)
         result = await _merge_segments_batched(segments_dir, output_file, len(segments))
         if result:
             _cleanup_segments(segments_dir, metadata_file)
@@ -655,26 +653,34 @@ def _create_segment_download_tasks(
 ) -> list[asyncio.Task[bool]]:
     """Create tasks for downloading missing segments.
 
+    Skips segments whose .ts file already exists with non-zero size.
+
     Args:
         segments: List of segment URLs to download.
         policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
 
     Returns:
-        List of download tasks.
+        List of download tasks for missing segments only.
     """
-    return [
-        asyncio.create_task(
-            _download_segment_concurrent(
-                SegmentTask(
-                    idx=i,
-                    segment_url=seg,
-                    segments_dir=policy.segments_dir,
-                ),
-                policy,
+    tasks = []
+    for i, seg in enumerate(segments):
+        segment_path = policy.segments_dir / f"{i:05d}.ts"
+        if segment_path.exists() and segment_path.stat().st_size > 0:
+            logger.debug("skipping_existing_segment", idx=i)
+            continue
+        tasks.append(
+            asyncio.create_task(
+                _download_segment_concurrent(
+                    SegmentTask(
+                        idx=i,
+                        segment_url=seg,
+                        segments_dir=policy.segments_dir,
+                    ),
+                    policy,
+                )
             )
         )
-        for i, seg in enumerate(segments)
-    ]
+    return tasks
 
 
 async def _run_download_session(
@@ -800,6 +806,11 @@ async def download_hls_with_resume(
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
     metadata_file = output_file.parent / f".{output_file.stem}_progress.json"
     segments_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear stale metadata on fresh start (no existing segments)
+    existing_segment_count = len(list(segments_dir.glob("*.ts"))) if segments_dir.exists() else 0
+    if existing_segment_count == 0 and metadata_file.exists():
+        metadata_file.unlink(missing_ok=True)
 
     headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
