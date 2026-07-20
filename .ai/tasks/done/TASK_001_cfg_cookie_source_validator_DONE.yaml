@@ -1,0 +1,74 @@
+id: TASK_001_cfg_cookie_source_validator
+
+title: Reject CookieSource.FILE at Settings validation boundary
+
+priority: high
+
+status: blocked
+
+blocked_by:
+  - TASK_000_research_cookie_source_file
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/02-audit-config-validated-findings.md
+source_section: CFG-001 (HIGH, mandatory)
+source_file: .ai/audit/99-validation/02-audit-config-validated-findings.md
+source_blocks:
+  - "CFG-001: cookie_source=FILE silently no-ops instead of raising"
+
+# Cross-phase consolidation (same root cause, single fix):
+#   CFG-001 (Phase 02) — silent no-op in primary download flow
+#   SEC-002 (Phase 04) — misleading crash via NotImplementedError only on extract_streams_with_cookies
+#   INT-004 (Phase 05) — documented as not implemented
+# All three resolved by one fail-fast field_validator in config.py.
+
+description: >
+  Add a `field_validator` to the `Settings` class in config.py that rejects
+  `CookieSource.FILE` during model construction with a clear, actionable error message.
+  This ensures fail-fast, type-safe behavior consistent across ALL entry points
+  (CLI, environment variable, programmatic API). The `CookieSource.FILE` enum value
+  MUST be retained for API compatibility; only its selection is rejected.
+
+goals:
+  - fail fast when cookie_source == CookieSource.FILE at Settings construction
+  - preserve CookieSource.FILE enum member (do not remove)
+  - produce a clear error: "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead."
+
+files:
+  - path: src/vkdownloader/config.py
+
+    targets:
+      - type: class
+        name: Settings
+
+    semantic_anchors:
+      # Insert the new validator immediately after the existing normalize_log_level
+      # field_validator (anchor: field_validator("log_level") / normalize_log_level).
+      insert_after:
+        type: method
+        value: normalize_log_level
+
+    changes:
+      - action: add_code
+        description: >
+          Add @field_validator("cookie_source") that raises ValueError
+          when value resolves to CookieSource.FILE.
+        code_hint: |
+          @field_validator("cookie_source")
+          @classmethod
+          def validate_cookie_source(cls, v: object) -> object:
+              """Reject CookieSource.FILE early (not implemented)."""
+              if str(v).lower() == "file":
+                  raise ValueError(
+                      "CookieSource.FILE is not implemented. "
+                      "Use 'none' or 'browser' instead."
+                  )
+              return v
+
+acceptance_criteria:
+  - Settings(cookie_source="file") raises ValueError at construction
+  - Settings(cookie_source=CookieSource.FILE) raises ValueError at construction
+  - Settings(cookie_source="browser") and "none" still construct successfully
+  - CookieSource.FILE enum member still exists (importable)
+  - existing tests for Settings construction still pass
+  - ruff + mypy clean

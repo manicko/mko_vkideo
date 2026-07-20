@@ -113,6 +113,20 @@ class Settings(BaseSettings):
             return v
         return LogLevel(v.upper())
 
+    @field_validator("cookie_source", mode="before")
+    @classmethod
+    def validate_cookie_source(cls, v: object) -> object:
+        """Reject CookieSource.FILE at model construction (not implemented)."""
+        if isinstance(v, CookieSource) and v == CookieSource.FILE:
+            raise ValueError(
+                "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead."
+            )
+        if isinstance(v, str) and v.lower() == "file":
+            raise ValueError(
+                "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead."
+            )
+        return v
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

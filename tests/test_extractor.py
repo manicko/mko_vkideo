@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
@@ -255,16 +256,12 @@ class TestExtractionErrors:
             assert raw is not None
 
     @pytest.mark.asyncio
-    async def test_extract_streams_with_cookies_file_mode_raises_not_implemented(self) -> None:
-        """Test extract_streams_with_cookies raises NotImplementedError for FILE mode."""
-        settings = Settings(cookie_source=CookieSource.FILE)
-        extractor = VKVideoExtractor(settings=settings)
-        url = "https://vkvideo.ru/video-12345_67890"
-
-        with pytest.raises(
-            NotImplementedError, match="CookieSource.FILE is not implemented"
-        ):
-            await extractor.extract_streams_with_cookies(url)
+    async def test_extract_streams_with_cookies_file_mode_raises_validation_error(self) -> None:
+        """Test that Settings rejects CookieSource.FILE at construction (not implemented)."""
+        # Creating Settings with FILE cookie_source raises ValidationError
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(cookie_source=CookieSource.FILE)
+        assert "CookieSource.FILE is not implemented" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_invalid_url(self) -> None:

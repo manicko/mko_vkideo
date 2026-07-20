@@ -75,18 +75,31 @@ def test_cookie_source_default() -> None:
 
 
 def test_cookie_source_validation() -> None:
-    """Test cookie_source accepts all enum values."""
+    """Test cookie_source accepts BROWSER and NONE, rejects FILE."""
     # Test BROWSER mode
     settings = Settings(cookie_source=CookieSource.BROWSER)
     assert settings.cookie_source == CookieSource.BROWSER
 
-    # Test FILE mode
-    settings = Settings(cookie_source=CookieSource.FILE)
-    assert settings.cookie_source == CookieSource.FILE
-
     # Test NONE mode (default)
     settings = Settings(cookie_source=CookieSource.NONE)
     assert settings.cookie_source == CookieSource.NONE
+
+    # Test string input for valid modes
+    settings = Settings(cookie_source="browser")
+    assert settings.cookie_source == CookieSource.BROWSER
+
+    settings = Settings(cookie_source="none")
+    assert settings.cookie_source == CookieSource.NONE
+
+    # Test FILE mode raises ValidationError
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(cookie_source=CookieSource.FILE)
+    assert "CookieSource.FILE is not implemented" in str(exc_info.value)
+
+    # Test string "file" also raises ValidationError
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(cookie_source="file")
+    assert "CookieSource.FILE is not implemented" in str(exc_info.value)
 
 
 def test_cookie_source_from_env() -> None:
