@@ -313,7 +313,7 @@ def download(
         CookieSource.NONE,
         "--cookie-source",
         "-c",
-        help="Cookie source: none, browser, or file",
+        help="Cookie source: none or browser (file not implemented)",
     ),
     ssl_verify: bool = typer.Option(
         True,
@@ -439,7 +439,7 @@ def batch_download(
         CookieSource.NONE,
         "--cookie-source",
         "-c",
-        help="Cookie source: none, browser, or file",
+        help="Cookie source: none or browser (file not implemented)",
     ),
     ssl_verify: bool = typer.Option(
         True,

@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     )
     cookie_source: CookieSource = Field(
         default=CookieSource.NONE,
-        description="Cookie acquisition strategy: none, browser, or file",
+        description="Cookie acquisition strategy: none or browser (file not implemented)",
     )
 
     # Logging settings

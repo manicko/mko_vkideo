@@ -1,0 +1,51 @@
+id: TASK_002_cli_cookie_help_text
+
+title: Update CLI help text to mark cookie-source file as unimplemented
+
+priority: high
+
+depends_on:
+  - TASK_001_cfg_cookie_source_validator
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/04-audit-security-validated-findings.md
+source_section: SEC-002 (LOW, advisory)
+source_blocks:
+  - "SEC-002: --cookie-source file is selectable but raises NotImplementedError at runtime"
+
+description: >
+  After TASK_001 makes cookie_source=FILE fail fast at Settings construction, update the
+  CLI `--cookie-source` help text in both the `download` and `batch_download` commands to
+  read "none or browser (file not implemented)" so users receive accurate, pre-validation
+  guidance.
+
+goals:
+  - align CLI help text with the new fail-fast behavior
+  - do not present "file" as a usable cookie source
+
+files:
+  - path: src/vkdownloader/cli.py
+
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: batch_download
+
+    semantic_anchors:
+      # Both commands define the cookie_source typer.Option with help string
+      # "none, browser, or file". Locate by the option definition, not line number.
+      insert_before:
+        type: function_call
+        value: CookieSource
+
+    changes:
+      - action: modify_code
+        description: >
+          Change the `--cookie-source` help text from "none, browser, or file" to
+          "none or browser (file not implemented)" in both download and batch_download.
+
+acceptance_criteria:
+  - `vkdownloader download --help` shows updated cookie-source help text
+  - `vkdownloader batch --help` shows updated cookie-source help text
+  - no remaining "none, browser, or file" literal in cli.py
