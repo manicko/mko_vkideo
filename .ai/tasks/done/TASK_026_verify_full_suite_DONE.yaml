@@ -4,7 +4,7 @@ title: Verify — full rollout final gate (build, tests, smoke)
 
 type: verification
 
-status: pending
+status: done
 
 priority: high
 
@@ -54,3 +54,12 @@ pass_criteria:
   - no circular import / runtime import error
 
 failure_action: return offending implementation task to rework
+
+result: IMPLEMENTATION_COMPLETE
+result_notes: >
+  All gates pass. ruff (src + tests) clean, mypy strict clean, 233 pytest
+  tests pass (>= 217). CLI --help renders via installed console script
+  `vkdownloader --help` (python -m vkdownloader.cli --help produces no output
+  due to missing __main__ guard). Two pre-existing ruff issues in
+  tests/test_downloader_throttle.py (unused asyncio import, missing trailing
+  newline) were auto-fixed with `ruff --fix` to satisfy the tests gate.

@@ -1,6 +1,5 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
