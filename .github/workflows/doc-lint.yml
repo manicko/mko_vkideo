@@ -1,0 +1,22 @@
+name: Doc Lint
+
+on:
+  push:
+    paths:
+      - "docs/**"
+  pull_request:
+    paths:
+      - "docs/**"
+
+jobs:
+  nul-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for NUL bytes in docs
+        run: |
+          if grep -rI $'\x00' docs/ 2>/dev/null; then
+            echo "::error::NUL bytes found in docs/ files"
+            exit 1
+          fi
+          echo "No NUL bytes found in docs/"
