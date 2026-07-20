@@ -50,7 +50,7 @@ class Settings(BaseSettings):
         default=300,
         ge=30,
         le=3600,
-        description="Download timeout in seconds",
+        description="HTTP client timeout in seconds for individual segment requests and playlist fetches.",
     )
     browser_pre_interaction_wait: int = Field(
         default=5,

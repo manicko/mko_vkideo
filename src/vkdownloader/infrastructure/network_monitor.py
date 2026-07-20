@@ -67,6 +67,20 @@ class NetworkMonitor:
         if "video" in url and response.headers.get("content-type", "").startswith(
             "application/json"
         ):
+            # Guard: skip oversized JSON bodies to avoid memory issues
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    size_bytes = int(content_length)
+                    if size_bytes >= 1_000_000:  # ~1MB threshold
+                        logger.debug(
+                            "skipping_oversized_json_response",
+                            url=_strip_auth_params(url),
+                            size=size_bytes,
+                        )
+                        return
+                except ValueError:
+                    pass  # Invalid content-length header, proceed without guard
             try:
                 data = await response.json()
                 self._extract_urls_from_json(data)

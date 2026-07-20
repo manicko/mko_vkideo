@@ -449,7 +449,7 @@ class TestYtdlpOptions:
         }
 
         assert "throttledratelimit" in ydl_opts
-        assert ydl_opts["throttledratelimit"] == 100000
+        assert ydl_opts["throttledratelimit"] == 10000
 
     def test_ytdlp_options_includes_http_chunk_size(self, test_settings: Settings) -> None:
         """Test yt-dlp options include http_chunk_size setting."""

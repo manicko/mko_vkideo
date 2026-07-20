@@ -758,9 +758,13 @@ async def perform_download(
             return result
         case DownloadMethod.AUTO:
             # Auto: try yt-dlp first (more reliable), segment download for resume
-            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
-                extractor, settings, url, m3u8_url, quality
-            )
+            if settings.cookie_source == CookieSource.NONE:
+                # Skip browser cookie resolution when explicitly disabled
+                m3u8_url, cookies, raw_cookies = m3u8_url, None, None
+            else:
+                m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                    extractor, settings, url, m3u8_url, quality
+                )
             return await download_with_ytdlp_with_resume_fallback(
                 url,
                 m3u8_url,
@@ -768,6 +772,8 @@ async def perform_download(
                 quality,
                 extractor,
                 settings,
+                cookies=cookies,
+                raw_cookies=raw_cookies,
                 backoff_coordinator=backoff_coordinator,
                 semaphore=semaphore,
                 progress_callback=progress_callback,
