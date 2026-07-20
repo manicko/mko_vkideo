@@ -115,8 +115,8 @@ def test_cookie_source_from_env() -> None:
 
 
 def test_throttled_rate_default(test_settings: Settings) -> None:
-    """Test throttled_rate default value is 100000."""
-    assert test_settings.throttled_rate == 100000
+    """Test throttled_rate default value is 10000."""
+    assert test_settings.throttled_rate == 10000
 
 
 def test_throttled_rate_validation(test_settings: Settings) -> None:
@@ -128,7 +128,7 @@ def test_throttled_rate_validation(test_settings: Settings) -> None:
     assert test_settings.throttled_rate == 1000000
 
     with pytest.raises(ValidationError):
-        Settings(throttled_rate=49999)  # Below minimum
+        Settings(throttled_rate=999)  # Below minimum
 
     with pytest.raises(ValidationError):
         Settings(throttled_rate=1000001)  # Above maximum

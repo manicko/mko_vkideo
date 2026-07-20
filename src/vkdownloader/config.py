@@ -13,7 +13,15 @@ logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
 
 class Settings(BaseSettings):
-    """Application settings with defaults and environment variable support."""
+    """Application settings with defaults and environment variable support.
+
+    Note: unknown VKDOWNLOADER_* environment variables are silently ignored due to
+    pydantic-settings v2 extra='forbid' limitation — it only applies to explicit
+    kwargs passed to the model constructor, not to environment variables.
+
+    The .env file is resolved relative to the current working directory (CWD),
+    not relative to the package installation location.
+    """
 
     # Browser Automation settings
     headless: bool = Field(
@@ -73,10 +81,10 @@ class Settings(BaseSettings):
         description="Maximum concurrent downloads",
     )
     throttled_rate: int = Field(
-        default=100000,
-        ge=50000,
+        default=10000,
+        ge=1000,
         le=1000000,
-        description="Minimum download rate in bytes/sec before throttling triggers re-extract",
+        description="Minimum download rate in bytes/sec before throttling triggers re-extract. Default is conservative (10KB/s) to avoid aborting legitimate slow downloads; yt-dlp will abort below this threshold.",
     )
     http_chunk_size: int = Field(
         default=10485760,
@@ -136,9 +144,27 @@ class Settings(BaseSettings):
 
 
 def setup_logging(settings: Settings | None = None) -> None:
-    """Configure structlog for the application."""
+    """Configure structlog for the application.
+
+    Creates parent directory for log_file if it does not exist.
+
+    Args:
+        settings: Application settings. If None, uses default Settings().
+
+    Raises:
+        OSError: If log_file parent directory cannot be created.
+    """
     if settings is None:
         settings = Settings()
+
+    if settings.log_file is not None:
+        log_path = settings.log_file
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OSError(
+                f"Failed to create log file parent directory '{log_path.parent}': {e}"
+            ) from e
 
     logging.basicConfig(
         format="%(message)s",

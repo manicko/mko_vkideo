@@ -30,6 +30,15 @@ logger = get_logger(__name__)
 _progress_manager = ProgressManager()
 
 
+def _log_env_file_path() -> None:
+    """Log the resolved .env file path at debug level."""
+    env_file = Path(".env")
+    if env_file.exists():
+        logger.debug(f".env file resolved to: {env_file.resolve()}")
+    else:
+        logger.debug(".env file not found; using environment variables or defaults only")
+
+
 @dataclass
 class DownloadContext:
     """Context for batch download operations, bundling batch-scoped state."""
@@ -329,6 +338,8 @@ def download(
     # Create Settings once with environment-loaded values, merging CLI overrides
     settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
     setup_logging(settings)
+    # Log resolved .env path for debugging configuration issues
+    _log_env_file_path()
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
@@ -461,6 +472,8 @@ def batch_download(
     # Create Settings once with environment-loaded values, merging CLI overrides
     settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
     setup_logging(settings)
+    # Log resolved .env path for debugging configuration issues
+    _log_env_file_path()
 
     # Read URLs from file
     urls = [
