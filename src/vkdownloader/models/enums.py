@@ -49,10 +49,3 @@ class CookieSource(StrEnum):
     BROWSER = "browser"
     FILE = "file"
 
-
-class SegmentRetryResult(StrEnum):
-    """Result of segment retry attempt for differentiated failure modes."""
-
-    SUCCESS = "success"
-    PERMANENT_FAILURE = "permanent_failure"
-    RETRY_EXHAUSTED = "retry_exhausted"

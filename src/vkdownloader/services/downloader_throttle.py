@@ -140,18 +140,6 @@ class ProgressManager:
         async with self._lock:
             self._state.clear()
 
-    async def get_progress(self, url_index: int) -> tuple[int, int]:
-        """Get progress tuple for a specific URL index.
-
-        Args:
-            url_index: Index of the URL to get progress for.
-
-        Returns:
-            Tuple of (downloaded, total), defaults to (0, 0) if not set.
-        """
-        async with self._lock:
-            return self._state.get(url_index, (0, 0))
-
 
 async def _retry_429_with_backoff(
     session: aiohttp.ClientSession,
