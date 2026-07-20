@@ -626,13 +626,16 @@ async def _resolve_cookies(
         Tuple of (updated m3u8_url, cookies string, raw cookies for Netscape format).
 
     Raises:
-        QualityNotAvailableError: If requested quality not available in browser streams.
+        QualityNotAvailableError: If requested quality is BEST but not available in browser streams.
     """
     if settings.cookie_source == CookieSource.BROWSER:
         browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
         if browser_streams:
-            try:
-                quality_enum = _parse_quality_to_enum(quality)
+            quality_enum = _parse_quality_to_enum(quality)
+            # Browser streams always have quality="best" with height=None.
+            # Only run quality selection for BEST; for numeric qualities, reuse the
+            # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
+            if quality_enum == QualityEnum.BEST:
                 selector = QualitySelector()
                 selected_stream = selector.select(browser_streams, quality_enum)
                 m3u8_url = str(selected_stream.url)
@@ -641,13 +644,12 @@ async def _resolve_cookies(
                     quality=quality,
                     selected_quality=selected_stream.quality,
                 )
-            except QualityNotAvailableError:
-                logger.error(
-                    "requested_quality_not_available_in_browser_streams",
+            else:
+                logger.info(
+                    "browser_streams_selected_with_preselected_url",
                     quality=quality,
-                    available=[s.quality for s in browser_streams],
+                    m3u8_url=_strip_auth_params(m3u8_url),
                 )
-                raise
         else:
             cookies = None
             raw_cookies = None
