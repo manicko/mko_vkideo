@@ -20,7 +20,7 @@ from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .models.video import VideoWithStreams
 from .services.downloader import perform_download
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
-from .services.extractor import VKVideoExtractor
+from .services.extractor import VIDEO_ID_PATTERN, VKVideoExtractor
 from .services.quality import QualitySelector
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from .utils.security import _sanitize_title, validate_output_path
@@ -312,12 +312,14 @@ async def _run_batch_with_progress(
 def _print_batch_summary(
     results: list[tuple[str, str, str]],
     max_concurrent: int,
+    skipped_count: int = 0,
 ) -> None:
     """Print batch download summary.
 
     Args:
         results: List of result tuples (url, output_path, status).
         max_concurrent: Maximum concurrent downloads setting.
+        skipped_count: Number of invalid URLs skipped during validation.
     """
     # Print results
     for url, output_path, status in results:
@@ -329,6 +331,8 @@ def _print_batch_summary(
 
     typer.echo("\n\nDownload Summary:")
     typer.echo(f"  Total connections: {len(results)}")
+    if skipped_count > 0:
+        typer.echo(f"  Skipped (invalid URLs): {skipped_count}")
     typer.echo(f"  Peak concurrency: {max_concurrent}")
     typer.echo(f"  Successful: {successful}")
     typer.echo(f"  Failed: {failed}")
@@ -525,22 +529,35 @@ def batch_download(
     # Log resolved .env path for debugging configuration issues
     _log_env_file_path()
 
-    # Read URLs from file
-    urls = [
-        line.strip()
-        for line in urls_file.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # Read and validate URLs from file
+    valid_urls: list[str] = []
+    skipped_count = 0
 
-    if not urls:
+    for line in urls_file.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not VIDEO_ID_PATTERN.search(stripped):
+            logger.warning("invalid_url_in_batch", url=stripped)
+            skipped_count += 1
+            continue
+        valid_urls.append(stripped)
+
+    if skipped_count > 0:
+        typer.echo(
+            f"Skipped {skipped_count} invalid URL(s) (not valid VK video URLs)",
+            err=True,
+        )
+
+    if not valid_urls:
         typer.echo(f"No URLs found in {urls_file}", err=True)
         raise typer.Exit(code=1)
 
     try:
         results = asyncio.run(
-            _run_batch_with_progress(urls, quality, method, settings, max_retries, output)
+            _run_batch_with_progress(valid_urls, quality, method, settings, max_retries, output)
         )
-        _print_batch_summary(results, settings.max_concurrent_downloads)
+        _print_batch_summary(results, settings.max_concurrent_downloads, skipped_count)
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)

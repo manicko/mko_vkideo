@@ -17,11 +17,14 @@ from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
+# VK video URL pattern for validation and parsing
+VIDEO_ID_PATTERN = re.compile(r"video-(-?\d+)_(\d+)")
+
 
 class VKVideoExtractor:
     """Extracts video stream information from VK video URLs using browser automation."""
 
-    VIDEO_ID_PATTERN = re.compile(r"video-(-?\d+)_(\d+)")
+    VIDEO_ID_PATTERN = VIDEO_ID_PATTERN
 
     def __init__(self, settings: Settings | None = None) -> None:
         """
