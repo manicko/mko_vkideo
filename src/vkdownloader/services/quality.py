@@ -36,13 +36,20 @@ class QualitySelector:
         """
         Get the best quality stream as fallback.
 
+        When streams have mixed height values, those with known heights are ranked
+        higher. When all streams have height=None, selection is deterministic by
+        falling back to the first stream in the list.
+
         Args:
             streams: List of available streams.
 
         Returns:
-            Stream with highest resolution.
+            Stream with highest resolution (or first stream if all heights are None).
         """
-        return max(streams, key=lambda s: s.height or 0)
+        # Use tuple key: (has_height, height) for deterministic ordering.
+        # Streams with known height rank higher; None-height streams rank lower.
+        # When all heights are None, max returns the first element (stable).
+        return max(streams, key=lambda s: (s.height is not None, s.height or 0))
 
     def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
         """
@@ -67,7 +74,10 @@ class QualitySelector:
                 result = self._get_fallback_stream(streams)
                 logger.debug("selected_best_quality", quality=result.quality)
             case QualityEnum.WORST:
-                result = min(streams, key=lambda s: s.height or float("inf"))
+                # Use tuple key: (is_none, height) for deterministic ordering.
+                # Streams with known height rank lower (better); None-height rank highest (worst).
+                # When all heights are None, min returns the first element (stable).
+                result = min(streams, key=lambda s: (s.height is None, s.height or 0))
                 logger.debug("selected_worst_quality", quality=result.quality)
             case _:
                 # Try to find matching quality (support both "720" and "720p" formats)
