@@ -21,7 +21,7 @@ from .services.downloader import perform_download
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
 from .services.quality import QualitySelector
-from .services.signal_handlers import setup_signal_handlers
+from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from .utils.security import _sanitize_title, validate_output_path
 
 logger = get_logger(__name__)
@@ -209,66 +209,70 @@ async def _run_batch_with_progress(
     """
     # Setup signal handlers inside async context
     setup_signal_handlers()
-    # Create shared semaphore and backoff coordinator at batch level
-    shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
-    backoff_coordinator = URLBackoffCoordinator()
+    try:
+        # Create shared semaphore and backoff coordinator at batch level
+        shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+        backoff_coordinator = URLBackoffCoordinator()
 
-    # Clear progress state for this batch
-    await _progress_manager.clear()
+        # Clear progress state for this batch
+        await _progress_manager.clear()
 
-    # Create progress callbacks for each URL
-    callbacks = [_create_progress_callback(i) for i in range(len(urls))]
+        # Create progress callbacks for each URL
+        callbacks = [_create_progress_callback(i) for i in range(len(urls))]
 
-    tasks = [
-        asyncio.create_task(
-            _download_single(
-                url,
-                quality,
-                output,
-                method,
-                settings,
-                max_retries,
-                DownloadContext(
-                    index=i,
-                    shared_semaphore=shared_semaphore,
-                    backoff_coordinator=backoff_coordinator,
-                    progress_callback=callbacks[i],
-                ),
+        tasks = [
+            asyncio.create_task(
+                _download_single(
+                    url,
+                    quality,
+                    output,
+                    method,
+                    settings,
+                    max_retries,
+                    DownloadContext(
+                        index=i,
+                        shared_semaphore=shared_semaphore,
+                        backoff_coordinator=backoff_coordinator,
+                        progress_callback=callbacks[i],
+                    ),
+                )
             )
-        )
-        for i, url in enumerate(urls)
-    ]
-    total = len(urls)
+            for i, url in enumerate(urls)
+        ]
+        total = len(urls)
 
-    # Initial progress display in per-URL format
-    typer.echo(f"\r{await _format_progress(total)}", nl=False)
-
-    for coro in asyncio.as_completed(tasks):
-        try:
-            await coro
-        except asyncio.CancelledError:
-            # Cancel remaining tasks on interrupt
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            # Wait for cancellation to propagate
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        except Exception:
-            # Log unexpected exceptions and continue - errors captured in gather results
-            logger.exception("unexpected_error_in_batch_progress")
-        # Update progress display with \r overwrite
+        # Initial progress display in per-URL format
         typer.echo(f"\r{await _format_progress(total)}", nl=False)
 
-    typer.echo()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    # Process results: keep tuples, label CancelledError as cancelled, other exceptions as download_error
-    return [
-        r if isinstance(r, tuple)
-        else (urls[i], "", "cancelled") if isinstance(r, asyncio.CancelledError)
-        else (urls[i], "", f"download_error: {str(r)}")
-        for i, r in enumerate(results)
-    ]
+        for coro in asyncio.as_completed(tasks):
+            try:
+                await coro
+            except asyncio.CancelledError:
+                # Cancel remaining tasks on interrupt
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                # Wait for cancellation to propagate
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            except Exception:
+                # Log unexpected exceptions and continue - errors captured in gather results
+                logger.exception("unexpected_error_in_batch_progress")
+            # Update progress display with \r overwrite
+            typer.echo(f"\r{await _format_progress(total)}", nl=False)
+
+        typer.echo()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Process results: keep tuples, label CancelledError as cancelled, other exceptions as download_error
+        return [
+            r if isinstance(r, tuple)
+            else (urls[i], "", "cancelled") if isinstance(r, asyncio.CancelledError)
+            else (urls[i], "", f"download_error: {str(r)}")
+            for i, r in enumerate(results)
+        ]
+    finally:
+        # Cleanup signal handlers to allow re-registration on subsequent loops
+        cleanup_signal_handlers()
 
 
 def _print_batch_summary(
@@ -356,51 +360,55 @@ def download(
         """Async implementation of video download."""
         # Setup signal handlers inside async context
         setup_signal_handlers()
-        extractor = VKVideoExtractor(settings=settings)
-        video = await extractor.extract_streams(url)
+        try:
+            extractor = VKVideoExtractor(settings=settings)
+            video = await extractor.extract_streams(url)
 
-        # Guard against empty streams to provide accurate error message
-        if not video.streams:
-            raise QualityNotAvailableError(
-                str(quality),
-                [],
-                'No streams found for this video; the video may be private or unavailable'
+            # Guard against empty streams to provide accurate error message
+            if not video.streams:
+                raise QualityNotAvailableError(
+                    str(quality),
+                    [],
+                    'No streams found for this video; the video may be private or unavailable'
+                )
+
+            selector = QualitySelector()
+            available = selector.list_available_qualities(video.streams)
+            logger.info("available_streams", count=len(video.streams))
+            logger.info("available_qualities", qualities=available[:8])
+
+            stream = selector.select(video.streams, quality)
+
+            # Apply settings download_dir as default output path
+            output_path = output if str(output) != "." else settings.download_dir
+            output_path = Path(output_path).resolve()
+
+            # Validate output directory to prevent path traversal
+            validated_output = validate_output_path(output_path, warning=False)
+
+            # Ensure output directory exists
+            validated_output.mkdir(parents=True, exist_ok=True)
+
+            # Generate output filename with sanitized title
+            safe_title = _sanitize_title(video.title) if video.title else None
+            if safe_title:
+                output_file = validated_output / f"{safe_title}_{video.id}.mp4"
+            else:
+                output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
+
+            return await perform_download(
+                url,
+                str(stream.quality),
+                output_file,
+                method,
+                extractor,
+                settings,
+                video_data=video,
+                selected_stream=stream,
             )
-
-        selector = QualitySelector()
-        available = selector.list_available_qualities(video.streams)
-        logger.info("available_streams", count=len(video.streams))
-        logger.info("available_qualities", qualities=available[:8])
-
-        stream = selector.select(video.streams, quality)
-
-        # Apply settings download_dir as default output path
-        output_path = output if str(output) != "." else settings.download_dir
-        output_path = Path(output_path).resolve()
-
-        # Validate output directory to prevent path traversal
-        validated_output = validate_output_path(output_path, warning=False)
-
-        # Ensure output directory exists
-        validated_output.mkdir(parents=True, exist_ok=True)
-
-        # Generate output filename with sanitized title
-        safe_title = _sanitize_title(video.title) if video.title else None
-        if safe_title:
-            output_file = validated_output / f"{safe_title}_{video.id}.mp4"
-        else:
-            output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
-
-        return await perform_download(
-            url,
-            str(stream.quality),
-            output_file,
-            method,
-            extractor,
-            settings,
-            video_data=video,
-            selected_stream=stream,
-        )
+        finally:
+            # Cleanup signal handlers to allow re-registration on subsequent loops
+            cleanup_signal_handlers()
 
     try:
         result = asyncio.run(_download())
@@ -523,4 +531,3 @@ def batch_download(
 def cli() -> None:
     """Entry point for CLI execution."""
     app()
-
