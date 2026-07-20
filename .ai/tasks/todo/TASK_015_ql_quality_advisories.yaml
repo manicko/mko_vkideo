@@ -1,0 +1,93 @@
+id: TASK_015_ql_quality_advisories
+
+title: Quality advisories — duration_ms param, throttle constant, Any doc, facade doc
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/08-audit-quality-validated-findings.md
+source_section: QLT-003, QLT-005, QLT-007, QLT-001 (advisory)
+source_blocks:
+  - "QLT-003: Unused function parameter duration_ms in read_progress"
+  - "QLT-005: Duplicated download_timeout default constant"
+  - "QLT-007: Any type usage confined to yt-dlp boundary"
+  - "QLT-001: downloader.py re-exports 25+ symbols it does not own (ARCHITECTURE_PATTERN)"
+
+description: >
+  Four independent maintainability advisories in config.py / ffmpeg_utils.py /
+  downloader.py:
+  - QLT-003: remove unused `duration_ms` parameter (and its docstring line) from
+    `read_progress` in ffmpeg_utils.py.
+  - QLT-005: eliminate the second source of truth for the 300s timeout — have
+    `_retry_429_with_backoff` reference `Settings.download_timeout` (or a shared
+    constants module) instead of the local `DEFAULT_DOWNLOAD_TIMEOUT = 300`.
+  - QLT-007: add a documented comment explaining why `Any` is used at the yt-dlp
+    integration boundary (optional / low ROI — may be skipped if deemed over-engineering).
+  - QLT-001 (reclassified ARCHITECTURE_PATTERN): add a doc comment block to the
+    `downloader.py` `__all__` re-export facade clarifying which symbols are owned by
+    which module. No code removal; documentation only.
+
+  NOTE: QLT-002 and QLT-004 were REJECTED — do NOT act on them.
+
+goals:
+  - read_progress has no unused parameter
+  - single source of truth for download timeout default
+  - re-export facade documented as intentional backward-compat
+  - yt-dlp Any usage documented (or accepted)
+
+files:
+  - path: src/vkdownloader/services/ffmpeg_utils.py
+
+    targets:
+      - type: function
+        name: read_progress
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: duration_ms
+
+    changes:
+      - action: modify_code
+        description: >
+          QLT-003: remove duration_ms parameter and its docstring line from read_progress.
+
+  - path: src/vkdownloader/services/downloader_throttle.py
+
+    targets:
+      - type: class
+        name: downloader_throttle
+
+    semantic_anchors:
+      insert_after:
+        type: return_statement
+        value: "DEFAULT_DOWNLOAD_TIMEOUT = 300 definition"
+
+    changes:
+      - action: modify_code
+        description: >
+          QLT-005: replace local default constant with reference to Settings.download_timeout
+          (or shared constants module).
+
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: class
+        name: downloader
+
+    semantic_anchors:
+      insert_after:
+        type: return_statement
+        value: "__all__ re-export block (backward-compat comment)"
+
+    changes:
+      - action: modify_code
+        description: >
+          QLT-001: add doc comment mapping re-exported symbols to owning modules.
+          QLT-007: add comment at yt-dlp Any usage explaining the boundary deviation.
+
+acceptance_criteria:
+  - read_progress signature has no duration_ms
+  - download timeout default has a single source of truth
+  - downloader.py __all__ has clarifying backward-compat doc comment
+  - ruff + mypy clean

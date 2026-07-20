@@ -1,0 +1,77 @@
+id: TASK_008_seg_resume_fix
+
+title: Fix segment resume double-count and missing-segment skip
+
+priority: high
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/03-audit-services-validated-findings.md
+source_section: SRV-003 (HIGH, mandatory)
+source_blocks:
+  - "SRV-003: Segment resume double-counts progress and can never complete a resumed run"
+
+# Consolidated duplicates (same root cause, single fix):
+#   DF-001 (Phase 06) — resume metadata never reset; accumulated count exceeds total
+#   DF-002 (Phase 06) — re-downloads all segments instead of only missing ones
+
+description: >
+  `download_hls_with_resume` advertises segment-level resume but (a) `_run_download_session`
+  loads `downloaded_count` but never uses it to skip already-downloaded segments, and
+  (b) `_tally_and_merge` computes `downloaded_count = _load_downloaded_count(...) + sum(...)`
+  which double-counts across runs, so the merge branch `if downloaded_count == len(segments)`
+  never triggers after interruption -> no output file, run reported failed.
+
+  Fix:
+  1. In `_create_segment_download_tasks`, skip segments whose `.ts` file already exists
+     with non-zero size (check `segments_dir / f"{i:05d}.ts"` before creating the task).
+  2. In `_tally_and_merge`, compute `downloaded_count = len(list(segments_dir.glob("*.ts")))`
+     (on-disk count only, NOT additive) and persist to metadata ONLY when
+     `downloaded_count == len(segments)`.
+  3. On a fresh (non-resume) start, do not carry over stale metadata that would block merge.
+
+goals:
+  - resumed run re-downloads only missing segments
+  - merge triggers when on-disk count == total segments
+  - progress metadata does not grow unbounded across invocations
+  - backward compatible: a clean first run still works
+
+files:
+  - path: src/vkdownloader/services/segment_downloader.py
+
+    targets:
+      - type: function
+        name: download_hls_with_resume
+      - type: function
+        name: _run_download_session
+      - type: function
+        name: _create_segment_download_tasks
+      - type: function
+        name: _tally_and_merge
+
+    semantic_anchors:
+      # _run_download_session: the line that loads _load_downloaded_count but never uses it.
+      insert_after:
+        type: function_call
+        value: _load_downloaded_count
+      # _create_segment_download_tasks: the loop that creates tasks for ALL segments.
+      insert_before:
+        type: function_call
+        value: _parse_m3u8_segments
+      # _tally_and_merge: the additive counter assignment.
+      insert_before:
+        type: function_call
+        value: _save_downloaded_count
+
+    changes:
+      - action: modify_code
+        description: >
+          Skip existing non-zero .ts files in _create_segment_download_tasks; replace
+          additive counter in _tally_and_merge with on-disk glob count; persist metadata
+          only on completion.
+
+acceptance_criteria:
+  - interrupted run, when re-invoked, re-downloads only missing segments and completes merge
+  - on-disk .ts count drives the completion check (no double counting)
+  - metadata file count does not grow unbounded across invocations
+  - fresh clean run still produces output
+  - ruff + mypy clean

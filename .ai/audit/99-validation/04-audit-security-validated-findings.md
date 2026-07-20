@@ -77,14 +77,22 @@ The auditor's evidence has been verified:
 - `models/enums.py:50`: `FILE = "file"` is a valid selectable enum value.
 - `api-reference.md:657`: "FILE — Load cookies from external file (placeholder for future enhancement)".
 
-**Recommendation:** Either (a) remove `FILE` from the enum and CLI choices until implemented, or (b) keep it but validate at CLI parse time and emit a clear, early error. Per the auditor guidance ("Is the code choice better than the doc?"): the `NotImplementedError` guard is reasonable; the documentation/CLI advertising an unimplemented secret-source is the deviation. Recommend updating docs/CLI to not present `file` as a usable option.
-- **why:** Avoids a confusing crash and prevents users from assuming a credential-file store exists (security-relevant feature that is not actually available).
-- **effort:** trivial
+**Recommendation:** Add a fail-fast validator in `src/vkdownloader/config.py` on the `cookie_source` field that raises `ValueError("cookie_source=FILE is not yet implemented; use 'none' or 'browser' instead")` when `CookieSource.FILE` is selected. This ensures consistent behavior across all entry points (CLI, env var, programmatic API) and matches the documented contract. Then update the CLI help text in `cli.py` (lines 316 and 442) to read `help="Cookie source: none or browser (file not yet implemented)"` and update `docs/01-tools/api-reference.md:657` to clearly mark FILE as unimplemented rather than a future enhancement placeholder. Keep `CookieSource.FILE` enum value for API compatibility but make its selection consistently fail before any download work begins.
+- **why:** Prevents silent no-op behavior in the primary download flow (CFG-001) while honoring the existing `NotImplementedError` guard (SEC-002) - users receive an immediate, actionable error instead of confusing silent or disparate behaviors.
+- **effort:** trivial (single field_validator in config.py + CLI help text update)
 - **priority:** recommended
 
+> **Cross-phase Resolution:** SEC-002 and CFG-001 share the same root cause (`CookieSource.FILE` is unimplemented). CFG-001 recommended rejecting FILE explicitly at the CLI/Settings validation boundary - this recommendation implements that approach. The validator ensures FILE fails consistently whether invoked via CLI (`--cookie-source file`), environment variable (`VKDOWNLOADER_COOKIE_SOURCE=file`), or programmatic API instantiation (`Settings(cookie_source=CookieSource.FILE)`), unifying both findings' concerns into a single fix.
+
+> **Implementation Details:**
+> - Add `@field_validator("cookie_source")` in `Settings` class to reject FILE at instantiation
+> - CLI help text: change "none, browser, or file" to "none or browser (file not implemented)"
+> - Docs/api-reference.md:657: change description to indicate FILE is explicitly rejected with error
+> - Do NOT remove `CookieSource.FILE` enum member - this is intentional for future use and API compatibility
+
 > **Validation Note:**
-> - **Action:** Validated
-> - **Detail:** The finding is technically correct. However, this finding overlaps with CFG-001 (Phase 02 Audit) which found that `cookie_source=FILE` silently no-ops in the primary download flow. Investigation reveals both are correct but describe different code paths. See cross-phase analysis below.
+> - **Action:** Replaced ambiguous two-alternative recommendation with single actionable fix aligned with CFG-001
+> - **Detail:** This addresses both the silent no-op (CFG-001) and the misleading crash path (SEC-002) by failing early at Settings construction.
 > - **See also:** CFG-001 (Phase 02)
 
 ---
@@ -128,12 +136,12 @@ None. No security vulnerability rises to mandatory (data loss / correctness / le
 ## Advisory Recommendations
 
 - **SEC-001** (MEDIUM): Harden permissions on the Netscape cookie file written during BROWSER-mode yt-dlp downloads.
-- **SEC-002** (LOW): Stop advertising unimplemented `--cookie-source file` in CLI/docs; validate at parse time or remove the enum value.
+- **SEC-002** (LOW): Reject `cookie_source=FILE` early via a `field_validator` in `config.py` and mark it unimplemented in CLI help/docs (aligned with CFG-001).
 - **SEC-003** (LOW): Validate batch URL file entries before enqueueing.
 
 ## Doc Updates Needed
 
-- **SEC-002**: `docs/01-tools/api-reference.md:657` and `docs/99-reference/cli-reference.md` (and CLI help in `cli.py`) should not present `file` as a usable cookie source, or should clearly mark it as disabled/unimplemented at the CLI layer.
+- **SEC-002**: `src/vkdownloader/config.py` (`cookie_source` field_validator), `cli.py` (help text lines ~316 and ~442), `docs/01-tools/api-reference.md:657` and `docs/99-reference/cli-reference.md` should mark `file` as unimplemented and not present it as a usable cookie source; selection must fail with a clear early error (see CFG-001 resolution).
 
 ---
 
@@ -179,8 +187,8 @@ None
 
 3. **Segment-download token refresh path**: `segment_downloader.py:381` logs a warning and skips browser flow when `cookie_source != BROWSER`.
 
-**Conclusion:** The `NotImplementedError` exists but is unreachable from the common CLI path. Users selecting `--cookie-source file` get silent credential-less downloads instead of the documented error. This is a design inconsistency where SEC-002 (runtime error) and CFG-001 (silent no-op) are two sides of the same underlying issue — `FILE` should either be removed or made to fail consistently.
+**Resolution:** The inconsistent behaviors are unified by a single fix: a fail-fast `field_validator` on `cookie_source` in `config.py` that rejects `CookieSource.FILE` at `Settings` construction with a clear error. This makes FILE fail consistently (whether via CLI, env var, or API) and eliminates both the silent no-op (CFG-001) and the late `NotImplementedError` crash (SEC-002). The enum member is retained for future use; documentation and CLI help are updated to mark FILE as unimplemented.
 
 ### Dependencies
 
-- SEC-002 and CFG-001 share the same root cause (unimplemented `CookieSource.FILE` value). Fixing one requires addressing the other.
+- SEC-002 and CFG-001 share the same root cause (unimplemented `CookieSource.FILE` value) and are resolved together by the `config.py` `field_validator` described in CFG-001.

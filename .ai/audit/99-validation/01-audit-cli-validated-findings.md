@@ -42,7 +42,9 @@ Any non-tuple result (including a genuine Exception/traceback) is turned into ('
 > - **See also:** None
 
 **Recommendation:**
-Distinguish cancellation from genuine failures. Either (a) let the broad except Exception in _download_single return a distinct status like ('url', '', f'error: {e}') instead of re-raising into the gather path, or (b) in the post-processing at cli.py:249-251, check isinstance(r, BaseException) and map it to an error status, preserving str(r). This keeps the logger.exception traceback while presenting an accurate, actionable status ('download_error: ...') rather than canceled.
+At cli.py:249-251, modify the list comprehension to check `isinstance(r, BaseException)` and map non-tuple, non-CancelledError exceptions to status `'download_error: {str(r)}'` instead of `'cancelled'`. This preserves the `logger.exception` traceback from cli.py:168 while accurately reporting genuine failures in the batch summary, distinguishing them from `asyncio.CancelledError` results.
+
+_Investigation: asyncio.gather(..., return_exceptions=True) at cli.py:247 captures exceptions as Exception objects; the current isinstance(r, tuple) check incorrectly labels all non-tuple results as user-cancelled._
 
 ---
 
@@ -81,7 +83,9 @@ This assumes the only ValueError source is URL parsing. But QualitySelector.sele
 > - **See also:** None
 
 **Recommendation:**
-Catch QualityNotAvailableError/ValueError from select() explicitly and produce a correct message (e.g. 'No streams found for this video; the video may be private or unavailable'). Narrow the except ValueError in the download command so it only fires for actual URL-format validation, or better: have the command verify video.streams is non-empty before select() and raise a dedicated, clearly-named error. Align the batch invalid_url label with the corrected semantics.
+In cli.py:347-348 (download command), add a guard before `selector.select()` to check `if not video.streams:` and raise `QualityNotAvailableError(quality, [])` with the message 'No streams found for this video; the video may be private or unavailable'. In cli.py:114 (_download_single), add the same guard. Then narrow the broad `except ValueError` at cli.py:387-392 to only catch URL-format validation errors (catch `QualityNotAvailableError` explicitly for empty-stream cases). This replaces the generic ValueError with a dedicated domain exception that conveys accurate semantics.
+
+_Investigation: QualitySelector.select() at quality.py:62-63 raises ValueError('Cannot select from empty streams list') when streams is empty; the CLI incorrectly assumes all ValueError instances stem from URL parsing._
 
 ---
 

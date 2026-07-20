@@ -1,0 +1,37 @@
+id: TASK_025_verify_seg_resume
+
+title: Verify — segment resume fix + redundant guard + docstring
+
+type: verification
+
+status: pending
+
+priority: high
+
+depends_on:
+  - TASK_008_seg_resume_fix
+  - TASK_009_seg_redundant_guard
+  - TASK_010_seg_docstring_clarify
+
+verifies:
+  - TASK_008_seg_resume_fix
+  - TASK_009_seg_redundant_guard
+  - TASK_010_seg_docstring_clarify
+
+verification_steps:
+  - build: "uv run ruff check src/vkdownloader/services/segment_downloader.py src/vkdownloader/services/downloader.py && uv run mypy src/vkdownloader"
+  - test: "uv run pytest tests/ -q"
+  - smoke_check: >
+      Simulate an interrupted HLS segment run: pre-populate segments_dir with a subset of
+      non-zero .ts files + a progress metadata file, then invoke download_hls_with_resume and
+      assert the merge branch triggers (output file produced) and only the missing segments are
+      re-downloaded. Assert metadata count uses on-disk count (no double-count).
+
+pass_criteria:
+  - ruff + mypy clean
+  - full test suite passes
+  - resumed run completes merge without re-downloading existing segments
+  - download_hls_with_resume output produced on simulated resume
+  - redundant guard removed; retry semantics unchanged
+
+failure_action: return TASK_008_seg_resume_fix to rework

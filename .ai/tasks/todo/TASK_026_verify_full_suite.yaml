@@ -1,0 +1,56 @@
+id: TASK_026_verify_full_suite
+
+title: Verify — full rollout final gate (build, tests, smoke)
+
+type: verification
+
+status: pending
+
+priority: high
+
+depends_on:
+  - TASK_003_cli_batch_error_relabel
+  - TASK_004_cli_empty_stream_guard
+  - TASK_005_cli_signal_handlers_loop_scoped
+  - TASK_006_doc_cli_reference_nul_strip
+  - TASK_011_browser_quality_fix
+  - TASK_012_doc_browser_quality
+  - TASK_013_quality_none_height_handling
+  - TASK_014_srv_dead_code
+  - TASK_015_ql_quality_advisories
+  - TASK_016_str_cli_structure
+  - TASK_017_sec_cookie_file_perms
+  - TASK_018_sec_batch_url_validation
+  - TASK_019_int_browser_lifecycle
+  - TASK_020_int_resume_and_cleanup
+  - TASK_021_int_monitor_and_auto
+  - TASK_022_tst_coverage_additions
+  - TASK_023_tst_gap_coverage
+  - TASK_024_verify_cfg_cookie
+  - TASK_025_verify_seg_resume
+
+verifies:
+  - TASK_003_cli_batch_error_relabel
+  - TASK_004_cli_empty_stream_guard
+  - TASK_011_browser_quality_fix
+  - TASK_013_quality_none_height_handling
+  - TASK_014_srv_dead_code
+  - TASK_016_str_cli_structure
+  - TASK_017_sec_cookie_file_perms
+  - TASK_019_int_browser_lifecycle
+  - TASK_022_tst_coverage_additions
+  - TASK_023_tst_gap_coverage
+
+verification_steps:
+  - build: "uv run ruff check src/ && uv run mypy src/ && uv run ruff check tests/"
+  - test: "uv run pytest tests/ -q"
+  - smoke_check: "uv run python -m vkdownloader.cli --help && uv run python -c \"import vkdownloader.services.downloader, vkdownloader.services.segment_downloader, vkdownloader.cli; print('OK imports')\""
+
+pass_criteria:
+  - ruff (src + tests) clean
+  - mypy strict clean
+  - full pytest suite passes (>= 217, plus new tests)
+  - CLI --help renders without error
+  - no circular import / runtime import error
+
+failure_action: return offending implementation task to rework

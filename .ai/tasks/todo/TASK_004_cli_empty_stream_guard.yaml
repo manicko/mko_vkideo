@@ -1,0 +1,71 @@
+id: TASK_004_cli_empty_stream_guard
+
+title: Guard empty-stream selection and narrow download ValueError handling
+
+priority: medium
+
+depends_on:
+  - TASK_003_cli_batch_error_relabel
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/01-audit-cli-validated-findings.md
+source_section: CLI-002 (MEDIUM, advisory)
+source_blocks:
+  - "CLI-002: Generic ValueError in download command reports wrong Invalid URL format message"
+
+description: >
+  `QualitySelector.select()` raises `ValueError('Cannot select from empty streams list')`
+  when `video.streams` is empty. The `download` command calls `selector.select()` before
+  any empty-stream guard, and the broad `except ValueError` then prints a misleading
+  "Invalid URL format" message. The same mislabeling occurs in the batch path
+  (`_download_single` labels ValueError as `invalid_url`).
+
+  Fix:
+  1. In `download` (`_download` inner) and `_download_single`, add a guard
+     `if not video.streams:` that raises `QualityNotAvailableError(quality, [])` with the
+     message 'No streams found for this video; the video may be private or unavailable'.
+  2. Narrow the broad `except ValueError` in `download` to only catch URL-format errors;
+     catch `QualityNotAvailableError` explicitly for the empty-stream case.
+
+goals:
+  - empty-stream case reports accurate "no streams / private" message
+  - URL-format errors still report "Invalid URL format"
+  - QualityNotAvailableError not mislabeled as invalid_url in batch
+
+files:
+  - path: src/vkdownloader/cli.py
+
+    targets:
+      - type: function
+        name: download
+      - type: function
+        name: _download_single
+
+    semantic_anchors:
+      # download: the call to selector.select(video.streams, quality) — add guard before it.
+      insert_before:
+        type: function_call
+        value: QualitySelector
+      # download: the broad `except ValueError` block that prints Invalid URL format.
+      # _download_single: the ValueError handling branch that labels invalid_url.
+      insert_before:
+        type: function_call
+        value: QualityNotAvailableError
+
+    changes:
+      - action: add_code
+        description: >
+          Add empty-stream guard raising QualityNotAvailableError before selector.select()
+          in both download and _download_single. Narrow the download except ValueError block.
+        code_hint: |
+          if not video.streams:
+              raise QualityNotAvailableError(
+                  str(quality), [],
+                  "No streams found for this video; the video may be private or unavailable"
+              )
+
+acceptance_criteria:
+  - a valid URL whose extraction returns zero streams reports "No streams found..." not "Invalid URL format"
+  - a genuinely malformed URL still reports "Invalid URL format"
+  - batch path no longer labels empty-stream errors as invalid_url
+  - ruff + mypy clean

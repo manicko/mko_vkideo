@@ -1,0 +1,54 @@
+id: TASK_011_browser_quality_fix
+
+title: Reuse pre-selected stream for BROWSER cookie-source numeric qualities
+
+priority: medium
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/03-audit-services-validated-findings.md
+source_section: SRV-005 (MEDIUM, mandatory)
+source_blocks:
+  - "SRV-005: BROWSER cookie-source rejects all specific qualities (only best works)"
+
+description: >
+  When `cookie_source == CookieSource.BROWSER`, `_resolve_cookies` re-extracts streams
+  via `extract_streams_with_cookies` which yields a SINGLE stream with `quality="best"`,
+  `height=None`. `QualitySelector.select(...)` then raises `QualityNotAvailableError` for any
+  numeric quality (Q720/Q1080/...), so `--quality 720 --cookie-source browser` always fails.
+
+  Fix: in `_resolve_cookies`, if a stream was ALREADY selected (the caller passes the
+  selected `m3u8_url`), reuse that URL and do NOT re-run quality selection on the
+  browser stream list unless quality == BEST. This makes numeric qualities work with the
+  browser path by reusing the originally selected yt-dlp stream URL.
+
+  Pairs with TASK_012 (doc update) and TASK_013 (height=None handling).
+
+goals:
+  - numeric qualities succeed with cookie_source=BROWSER
+  - BEST still works unchanged
+  - no re-selection on the single best-only browser stream list for numeric quality
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: function
+        name: _resolve_cookies
+
+    semantic_anchors:
+      # The BROWSER branch that re-selects on browser_streams.
+      insert_after:
+        type: function_call
+        value: extract_streams_with_cookies
+
+    changes:
+      - action: modify_code
+        description: >
+          In the BROWSER branch, skip QualitySelector.select when the requested quality is
+          not BEST (reuse the pre-selected m3u8_url). Only run selection for BEST.
+
+acceptance_criteria:
+  - `perform_download(..., quality="720", cookie_source=BROWSER)` does not raise QualityNotAvailableError
+  - `quality="best"` with BROWSER still selects and downloads
+  - no behavior change for cookie_source=NONE
+  - ruff + mypy clean

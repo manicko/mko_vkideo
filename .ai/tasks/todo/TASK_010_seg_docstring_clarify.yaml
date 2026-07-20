@@ -1,0 +1,49 @@
+id: TASK_010_seg_docstring_clarify
+
+title: Clarify segment-resume docstrings (fallback restart, not true resume)
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/03-audit-services-validated-findings.md
+source_section: SRV-007 (LOW, advisory)
+source_blocks:
+  - "SRV-007: Segment resume discards the partial yt-dlp file instead of resuming it"
+
+description: >
+  `_attempt_segment_resume` calls `output_file.unlink()` before switching to
+  `download_hls_with_resume`, discarding the partial yt-dlp file. The docstrings
+  ("resumes from last checkpoint") overstate the behavior. Update docstrings to state
+  this is a fallback restart via a fresh HLS segment download, and that the partial
+  yt-dlp file is discarded (not resumed). Documentation-only fix; no behavior change.
+
+  NOTE: This pairs with SRV-003 (TASK_008) which fixes actual resume counting.
+
+goals:
+  - docstrings accurately describe fallback-restart behavior
+  - no production code behavior change
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+      - type: function
+        name: _attempt_segment_resume
+
+    semantic_anchors:
+      insert_before:
+        type: function_call
+        value: output_file.unlink
+
+    changes:
+      - action: modify_code
+        description: >
+          Replace "resumes from last checkpoint" wording with "falls back to a fresh
+          segment-based download via HLS; the partial yt-dlp file is discarded".
+
+acceptance_criteria:
+  - docstrings reflect fallback-restart semantics
+  - no logic change; tests unaffected
+  - ruff + mypy clean

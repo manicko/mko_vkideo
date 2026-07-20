@@ -29,7 +29,11 @@
 > - **Detail:** Code inspection confirms the bug. Line 796-802 creates the directories with exist_ok=True but never deletes existing .ts files or resets metadata. Line 540 accumulates counts across runs, causing merge to never trigger when re-invoked. This is a SPEC-DEVIATION: the documented resume behavior does not match the implementation.
 > - **See also:** DF-002, SRV-003 (Phase 03 - duplicate issue)
 
-**Recommendation:** Reset progress metadata at the start of a fresh download_hls_with_resume invocation (or make resume explicitly opt-in), and base the merge decision on on-disk segment count (segments_dir.glob("*.ts")) rather than accumulated counter.
+**Recommendation:** In `segment_downloader.py`, modify `_create_segment_download_tasks` (line 652) to filter out segments whose `.ts` file already exists with non-zero size (check `segments_dir / f"{i:05d}.ts"` before creating task); then modify `_tally_and_merge` (line 540) to compute `downloaded_count = len(list(segments_dir.glob("*.ts")))` (on-disk count only, not additive) and persist to metadata only when `downloaded_count == len(segments)`. This fixes both the redundant-download bug and the incomplete-merge bug with minimal changes. See SRV-003 (Phase 03) for the authoritative validated recommendation — this fix resolves both DF-001 and DF-002.
+
+**Investigation (2026-07-20):** Code analysis confirms the additive counter in `_tally_and_merge` (line 540) causes double-counting: if 50 segments downloaded then `_load_downloaded_count` returns 50, and a resumed run adds another 50, yielding `downloaded_count = 100` which never equals `len(segments) = 50`. Simultaneously, `_create_segment_download_tasks` (lines 665-677) creates tasks for all segments without checking for existing files. The fix is to skip existing segments and use only the on-disk count for merge decisions.
+
+**Note:** This finding is a duplicate of SRV-003 (Phase 03). The single fix under SRV-003 resolves both DF-001 and DF-002.
 
 ---
 
@@ -53,7 +57,7 @@
 > - **Detail:** Code inspection confirms _create_segment_download_tasks creates ALL segment tasks without checking for existing files. The downloaded_count metadata value is used only for display/logging, not for skipping existing segments. This is a SPEC-DEVIATION: documented behavior contradicts implementation.
 > - **See also:** DF-001
 
-**Recommendation:** When resuming, filter the segment list to files not already present in segments_dir (and whose size is non-zero). Write the completion check against the on-disk count.
+**Recommendation:** When resuming, filter the segment list to files not already present in segments_dir (and whose size is non-zero). Write the completion check against the on-disk count. **Note:** This finding is a duplicate of SRV-003 (Phase 03). The single fix under SRV-003 resolves both DF-001 and DF-002.
 
 ---
 
@@ -61,9 +65,9 @@
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 2 | DF-001, DF-002 |
+| Validated (unchanged) | 0 | DF-001/DF-002 re-validated then consolidated |
 | Reclassified | 0 | |
-| Merged | 0 | |
+| Merged | 2 | DF-001, DF-002 consolidated into SRV-003 |
 | Rejected | 0 | |
 
 ### Rejected Findings
@@ -72,9 +76,9 @@ No findings rejected.
 
 ### Merged Findings
 
-No findings merged. The issues are related but describe distinct aspects:
-- DF-001 focuses on the merge-trigger bug
-- DF-002 focuses on the redundant-download bug
+DF-001 and DF-002 are duplicates of SRV-003 (Phase 03). Per the Cross-Phase Analysis, fix efforts should consolidate under SRV-003. The actionable recommendation from SRV-003 resolves both findings:
+- Skip segments whose file already exists (lines 665-677 in `_create_segment_download_tasks`)
+- Use on-disk segment count instead of additive counter (line 540 in `_tally_and_merge`)
 
 ### Reclassified Findings
 

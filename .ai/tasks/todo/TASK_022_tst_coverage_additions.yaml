@@ -1,0 +1,75 @@
+id: TASK_022_tst_coverage_additions
+
+title: Add tests for perform_download orchestration and misleading-name fixes
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/07-audit-tests-validated-findings.md
+source_section: TST-002, TST-003, TST-004, TST-005 (advisory)
+source_blocks:
+  - "TST-002: perform_download orchestration lacks behavioral tests"
+  - "TST-003: test_structured_logging_on_retry does not verify logging"
+  - "TST-004: test_delay_capped_at_30_seconds asserts nothing about the cap"
+  - "TST-005: Misleadingly named test_empty_path_rejected actually accepts the path"
+
+description: >
+  Test-only improvements (no production code changes):
+  - TST-002: add behavioral tests for `perform_download` branch dispatch + FFMPEG→segment
+    fallback — let `download_with_ffmpeg` return None and assert segment-download fallback
+    runs (currently only log-message assertions exist).
+  - TST-003: fix `test_structured_logging_on_retry` to actually spy on the logger
+    (mock_logger.warning/info) and assert structured logging output.
+  - TST-004: fix `test_delay_capped_at_30_seconds` to assert the cap (or remove as
+    redundant given TestComputeBackoffDelay.test_delay_caps_at_30_seconds already covers it).
+  - TST-005: rename `test_empty_path_rejected` to reflect that "."/empty is ACCEPTED
+    (resolves to cwd), or change the assertion to match intended semantics; do not silently
+    keep a misleading name.
+
+goals:
+  - perform_download fallback path is behaviorally tested
+  - logging tests actually verify logging
+  - no misleading/redundant test names
+
+files:
+  - path: tests/test_hls_downloader.py
+
+    targets:
+      - type: class
+        name: TestDownloadMethodLogging
+      - type: function
+        name: test_structured_logging_on_retry
+      - type: function
+        name: test_delay_capped_at_30_seconds
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: perform_download
+
+    changes:
+      - action: add_code
+        description: >
+          TST-002: add fallback behavioral test. TST-003/004: fix assertions. TST-005: rename.
+
+  - path: tests/test_security.py
+
+    targets:
+      - type: function
+        name: test_empty_path_rejected
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: validate_output_path
+
+    changes:
+      - action: modify_code
+        description: >
+          TST-005: rename test_empty_path_rejected to reflect accepted-empty behavior.
+
+acceptance_criteria:
+  - new perform_download fallback test passes
+  - test_structured_logging_on_retry verifies logger output
+  - no test with a name that contradicts its assertion
+  - full suite still passes

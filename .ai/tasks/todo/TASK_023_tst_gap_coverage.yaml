@@ -1,0 +1,86 @@
+id: TASK_023_tst_gap_coverage
+
+title: Add tests for _sanitize_title, _fetch_playlist_with_retry, signal/cookie resolution
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/07-audit-tests-validated-findings.md
+source_section: TST-006, TST-007, TST-008 (advisory)
+source_blocks:
+  - "TST-006: Coverage gap — _sanitize_title (Windows filename safety) has no tests"
+  - "TST-007: Coverage gap — _fetch_playlist_with_retry token-refresh logic never executed"
+  - "TST-008: Coverage gap — setup_signal_handlers and _resolve_cookies untested"
+
+description: >
+  Test-only additions (no production code changes):
+  - TST-006: add unit tests for `utils/security._sanitize_title` (Windows filename safety:
+    strip illegal chars, collapse, length limits). Pure deterministic function — cheap to cover.
+  - TST-007: add a test that exercises `segment_downloader._fetch_playlist_with_retry`
+    token-refresh path (HTTP 403/410 → refresh → retry), instead of mocking it with a
+    static return value.
+  - TST-008: add tests for `services/signal_handlers.setup_signal_handlers` (Windows
+    fallback branch) and `downloader._resolve_cookies` cookie-source branching +
+    QualityNotAvailableError propagation.
+
+goals:
+  - _sanitize_title covered
+  - _fetch_playlist_with_retry token-refresh path executed
+  - signal handlers + _resolve_cookies covered
+
+files:
+  - path: tests/test_security.py
+
+    targets:
+      - type: function
+        name: _sanitize_title
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: _sanitize_title
+
+    changes:
+      - action: add_code
+        description: >
+          TST-006: add _sanitize_title unit tests.
+
+  - path: tests/test_segment_downloader.py
+
+    targets:
+      - type: function
+        name: _fetch_playlist_with_retry
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: _fetch_playlist_with_retry
+
+    changes:
+      - action: add_code
+        description: >
+          TST-007: add token-refresh execution test.
+
+  - path: tests/test_hls_downloader.py
+
+    targets:
+      - type: function
+        name: setup_signal_handlers
+      - type: function
+        name: _resolve_cookies
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: setup_signal_handlers
+
+    changes:
+      - action: add_code
+        description: >
+          TST-008: add setup_signal_handlers + _resolve_cookies tests.
+
+acceptance_criteria:
+  - _sanitize_title has direct unit tests
+  - _fetch_playlist_with_retry token-refresh is executed in a test
+  - signal handlers + _resolve_cookies have direct tests
+  - full suite passes; coverage of these symbols > 0

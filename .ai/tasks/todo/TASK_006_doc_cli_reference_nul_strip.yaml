@@ -1,0 +1,47 @@
+id: TASK_006_doc_cli_reference_nul_strip
+
+title: Strip NUL-byte corruption from cli-reference.md
+
+priority: medium
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/01-audit-cli-validated-findings.md
+source_section: CLI-003 (MEDIUM, DOC-UPDATE)
+source_blocks:
+  - "CLI-003: cli-reference.md is binary-corrupted (trailing NUL bytes)"
+
+description: >
+  `docs/99-reference/cli-reference.md` contains 2 trailing NUL bytes (invalid UTF-8),
+  blocking strict readers/linters. Re-save the file as valid UTF-8 without NULs. Confirm
+  the See Also links and the documented options (quality, method, cookie-source, ssl-verify,
+  max-retries, output) still match the live `cli.py --help` (they currently do). No
+  content/spec change beyond de-corruption. Add a CI/doc-lint guard that fails on NUL bytes
+  in docs/ if such a guard does not already exist.
+
+goals:
+  - file is valid UTF-8 with zero NUL bytes
+  - documented options still match cli.py --help
+  - CI/doc-lint fails on NUL bytes (new guard or extend existing)
+
+files:
+  - path: docs/99-reference/cli-reference.md
+
+    targets:
+      - type: file
+        name: cli-reference.md
+
+    semantic_anchors:
+      insert_after:
+        type: return_statement
+        value: "end of file (after See Also block)"
+
+    changes:
+      - action: modify_code
+        description: >
+          Remove the 2 trailing NUL bytes; re-encode file as UTF-8. Verify See Also links
+          and option list against cli.py --help. Add NUL-byte doc-lint guard to CI.
+
+acceptance_criteria:
+  - `file` reports no NUL bytes; file opens as valid UTF-8 text
+  - documented options match current cli.py --help output
+  - CI step (or existing doc lint) fails if any docs/ file contains NUL bytes

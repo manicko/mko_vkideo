@@ -1,0 +1,62 @@
+id: TASK_016_str_cli_structure
+
+title: Decompose _download_single and de-duplicate output-path resolution in cli.py
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/09-structural-quality-validated-findings.md
+source_section: STR-005, STR-006, STR-007 (advisory)
+source_blocks:
+  - "STR-005: _download_single — high complexity (CC 17), 93 lines"
+  - "STR-007: Duplicated output-path / filename resolution in cli.py"
+
+description: >
+  Two structural-quality advisories in cli.py (STR-006 parameter-objects is broader and
+  is intentionally LEFT as advisory-without-action to avoid overengineering per rule 4;
+  only STR-005 and STR-007 are actionable here):
+  - STR-005: `_download_single` is the only function with radon rank C (CC 17), 93 lines,
+    handling 5+ responsibilities incl. a 6-branch except chain. Split into focused helpers
+    (path-resolution helper, error-mapping helper). This overlaps with CLI-001/CLI-002
+    exception handling; coordinate so the error-mapping helper centralizes the status labels.
+  - STR-007: output-path resolution + sanitized-filename generation appears twice with
+    inconsistent fallback filenames (`{safe_title}_{video.id}.mp4` in `_download_single`
+    vs `{video.id}_{stream.quality}.mp4` in `download`). Extract a single
+    `_resolve_output_file(video, output, settings, index, stream)` helper and decide the
+    fallback filename convention.
+
+  STR-006 (parameter objects for 10-11-param orchestrators) is a larger refactor with
+  low ROI at project scale; mark as deferred, no code change in this task.
+
+goals:
+  - _download_single decomposed below CC ~10 with clear helpers
+  - single output-path/filename helper used by both call sites
+  - consistent fallback filename convention
+
+files:
+  - path: src/vkdownloader/cli.py
+
+    targets:
+      - type: function
+        name: _download_single
+      - type: function
+        name: download
+
+    semantic_anchors:
+      # The duplicated output-path blocks in _download_single and download::_download.
+      insert_after:
+        type: function_call
+        value: _sanitize_title
+
+    changes:
+      - action: modify_code
+        description: >
+          STR-005: extract error-mapping + path-resolution helpers from _download_single.
+          STR-007: extract _resolve_output_file helper and reuse in both sites.
+
+acceptance_criteria:
+  - _download_single cyclomatic complexity reduced (no longer rank C)
+  - both download paths use one _resolve_output_file helper
+  - fallback filename convention consistent
+  - existing CLI tests still pass
+  - ruff + mypy clean

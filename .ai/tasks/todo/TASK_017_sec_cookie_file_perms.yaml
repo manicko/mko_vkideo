@@ -1,0 +1,69 @@
+id: TASK_017_sec_cookie_file_perms
+
+title: Harden permissions on BROWSER-mode Netscape cookie file
+
+priority: medium
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/04-audit-security-validated-findings.md
+source_section: SEC-001 (MEDIUM, advisory)
+source_blocks:
+  - "SEC-001: Browser-captured session cookies persisted to disk with default permissions"
+
+description: >
+  When `cookie_source=BROWSER`, the yt-dlp path writes a Netscape cookie file containing
+  live VK session cookies to `output_file.parent` using `cookie_file.write_text(...)`, which
+  creates the file with the process umask (typically 0644 on Unix) — world-readable for the
+  duration of the download. These are valid, reusable bearer credentials.
+
+  Fix: create the cookie file with restrictive permissions (`os.open` with `0o600`, or
+  `chmod 0o600` immediately after creation). Optionally write it to a `mkstemp`-style temp
+  location (like the existing `_temp_headers_file`) instead of the world-readable download
+  directory. The cleanup `finally` block must still remove it.
+
+  This task MODIFIES a file (`downloader.py`/`cookies.py`) involved in credential handling
+  and alters on-disk file permissions — classified as RISKY (credential exposure surface).
+  Marked blocked pending a small research/verification gate confirming the chosen permission
+  primitive works cross-platform (Windows ACL vs Unix mode) and does not break the yt-dlp
+  reader.
+
+files:
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+
+    semantic_anchors:
+      # The cookie_file.write_text(...) call inside the BROWSER path.
+      insert_before:
+        type: function_call
+        value: write_text
+
+    changes:
+      - action: modify_code
+        description: >
+          Replace write_text with an os.open(0o600) write (or chmod 0o600 after write),
+          or route through a mkstemp-style temp file. Keep cleanup in finally.
+
+  - path: src/vkdownloader/services/cookies.py
+
+    targets:
+      - type: function
+        name: _cookies_to_netscape
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: _cookies_to_netscape
+
+    changes:
+      - action: modify_code
+        description: >
+          Optionally expose a hardened-write helper used by the BROWSER cookie path.
+
+acceptance_criteria:
+  - cookie file created with owner-only (0600) permissions
+  - yt-dlp can still read the cookie file on both Windows and Unix
+  - file still removed in finally block
+  - ruff + mypy clean

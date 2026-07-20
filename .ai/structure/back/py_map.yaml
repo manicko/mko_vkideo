@@ -2,7 +2,9 @@
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.cli
   layer: unknown
   imports:
+  - __future__
   - collections.abc
+  - dataclasses
   - pathlib
   - structlog
   - config
@@ -14,7 +16,8 @@
   - services.quality
   - services.signal_handlers
   - utils.security
-  classes: []
+  classes:
+  - DownloadContext
   functions:
   - _create_progress_callback
   - callback
@@ -33,6 +36,7 @@
   classes:
   - Settings
   functions:
+  - expand_tilde_paths
   - normalize_log_level
   - setup_logging
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\exceptions.py
@@ -95,14 +99,9 @@
   - collections.abc
   - pathlib
   - pydantic
-  - vkdownloader.config
-  - vkdownloader.services.downloader_throttle
-  - vkdownloader.services.extractor
   classes:
   - HLSDownloadRequest
-  functions:
-  - _ensure_model_rebuilt
-  - _lazy_init
+  functions: []
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\enums.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.enums
   layer: unknown
@@ -114,6 +113,7 @@
   - LogLevel
   - DownloadMethod
   - CookieSource
+  - SegmentRetryResult
   functions: []
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\video.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.video
@@ -175,10 +175,10 @@
   - HLSDownloader
   functions:
   - _parse_quality_to_enum
-  - __init__
-  - _build_ffmpeg_cmd
-  - _download
+  - _build_ytdlp_options
   - _progress_hook
+  - __init__
+  - _download
 - path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
   module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader_throttle
   layer: unknown
@@ -253,6 +253,7 @@
   imports:
   - __future__
   - collections.abc
+  - dataclasses
   - pathlib
   - typing
   - urllib.parse
@@ -266,7 +267,9 @@
   - models.dtos
   - services.extractor
   - downloader_throttle
-  classes: []
+  classes:
+  - SegmentTask
+  - DownloadPolicy
   functions:
   - _parse_m3u8_segments
   - _is_retryable_status

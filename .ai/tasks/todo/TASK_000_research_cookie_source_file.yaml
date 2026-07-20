@@ -1,0 +1,37 @@
+id: TASK_000_research_cookie_source_file
+
+title: Research — impact of rejecting CookieSource.FILE at config boundary
+
+priority: high
+
+status: pending
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/02-audit-config-validated-findings.md
+source_section: CFG-001 / SEC-002 / INT-004 (consolidated)
+
+description: >
+  Prerequisite research for TASK_001_cfg_cookie_source_validator. The change adds a
+  fail-fast field_validator rejecting CookieSource.FILE in config.py — a shared config
+  boundary consumed by CLI, environment, and the programmatic API. This is classified
+  RISKY per the rules (modifies config affecting multiple services; changes fail-fast
+  behavior with potential hidden consumers that currently pass cookie_source=file and
+  silently no-op). Produce a go/no-go recommendation before implementation proceeds.
+
+research_questions:
+  - Enumerate every call site / entry point that constructs Settings with a cookie_source value (CLI flag, env var VKDOWNLOADER_COOKIE_SOURCE, programmatic API, tests).
+  - Identify any existing tests or scripts that intentionally pass cookie_source="file" or "FILE" and expect success (these will break and must be updated or removed).
+  - Confirm CookieSource.FILE enum member must be RETAINED (API compatibility) — document this constraint.
+  - Assess downstream impact of failing fast vs. current silent no-op, especially any batch/CI invocation relying on the no-op.
+  - Verify the chosen error message and ValueError type do not conflict with existing exception handling in CLI (cli.py download/batch except blocks).
+
+deliverables:
+  - list of all dependents / consumers of cookie_source
+  - impact assessment (breaking vs non-breaking)
+  - explicit go / go-with-changes / no-go recommendation
+  - list of test/scripts that must be updated alongside TASK_001
+
+verification:
+  - grep cookie_source across src/ and tests/
+  - grep CookieSource.FILE across repo
+  - confirm no production code relies on FILE no-op behavior

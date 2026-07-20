@@ -1,0 +1,49 @@
+id: TASK_005_cli_signal_handlers_loop_scoped
+
+title: Make signal-handler registration loop-scoped, not process-global
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/01-audit-cli-validated-findings.md
+source_section: CLI-004 (LOW, advisory)
+source_blocks:
+  - "CLI-004: Signal handlers register once per process but are bound to the first event loop only"
+
+description: >
+  `setup_signal_handlers()` uses a module-global flag `_signal_handlers_setup` so handlers
+  register only once per process. On a second `asyncio.run()` invocation in the same
+  process, the new loop never gets handlers (stale handlers reference a closed loop).
+  Make registration loop-scoped: reset `_signal_handlers_setup = False` and remove handlers
+  (`loop.remove_signal_handler`) at the end of each async command so every invocation gets
+  correctly-bound graceful-shutdown handlers.
+
+goals:
+  - each asyncio.run() invocation gets signal handlers bound to its own loop
+  - graceful Ctrl+C preserved across repeated invocations
+  - no reliance on Windows-only signal.signal behavior
+
+files:
+  - path: src/vkdownloader/services/signal_handlers.py
+
+    targets:
+      - type: function
+        name: setup_signal_handlers
+
+    semantic_anchors:
+      # Anchor on the module-global flag and the early-return guard + registration block.
+      insert_after:
+        type: return_statement
+        value: "early-return when _signal_handlers_setup is True"
+
+    changes:
+      - action: modify_code
+        description: >
+          Reset `_signal_handlers_setup` to False and call `loop.remove_signal_handler`
+          for each registered signal when the command finishes, so the next loop re-registers.
+
+acceptance_criteria:
+  - two consecutive asyncio.run() invocations in one process each install working handlers
+  - no orphaned handlers referencing a closed loop
+  - existing CLI Ctrl+C behavior unchanged on single invocation
+  - ruff + mypy clean

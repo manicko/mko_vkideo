@@ -1,0 +1,153 @@
+# Execution ordering for validated audit findings (Phases 01-09).
+# Numbering matches the rollout order. No circular dependencies.
+#
+# Dependency rules applied:
+#  - Tasks touching the SAME file execute sequentially (explicit depends_on chain).
+#  - config.py changes (TASK_001, TASK_007, TASK_021) are independent of each other
+#    but all touch config.py -> ordered 001 -> 007 -> 021 with depends_on_prev_in_file.
+#  - cli.py changes (002, 003, 004, 005, 006, 016, 018) ordered with explicit
+#    depends_on to serialize file edits.
+#  - downloader.py changes (009, 010, 011, 015, 017, 019-part, 020-part, 021-part)
+#    serialized via depends_on on the immediately preceding downloader.py task.
+#  - segment_downloader.py changes (008, 020-part) serialized.
+#
+# Research gate (TASK_000) blocks the risky config-boundary change (TASK_001).
+
+tasks:
+  # ── Research gate (blocks risky config change) ──
+  - id: TASK_000_research_cookie_source_file
+    depends_on: []
+
+  # ── Config / cookie-source foundation ──
+  - id: TASK_001_cfg_cookie_source_validator
+    depends_on:
+      - TASK_000_research_cookie_source_file
+
+  - id: TASK_002_cli_cookie_help_text
+    depends_on:
+      - TASK_001_cfg_cookie_source_validator
+
+  - id: TASK_007_cfg_docs_and_defaults
+    depends_on:
+      - TASK_001_cfg_cookie_source_validator
+
+  - id: TASK_021_int_monitor_and_auto
+    depends_on:
+      - TASK_007_cfg_docs_and_defaults
+
+  # ── CLI error handling ──
+  - id: TASK_003_cli_batch_error_relabel
+    depends_on:
+      - TASK_002_cli_cookie_help_text
+
+  - id: TASK_004_cli_empty_stream_guard
+    depends_on:
+      - TASK_003_cli_batch_error_relabel
+
+  - id: TASK_005_cli_signal_handlers_loop_scoped
+    depends_on:
+      - TASK_004_cli_empty_stream_guard
+
+  - id: TASK_006_doc_cli_reference_nul_strip
+    depends_on:
+      - TASK_005_cli_signal_handlers_loop_scoped
+
+  - id: TASK_016_str_cli_structure
+    depends_on:
+      - TASK_006_doc_cli_reference_nul_strip
+
+  - id: TASK_018_sec_batch_url_validation
+    depends_on:
+      - TASK_016_str_cli_structure
+
+  # ── Segment resume (core correctness) ──
+  - id: TASK_008_seg_resume_fix
+    depends_on:
+      - TASK_018_sec_batch_url_validation
+
+  - id: TASK_009_seg_redundant_guard
+    depends_on:
+      - TASK_008_seg_resume_fix
+
+  - id: TASK_010_seg_docstring_clarify
+    depends_on:
+      - TASK_009_seg_redundant_guard
+
+  # ── BROWSER quality ──
+  - id: TASK_011_browser_quality_fix
+    depends_on:
+      - TASK_010_seg_docstring_clarify
+
+  - id: TASK_012_doc_browser_quality
+    depends_on:
+      - TASK_011_browser_quality_fix
+
+  - id: TASK_013_quality_none_height_handling
+    depends_on:
+      - TASK_012_doc_browser_quality
+
+  # ── Dead code / quality advisories ──
+  - id: TASK_014_srv_dead_code
+    depends_on:
+      - TASK_013_quality_none_height_handling
+
+  - id: TASK_015_ql_quality_advisories
+    depends_on:
+      - TASK_014_srv_dead_code
+
+  # ── Security / integration ──
+  - id: TASK_017_sec_cookie_file_perms
+    depends_on:
+      - TASK_015_ql_quality_advisories
+
+  - id: TASK_019_int_browser_lifecycle
+    depends_on:
+      - TASK_017_sec_cookie_file_perms
+
+  - id: TASK_020_int_resume_and_cleanup
+    depends_on:
+      - TASK_019_int_browser_lifecycle
+
+  # ── Test coverage additions ──
+  - id: TASK_022_tst_coverage_additions
+    depends_on:
+      - TASK_020_int_resume_and_cleanup
+
+  - id: TASK_023_tst_gap_coverage
+    depends_on:
+      - TASK_022_tst_coverage_additions
+
+  # ── Verification gates ──
+  - id: TASK_024_verify_cfg_cookie
+    depends_on:
+      - TASK_001_cfg_cookie_source_validator
+      - TASK_002_cli_cookie_help_text
+      - TASK_007_cfg_docs_and_defaults
+
+  - id: TASK_025_verify_seg_resume
+    depends_on:
+      - TASK_008_seg_resume_fix
+      - TASK_009_seg_redundant_guard
+      - TASK_010_seg_docstring_clarify
+
+  - id: TASK_026_verify_full_suite
+    depends_on:
+      - TASK_003_cli_batch_error_relabel
+      - TASK_004_cli_empty_stream_guard
+      - TASK_005_cli_signal_handlers_loop_scoped
+      - TASK_006_doc_cli_reference_nul_strip
+      - TASK_011_browser_quality_fix
+      - TASK_012_doc_browser_quality
+      - TASK_013_quality_none_height_handling
+      - TASK_014_srv_dead_code
+      - TASK_015_ql_quality_advisories
+      - TASK_016_str_cli_structure
+      - TASK_017_sec_cookie_file_perms
+      - TASK_018_sec_batch_url_validation
+      - TASK_019_int_browser_lifecycle
+      - TASK_020_int_resume_and_cleanup
+      - TASK_021_int_monitor_and_auto
+      - TASK_022_tst_coverage_additions
+      - TASK_023_tst_gap_coverage
+      - TASK_024_verify_cfg_cookie
+      - TASK_025_verify_seg_resume

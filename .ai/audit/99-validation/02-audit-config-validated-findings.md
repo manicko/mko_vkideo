@@ -32,9 +32,9 @@ Consequently cookie_source=file is accepted and behaves identically to none.
 > **Validation Note:**
 > - **Action:** validated
 > - **Detail:** Code inspection confirms extract_streams never checks cookie_source. The NotImplementedError only exists in extract_streams_with_cookies which is only called when cookie_source == BROWSER or force_browser=True. Runtime verification confirms Settings(cookie_source='file') is accepted.
-> - **See also:** —
+> - **See also:** SEC-002 (Phase 04) — shares root cause; same fix resolves both.
 
-**Recommendation:** Enforce FILE rejection at the config/CLI boundary or update documentation to reflect the current silent no-op behavior.
+**Recommendation:** Add a `field_validator` to the `Settings` class in `src/vkdownloader/config.py` that rejects `CookieSource.FILE` during model construction with a clear error message: "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead." This ensures fail-fast, type-safe behavior that is consistent across all entry points (CLI, environment, and API), aligning with project rules for predictable validation and the existing pattern where `field_validator` is already used for `log_level` normalization (config.py:109-114).
 
 ---
 
@@ -57,7 +57,7 @@ Consequently cookie_source=file is accepted and behaves identically to none.
 > - **Detail:** Runtime verification confirms unknown env vars are silently ignored. Pydantic-settings v2 behavior confirmed.
 > - **See also:** —
 
-**Recommendation:** Validate environment-derived config explicitly or add tests for unknown env var handling.
+**Recommendation:** Add a test in `tests/test_config.py` that asserts unknown `VKDOWNLOADER_*` environment variables are silently ignored (documenting the pydantic-settings v2 `extra=forbid` limitation), and add a one-line docstring note on the `Settings` class stating that unknown env vars are not rejected by `extra=forbid`.
 
 ---
 
@@ -115,7 +115,7 @@ Consequently cookie_source=file is accepted and behaves identically to none.
 
 **Description:** model_config uses env_file: .env which pydantic-settings resolves relative to CWD, not the package install location.
 
-**Recommendation:** Document .env location requirement or support explicit config location.
+**Recommendation:** Add a `Notes`/`env_file` docstring or README note on `Settings` documenting that the `.env` file is resolved relative to the current working directory (not the package location), and have the CLI print the resolved `.env` path at startup debug level so operators can verify placement.
 
 ---
 
@@ -131,7 +131,7 @@ Consequently cookie_source=file is accepted and behaves identically to none.
 
 **Description:** throttled_rate (default 100000 bytes/sec) maps to yt-dlp throttledratelimit which aborts downloads below threshold.
 
-**Recommendation:** Raise default or document the trade-off.
+**Recommendation:** Raise the `throttled_rate` default in `config.py` from `100000` to a value that will not abort legitimate slow connections (e.g. `10000` bytes/sec, matching a conservative 80 kbps floor), and add a docstring on the field explaining the yt-dlp `throttledratelimit` abort trade-off so users can tune it down if needed.
 
 ---
 
@@ -160,4 +160,4 @@ No findings reclassified.
 
 ## Rollout Analysis
 
-Findings are independent and can be addressed in any order. CFG-001 is high priority due to silent correctness loss on authentication.
+Findings are independent and can be addressed in any order. CFG-001 and SEC-002 share the same root cause and should be addressed together with a single fix at the Settings validation boundary.

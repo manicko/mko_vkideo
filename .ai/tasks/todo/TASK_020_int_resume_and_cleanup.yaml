@@ -1,0 +1,94 @@
+id: TASK_020_int_resume_and_cleanup
+
+title: Integration fixes — resume backoff, CancelledError, temp cleanup, ffmpeg cancel
+
+priority: low
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/05-audit-integrations-validated-findings.md
+source_section: INT-005, INT-006, INT-009, INT-010 (advisory)
+source_blocks:
+  - "INT-005: Parallel segment download has hardcoded retry sleep"
+  - "INT-006: _fetch_single_playlist swallows asyncio.CancelledError"
+  - "INT-009: cancel_ffmpeg_process result ignored"
+  - "INT-010: Segment merge leaves partial files on failure"
+
+description: >
+  Four independent integration advisories:
+  - INT-005: in `segment_downloader._run_parallel_download_with_backoff`, replace the
+    hardcoded `await asyncio.sleep(1.0)` with exponential backoff using
+    `_compute_backoff_delay` from downloader_throttle.py.
+  - INT-006: in `segment_downloader._fetch_single_playlist`, remove `asyncio.CancelledError`
+    from the caught exception tuple so CancelledError propagates naturally.
+  - INT-009: in `downloader.HLSDownloader.download_with_ffmpeg`, capture the return value
+    of `cancel_ffmpeg_process` and log if the process did not terminate cleanly.
+  - INT-010: in `ffmpeg_utils._merge_segments_batched`, wrap the merge loop in try/finally
+    to clean up partial temp files on any failure.
+
+goals:
+  - proper exponential backoff in segment retry
+  - CancelledError propagates (no silent swallow)
+  - ffmpeg cancel result is checked/logged
+  - merge leaves no orphaned temp files on failure
+
+files:
+  - path: src/vkdownloader/services/segment_downloader.py
+
+    targets:
+      - type: function
+        name: _run_parallel_download_with_backoff
+      - type: function
+        name: _fetch_single_playlist
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: asyncio.sleep
+      insert_before:
+        type: function_call
+        value: except asyncio.CancelledError
+
+    changes:
+      - action: modify_code
+        description: >
+          INT-005: replace asyncio.sleep(1.0) with _compute_backoff_delay(...).
+          INT-006: drop asyncio.CancelledError from the except tuple.
+
+  - path: src/vkdownloader/services/downloader.py
+
+    targets:
+      - type: function
+        name: HLSDownloader.download_with_ffmpeg
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: cancel_ffmpeg_process
+
+    changes:
+      - action: modify_code
+        description: >
+          INT-009: capture cancel_ffmpeg_process return and log non-clean termination.
+
+  - path: src/vkdownloader/services/ffmpeg_utils.py
+
+    targets:
+      - type: function
+        name: _merge_segments_batched
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: _merge_segments_batched
+
+    changes:
+      - action: modify_code
+        description: >
+          INT-010: wrap merge loop in try/finally to remove partial temp files on failure.
+
+acceptance_criteria:
+  - segment retry uses exponential backoff (no fixed 1.0s)
+  - CancelledError propagates out of _fetch_single_playlist
+  - ffmpeg cancel non-clean termination is logged
+  - merge failure cleans up partial temp files
+  - ruff + mypy clean

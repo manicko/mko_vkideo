@@ -1,0 +1,81 @@
+id: TASK_007_cfg_docs_and_defaults
+
+title: Config doc clarifications, .env cleanup, and throttled_rate default
+
+priority: low
+
+depends_on:
+  - TASK_001_cfg_cookie_source_validator
+
+# ── Plan/Audit report source ──
+source_reference: .ai/audit/99-validation/02-audit-config-validated-findings.md
+source_section: CFG-002, CFG-003, CFG-004, CFG-005, CFG-006 (advisory)
+source_blocks:
+  - "CFG-002: extra=forbid does not protect env/.env"
+  - "CFG-003: .env references non-existent VKDOWNLOADER_DOWNLOAD_METHOD"
+  - "CFG-004: log_file parent dir missing yields unhelpful error"
+  - "CFG-005: .env loaded relative to CWD only"
+  - "CFG-006: throttled_rate default may abort legitimate slow downloads"
+
+description: >
+  Independent config/doc advisories, all in config.py / .env / docs:
+  - CFG-002: add a docstring note on Settings stating unknown VKDOWNLOADER_* env vars are
+    silently ignored (pydantic-settings v2 extra=forbid limitation).
+  - CFG-003: remove stale `VKDOWNLOADER_DOWNLOAD_METHOD=auto` line from .env (no such field).
+  - CFG-004: in `setup_logging`, create the parent directory of `log_file` before the
+    FileHandler is instantiated, with an actionable error if creation fails.
+  - CFG-005: add a docstring/README note that `.env` resolves relative to CWD; have CLI
+    print the resolved `.env` path at debug level at startup.
+  - CFG-006: raise `throttled_rate` default from 100000 to 10000 with a docstring
+    explaining the yt-dlp throttledratelimit abort trade-off.
+
+  NOTE: CFG-001 (cookie_source validator) is handled separately in TASK_001.
+
+goals:
+  - .env no longer references a non-existent setting
+  - missing log_file parent dir is created or errors helpfully
+  - throttled_rate default is conservative (10000)
+  - config limitations documented
+
+files:
+  - path: src/vkdownloader/config.py
+
+    targets:
+      - type: function
+        name: setup_logging
+      - type: class
+        name: Settings
+
+    semantic_anchors:
+      insert_after:
+        type: function_call
+        value: FileHandler
+
+    changes:
+      - action: modify_code
+        description: >
+          CFG-002 docstring on Settings; CFG-004 mkdir(parents=True) before FileHandler;
+          CFG-006 throttled_rate default 10000 + docstring; CFG-005 .env CWD note.
+
+  - path: .env
+
+    targets:
+      - type: file
+        name: .env
+
+    semantic_anchors:
+      insert_after:
+        type: return_statement
+        value: "VKDOWNLOADER_DOWNLOAD_METHOD line"
+
+    changes:
+      - action: modify_code
+        description: >
+          CFG-003: remove the stale VKDOWNLOADER_DOWNLOAD_METHOD=auto line.
+
+acceptance_criteria:
+  - Settings docstring documents env-var limitation
+  - .env has no VKDOWNLOADER_DOWNLOAD_METHOD line
+  - setup_logging creates log_file parent dir or raises actionable error
+  - throttled_rate default is 10000 with explanatory docstring
+  - ruff + mypy clean

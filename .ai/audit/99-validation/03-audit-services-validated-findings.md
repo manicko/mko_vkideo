@@ -270,7 +270,7 @@ return await download_hls_with_resume(...)
 > - **Detail:** Code inspection confirms `output_file.unlink()` at line 506 removes the partial file before calling `download_hls_with_resume`. The docstring at downloader.py:373-377 promises "segment-based resume on failure" and "resumes from last checkpoint", but the implementation is a fallback restart via segment download. This is a documentation-behavior mismatch.
 > - **See also:** SRV-003
 
-**Recommendation:** Either rename the feature to "fallback restart via segment download" in the docstrings, or implement true file-resume. Given SRV-003's fix is mandatory, documenting the actual behavior is clearer. Effort: trivial (docs) / small (behavior). Priority: recommended.
+**Recommendation:** Update docstrings to clarify this is a fallback restart, not true resume. Change "resumes from last checkpoint" to "falls back to a fresh segment-based download via HLS". Note that the partial yt-dlp file is discarded, not resumed. This documentation-only fix is sufficient since SRV-003 must be fixed for actual resume behavior, and implementing true partial-file resume would add complexity with low ROI. Effort: trivial. Priority: recommended.
 
 ---
 
@@ -286,7 +286,7 @@ return await download_hls_with_resume(...)
 ## Mandatory Fixes
 
 - **SRV-003** (HIGH): Segment resume double-counts progress and can never complete a resumed run — fix skipping + counter semantics.
-- **SRV-005** (MEDIUM): BROWSER cookie-source rejects all specific (numeric) qualities; align with documented ffmpeg/numeric usage or update docs.
+- **SRV-005** (MEDIUM): BROWSER cookie-source rejects all specific (numeric) qualities; fix the code to reuse the already-selected stream URL instead of re-selection, then update docs/01-tools/quality-selection.md and docs/11-guides/vkdownloader-limitations.md to remove contradictory numeric-quality-with-browser examples.
 
 ## Advisory Recommendations
 
@@ -298,7 +298,7 @@ return await download_hls_with_resume(...)
 
 ## Doc Updates Needed
 
-- **SRV-005**: quality-selection.md (lines 96-99) implies numeric qualities work with ffmpeg/browser cookie path; clarify that BROWSER cookie-source only yields a `best`-quality stream, or fix code so numeric qualities reuse the pre-selected stream URL.
+- **SRV-005**: quality-selection.md (lines 96-99) implies numeric qualities work with ffmpeg/browser cookie path; update it to reflect that BROWSER cookie-source only yields a `best`-quality stream after the SRV-005 code fix reuses the pre-selected stream URL (and remove the contradictory numeric-quality-with-browser examples).
 - **SRV-007**: Clarify docstrings in `downloader.py` ("resumes from last checkpoint") to reflect actual fallback-restart behavior.
 
 ---
@@ -334,9 +334,10 @@ SRV-003 (segment resume counter bug) and SRV-007 (partial file discarded) are re
 
 ### SRV-005 Documentation-Crossference
 
-SRV-005 directly contradicts the documentation in `docs/01-tools/quality-selection.md` lines 96-99 which shows `--quality 720 --method ffmpeg` without warning that this fails with `--cookie-source browser`. Additionally, `docs/11-guides/vkdownloader-limitations.md` lines 115-118 recommends `--method ffmpeg --cookie-source browser` which would trigger this bug. This is a SPEC-DEVIATION requiring either code fix or doc update.
+SRV-005 directly contradicts the documentation in `docs/01-tools/quality-selection.md` lines 96-99 which shows `--quality 720 --method ffmpeg` without warning that this fails with `--cookie-source browser`. Additionally, `docs/11-guides/vkdownloader-limitations.md` lines 115-118 recommends `--method ffmpeg --cookie-source browser` which would trigger this bug. This is a SPEC-DEVIATION resolved by the SRV-005 code fix (reuse the already-selected stream URL) plus a doc update to remove the contradictory examples.
 
 ### CFG-001 Cross-Reference
 
 CFG-001 from Phase 02 identifies that `CookieSource.FILE` silently no-ops in the primary download flow. This shares root cause with SRV-005: both relate to `cookie_source` handling. However, CFG-001 covers FILE mode specifically, while SRV-005 covers BROWSER mode quality selection. They are distinct issues requiring separate fixes.
+
 
