@@ -254,9 +254,12 @@ async def _run_batch_with_progress(
 
     typer.echo()
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    # Filter out CancelledError results
+    # Process results: keep tuples, label CancelledError as cancelled, other exceptions as download_error
     return [
-        r if isinstance(r, tuple) else (urls[i], "", "cancelled") for i, r in enumerate(results)
+        r if isinstance(r, tuple)
+        else (urls[i], "", "cancelled") if isinstance(r, asyncio.CancelledError)
+        else (urls[i], "", f"download_error: {str(r)}")
+        for i, r in enumerate(results)
     ]
 
 
