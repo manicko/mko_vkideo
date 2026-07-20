@@ -22,7 +22,7 @@ from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
-from .cookies import _cookies_to_netscape
+from .cookies import _cookies_to_netscape, _write_netscape_cookie_file
 from .downloader_throttle import _retry_429_with_backoff, get_shutdown_event
 from .ffmpeg_utils import (
     FfmpegProgress,
@@ -184,11 +184,11 @@ def _build_ytdlp_options(
     cookie_file: Path | None = None
     if raw_cookies:
         cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-        cookie_file.write_text(_cookies_to_netscape(raw_cookies))
+        _write_netscape_cookie_file(cookie_file, raw_cookies)
         ydl_opts["cookiefile"] = str(cookie_file)
     elif cookies:
         cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-        cookie_file.write_text(_cookies_to_netscape(cookies))
+        _write_netscape_cookie_file(cookie_file, cookies)
         ydl_opts["cookiefile"] = str(cookie_file)
 
     # Add progress hook if callback provided

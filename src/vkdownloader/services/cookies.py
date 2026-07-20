@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -53,4 +55,23 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["_cookies_to_netscape"]
+def _write_netscape_cookie_file(path: Path, cookies_input: str | list[Cookie]) -> None:
+    """Write cookies to a Netscape cookie file with owner-only permissions.
+
+    The file is created with mode 0o600 via ``os.open`` so that live session
+    credentials are never written world-readable on disk (the default umask on
+    Unix would otherwise yield 0644). ``os.open`` honors the mode on Unix; on
+    Windows the mode is a no-op but the call is harmless, so the helper stays
+    cross-platform safe. yt-dlp reads the file by path, which is unchanged.
+
+    Args:
+        path: Destination cookie file path.
+        cookies_input: Either a cookies string or a list of Playwright Cookie objects.
+    """
+    content = _cookies_to_netscape(cookies_input)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+
+__all__ = ["_cookies_to_netscape", "_write_netscape_cookie_file"]
