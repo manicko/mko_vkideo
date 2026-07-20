@@ -17,6 +17,7 @@ from .exceptions import (
     VKDownloadError,
 )
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
+from .models.video import VideoWithStreams
 from .services.downloader import perform_download
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VKVideoExtractor
@@ -83,6 +84,59 @@ async def _format_progress(url_count: int) -> str:
     return await _progress_manager.get_formatted_progress(url_count)
 
 
+def _resolve_output_file(
+    video: VideoWithStreams,
+    output: Path,
+    settings: Settings,
+    index: int,
+) -> Path:
+    """Resolve output file path with sanitized filename.
+
+    Args:
+        video: Video with metadata for filename generation.
+        output: Output directory override (or "." for default).
+        settings: Application settings with default download_dir.
+        index: Index for fallback filename (batch context).
+
+    Returns:
+        Resolved Path to the output file.
+    """
+    output_path = output if str(output) != "." else settings.download_dir
+    output_path = Path(output_path).resolve()
+
+    validated_output = validate_output_path(output_path, warning=False)
+    validated_output.mkdir(parents=True, exist_ok=True)
+
+    safe_title = _sanitize_title(video.title) if video.title else None
+    if safe_title:
+        output_file = validated_output / f"{safe_title}_{video.id}.mp4"
+    else:
+        output_file = validated_output / f"{index}_{video.id}.mp4"
+
+    return output_file
+
+
+def _map_exception_to_status(exc: Exception) -> str:
+    """Map exception to status label for batch results.
+
+    Args:
+        exc: The exception to map.
+
+    Returns:
+        Status label string (e.g., "no_streams", "video_not_found", "download_error").
+    """
+    if isinstance(exc, QualityNotAvailableError):
+        # Distinguish empty-stream case from missing quality
+        if not exc.available and exc.requested:
+            return f"no_streams: {exc}"
+        return f"quality_not_available: requested {exc.requested}p, available: {', '.join(exc.available)}"
+    if isinstance(exc, VideoNotFoundError):
+        return f"video_not_found: {exc}"
+    if isinstance(exc, VKDownloadError):
+        return f"download_error: {exc}"
+    return f"unexpected_error: {type(exc).__name__}"
+
+
 async def _download_single(
     url: str,
     quality: QualityEnum,
@@ -124,28 +178,13 @@ async def _download_single(
             raise QualityNotAvailableError(
                 str(quality),
                 [],
-                'No streams found for this video; the video may be private or unavailable'
+                "No streams found for this video; the video may be private or unavailable",
             )
 
         selector = QualitySelector()
         stream = selector.select(video.streams, quality)
 
-        # Apply settings download_dir as default output path
-        output_path = output if str(output) != "." else settings.download_dir
-        output_path = Path(output_path).resolve()
-
-        # Validate output directory to prevent path traversal
-        validated_output = validate_output_path(output_path, warning=False)
-
-        # Ensure output directory exists
-        validated_output.mkdir(parents=True, exist_ok=True)
-
-        # Generate output filename with sanitized title
-        safe_title = _sanitize_title(video.title) if video.title else None
-        if safe_title:
-            output_file = validated_output / f"{safe_title}_{video.id}.mp4"
-        else:
-            output_file = validated_output / f"{index}_{video.id}.mp4"
+        output_file = _resolve_output_file(video, output, settings, index)
 
         result = await perform_download(
             url,
@@ -168,18 +207,11 @@ async def _download_single(
         # Re-raise CancelledError to allow batch cancellation
         raise
     except QualityNotAvailableError as e:
-        # Return actionable message: distinguish empty-stream case from missing quality
-        if not e.available and e.requested:
-            return (url, "", f"no_streams: {e}")
-        return (
-            url,
-            "",
-            f"quality_not_available: requested {e.requested}p, available: {', '.join(e.available)}",
-        )
+        return (url, "", _map_exception_to_status(e))
     except VideoNotFoundError as e:
-        return (url, "", f"video_not_found: {e}")
+        return (url, "", _map_exception_to_status(e))
     except VKDownloadError as e:
-        return (url, "", f"download_error: {e}")
+        return (url, "", _map_exception_to_status(e))
     except Exception:
         # Log unexpected exceptions to surface bugs instead of silently swallowing them
         logger.exception("unexpected_error_in_batch_download", url=url)
@@ -265,8 +297,10 @@ async def _run_batch_with_progress(
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # Process results: keep tuples, label CancelledError as cancelled, other exceptions as download_error
         return [
-            r if isinstance(r, tuple)
-            else (urls[i], "", "cancelled") if isinstance(r, asyncio.CancelledError)
+            r
+            if isinstance(r, tuple)
+            else (urls[i], "", "cancelled")
+            if isinstance(r, asyncio.CancelledError)
             else (urls[i], "", f"download_error: {str(r)}")
             for i, r in enumerate(results)
         ]
@@ -369,7 +403,7 @@ def download(
                 raise QualityNotAvailableError(
                     str(quality),
                     [],
-                    'No streams found for this video; the video may be private or unavailable'
+                    "No streams found for this video; the video may be private or unavailable",
                 )
 
             selector = QualitySelector()
@@ -379,22 +413,7 @@ def download(
 
             stream = selector.select(video.streams, quality)
 
-            # Apply settings download_dir as default output path
-            output_path = output if str(output) != "." else settings.download_dir
-            output_path = Path(output_path).resolve()
-
-            # Validate output directory to prevent path traversal
-            validated_output = validate_output_path(output_path, warning=False)
-
-            # Ensure output directory exists
-            validated_output.mkdir(parents=True, exist_ok=True)
-
-            # Generate output filename with sanitized title
-            safe_title = _sanitize_title(video.title) if video.title else None
-            if safe_title:
-                output_file = validated_output / f"{safe_title}_{video.id}.mp4"
-            else:
-                output_file = validated_output / f"{video.id}_{stream.quality}.mp4"
+            output_file = _resolve_output_file(video, output, settings, 0)
 
             return await perform_download(
                 url,
