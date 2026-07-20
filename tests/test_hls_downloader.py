@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.exceptions import QualityNotAvailableError
 from vkdownloader.models.dtos import HLSDownloadRequest
+from vkdownloader.models.enums import CookieSource, QualityEnum, StreamFormat
+from vkdownloader.models.video import Stream
 from vkdownloader.services.downloader import (
     FfmpegProgress,
     HLSDownloader,
@@ -15,16 +18,20 @@ from vkdownloader.services.downloader import (
     _cookies_to_netscape,
     _load_downloaded_count,
     _parse_m3u8_segments,
+    _resolve_cookies,
     _save_downloaded_count,
     download_hls_with_resume,
 )
+from vkdownloader.services.downloader_throttle import get_shutdown_event
 from vkdownloader.services.ffmpeg_utils import _merge_segments_batched
+from vkdownloader.services.quality import QualitySelector
 from vkdownloader.services.segment_downloader import (
     _download_segment,
     _download_segment_parallel,
     _download_segment_sequential,
     _is_retryable_status,
 )
+from vkdownloader.services.signal_handlers import setup_signal_handlers
 
 
 class TestHLSDownloader:
@@ -1722,5 +1729,200 @@ class TestMergeSegmentsBatchedRealExecution:
 
         for code in [200, 400, 403, 404]:
             assert _is_retryable_status(code) is False
+
+
+class TestSetupSignalHandlers:
+    """Tests for setup_signal_handlers Windows fallback branch."""
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_registers_signal_handlers(self) -> None:
+        """Test that platforms without loop.add_signal_handler support fall
+        back to signal.signal for SIGINT and SIGTERM."""
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+
+        class _FakeLoop:
+            def add_signal_handler(self, sig: object, handler: object) -> None:
+                raise NotImplementedError("signal only works in main thread")
+
+            def remove_signal_handler(self, sig: object) -> None:
+                raise NotImplementedError("signal only works in main thread")
+
+        with patch.object(asyncio, "get_running_loop", return_value=_FakeLoop()):
+            with patch.object(signal_module, "signal") as mock_signal:
+                setup_signal_handlers()
+
+                # SIGINT and SIGTERM must be registered via the signal.signal fallback
+                assert mock_signal.call_count == 2
+                registered = {call.args[0] for call in mock_signal.call_args_list}
+                assert signal_module.SIGINT in registered
+                assert signal_module.SIGTERM in registered
+            # Reset module state so other tests are unaffected
+            signal_handlers.cleanup_signal_handlers()
+
+    @pytest.mark.asyncio
+    async def test_registered_handler_triggers_shutdown(self) -> None:
+        """Test that the fallback signal handler sets the shutdown event."""
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+
+        captured: dict[int, Any] = {}
+
+        class _FakeLoop:
+            def add_signal_handler(self, sig: object, handler: object) -> None:
+                raise NotImplementedError("signal only works in main thread")
+
+            def remove_signal_handler(self, sig: object) -> None:
+                raise NotImplementedError("signal only works in main thread")
+
+        def _record_signal(sig: int, handler: object) -> None:
+            captured[sig] = handler
+
+        with patch.object(asyncio, "get_running_loop", return_value=_FakeLoop()):
+            with patch.object(signal_module, "signal", side_effect=_record_signal):
+                setup_signal_handlers()
+
+            shutdown_event = get_shutdown_event()
+            shutdown_event.clear()
+            handler = captured[signal_module.SIGINT]
+            handler(signal_module.SIGINT, None)
+            assert shutdown_event.is_set()
+
+            # Restore clean state
+            shutdown_event.clear()
+            signal_handlers.cleanup_signal_handlers()
+
+
+class TestResolveCookies:
+    """Tests for _resolve_cookies cookie-source branching."""
+
+    @pytest.mark.asyncio
+    async def test_non_browser_source_skips_extraction(
+        self, test_settings: Settings
+    ) -> None:
+        """Test that non-browser cookie source returns m3u8_url without cookies."""
+        test_settings.cookie_source = CookieSource.NONE
+        extractor = MagicMock()
+        extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([], None, None)
+        )
+        m3u8_url = "https://example.com/video.m3u8"
+
+        result = await _resolve_cookies(
+            extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "best"
+        )
+
+        assert result == (m3u8_url, None, None)
+        extractor.extract_streams_with_cookies.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_browser_source_best_quality_selects_stream(
+        self, test_settings: Settings
+    ) -> None:
+        """Test browser source with BEST quality selects a stream and returns cookies."""
+        test_settings.cookie_source = CookieSource.BROWSER
+        stream = Stream(
+            url="https://example.com/best.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        raw_cookies = [MagicMock()]
+        extractor = MagicMock()
+        extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "vk=abc", raw_cookies)
+        )
+        m3u8_url = "https://example.com/preselected.m3u8"
+
+        result = await _resolve_cookies(
+            extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "best"
+        )
+
+        assert result[0] == "https://example.com/best.m3u8"
+        assert result[1] == "vk=abc"
+        assert result[2] == raw_cookies
+        extractor.extract_streams_with_cookies.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_browser_source_numeric_quality_keeps_preselected_url(
+        self, test_settings: Settings
+    ) -> None:
+        """Test numeric quality reuses caller's preselected m3u8_url (no select)."""
+        test_settings.cookie_source = CookieSource.BROWSER
+        stream = Stream(
+            url="https://example.com/best.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        extractor = MagicMock()
+        extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "vk=abc", [MagicMock()])
+        )
+        m3u8_url = "https://example.com/preselected.m3u8"
+
+        with patch.object(QualitySelector, "select") as mock_select:
+            result = await _resolve_cookies(
+                extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "720"
+            )
+
+        # Preselected URL is reused; quality selection must not run for numeric quality.
+        assert result[0] == m3u8_url
+        assert result[1] == "vk=abc"
+        mock_select.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_browser_source_no_streams_returns_none_cookies(
+        self, test_settings: Settings
+    ) -> None:
+        """Test browser source with no streams returns m3u8_url and None cookies."""
+        test_settings.cookie_source = CookieSource.BROWSER
+        extractor = MagicMock()
+        extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([], None, None)
+        )
+        m3u8_url = "https://example.com/preselected.m3u8"
+
+        result = await _resolve_cookies(
+            extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "best"
+        )
+
+        assert result == (m3u8_url, None, None)
+        extractor.extract_streams_with_cookies.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_quality_not_available_propagates(
+        self, test_settings: Settings
+    ) -> None:
+        """Test QualityNotAvailableError from selection propagates out of _resolve_cookies."""
+        test_settings.cookie_source = CookieSource.BROWSER
+        stream = Stream(
+            url="https://example.com/best.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        extractor = MagicMock()
+        extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "vk=abc", [MagicMock()])
+        )
+
+        class _FailingSelector:
+            def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
+                raise QualityNotAvailableError("best", ["720p"])
+
+        with patch(
+            "vkdownloader.services.downloader.QualitySelector", _FailingSelector
+        ):
+            with pytest.raises(QualityNotAvailableError):
+                await _resolve_cookies(
+                    extractor,
+                    test_settings,
+                    "https://vkvideo.ru/video-1_2",
+                    "https://example.com/preselected.m3u8",
+                    "best",
+                )
 
 
