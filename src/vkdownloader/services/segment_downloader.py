@@ -19,7 +19,12 @@ from ..config import Settings
 from ..models.enums import CookieSource
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
-from .downloader_throttle import RETRYABLE_STATUS_CODES, _retry_429_with_backoff, get_shutdown_event
+from .downloader_throttle import (
+    RETRYABLE_STATUS_CODES,
+    _compute_backoff_delay,
+    _retry_429_with_backoff,
+    get_shutdown_event,
+)
 from .ffmpeg_utils import _merge_segments_batched
 
 if TYPE_CHECKING:
@@ -162,7 +167,9 @@ async def _run_parallel_download_with_backoff(
         await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, video_url)
 
         if _should_continue_on_retry(response.status, attempt, max_retries):
-            await asyncio.sleep(1.0)
+            # Exponential backoff with full jitter instead of a fixed 1.0s sleep.
+            delay = _compute_backoff_delay(response.status, attempt, None)
+            await asyncio.sleep(delay)
             return None
 
         return False
@@ -407,7 +414,7 @@ async def _fetch_single_playlist(
             if response.status == 200:
                 return await response.text(), response.status
             return "", response.status
-    except (aiohttp.ClientError, asyncio.CancelledError) as e:
+    except aiohttp.ClientError as e:
         logger.warning("playlist_fetch_failed", error=str(e))
         return None
 

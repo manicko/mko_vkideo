@@ -340,7 +340,8 @@ class HLSDownloader:
                 assert process.stderr is not None
                 async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
                     if shutdown_event.is_set():
-                        await cancel_ffmpeg_process(process)
+                        if not await cancel_ffmpeg_process(process):
+                            logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
                         break
                     if progress_callback:
                         progress_callback(progress)
@@ -350,7 +351,8 @@ class HLSDownloader:
                 assert process.stderr is not None
                 while True:
                     if shutdown_event.is_set():
-                        await cancel_ffmpeg_process(process)
+                        if not await cancel_ffmpeg_process(process):
+                            logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
                         break
                     line = await process.stderr.readline()
                     if not line:
@@ -370,7 +372,8 @@ class HLSDownloader:
             stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
             if shutdown_event.is_set():
-                await cancel_ffmpeg_process(process)
+                if not await cancel_ffmpeg_process(process):
+                    logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
                 return None
 
             if process.returncode != 0:
