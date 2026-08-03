@@ -135,10 +135,11 @@ vkdownloader batch [OPTIONS] URLS_FILE
 
 1. Reads video URLs from the provided file (one URL per line)
 2. Skips empty lines and lines starting with `#`
-3. Downloads each video concurrently with dynamic thread distribution (up to 4 parallel downloads)
-4. Uses shared semaphore for segment-level concurrency control
-5. Shows per-URL segment progress during download
-6. Prints summary of successful and failed downloads
+3. Validates each remaining URL against the VK video URL pattern; non-matching entries are skipped with a warning and counted as invalid
+4. Downloads each video concurrently with dynamic thread distribution (up to 4 parallel downloads)
+5. Uses shared semaphore for segment-level concurrency control
+6. Shows per-URL segment progress during download
+7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped
 
 **Progress Format:**
 

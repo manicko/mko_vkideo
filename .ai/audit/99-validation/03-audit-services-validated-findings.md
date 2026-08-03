@@ -1,305 +1,215 @@
+---
+name: 03-audit-services-validated-findings
+phase: 03-services
+description: Validated service layer & business logic audit findings
+---
+
 # Phase 03 Audit Findings — Service Layer & Business Logic (Validated)
 
-**Executor:** auditor
-**Template:** .kilo/commands/audit/phases/03-audit-services.md
+**Executor:** auditor → validator  
+**Source:** `.ai/audit/03-audit-services/findings.md`  
+**Validated:** yes  
 **Status:** complete
-**Validated:** validator
-**Validated Date:** 2026-07-20
 
 ---
 
-## Runtime Verification
+## Runtime Verification Summary
 
-- **R1 (Import):** `uv run python -c "import ..."` for all 8 service modules + 3 model modules → `IMPORTS OK`. No import errors.
-- **R2 (Lint/Type):** `uv run ruff check src/vkdownloader/services src/vkdownloader/models` → All checks passed. `uv run mypy ...` → Success, no issues found (13 files).
-- **R3 (Tests):** `uv run pytest tests -q` → 217 passed.
-- **R4 (Dead code):** Static scan of `src/vkdownloader` identified two never-referenced symbols (see SRV-001, SRV-002). All other service helpers are referenced.
+| Step | Command | Result |
+|------|---------|--------|
+| R1 Import | `uv run python -c "import vkdownloader.services.*"` | OK — all 8 service modules import cleanly (`IMPORT_OK`). |
+| R2 Lint | `uv run ruff check src/vkdownloader/services` | Pass ("All checks passed!"). |
+| R2 Format | `uv run ruff format --check src/vkdownloader/services` | FAIL — `signal_handlers.py` would be reformatted (see SRV-007). |
+| R2 Types | `uv run mypy src/vkdownloader/services` | Pass ("no issues found in 9 source files"). |
+| R3 Tests | `uv run pytest tests` | Pass — 233 passed in ~13.5s. |
+| R4 Dead code | AST + reference scan | Vestigial metadata + unused param found (SRV-004, SRV-005). |
 
 ---
 
 ## Findings
 
-### SRV-001: `SegmentRetryResult` enum is dead code
+### SRV-001: Parallel segment download retries non-retryable HTTP errors without backoff
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-001 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/models/enums.py` |
-| **Classification** | advisory |
+| **Severity** | MEDIUM |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/services/segment_downloader.py` |
+| **Classification** | mandatory |
 
-**Description:** `SegmentRetryResult` (enums.py:53-58) is a `StrEnum` defining `SUCCESS`, `PERMANENT_FAILURE`, `RETRY_EXHAUSTED`. It is neither imported nor referenced anywhere in `src/` or `tests/`. The segment downloader reports failure as a bare `None` (see `download_hls_with_resume` / `_run_download_session`), so this differentiated failure taxonomy is unused.
+**Description:** In the parallel download path (used whenever `max_concurrent_downloads > 1`, the default is 4), non-retryable HTTP statuses (e.g. 401/403/404) are retried up to `max_retries` times with **no delay** between attempts. This violates the "non-retryable errors fail fast" invariant and is inconsistent with the sequential path, which returns immediately on a non-retryable status. It also produces a rapid burst of failing requests against the CDN.
 
 **Evidence:**
-```
-src/vkdownloader/models/enums.py:53
-class SegmentRetryResult(StrEnum):
-    SUCCESS = "success"
-    PERMANENT_FAILURE = "permanent_failure"
-    RETRY_EXHAUSTED = "retry_exhausted"
-```
-Grep for `SegmentRetryResult` across `src/` returns only the definition (0 usages).
+- `_run_parallel_download_with_backoff` (segment_downloader.py:144-175) returns `True` on 200, `None` only when `_should_continue_on_retry` is true (retryable + not last attempt, and only then does it `await asyncio.sleep(delay)`), and `False` otherwise (including all non-retryable statuses) — with no sleep.
+- `_do_parallel_download_attempt` (segment_downloader.py:191-217) collapses the result with `return result is True`, so `None` (retryable) and `False` (fatal) become indistinguishable.
+- `_download_segment_parallel` (segment_downloader.py:276-295) loops `for attempt in range(max_retries)` and simply continues on any non-`True` result, so a 403/404 is re-requested `max_retries` times back-to-back.
+- Contrast the sequential path `_retry_429_with_backoff` (downloader_throttle.py:185-192), which returns `None` immediately for `response.status not in RETRYABLE_STATUS_CODES`.
+
+**Recommendation:** Propagate a tri-state (success / retryable / fatal) from `_run_parallel_download_with_backoff` up through `_download_segment_parallel` so fatal statuses break the loop immediately (mirroring the sequential path). This restores fail-fast behavior and removes redundant CDN load. Effort: small. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms `SegmentRetryResult` is defined in `enums.py` but has zero runtime references in `src/` or `tests/`. No imports exist. This is unused code that should be removed or integrated.
-> - **See also:** None
-
-**Recommendation:** Remove the enum. Effort: trivial. Priority: recommended.
+> - **Detail:** Verified in segment_downloader.py lines 276-295 — the loop continues on any non-`True` result without distinguishing fatal from retryable errors. Code inspection confirms the race condition described.
 
 ---
 
-### SRV-002: `ProgressManager.get_progress` is never called
+### SRV-002: Browser interaction catches builtin TimeoutError, not Playwright's TimeoutError
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-002 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader_throttle.py` |
-| **Classification** | advisory |
+| **Severity** | MEDIUM |
+| **Type** | RUNTIME-ERROR |
+| **Affected Modules** | `src/vkdownloader/services/extractor.py` |
+| **Classification** | mandatory |
 
-**Description:** `ProgressManager.get_progress(self, url_index)` (downloader_throttle.py:143-153) is a public async method that duplicates the read done by `get_formatted_progress` but for a single index. It is never referenced anywhere. Only `update_sync`, `get_formatted_progress`, and `clear` are used (by `cli.py`).
+**Description:** `_simulate_video_interaction` wraps `page.click(".VideoPlayer")` in `try/except TimeoutError` intending to gracefully ignore a click that never resolves. However Playwright raises `playwright.async_api.TimeoutError`, which is **not** a subclass of the builtin `TimeoutError`. The `except` clause therefore never matches, so a click timeout propagates out of `_simulate_video_interaction` → `_extract_with_browser`, aborting browser-based extraction (and any forced token-refresh resume) instead of degrading gracefully.
 
 **Evidence:**
-```python
-downloader_throttle.py:143
-async def get_progress(self, url_index: int) -> tuple[int, int]:
-    async with self._lock:
-        return self._state.get(url_index, (0, 0))
-```
-Grep for `get_progress` across `src/` returns only the definition.
+- extractor.py:7 imports only `from playwright.async_api import Cookie, Page` — `TimeoutError` in the handler refers to the builtin.
+- extractor.py:271-275:
+  ```python
+  try:
+      await page.click(".VideoPlayer")
+      logger.debug("clicked_video_player")
+  except TimeoutError:
+      logger.debug("video_player_click_failed", exc_info=True)
+  ```
+- Runtime check confirms the mismatch:
+  `uv run python -c "import playwright.async_api as p; print(issubclass(p.TimeoutError, TimeoutError))"` → `is_subclass False`; MRO is `playwright._impl._errors.TimeoutError -> Error -> Exception`.
+
+**Recommendation:** Import and catch Playwright's error, e.g. `from playwright.async_api import TimeoutError as PlaywrightTimeoutError` and `except PlaywrightTimeoutError:`. This makes the intended graceful fallback actually work. Effort: trivial. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms `get_progress` is defined but has zero runtime references. The only tests for this method are absent. The method adds surface area without utility.
-> - **See also:** None
-
-**Recommendation:** Remove the method to reduce surface area. Effort: trivial. Priority: recommended.
+> - **Detail:** Verified runtime check confirms `playwright.async_api.TimeoutError` is not a subclass of builtin `TimeoutError`. The except clause at line 274 will not catch Playwright timeouts, causing extraction to fail instead of gracefully degrading.
 
 ---
 
-### SRV-003: Segment resume double-counts progress and can never complete a resumed run
+### SRV-003: ffmpeg success is judged by `process.returncode` after cancelling `process.wait()`
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-003 |
-| **Severity** | HIGH |
+| **Severity** | MEDIUM |
 | **Type** | RUNTIME-ERROR |
-| **Affected Modules** | `src/vkdownloader/services/segment_downloader.py` |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` |
 | **Classification** | mandatory |
 
-**Description:** `download_hls_with_resume` advertises segment-level resume ("can resume after interruption by re-downloading missing segments"). However, the resume path has two compounding defects that make a resumed run fail to produce output:
-
-1. `_run_download_session` (segment_downloader.py:726-751) loads `downloaded_count = _load_downloaded_count(metadata_file)` (line 727) but never uses it to skip already-downloaded segments. It creates tasks for **all** segments from index 0 (line 751, `_create_segment_download_tasks`), overwriting existing `.ts` files.
-2. `_tally_and_merge` (segment_downloader.py:540) computes `downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)`. Because every segment is re-downloaded and succeeds, the persisted count is **added to itself**: resumed count = old_count + total_segments. The completion check `if downloaded_count == len(segments)` (line 549) then compares e.g. `150 == 100`, which is always false, so the merge branch is never taken and the function returns `None`.
-
-**Consequence:** After an interrupted run (the intended resume scenario), re-invoking the download re-downloads all segments successfully but never merges them — the user gets no output file and the run is reported as failed, defeating the core resume feature. The `downloaded_count` persisted in `.<stem>_progress.json` also grows unbounded across invocations.
+**Description:** `HLSDownloader.download_with_ffmpeg` runs `process.wait()` concurrently with a stderr monitor/drain task via `_await_first_and_cancel_others`, which awaits `FIRST_COMPLETED` and cancels the loser. When the monitor/drain task finishes first (e.g. the progress reader breaks on `progress=end` before ffmpeg has fully exited), the `process.wait()` task is cancelled, so the process may not be reaped and `process.returncode` can still be `None`. The subsequent `if process.returncode != 0` check then treats `None != 0` as a failure and returns `None` for a download that actually succeeded.
 
 **Evidence:**
-```python
-# segment_downloader.py:540 (_tally_and_merge)
-downloaded_count = _load_downloaded_count(metadata_file) + sum(1 for r in download_results if r)
-_save_downloaded_count(metadata_file, downloaded_count)
-...
-# segment_downloader.py:549
-if downloaded_count == len(segments):
-    result = await _merge_segments_batched(...)
-```
-```python
-# segment_downloader.py:726-751 (_run_download_session) — no skip of already-downloaded segments
-segments = _parse_m3u8_segments(playlist_content)
-downloaded_count = _load_downloaded_count(metadata_file)   # loaded but unused for skipping
-...
-tasks = _create_segment_download_tasks(segments, policy)    # ALL segments, index 0..N
-```
+- downloader.py:362-370 launches `process_task = create_task(process.wait())` alongside `monitor_task`/`drain_task` and calls `_await_first_and_cancel_others(...)`.
+- `_await_first_and_cancel_others` (downloader.py:80-102) uses `asyncio.wait(..., return_when=asyncio.FIRST_COMPLETED)` and cancels all pending tasks — including `process.wait()` if the reader task wins the race.
+- `read_progress` (ffmpeg_utils.py:90-95) `break`s as soon as it reads `progress=end`, which ffmpeg emits *before* it finishes finalizing/exiting.
+- downloader.py:379-384 then checks `if process.returncode != 0: ... return None` with no guard for `returncode is None`.
+- Mitigating factor: the production `perform_download` FFMPEG branch (downloader.py:775) calls `download_with_ffmpeg` with **no** `progress_callback`, so it takes the `_drain_stderr` branch which reads until stderr EOF (process exit); this narrows but does not close the race, and the documented public API path with a `progress_callback` remains exposed.
+
+**Recommendation:** After the concurrent wait, ensure the process is actually reaped before reading `returncode` (e.g. `await process.wait()` unconditionally after the reader completes, or treat `returncode is None` as "still running / await it"), rather than inferring failure from an unset return code. Effort: small. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms both defects. Line 727 loads `downloaded_count` but it is never passed to any function that would skip already-downloaded segments. Line 540 adds the old count to the new result count, making completion impossible on resume. This is a critical bug that prevents resume functionality from working.
-> - **See also:** None
-
-**Recommendation:** Fix the resume logic: (a) skip segments whose file already exists, and (b) replace the additive counter with only the count of newly-downloaded segments, only persisting when `downloaded_count == len(segments)`. Effort: medium. Priority: mandatory.
+> - **Detail:** Verified in downloader.py lines 362-379 and ffmpeg_utils.py lines 90-94. The race condition exists: `read_progress` breaks on `progress=end` before process exit, and `returncode is None` is treated as failure without handling the concurrent cancellation scenario.
 
 ---
 
-### SRV-004: Dead conditional guard in `_attempt_segment_resume`
+### SRV-004: Segment-progress metadata file is vestigial and does not drive resume
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-004 |
 | **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py` |
+| **Affected Modules** | `src/vkdownloader/services/segment_downloader.py` |
 | **Classification** | advisory |
 
-**Description:** In `download_with_ytdlp_with_resume_fallback` (downloader.py:358), the `while retry_count <= MAX_RESUME_RETRIES:` loop (downloader.py:400) guarantees `retry_count <= MAX_RESUME_RETRIES` on every iteration. Inside the loop body, the line `if retry_count <= MAX_RESUME_RETRIES:` (downloader.py:418) is therefore always true and the branch is unconditional. This is dead/confusing control flow that implies a guard that does not exist.
+**Description:** The `_progress.json` metadata (`_load_downloaded_count` / `_save_downloaded_count`) is documented as a resume "checkpoint" but has no effect on resume behavior. Actual resume is driven entirely by on-disk `.ts` file existence checks. The metadata is written only on full completion, immediately before it is deleted, and is read only to populate a log field — so it never survives an interruption to be used on the next run.
 
 **Evidence:**
-```python
-# downloader.py:400 (while loop) and 418 (redundant guard inside same function)
-while retry_count <= MAX_RESUME_RETRIES:
-    ...
-    if retry_count <= MAX_RESUME_RETRIES:  # <-- redundant inside the while loop
-        if (
-            segment_result := await _attempt_segment_resume(...)
-        ) is not None:
-            return segment_result
-```
+- `_save_downloaded_count` is called once (segment_downloader.py:555) inside `_tally_and_merge`, only when `downloaded_count == len(segments)`; the very next successful step, `_cleanup_segments` (segment_downloader.py:558 → :376), deletes the file via `metadata_file.unlink(missing_ok=True)`.
+- `_load_downloaded_count` result (segment_downloader.py:740) is consumed only by the log line `logger.info("found_segments", ..., resume_from=downloaded_count)` (line 741); it is not passed to `_create_segment_download_tasks`.
+- Real resume logic is `_create_segment_download_tasks` (segment_downloader.py:672-690), which skips segments whose `{i:05d}.ts` already exists with non-zero size — independent of the metadata count.
+- Docs (`docs/01-tools/api-reference.md:499`) state "Segment download resumes from last checkpoint", implying a checkpoint file that is not actually used.
+
+**Recommendation:** Investigate intent before removing: either wire the metadata into resume decisions (persist on partial failure and use it to skip work) or remove the metadata mechanism and update the docs to describe file-existence-based resume. Effort: small. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms the guard at line 418 is redundant. The `while retry_count <= MAX_RESUME_RETRIES` loop at line 400 ensures the condition is always satisfied when the inner `if` is reached. The guard adds no protection and misleads the reader. Additionally, the original finding incorrectly stated the guard is inside `_attempt_segment_resume`; it is actually in the same function (`download_with_ytdlp_with_resume_fallback`) at line 418.
-> - **See also:** None
-
-**Recommendation:** Remove the redundant guard. The body is already gated by the caller loop. Effort: trivial. Priority: recommended.
+> - **Detail:** Verified in segment_downloader.py: the metadata file is written at line 555 just before `_cleanup_segments` deletes it at line 558. Resume (line 675) checks `.ts` file existence, ignoring the metadata count. However, docs/01-tools/api-reference.md:521-524 still list `settings`, `extractor`, `backoff_coordinator`, `semaphore` as HLSDownloadRequest attributes, but the actual model (dtos.py:19-24) does not have these. This finding overlaps with SRV-006 — both involve documentation inaccuracies.
 
 ---
 
-### SRV-005: BROWSER cookie-source rejects all specific qualities (only `best` works)
+### SRV-005: `_tally_and_merge` ignores per-segment download results; success inferred from filesystem
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-005 |
-| **Severity** | MEDIUM |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/extractor.py`, `src/vkdownloader/services/quality.py` |
-| **Classification** | mandatory |
+| **Severity** | LOW |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/services/segment_downloader.py` |
+| **Classification** | advisory |
 
-**Description:** When `cookie_source == BROWSER`, `perform_download` calls `_resolve_cookies` (downloader.py:631), which re-extracts streams via `extractor.extract_streams_with_cookies(..., force_browser=True)` and re-selects with `QualitySelector.select(browser_streams, quality_enum)`. But the browser path (`extractor._extract_with_browser`, extractor.py:222-230) captures a **single** m3u8 URL and assigns it `quality="best"` with `height=None`. Any requested non-`best` quality (`Q720`, `Q1080`, etc.) therefore fails `_find_quality_match` and raises `QualityNotAvailableError`, even though the originally selected yt-dlp stream (`selected_stream`) was a valid numeric quality.
-
-**Consequence:** A user invoking `vkdownloader download <url> --cookie-source browser --quality 720` (or `--method ffmpeg --quality 720` with BROWSER source) gets a hard `QualityNotAvailableError` ("requested 720p, available: best") for every numeric quality. The `--method ffmpeg` and `--method auto` doc examples (quality-selection.md:96-99) implicitly assume numeric qualities work with the browser/cookie path; they do not. Only `--quality best` succeeds.
+**Description:** `_tally_and_merge` receives the list of per-segment success booleans (`download_results`) but never inspects it. Completion is decided purely by counting `.ts` files on disk (`len(list(segments_dir.glob("*.ts")))`). The returned booleans from `_download_segment_*` are therefore dead information, and correctness relies entirely on the invariant that a failed download never leaves a non-empty `.ts` file. This is fragile and makes the explicit result-tracking code misleading.
 
 **Evidence:**
-```python
-# extractor.py:222-230 — browser path yields exactly one stream, quality="best", height=None
-if monitor.m3u8_urls:
-    stream = Stream(
-        url=monitor.m3u8_urls[0],
-        format=StreamFormat.HLS,
-        quality="best",
-        width=None,
-        height=None,
-    )
-    streams.append(stream)
-```
-```python
-# downloader.py:631-637 (_resolve_cookies) — re-selects on browser streams and raises for numeric quality
-if settings.cookie_source == CookieSource.BROWSER:
-    browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
-    if browser_streams:
-        ...
-        quality_enum = _parse_quality_to_enum(quality)
-        selector = QualitySelector()
-        selected_stream = selector.select(browser_streams, quality_enum)  # raises for Q720/Q1080/...
-```
-```python
-# quality.py:73-81 — no match -> QualityNotAvailableError
-match = self._find_quality_match(streams, quality_str)
-if match:
-    result = match
-else:
-    available_qualities = [s.quality for s in streams]   # -> ["best"]
-    raise QualityNotAvailableError(str(quality), available_qualities)
-```
+- `download_results` is passed into `_tally_and_merge` (segment_downloader.py:524-525, 591) and documented (line 536) but is not referenced anywhere in the function body (segment_downloader.py:547-561).
+- Success is computed as `downloaded_count = len(list(segments_dir.glob("*.ts")))` and compared to `len(segments)` (lines 547, 553).
+
+**Recommendation:** Either use `download_results` to detect failed segments explicitly (and fail fast / report which segments failed) or drop the unused parameter and its docstring to remove dead code. Effort: trivial. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms the bug. The browser extraction path always produces a single stream with `quality="best"` and `height=None`. When `_resolve_cookies` calls `QualitySelector.select()` with a numeric quality enum, `_find_quality_match` fails and raises `QualityNotAvailableError`. The `download` and `ffmpeg` paths in `perform_download` both call `_resolve_cookies` when `cookie_source == BROWSER`, making this a real user-facing defect. The documentation in `quality-selection.md` (lines 96-99) shows examples with numeric qualities and `--method ffmpeg` without warning about this limitation.
-> - **See also:** SRV-006 (related: BEST/WORST selection with None heights)
-
-**Recommendation:** When `cookie_source == BROWSER`, if a stream was already selected, reuse its URL instead of re-selecting. Do not run quality selection on the browser-stream list unless quality == BEST. Effort: small. Priority: mandatory.
+> - **Detail:** Verified in segment_downloader.py:547-553 — `download_results` parameter is received but never used. Success is computed solely from filesystem scan.
 
 ---
 
-### SRV-006: `_get_fallback_stream` / `WORST` selection is arbitrary when stream heights are `None`
+### SRV-006: Data-model docs deviate from actual models
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-006 |
 | **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/quality.py` |
+| **Type** | DOC-UPDATE |
+| **Affected Modules** | `src/vkdownloader/models/video.py`, `src/vkdownloader/models/dtos.py`, `docs/01-tools/api-reference.md` |
 | **Classification** | advisory |
 
-**Description:** `QualitySelector._get_fallback_stream` (quality.py:35-45) uses `max(streams, key=lambda s: s.height or 0)`, and `WORST` (quality.py:70) uses `min(streams, key=lambda s: s.height or float("inf"))`. Streams from the browser path have `height=None`, which collapses to `0`/`inf`. With multiple `None`-height streams, `max`/`min` return an arbitrary (first/last) element rather than a meaningful "best/worst". For the yt-dlp path heights are populated, so this only bites the browser-derived streams, but it is a latent correctness gap that interacts with SRV-005.
+**Description:** The API reference describes the data models inaccurately, which matters for the Data Model Integrity dimension because downstream consumers rely on these contracts. Three concrete mismatches exist between docs and code.
 
 **Evidence:**
-```python
-# quality.py:45
-return max(streams, key=lambda s: s.height or 0)
-# quality.py:70
-result = min(streams, key=lambda s: s.height or float("inf"))
-```
+- `Stream.url`: docs say type `HttpUrl` (api-reference.md:538) but the model declares `url: str` (video.py:18). The service layer still wraps it in `str(...)` (e.g. downloader.py:740, 750), a leftover from when it was a URL type.
+- `Stream.format`: docs list "(HLS, DASH, MP4)" (api-reference.md:539) but `StreamFormat` defines only `HLS` and `MP4` (enums.py:20-24); there is no `DASH`.
+- `HLSDownloadRequest`: docs list attributes `settings`, `extractor`, `backoff_coordinator`, `semaphore` (api-reference.md:521-525) that do not exist on the model; `dtos.py:19-24` defines only `video_url, m3u8_url, output_file, quality, cookies, progress_callback` (those service objects are intentionally passed as function args, per the model docstring).
+
+**Recommendation:** Update `docs/01-tools/api-reference.md` to match the real models: `Stream.url: str`, remove `DASH` from the format list, and correct the `HLSDownloadRequest` attribute table. Optionally, if URL validation is desired, promote `Stream.url` to a validated type in code instead. Effort: trivial. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms the implementation. When `height=None`, the default values produce arbitrary selection. However, the test at `test_quality_selector.py:142-152` (`test_get_fallback_stream_handles_none_height`) shows the current behavior: it falls back to streams with actual heights when available. The issue only manifests when ALL streams have `height=None`, which occurs with browser-extraction. While technically correct, this is latent for the browser path. Given SRV-005 should be fixed to avoid quality re-selection on browser streams, this becomes a secondary concern.
-> - **See also:** SRV-005
-
-**Recommendation:** When fixing SRV-005, this issue becomes moot for browser streams. For robustness, consider documenting that BEST/WORST with None-height streams returns an arbitrary element. Effort: trivial. Priority: recommended.
+> - **Detail:** Verified all three mismatches: Stream.url (video.py:18 is `str`), StreamFormat (enums.py:20-24 has no DASH), HLSDownloadRequest (dtos.py:19-24 has `video_url, m3u8_url, output_file, quality, cookies, progress_callback`). Also verified docs/01-tools/api-reference.md:538-544 and 521-524 still contain the incorrect information.
 
 ---
 
-### SRV-007: Segment resume discards the partial yt-dlp file instead of resuming it
+### SRV-007: `ruff format --check` fails on a service module
 
 | Field | Value |
 |-------|-------|
 | **ID** | SRV-007 |
 | **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py` |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/services/signal_handlers.py` |
 | **Classification** | advisory |
 
-**Description:** `download_with_ytdlp_with_resume_fallback` (downloader.py:358) advertises "segment-based resume on failure", and `_attempt_segment_resume` (downloader.py:440) is invoked when yt-dlp leaves a partial MP4 (`validated_output.stat().st_size > 0`, line 414). However, `_attempt_segment_resume` immediately calls `output_file.unlink()` (downloader.py:506) to "start clean segment download", discarding the partial file entirely. The switch to `download_hls_with_resume` then re-downloads the full set of HLS segments from scratch. So on a yt-dlp interruption, **zero bytes of the partial file are reused** — the "resume" is a full restart via a different mechanism, not a true resume.
-
-**Consequence:** The feature name and the docstrings ("resumes from last checkpoint", segment_downloader docstring "re-downloading missing segments") overstate the behavior. Users with a large partially-downloaded file pay the full re-download cost. (This also feeds SRV-003: because the partial file is removed and a fresh `download_hls_with_resume` runs, the resume double-count bug from SRV-003 can still trigger on a *subsequent* interruption of the segment phase.)
+**Description:** The project's formatting gate (`uv run ruff format --check`) fails on `signal_handlers.py` due to a trailing blank line at end of file, so the service directory is not fully format-clean.
 
 **Evidence:**
-```python
-# downloader.py:505-506
-# Remove partial file to start clean segment download
-output_file.unlink()
-# Continue to segment download
-return await download_hls_with_resume(...)
-```
+- `uv run ruff format --check src/vkdownloader/services` → "Would reformat: src\vkdownloader\services\signal_handlers.py; 1 file would be reformatted".
+- signal_handlers.py ends at line 86 with actual code content, followed by a trailing blank line at line 87.
+
+**Recommendation:** Run `uv run ruff format src/vkdownloader/services/signal_handlers.py` to remove the trailing newline. Effort: trivial. Priority: recommended.
 
 > **Validation Note:**
 > - **Action:** Validated
-> - **Detail:** Code inspection confirms `output_file.unlink()` at line 506 removes the partial file before calling `download_hls_with_resume`. The docstring at downloader.py:373-377 promises "segment-based resume on failure" and "resumes from last checkpoint", but the implementation is a fallback restart via segment download. This is a documentation-behavior mismatch.
-> - **See also:** SRV-003
-
-**Recommendation:** Update docstrings to clarify this is a fallback restart, not true resume. Change "resumes from last checkpoint" to "falls back to a fresh segment-based download via HLS". Note that the partial yt-dlp file is discarded, not resumed. This documentation-only fix is sufficient since SRV-003 must be fixed for actual resume behavior, and implementing true partial-file resume would add complexity with low ROI. Effort: trivial. Priority: recommended.
-
----
-
-## Summary
-
-| Severity | Count |
-|----------|-------|
-| CRITICAL | 0 |
-| HIGH | 1 |
-| MEDIUM | 1 |
-| LOW | 4 |
-
-## Mandatory Fixes
-
-- **SRV-003** (HIGH): Segment resume double-counts progress and can never complete a resumed run — fix skipping + counter semantics.
-- **SRV-005** (MEDIUM): BROWSER cookie-source rejects all specific (numeric) qualities; fix the code to reuse the already-selected stream URL instead of re-selection, then update docs/01-tools/quality-selection.md and docs/11-guides/vkdownloader-limitations.md to remove contradictory numeric-quality-with-browser examples.
-
-## Advisory Recommendations
-
-- **SRV-001** (LOW): `SegmentRetryResult` enum is dead code — remove it.
-- **SRV-002** (LOW): `ProgressManager.get_progress` is never called — remove it.
-- **SRV-004** (LOW): Dead `if retry_count <= MAX_RESUME_RETRIES:` guard in `download_with_ytdlp_with_resume_fallback` (inside the while loop).
-- **SRV-006** (LOW): `BEST`/`WORST` selection is arbitrary for `height=None` streams.
-- **SRV-007** (LOW): Segment "resume" discards the partial yt-dlp file (full restart); clarify docs/behavior.
-
-## Doc Updates Needed
-
-- **SRV-005**: quality-selection.md (lines 96-99) implies numeric qualities work with ffmpeg/browser cookie path; update it to reflect that BROWSER cookie-source only yields a `best`-quality stream after the SRV-005 code fix reuses the pre-selected stream URL (and remove the contradictory numeric-quality-with-browser examples).
-- **SRV-007**: Clarify docstrings in `downloader.py` ("resumes from last checkpoint") to reflect actual fallback-restart behavior.
+> - **Detail:** Confirmed: signal_handlers.py ends at line 87 with a trailing blank line (file has 87 lines total but content ends at line 86). Running `ruff format --check` reports "1 file would be reformatted".
 
 ---
 
@@ -308,36 +218,37 @@ return await download_hls_with_resume(...)
 | Action | Count | Details |
 |--------|-------|---------|
 | Validated (unchanged) | 7 | SRV-001, SRV-002, SRV-003, SRV-004, SRV-005, SRV-006, SRV-007 |
-| Reclassified | 0 | - |
-| Merged | 0 | - |
-| Rejected | 0 | - |
+| Reclassified | 0 | — |
+| Merged | 0 | — |
+| Rejected | 0 | — |
 
-### Rejected Findings
+### Cross-Phase Analysis
 
-None
+No cross-phase conflicts detected. All findings are internally consistent with verified code evidence.
 
-### Merged Findings
+### Rollout Safety Assessment
 
-None
+| Concern | Status |
+|---------|--------|
+| Circular dependencies | None detected in service layer |
+| Hidden dependencies | None detected |
+| Unsafe execution sequences | Not applicable (validation only) |
 
-### Reclassified Findings
+### Architectural Impact Assessment
 
-None
+| Finding ID | Impact | Risk Level |
+|------------|--------|------------|
+| SRV-001 | Medium — retries non-retryable errors violates fail-fast invariant; may cause unnecessary CDN load | MEDIUM |
+| SRV-002 | Medium — exception mismatch breaks graceful degradation in browser extraction path | MEDIUM |
+| SRV-003 | Medium — race condition in ffmpeg returncode handling can report false failures | MEDIUM |
+| SRV-004 | Low — dead code / documentation inconsistency; no runtime risk | LOW |
+| SRV-005 | Low — unused parameter creates misleading dead code path | LOW |
+| SRV-006 | Low — documentation inaccuracy; no code change needed | LOW |
+| SRV-007 | Low — formatting issue; no runtime impact | LOW |
 
----
+### Required Actions Summary
 
-## Cross-Phase Analysis
-
-### SRV-003 Interaction with SRV-007
-
-SRV-003 (segment resume counter bug) and SRV-007 (partial file discarded) are related but distinct. SRV-007 discards the yt-dlp partial file, then SRV-003 prevents the segment-download phase from completing even on a fresh start. Both must be fixed for reliable resume behavior.
-
-### SRV-005 Documentation-Crossference
-
-SRV-005 directly contradicts the documentation in `docs/01-tools/quality-selection.md` lines 96-99 which shows `--quality 720 --method ffmpeg` without warning that this fails with `--cookie-source browser`. Additionally, `docs/11-guides/vkdownloader-limitations.md` lines 115-118 recommends `--method ffmpeg --cookie-source browser` which would trigger this bug. This is a SPEC-DEVIATION resolved by the SRV-005 code fix (reuse the already-selected stream URL) plus a doc update to remove the contradictory examples.
-
-### CFG-001 Cross-Reference
-
-CFG-001 from Phase 02 identifies that `CookieSource.FILE` silently no-ops in the primary download flow. This shares root cause with SRV-005: both relate to `cookie_source` handling. However, CFG-001 covers FILE mode specifically, while SRV-005 covers BROWSER mode quality selection. They are distinct issues requiring separate fixes.
-
-
+| Priority | Findings | Action |
+|----------|----------|--------|
+| Mandatory | SRV-001, SRV-002, SRV-003 | Code fixes required before production use |
+| Advisory | SRV-004, SRV-005, SRV-006, SRV-007 | Documentation and cleanup improvements |

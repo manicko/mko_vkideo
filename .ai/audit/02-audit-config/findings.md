@@ -1,7 +1,14 @@
-﻿# Phase 02 Audit Findings — Configuration & Settings Models
+---
+name: 02-audit-config-findings
+description: Configuration & Settings Models audit findings for mko_vkideo
+agent: auditor
+alwaysApply: false
+---
+
+# Phase 02 Audit Findings — Configuration & Settings Models
 
 **Executor:** auditor
-**Template:** .kilo/commands/audit/phases/02-audit-config.md
+**Template:** .ai/audit/templates/audit-findings.md
 **Status:** complete
 **Validated:** no
 
@@ -9,136 +16,118 @@
 
 ## Findings
 
-### CFG-001: `cookie_source=FILE` silently no-ops instead of raising (primary download flow)
+### CFG-001: `throttled_rate` documented default (100000) does not match code (10000)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-001 |
-| **Severity** | HIGH |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/config.py`, `src/vkdownloader/services/extractor.py`, `src/vkdownloader/cli.py`, `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/segment_downloader.py` |
-| **Classification** | mandatory |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION / DOC-UPDATE |
+| **Affected Modules** | `src/vkdownloader/config.py`, `docs/11-guides/configuration.md`, `.env` |
+| **Classification** | advisory |
 
-**Description:** The `CookieSource.FILE` enum value and `configuration.md` (line 64) document that selecting `file` "raises `NotImplementedError`. Use `none` or `browser` instead." In reality the `NotImplementedError` is only raised inside `VKVideoExtractor.extract_streams_with_cookies()` (extractor.py lines 123-126). The primary `download`/`batch` CLI flow never calls that method for stream acquisition:
-
-- `cli.py` download (line 111) and batch (line 338) call `extractor.extract_streams(url)`, which ignores `cookie_source` entirely (only checks `== NONE` to skip the browser).
-- `downloader.py` `resolve_cookies` (line 631) only invokes `extract_streams_with_cookies` when `cookie_source == BROWSER`.
-- `segment_downloader.py` `_refresh_token` (line 381) short-circuits with a warning when `cookie_source != BROWSER` and never reaches the FILE branch.
-
-Consequently `cookie_source=file` (via `--cookie-source file` or `VKDOWNLOADER_COOKIE_SOURCE=file`) is accepted by the model and CLI, is stored without error, and then behaves **identically to `none`** — an anonymous download with no cookies and no error surfaced. A user trying to download authenticated/private content this way gets a silent failure with no indication that the chosen mode is unsupported.
+**Description:** The settings model default for `throttled_rate` is `10000` (10 KB/s, a deliberately conservative value per the in-code description), but `docs/11-guides/configuration.md` line 32 documents the default as `100000` (10x higher). The repository `.env` template line 21 uses `10000`, matching the code, not the docs. Tests (`tests/test_config.py:117-119`) assert `10000`, confirming code is the source of truth.
 
 **Evidence:**
-```
-uv run python -c "from vkdownloader.config import Settings; s=Settings(cookie_source='file'); print(s.cookie_source)"
-# -> file   (accepted, no error)
-```
-`test_config.py::test_cookie_source_validation` (lines 84-85) asserts `FILE` is accepted by the model but never exercises the actual download path, so the gap is untested.
+- `config.py:83-88` — `throttled_rate: int = Field(default=10000, ...)`
+- `configuration.md:32` — `| throttled_rate | VKDOWNLOADER_THROTTLED_RATE | 100000 | ...`
+- `test_config.py:119` — `assert test_settings.throttled_rate == 10000`
 
-**Recommendation:** Either (a) enforce the FILE rejection at the config/CLI boundary — fail fast in `cli.py`/`Settings` validator when `cookie_source == FILE` is selected, so the documented `NotImplementedError` behavior is real for the user-visible path; or (b) update `configuration.md` and the enum docstring to state that `file` is currently treated as `none` (silent no-op). Option (a) is preferred because it matches the documented contract and prevents silent data/correctness loss on private videos.
+**Recommendation:** Update `configuration.md` line 32 to show the correct default (`10000`). The code choice (conservative 10 KB/s) is intentional and should be preserved; fix the documentation, not the code. Effort: trivial. Priority: recommended.
 
 ---
 
-### CFG-002: `extra="forbid"` does not protect the real config source (env / `.env`)
+### CFG-002: `browser_pre_interaction_wait` and `browser_post_interaction_wait` missing from config docs
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-002 |
-| **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/config.py`, `tests/test_config.py` |
+| **Severity** | LOW |
+| **Type** | DOC-UPDATE / SPEC-DEVIATION |
+| **Affected Modules** | `docs/11-guides/configuration.md`, `src/vkdownloader/config.py` |
 | **Classification** | advisory |
 
-**Description:** `Settings.model_config` sets `"extra": "forbid"` (config.py line 119), and `configuration.md` plus `test_config.py` (`test_settings_rejects_unknown_keys`, `test_settings_rejects_multiple_unknown_keys`) imply that unknown configuration keys are rejected. In pydantic-settings v2, `extra="forbid"` only applies to **explicit model-construction kwargs / `model_validate` input** — it does NOT apply to environment variables or the parsed `.env` file. The actual configuration path (env vars + `.env`) therefore silently ignores unknown/mistyped keys with no error and no warning.
+**Description:** The `Settings` model defines two browser-stealth timing fields, `browser_pre_interaction_wait` (default 5) and `browser_post_interaction_wait` (default 8), which are actively consumed by the extractor (`extractor.py:212` and `extractor.py:214`). Neither field appears anywhere in `configuration.md` (neither in the settings table nor in any section). A user reading the configuration guide cannot discover or tune these values, and there is no `VKDOWNLOADER_*` env var mapping documented for them.
 
-Runtime proof:
-```
-uv run python -c "import os; os.environ['VKDOWNLOADER_BOGUS']='5'; from vkdownloader.config import Settings; print(Settings())"
-# -> Settings(...)  (no ValidationError, value ignored)
-```
-This gives false confidence: a typo such as `VKDOWNLOADER_MAX_RETRIES_` or a renamed setting is silently dropped, producing a misconfigured run that looks correct. The unit tests only exercise the kwargs path, so they pass while the real path is unprotected.
+**Evidence:**
+- `config.py:55-66` — both fields defined with `VKDOWNLOADER_*` env mapping via `env_prefix`.
+- `extractor.py:212` — `await asyncio.sleep(self.settings.browser_pre_interaction_wait)`
+- `extractor.py:214` — `await asyncio.sleep(self.settings.browser_post_interaction_wait)`
+- `configuration.md` — full text search shows no occurrence of `browser_pre_interaction_wait` or `browser_post_interaction_wait`.
 
-**Evidence:** `config.py` lines 116-121 (`extra: "forbid"`); `test_config.py` lines 48-68 (only `Settings(unknown_key=...)` kwargs). Reproduced above.
-
-**Recommendation:** Validate the environment-derived config explicitly. Options (small effort): (a) read env via `os.environ` filtered by `Settings.model_fields` and feed through `Settings.model_validate(...)` so `extra=forbid` actually applies; (b) after construction, diff the resolved env keys against known field names and warn/log on unknown ones. At minimum, add a test that sets an unknown `VKDOWNLOADER_*` env var and asserts it is either rejected or warned about, so the protection is real for the primary config path.
+**Recommendation:** Add both fields to the `configuration.md` settings reference table (with env var names `VKDOWNLOADER_BROWSER_PRE_INTERACTION_WAIT` / `VKDOWNLOADER_BROWSER_POST_INTERACTION_WAIT`, defaults 5/8, and description of their role in browser extraction). Effort: trivial. Priority: recommended.
 
 ---
 
-### CFG-003: Repo `.env` template references a non-existent setting (`VKDOWNLOADER_DOWNLOAD_METHOD`)
+### CFG-003: Invalid `.env`/environment value raises an uncaught traceback to the end user
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-003 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `.env` (repo root), `docs/11-guides/configuration.md`, `src/vkdownloader/config.py` |
+| **Severity** | MEDIUM |
+| **Type** | RUNTIME-ERROR / BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/config.py` |
 | **Classification** | advisory |
 
-**Description:** The shipped `.env` (repo root) line 25 contains `VKDOWNLOADER_DOWNLOAD_METHOD=auto`, but no `download_method` field exists in `Settings` (config.py). The `DownloadMethod` enum is only used as a CLI option, not as a persisted setting. Because of CFG-002, this line is silently ignored at load time. `configuration.md` also does not list `download_method` as a setting, so the `.env` template disagrees with both the code and the docs.
+**Description:** `Settings` is constructed at the top of each CLI command (`cli.py:392` in `download`, `cli.py:527` in `batch_download`) with no exception handling. When a `.env` file or `VKDOWNLOADER_*` environment variable contains a value that fails Pydantic validation (e.g., a non-integer for an `int` field, or an out-of-range value), `pydantic.ValidationError` propagates uncaught and the user sees a raw Python traceback instead of a clear, actionable configuration error. This is a robustness/correctness gap in configuration handling.
 
-**Evidence:**
+**Evidence (runtime, R2):**
 ```
-.env (line 25): # VKDOWNLOADER_DOWNLOAD_METHOD=auto
-Settings.model_fields keys: headless, user_agent, timezone, locale, max_retries,
-  download_timeout, browser_pre_interaction_wait, browser_post_interaction_wait,
-  ssl_verify, download_dir, max_concurrent_downloads, throttled_rate, http_chunk_size,
-  cookie_source, log_level, log_file   (no download_method)
+$env:VKDOWNLOADER_MAX_RETRIES='notanint'; uv run python -c "from vkdownloader.config import Settings; s=Settings()"
+...
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+max_retries
+  Input should be a valid integer, unable to parse string as an integer [type=int_parsing, input_value='notanint', input_type=str]
+  ...
+EXIT=1
 ```
+The same unhandled `ValidationError` is what the end user receives when launching `vkdownloader download ...` with a malformed `.env`, because `cli.py:392`/`cli.py:527` call `Settings(...)` directly.
 
-**Recommendation:** Remove the stale `VKDOWNLOADER_DOWNLOAD_METHOD` line from `.env`, or (if a persisted default download method is intended) add a typed `download_method: DownloadMethod` field to `Settings` and document it in `configuration.md`. Keeping a dead knob in the template misleads users into thinking it is configurable.
+**Recommendation:** Wrap `Settings(...)` construction in the CLI entry points and catch `ValidationError`, emitting a concise, user-facing message (which field, expected type/range, and how to fix the `.env`) before `typer.Exit(code=1)`. Effort: small. Priority: recommended.
 
 ---
 
-### CFG-004: `log_file`/`download_dir` resolved at construction; missing parent dir yields unhelpful error
+### CFG-004: Misspelled environment variables are silently ignored (inconsistent with `extra='forbid'`)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-004 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/config.py`, `src/vkdownloader/config.py#setup_logging` |
+| **Severity** | MEDIUM |
+| **Type** | BEST-PRACTICE / RUNTIME-ERROR |
+| **Affected Modules** | `src/vkdownloader/config.py` |
 | **Classification** | advisory |
 
-**Description:** The `expand_tilde_paths` validator (config.py lines 102-107) calls `.expanduser().resolve()` on `download_dir` and `log_file` at model-construction time, eagerly resolving symlinks and making relative paths absolute against the current working directory. More importantly, when `log_file` points to a path whose parent directory does not exist, `setup_logging()` (config.py lines 124-137) calls `logging.FileHandler(settings.log_file)` directly, which raises a bare `FileNotFoundError` with no actionable message telling the user to create the directory. `configuration.md` (line 156-163) states only "Optional path to a file for structured JSON log output" with no prerequisite about the parent directory existing.
+**Description:** The model sets `extra='forbid'` (`config.py:141`), which correctly rejects unknown *kwargs* (covered by `test_config.py:48-68`). However, `pydantic-settings` v2 does **not** apply `extra='forbid'` to environment variables — a misspelled `VKDOWNLOADER_*` variable is silently dropped and the default value is used, producing no warning. This gives a false sense of safety from the `extra='forbid'` setting and can cause confusing "my config isn't taking effect" behavior (e.g., a user sets `VKDOWNLOADER_MAXRETRIES` instead of `VKDOWNLOADER_MAX_RETRIES` and silently gets the default). The inline docstring at `config.py:18-20` even acknowledges this limitation.
 
-**Evidence:** `config.py` lines 129-137; runtime: setting `VKDOWNLOADER_LOG_FILE=/nonexistent_dir/vk.log` raises `FileNotFoundError: [Errno 2] No such file or directory: '/nonexistent_dir/vk.log'` before any CLI help text.
+**Evidence (runtime, R2):**
+```
+$env:VKDOWNLOADER_MAXRETRIES='9'; uv run python -c "from vkdownloader.config import Settings; print(Settings().max_retries)"
+max_retries effective = 3      # typo'd variable silently ignored; default retained
+EXIT=0
+```
 
-**Recommendation:** In `setup_logging`, ensure `settings.log_file.parent.mkdir(parents=True, exist_ok=True)` before constructing the `FileHandler`, and emit a clear log/error if the path is not writable. Also consider deferring `.resolve()` of `download_dir`/`log_file` until first use (or documenting that relative paths are resolved against CWD), to avoid surprising absolute paths when the tool is invoked from different directories.
+**Recommendation:** Add a lightweight guard that scans `os.environ` for any `VKDOWNLOADER_`-prefixed keys not present in the model's field names (normalized) and emits a warning log before/at `Settings()` construction. Alternatively document this caveat prominently in `configuration.md`. Effort: small. Priority: recommended.
 
 ---
 
-### CFG-005: `.env` is loaded relative to CWD only — not portable for installed / console-script usage
+### CFG-005: `max_retries` documentation says "during batch processing" but applies to single downloads too
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-005 |
 | **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/config.py` |
+| **Type** | DOC-UPDATE / SPEC-DEVIATION |
+| **Affected Modules** | `docs/11-guides/configuration.md`, `src/vkdownloader/config.py` |
 | **Classification** | advisory |
 
-**Description:** `model_config` uses `"env_file": ".env"` (config.py line 117), which pydantic-settings resolves relative to the current working directory, not the package install location. When the tool is installed and run as a console script from an arbitrary directory (e.g. `vkdownloader download ...` from `C:\Users\...`), the repo-root `.env` is not found and env-based configuration is silently absent. Users have no documented way to supply a config file outside the repo.
+**Description:** `configuration.md:27` describes `max_retries` as "Maximum retry attempts for failed segment downloads during batch processing (1-10)". In reality the field is consumed by both single (`download`) and batch (`batch`) paths — it maps to yt-dlp's `retries`/`fragment_retries` (`downloader.py:179-180`) and the segment downloader's `max_retries` (`segment_downloader.py:734,757`), all of which run on the single-download code path as well. The "during batch processing" qualifier is misleading and may cause users to believe the setting has no effect on single downloads.
 
-**Evidence:** `config.py` lines 116-121; behavior confirmed by pydantic-settings semantics (`.env` resolved from CWD).
+**Evidence:**
+- `configuration.md:27` — "Maximum retry attempts for failed segment downloads during batch processing (1-10)"
+- `config.py:43-48` — field docstring: "Maximum retry attempts for failed requests"
+- `downloader.py:179-180` and `segment_downloader.py:734,757` — `max_retries` used outside any batch-only guard.
 
-**Recommendation:** Document that configuration is env-only and `.env` must live in the working directory, OR support an explicit, documented config location (e.g. `VKDOWNLOADER_CONFIG` env var or a user-level path such as `%APPDATA%/vkdownloader/.env` on Windows). Keep it simple — a single documented location is enough; avoid introducing a full config-file parser for a CLI tool of this size.
-
----
-
-### CFG-006: `throttled_rate` default (100 KB/s) may abort legitimate slow downloads
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-006 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/config.py`, `src/vkdownloader/services/downloader.py` |
-| **Classification** | advisory |
-
-**Description:** `throttled_rate` (default 100000 bytes/sec ≈ 100 KB/s, range 50000-1000000) maps to yt-dlp's `throttledratelimit`, which **aborts** a download when throughput drops below the threshold and triggers re-extraction. On throttled CDN connections or large files, sustained throughput under 100 KB/s is common, so the default can cause spurious aborts/retries rather than protecting the user. The `configuration.md` wording ("Minimum download rate ... before throttling triggers re-extract") matches the code but does not warn about this trade-off.
-
-**Evidence:** `config.py` lines 75-80; `downloader.py` line 169 (`"throttledratelimit": settings.throttled_rate`).
-
-**Recommendation:** Either raise the default (e.g. to a value less likely to trip on normal VK throttling) or document the trade-off explicitly in `configuration.md` with a recommended value for slow connections. Low priority; flagged for operational clarity, not a defect.
+**Recommendation:** Reword the `configuration.md` description to state the retries apply to both single and batch downloads (and to both network and fragment retries). Effort: trivial. Priority: recommended.
 
 ---
 
@@ -147,24 +136,36 @@ Settings.model_fields keys: headless, user_agent, timezone, locale, max_retries,
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 1 |
-| MEDIUM | 1 |
-| LOW | 4 |
+| HIGH | 0 |
+| MEDIUM | 2 |
+| LOW | 3 |
 
 ## Mandatory Fixes
 
-- **CFG-001** — `cookie_source=FILE` silently behaves like `none` in the primary download flow instead of raising the documented `NotImplementedError`; fail fast at the config/CLI boundary or correct the docs. (correctness, HIGH)
+(None — no security, data-loss, or correctness defects requiring mandatory fixes were found.)
 
 ## Advisory Recommendations
 
-- **CFG-002** — `extra="forbid"` does not protect env/`.env` config; unknown keys are silently ignored. Validate env-derived config or warn on unknown keys; fix the misleading test.
-- **CFG-003** — Repo `.env` references non-existent `VKDOWNLOADER_DOWNLOAD_METHOD`; remove or implement it.
-- **CFG-004** — `log_file` parent dir not created; unhelpful `FileNotFoundError`. Create parent dir in `setup_logging`.
-- **CFG-005** — `.env` resolved from CWD only; not portable for installed usage. Document or support a fixed config location.
-- **CFG-006** — `throttled_rate` default may abort legitimate slow downloads; raise default or document trade-off.
+- **CFG-001** — Fix `throttled_rate` default in `configuration.md` (100000 → 10000). Doc-only.
+- **CFG-002** — Document `browser_pre/post_interaction_wait` in the config reference.
+- **CFG-003** — Catch `ValidationError` at CLI `Settings()` construction; surface a clean config error.
+- **CFG-004** — Warn on unknown `VKDOWNLOADER_*` env vars (typo guard).
+- **CFG-005** — Correct `max_retries` description (applies to single + batch downloads).
 
 ## Doc Updates Needed
 
-- **CFG-001** — `configuration.md` (cookie_source section) and `CookieSource.FILE` docstring imply a hard error that does not occur on the real path.
-- **CFG-003** — `configuration.md` does not list `download_method`; `.env` does. Reconcile template and docs.
-- **CFG-006** — `configuration.md` should note the abort/retry trade-off of `throttled_rate`.
+- **CFG-001** — `docs/11-guides/configuration.md` line 32 (throttled_rate default).
+- **CFG-002** — `docs/11-guides/configuration.md` settings table (add 2 browser wait fields).
+- **CFG-005** — `docs/11-guides/configuration.md` line 27 (max_retries scope).
+- **CFG-004** (optional) — Document the `extra='forbid'` env-var caveat in `configuration.md`.
+
+---
+
+## Audit Notes (discovery & verification)
+
+- **Config model:** single flat `Settings(BaseSettings)` model in `config.py` (16 fields). No sub-models; all sections (browser, download, logging) are flat fields.
+- **Config-to-consumer trace:** every one of the 16 fields is consumed by at least one consumer (`browser.py`, `extractor.py`, `downloader.py`, `segment_downloader.py`, `cli.py`, `config.py`/`setup_logging`). No unused or dead config fields found.
+- **Validation/Runtime:** `uv run ruff check src/vkdownloader/config.py` → pass; `uv run mypy src/vkdownloader/config.py` → pass (only a benign "unused section" note for test overrides); `uv run pytest tests/test_config.py` → 12 passed.
+- **Init/Template service:** the project exposes no `init`/`scaffold` command (CLI has only `download` and `batch`). Dimension 3 (Init/Template Service) is not applicable; omitted.
+- **Secrets:** `.env` (`configuration.md` example and repo template) contains only commented placeholder values; `.gitignore` excludes `.env`. No real secrets present. Dimension 4 leakage check: pass (no finding).
+- **Path resolution:** `download_dir`/`log_file` are normalized via `expand_tilde_paths` (`config.py:110-115`); `download_dir` default resolves to `~/Downloads/vkdownloader`. Config is read from CWD-relative `.env` (documented limitation in `config.py:22-23`).
