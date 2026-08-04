@@ -542,6 +542,50 @@ class TestSslVerifyOption:
         assert result.exit_code == 0
 
 
+class TestConfigurationErrors:
+    """Tests for graceful handling of Settings validation errors."""
+
+    def test_download_file_cookie_source_no_traceback(self, tmp_path: Path) -> None:
+        """Verify --cookie-source file produces clean error, not raw traceback (CLI-001)."""
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890", "--cookie-source", "file"],
+        )
+
+        assert result.exit_code == 1
+        assert "Configuration error" in result.output
+        assert "Traceback" not in result.output
+
+    def test_batch_file_cookie_source_no_traceback(self, tmp_path: Path) -> None:
+        """Verify --cookie-source file in batch produces clean error, not raw traceback."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file), "--cookie-source", "file"],
+        )
+
+        assert result.exit_code == 1
+        assert "Configuration error" in result.output
+        assert "Traceback" not in result.output
+
+    def test_batch_unreadable_url_file_error(self, tmp_path: Path) -> None:
+        """Verify unreadable URL file produces clean error, not raw traceback."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+
+        with patch.object(Path, "read_text", side_effect=PermissionError("Permission denied")):
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+            )
+
+            assert result.exit_code == 1
+            assert "Failed to read URL file" in result.output
+            assert "Traceback" not in result.output
+
+
 class TestCliHelp:
     """Tests for CLI help output."""
 

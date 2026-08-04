@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 from structlog import get_logger
 
 from .config import Settings, setup_logging
@@ -388,12 +389,6 @@ def download(
     Extracts available streams, selects the requested quality, and downloads the video
     to the specified output directory.
     """
-    # Create Settings once with environment-loaded values, merging CLI overrides
-    settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
-    setup_logging(settings)
-    # Log resolved .env path for debugging configuration issues
-    _log_env_file_path()
-
     async def _download() -> Path | None:
         """Async implementation of video download."""
         # Setup signal handlers inside async context
@@ -434,6 +429,11 @@ def download(
             cleanup_signal_handlers()
 
     try:
+        # Create Settings once with environment-loaded values, merging CLI overrides
+        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+        setup_logging(settings)
+        # Log resolved .env path for debugging configuration issues
+        _log_env_file_path()
         result = asyncio.run(_download())
 
         if result:
@@ -442,6 +442,9 @@ def download(
             typer.echo("Download failed", err=True)
             raise typer.Exit(code=1)
 
+    except ValidationError as e:
+        typer.echo(f"Configuration error: {e}", err=True)
+        raise typer.Exit(code=1) from None
     except ValueError:
         typer.echo(
             "Invalid URL format. Expected format: https://vkvideo.ru/video-{owner_id}_{video_id}",
@@ -523,42 +526,48 @@ def batch_download(
     Reads video URLs from a file (one URL per line) and downloads each video
     with the specified quality to the output directory.
     """
-    # Create Settings once with environment-loaded values, merging CLI overrides
-    settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
-    setup_logging(settings)
-    # Log resolved .env path for debugging configuration issues
-    _log_env_file_path()
-
-    # Read and validate URLs from file
-    valid_urls: list[str] = []
-    skipped_count = 0
-
-    for line in urls_file.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if not VIDEO_ID_PATTERN.search(stripped):
-            logger.warning("invalid_url_in_batch", url=stripped)
-            skipped_count += 1
-            continue
-        valid_urls.append(stripped)
-
-    if skipped_count > 0:
-        typer.echo(
-            f"Skipped {skipped_count} invalid URL(s) (not valid VK video URLs)",
-            err=True,
-        )
-
-    if not valid_urls:
-        typer.echo(f"No URLs found in {urls_file}", err=True)
-        raise typer.Exit(code=1)
-
     try:
+        # Create Settings once with environment-loaded values, merging CLI overrides
+        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+        setup_logging(settings)
+        # Log resolved .env path for debugging configuration issues
+        _log_env_file_path()
+
+        # Read and validate URLs from file
+        valid_urls: list[str] = []
+        skipped_count = 0
+
+        for line in urls_file.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not VIDEO_ID_PATTERN.search(stripped):
+                logger.warning("invalid_url_in_batch", url=stripped)
+                skipped_count += 1
+                continue
+            valid_urls.append(stripped)
+
+        if skipped_count > 0:
+            typer.echo(
+                f"Skipped {skipped_count} invalid URL(s) (not valid VK video URLs)",
+                err=True,
+            )
+
+        if not valid_urls:
+            typer.echo(f"No URLs found in {urls_file}", err=True)
+            raise typer.Exit(code=1)
+
         results = asyncio.run(
             _run_batch_with_progress(valid_urls, quality, method, settings, max_retries, output)
         )
         _print_batch_summary(results, settings.max_concurrent_downloads, skipped_count)
 
+    except ValidationError as e:
+        typer.echo(f"Configuration error: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    except OSError as e:
+        typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
+        raise typer.Exit(code=1) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
