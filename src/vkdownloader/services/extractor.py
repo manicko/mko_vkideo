@@ -144,6 +144,7 @@ class VKVideoExtractor:
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
+            "nocheckcertificate": not self.settings.ssl_verify,
         }
 
         def _sync_extract() -> tuple[list[Stream], str | None]:

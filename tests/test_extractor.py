@@ -97,6 +97,37 @@ class TestExtractionErrors:
                 await extractor._extract_with_ytdlp(url, "12345_67890")
 
     @pytest.mark.asyncio
+    async def test_extract_with_ytdlp_ssl_verify_default_true(self) -> None:
+        """Test _extract_with_ytdlp passes nocheckcertificate=False when ssl_verify is True (default)."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+            mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = {"title": "Test", "formats": []}
+
+            await extractor._extract_with_ytdlp(url, "12345_67890")
+
+            ydl_opts = mock_ydl_class.call_args[0][0]
+            assert ydl_opts["nocheckcertificate"] is False
+
+    @pytest.mark.asyncio
+    async def test_extract_with_ytdlp_no_ssl_verify_sets_nocheckcertificate(self) -> None:
+        """Test _extract_with_ytdlp passes nocheckcertificate=True when ssl_verify is False."""
+        settings = Settings(ssl_verify=False)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+            mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = {"title": "Test", "formats": []}
+
+            await extractor._extract_with_ytdlp(url, "12345_67890")
+
+            ydl_opts = mock_ydl_class.call_args[0][0]
+            assert ydl_opts["nocheckcertificate"] is True
+
+    @pytest.mark.asyncio
     async def test_format_cookies_for_ffmpeg(self) -> None:
         """Test _format_cookies_for_ffmpeg correctly formats cookies for ffmpeg header."""
         extractor = VKVideoExtractor()
