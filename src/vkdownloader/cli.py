@@ -11,7 +11,7 @@ import typer
 from pydantic import ValidationError
 from structlog import get_logger
 
-from .config import Settings, setup_logging
+from .config import Settings, setup_logging, warn_unknown_env_vars
 from .exceptions import (
     QualityNotAvailableError,
     VideoNotFoundError,
@@ -39,6 +39,31 @@ def _log_env_file_path() -> None:
         logger.debug(f".env file resolved to: {env_file.resolve()}")
     else:
         logger.debug(".env file not found; using environment variables or defaults only")
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    """Format a Pydantic ValidationError into a concise, user-facing message.
+
+    Args:
+        error: The ValidationError to format.
+
+    Returns:
+        A human-readable string listing each field error with the received
+        value and a hint to check the .env file or environment variables.
+    """
+    lines = [
+        "Configuration error: one or more settings have invalid values.",
+        "Check your .env file or VKDOWNLOADER_* environment variables:",
+    ]
+    for err in error.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = err.get("msg", "validation failed")
+        received = err.get("input")
+        lines.append(f"  - {loc}: {msg}")
+        if received is not None:
+            lines.append(f"    Received: {received!r}")
+    lines.append("Fix the offending value(s) and try again.")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -389,6 +414,7 @@ def download(
     Extracts available streams, selects the requested quality, and downloads the video
     to the specified output directory.
     """
+
     async def _download() -> Path | None:
         """Async implementation of video download."""
         # Setup signal handlers inside async context
@@ -429,6 +455,8 @@ def download(
             cleanup_signal_handlers()
 
     try:
+        # Detect misspelled VKDOWNLOADER_* env vars before construction
+        warn_unknown_env_vars()
         # Create Settings once with environment-loaded values, merging CLI overrides
         settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
         setup_logging(settings)
@@ -443,7 +471,7 @@ def download(
             raise typer.Exit(code=1)
 
     except ValidationError as e:
-        typer.echo(f"Configuration error: {e}", err=True)
+        typer.echo(_format_validation_error(e), err=True)
         raise typer.Exit(code=1) from None
     except ValueError:
         typer.echo(
@@ -527,6 +555,8 @@ def batch_download(
     with the specified quality to the output directory.
     """
     try:
+        # Detect misspelled VKDOWNLOADER_* env vars before construction
+        warn_unknown_env_vars()
         # Create Settings once with environment-loaded values, merging CLI overrides
         settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
         setup_logging(settings)
@@ -563,7 +593,7 @@ def batch_download(
         _print_batch_summary(results, settings.max_concurrent_downloads, skipped_count)
 
     except ValidationError as e:
-        typer.echo(f"Configuration error: {e}", err=True)
+        typer.echo(_format_validation_error(e), err=True)
         raise typer.Exit(code=1) from None
     except OSError as e:
         typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)

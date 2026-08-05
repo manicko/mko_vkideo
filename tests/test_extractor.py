@@ -1,8 +1,9 @@
 """Tests for VKVideoExtractor service."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import ValidationError
 
 from vkdownloader.config import Settings
@@ -63,9 +64,7 @@ class TestExtractionErrors:
         """Test extract_streams raises VideoNotFoundError when no streams are found."""
         extractor = VKVideoExtractor()
 
-        with patch.object(
-            extractor, "_extract_with_ytdlp", return_value=([], None)
-        ):
+        with patch.object(extractor, "_extract_with_ytdlp", return_value=([], None)):
             with pytest.raises(VideoNotFoundError, match="No streams found"):
                 await extractor.extract_streams("https://vkvideo.ru/video-12345_67890")
 
@@ -76,9 +75,7 @@ class TestExtractionErrors:
         settings = Settings(cookie_source=CookieSource.BROWSER)
         extractor = VKVideoExtractor(settings=settings)
 
-        with patch.object(
-            extractor, "_extract_with_browser", return_value=([], None, None)
-        ):
+        with patch.object(extractor, "_extract_with_browser", return_value=([], None, None)):
             with pytest.raises(VideoNotFoundError, match="No streams found"):
                 await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-12345_67890")
 
@@ -280,7 +277,9 @@ class TestExtractionErrors:
             "_extract_with_browser",
             return_value=([mock_stream], "forced_cookies", raw_cookies),
         ):
-            streams, cookies, raw = await extractor.extract_streams_with_cookies(url, force_browser=True)
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(
+                url, force_browser=True
+            )
 
             assert len(streams) == 1
             assert cookies == "forced_cookies"  # Cookies returned when forced
@@ -318,7 +317,9 @@ class TestExtractionErrors:
         with patch.object(
             extractor, "_extract_with_ytdlp", return_value=([mock_stream], None)
         ) as mock_extract:
-            streams, cookies, raw = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(
+                "https://vkvideo.ru/video-1_2"
+            )
 
             mock_extract.assert_called_once()
             assert cookies is None
@@ -336,7 +337,9 @@ class TestExtractionErrors:
         with patch.object(
             extractor, "_extract_with_browser", return_value=([mock_stream], "cookies", raw_cookies)
         ) as mock_browser:
-            streams, cookies, raw = await extractor.extract_streams_with_cookies("https://vkvideo.ru/video-1_2")
+            streams, cookies, raw = await extractor.extract_streams_with_cookies(
+                "https://vkvideo.ru/video-1_2"
+            )
 
             mock_browser.assert_called_once()
             assert cookies == "cookies"
@@ -346,7 +349,9 @@ class TestExtractionErrors:
         """Test extract_streams returns VideoWithStreams with populated title."""
         extractor = VKVideoExtractor()
         url = "https://vkvideo.ru/video-12345_67890"
-        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+        mock_stream = Stream(
+            url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720"
+        )
 
         with patch.object(
             extractor,
@@ -364,7 +369,9 @@ class TestExtractionErrors:
         """Test extract_streams uses fulltitle when title is not available."""
         extractor = VKVideoExtractor()
         url = "https://vkvideo.ru/video-12345_67890"
-        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+        mock_stream = Stream(
+            url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720"
+        )
 
         with patch.object(
             extractor,
@@ -380,7 +387,9 @@ class TestExtractionErrors:
         """Test extract_streams handles None title gracefully."""
         extractor = VKVideoExtractor()
         url = "https://vkvideo.ru/video-12345_67890"
-        mock_stream = Stream(url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720")
+        mock_stream = Stream(
+            url="https://example.com/video.m3u8", format=StreamFormat.HLS, quality="720"
+        )
 
         with patch.object(
             extractor,
@@ -391,3 +400,27 @@ class TestExtractionErrors:
 
             assert result.title is None
             assert result.id == "12345_67890"
+
+    @pytest.mark.asyncio
+    async def test_extract_with_browser_goto_failure_raises_extraction_error(self) -> None:
+        """Test _extract_with_browser wraps Playwright navigation failure in ExtractionError."""
+        settings = Settings(cookie_source=CookieSource.BROWSER)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        mock_page = MagicMock()
+        mock_page.goto = AsyncMock(side_effect=PlaywrightTimeoutError("timeout"))
+
+        mock_browser = AsyncMock()
+        mock_browser.create_stealth_page = AsyncMock(return_value=mock_page)
+
+        mock_browser_manager = MagicMock()
+        mock_browser_manager.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_browser_manager.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "vkdownloader.services.extractor.BrowserManager",
+            return_value=mock_browser_manager,
+        ):
+            with pytest.raises(ExtractionError, match="Failed to navigate to video page"):
+                await extractor._extract_with_browser(url, "12345_67890")

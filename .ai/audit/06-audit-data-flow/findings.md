@@ -1,10 +1,3 @@
----
-name: 06-audit-data-flow-findings
-description: End-to-end data-flow audit findings for mko_vkideo
-agent: auditor
-alwaysApply: false
----
-
 # Phase 06 Audit Findings — End-to-End Data Flow
 
 **Executor:** auditor
@@ -12,119 +5,188 @@ alwaysApply: false
 **Status:** complete
 **Validated:** no
 
-**Runtime verification (all passed):**
-- Import full pipeline: OK
-- `uv run ruff check src/vkdownloader`: All checks passed (exit 0)
-- `uv run mypy src/vkdownloader`: Success, no issues in 23 source files (exit 0)
-- `uv run pytest`: 233 passed (exit 0)
+---
 
+## Runtime Verification
+
+| Step | Command | Result |
+|------|---------|--------|
+| R1 Import | uv run python -c "import vkdownloader.cli, config, services.downloader, services.segment_downloader, services.downloader_throttle, services.ffmpeg_utils, services.quality, services.cookies, services.signal_handlers, infrastructure.browser, infrastructure.network_monitor, utils.security, utils.url_sanitizer" (full pipeline) | ALL IMPORTS OK |
+| R2 Lint | uv run ruff check src/vkdownloader | Pass — All checks passed! |
+| R2 Types | uv run mypy src/vkdownloader | Pass — no issues found in 23 source files |
+| R3 Tests | uv run pytest tests/ -q | Pass — 248 passed |
+| R4 Empty-segment trace | Runtime simulation: 200 response with empty body (b"") in segment download path | Confirmed: 0-byte file written, returns True (success); reaches merge stage unhandled |
 ---
 
 ## Findings
 
-### DF-001: ProgressManager.update_sync is called from threads but is unsynchronized
+### DF-001: Empty (0-byte) segment from HTTP 200 with empty body treated as a successful download
 
 | Field | Value |
 |-------|-------|
 | **ID** | DF-001 |
-| **Severity** | MEDIUM |
+| **Severity** | HIGH |
 | **Type** | RUNTIME-ERROR |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/downloader_throttle.py` |
+| **Affected Modules** | src/vkdownloader/services/segment_downloader.py (_run_parallel_download_with_backoff), src/vkdownloader/services/downloader_throttle.py (_retry_429_with_backoff, _download_segment_sequential), src/vkdownloader/services/ffmpeg_utils.py (_merge_segments_batched) |
 | **Classification** | mandatory |
 
-**Description:** In batch mode, `ProgressManager.update_sync()` writes to the shared module-level `_progress_manager._state` dict from multiple concurrent contexts. The yt-dlp progress hook is registered in `_build_ytdlp_options` (`downloader.py:197-205`) and invoked from inside `_download()`, which runs on a worker thread via `loop.run_in_executor(None, _download)` (`downloader.py:621-628`). The segment path (`_tally_and_merge`, `segment_downloader.py:548-550`) writes the same dict from the event loop. `update_sync` performs direct assignment with **no lock** (`downloader_throttle.py:106-121`). The class and `cli.py` docstrings explicitly claim this is safe because "callbacks execute sequentially in the single-threaded asyncio event loop" (`cli.py:62-67`, `downloader_throttle.py:82-89, 106-120`) — this invariant is **false** for yt-dlp hooks, which fire on the executor thread. The `asyncio.Lock` in `get_formatted_progress` only serializes coroutines, not threads, so read paths can observe torn/partial writes while a thread mutates the dict.
+**Description:** When the VK CDN returns an HTTP 200 response with an empty body (plausible during token expiry or CDN edge errors), the segment-download functions write a 0-byte .ts file and return True (success). The tally stage validates segment integrity by filename count (glob("*.ts")) and file existence, never by file size, so 0-byte segments pass every check and flow into the ffmpeg concat merge. ffmpeg then either errors on the empty segment (causing the entire video download to fail with a misleading error) or silently includes a blank segment in the output. The root cause is invisible to the user. On the sequential path, the same gap exists: response.read() returning b"" is written as 0 bytes and marked success because b"" is not None.
 
 **Evidence:**
-- `cli.py:69-72` — `_create_progress_callback` → `_progress_manager.update_sync(url_index, downloaded, total)` invoked from the yt-dlp hook chain.
-- `downloader.py:621-628` — `_download` (which calls `ydl.download`) runs via `run_in_executor` → progress hooks execute on a worker thread.
-- `downloader_throttle.py:106-121` — `update_sync` does `self._state[url_index] = (downloaded, total)` with no synchronization; docstring contradicts the real call site.
-- Tests only exercise the async `update()` (e.g. `test_downloader_throttle.py:634`), never the threaded `update_sync` path, so the race is untested.
+- segment_downloader.py:160-163 — parallel path, no size check after write:
+  ```python
+  if response.status == 200:
+      with open(output_path, "wb") as f:
+          f.write(await response.read())
+      return True
+  ```
+- downloader_throttle.py:182-183 — sequential path returns raw content including b"":
+  ```python
+  if response.status == 200:
+      return await response.read()
+  ```
+- downloader_throttle.py:112-114 — sequential wrapper treats b"" as success (b"" is not None):
+  ```python
+  if content is not None:
+      with open(output_path, "wb") as f:
+          f.write(content)
+      return True
+  ```
+- segment_downloader.py:541 — integrity check is filename-count only:
+  ```python
+  downloaded_count = len(list(segments_dir.glob("*.ts")))
+  ```
+- segment_downloader.py:548 — all(download_results) is True because the 0-byte segment returned True.
+- segment_downloader.py:554 — downloaded_count == len(segments) passes because the 0-byte .ts file exists on disk.
+- ffmpeg_utils.py:285 — merge only checks existence, not size:
+  ```python
+  if not all(f.exists() for f in batch_files):
+  ```
+- Runtime verified: simulated a 200+empty-body response — download returns True, the 0-byte file passes _tally_and_merge checks, and ffmpeg fails at the merge step with a generic error.
 
-**Recommendation:** Either (a) make `update_sync` thread-safe (e.g., use a `threading.Lock` or a `dict` specialized for concurrency), or (b) marshal the yt-dlp progress events onto the event loop (e.g., via `loop.call_soon_threadsafe`) so the documented single-threaded invariant becomes true. Also correct the inaccurate docstrings. Why it matters: under `max_concurrent_downloads > 1`, concurrent batch runs can show inconsistent/garbage progress and, during dict resize, risk a `RuntimeError: dictionary changed size during iteration` — a latent crash with no functional benefit from the current design.
+**Recommendation:** After writing content on a 200 response, validate that the downloaded content is non-empty (len(content) > 0 / output_path.stat().st_size > 0). If empty, treat as a retryable failure (return None) so the retry loop re-attempts the segment. Effort: small. Priority: mandatory.
 
 ---
-
-### DF-002: Segment-based resume only supports BEST quality; numeric qualities abort on yt-dlp failure
+### DF-002: Resume logic reuses stale segments by filename index with no content or URL validation
 
 | Field | Value |
 |-------|-------|
 | **ID** | DF-002 |
 | **Severity** | MEDIUM |
 | **Type** | RUNTIME-ERROR |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/extractor.py`, `src/vkdownloader/services/quality.py` |
+| **Affected Modules** | src/vkdownloader/services/segment_downloader.py (_create_segment_download_tasks, _tally_and_merge) |
 | **Classification** | mandatory |
 
-**Description:** The documented "automatic segment-based fallback on failure" (`downloader.py:404-468`) cannot recover a download when the user requested a **specific numeric quality** (e.g. 720p). On a yt-dlp partial failure, `_attempt_segment_resume` force-launches the browser to obtain a fresh token and re-selects the stream (`downloader.py:516-524`). However, browser-captured streams are hardcoded to `quality="best"` with `height=None` (`extractor.py:232-239`). The code then runs `_parse_quality_to_enum(quality)` (e.g. `"720p"` → `QualityEnum.Q720`) and `selector.select(browser_streams, QualityEnum.Q720)`. `QualitySelector.select` finds no numeric match (the only browser stream is `"best"`) and raises `QualityNotAvailableError` (`quality.py:82-91`). `_attempt_segment_resume` only catches `(ExtractionError, OSError)` and `ValueError` (`downloader.py:554-558`); `QualityNotAvailableError` (subclass of `VKDownloadError`, not `ValueError`) is **not** caught and propagates, aborting the whole download. So a numeric-quality download that partially failed via yt-dlp is reported as a hard quality error rather than being resumed — the exact recovery scenario the feature advertises.
+**Description:** When resuming a segment download after an interruption, _create_segment_download_tasks skips existing segments based solely on filename index and non-zero file size (segment_downloader.py:672). The segment filename is purely index-based (f"{i:05d}.ts", line 626) with no URL hash, playlist signature, or content fingerprint recorded. Two failure modes result: (1) Silent corruption — if a new playlist (e.g., after token refresh returns a fresh m3u8 from a different CDN edge) has the same segment count but different content at the same indices, existing on-disk segments are NOT re-downloaded, and the merge combines stale + fresh segments into a corrupt output reported as "success". (2) False failure — if the new playlist has a different segment count, leftover .ts files from the previous run cause downloaded_count != len(segments) (line 554), aborting the merge entirely even though all current playlist segments are present.
 
 **Evidence:**
-- `downloader.py:471-560` — `_attempt_segment_resume` raises/propagates when browser stream selection fails for non-BEST quality.
-- `extractor.py:232-239` — browser stream `quality="best"`, `height=None`.
-- `quality.py:82-91` — numeric match fails → `QualityNotAvailableError`.
-- `downloader.py:554-558` — handler list omits `QualityNotAvailableError` (and `VKDownloadError`).
+- segment_downloader.py:626 — segment filename is index-only, no URL/content binding:
+  ```python
+  segment_path = task.segments_dir / f"{task.idx:05d}.ts"
+  ```
+- segment_downloader.py:672 — resume skip checks existence + size only, no URL/content match:
+  ```python
+  if segment_path.exists() and segment_path.stat().st_size > 0:
+      logger.debug("skipping_existing_segment", idx=i)
+      continue
+  ```
+- segment_downloader.py:534 — _parse_m3u8_segments parses the current playlist but no signature is stored for comparison on resume.
+- segment_downloader.py:541 — downloaded_count counts ALL .ts files including stale ones from a previous playlist.
+- segment_downloader.py:554 — count-mismatch abort when stale files are present at non-overlapping indices:
+  ```python
+  if downloaded_count == len(segments):
+  ```
 
-**Recommendation:** When the requested quality is numeric and the browser stream only exposes `"best"`, fall back to downloading the available `"best"` stream during resume (preserving the original intent of retrying the download) and/or catch `QualityNotAvailableError` in `_attempt_segment_resume` to degrade gracefully. Why it matters: this silently breaks resume robustness for the most common user case (a specific resolution), turning a recoverable transient failure into a failed download.
+**Recommendation:** Bind on-disk segments to the current playlist by including a URL/content digest in the filename (e.g., f"{i:05d}_{md5(url)[:8]}.ts"), or store a playlist signature (hash of segment URLs) in the segments directory and clear stale files whose indices or signatures do not match at session start. At minimum, delete .ts files whose indices are >= len(segments) before creating download tasks. Effort: medium. Priority: mandatory.
 
 ---
-
-### DF-003: Settings validation errors are misreported as URL-format errors
+### DF-003: failed_indices in _tally_and_merge reports wrong segment indices
 
 | Field | Value |
 |-------|-------|
 | **ID** | DF-003 |
-| **Severity** | MEDIUM |
+| **Severity** | LOW |
 | **Type** | RUNTIME-ERROR |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/config.py` |
-| **Classification** | mandatory |
+| **Affected Modules** | src/vkdownloader/services/segment_downloader.py (_tally_and_merge, _create_segment_download_tasks) |
+| **Classification** | advisory |
 
-**Description:** The `download()` command constructs `Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)` (`cli.py:392`), then wraps the whole body in `except ValueError:` that prints `"Invalid URL format. Expected format: https://vkvideo.ru/video-{owner_id}_{video_id}"` and exits 1 (`cli.py:445-450`). But `Settings` can also raise `ValueError` during construction — specifically the `cookie_source` validator rejects `CookieSource.FILE` (`config.py:124-136`). Because Typer accepts `file` as a valid `CookieSource` enum member, `--cookie-source file` reaches `Settings()` and raises `ValueError`, which is then mislabeled as an invalid URL. A user who passed a perfectly valid URL gets a confusing "Invalid URL format" message. The sibling `batch_download` command (`cli.py:527`) constructs the same `Settings` but has **no** `ValueError` handler, so the identical input produces an unhandled traceback. The two commands handle the same failure differently.
+**Description:** _tally_and_merge computes failed_indices from enumerate(download_results) (line 549), but download_results corresponds only to the tasks created by _create_segment_download_tasks — which excludes segments that already existed on disk (skipped at line 672). So the index i in failed_indices is a position into the missing-segments task list, NOT the actual segment index in the playlist.
+
+Example: playlist has segments [0,1,2,3,4]. Segments 0 and 2 already exist from a prior run. Segment 1 fails. Tasks are created for [1, 3, 4]. download_results = [False, True, True]. failed_indices = [0] (position of the False entry in the task list), but the actual failed segment is index 1.
 
 **Evidence:**
-- `cli.py:392` + `cli.py:445-450` — `except ValueError` conflates config validation with `parse_video_id` `ValueError`.
-- `config.py:124-136` — validator raises `ValueError` for `CookieSource.FILE`.
-- `cli.py:527` — `batch_download` builds `Settings` with no equivalent handler (inconsistent).
+- segment_downloader.py:549:
+  ```python
+  failed_indices = [i for i, r in enumerate(download_results) if not r]
+  ```
+- segment_downloader.py:670-686: tasks are created only for missing segments (existing ones skipped at line 672 via the continue statement).
 
-**Recommendation:** Separate config-validation failures from URL-parse failures. Catch the `Settings` construction error explicitly (or let Typer/pydantic validation surface a clear message) before any URL work, and reserve the "Invalid URL format" message for `ValueError` originating from `parse_video_id`. Why it matters: misleading diagnostics waste user time and the inconsistent handling (silent traceback in `batch`) undermines the "config error stops before side-effects" expectation.
+**Impact:** The diagnostic log reports incorrect segment indices, directing developers/operators to the wrong segment when troubleshooting download failures.
+
+**Recommendation:** Track the actual segment index alongside each download result (e.g., download_results as list[tuple[int, bool]] or preserve SegmentTask.idx), and compute failed_indices from the real segment indices. Effort: trivial. Priority: recommended.
 
 ---
 
-### DF-004: Unreachable empty-streams guard masks real control flow
+### DF-004: Batch summary reports configured max_concurrent_downloads as Peak concurrency without measuring actual peak
 
 | Field | Value |
 |-------|-------|
 | **ID** | DF-004 |
 | **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/services/extractor.py` |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | src/vkdownloader/cli.py (_run_batch_with_progress, _print_batch_summary) |
 | **Classification** | advisory |
 
-**Description:** `_download_single` (`cli.py:177-182`) and `download()` (`cli.py:406-411`) both contain `if not video.streams: raise QualityNotAvailableError(...)`. This guard is unreachable: `VKVideoExtractor.extract_streams` already raises `VideoNotFoundError` when no streams are found (`extractor.py:85-86`) before returning, so `video.streams` can never be empty after a successful `extract_streams` call. The guards' comments (`cli.py:176`, `cli.py:405`) claim they "provide an accurate error message," which they never do. The code implies a fallback path that does not exist, which can mislead maintainers about how empty-stream errors are actually surfaced.
+**Description:** _run_batch_with_progress creates a shared_semaphore from settings.max_concurrent_downloads (line 272) to cap concurrency, but no counter tracks the actual peak number of concurrent downloads. The batch_download command passes settings.max_concurrent_downloads directly to _print_batch_summary as the "peak" value (line 593), and _print_batch_summary displays it verbatim as "Peak concurrency" (line 362). The DownloadContext dataclass (lines 69-77) has no field for tracking observed concurrency.
+
+When the number of batch URLs is less than max_concurrent_downloads, the reported "Peak concurrency" is higher than what actually occurred (e.g., "Peak concurrency: 4" for a 2-URL batch where the actual peak was 2).
 
 **Evidence:**
-- `extractor.py:83-94` — `extract_streams` raises `VideoNotFoundError` when `streams` is empty; only then returns `VideoWithStreams`.
-- `cli.py:177-182` and `cli.py:406-411` — post-extraction empty-stream checks can never be True.
+- cli.py:272 — semaphore created from config, no peak counter:
+  ```python
+  shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+  ```
+- cli.py:69-77 — DownloadContext has no peak-tracking field.
+- cli.py:362 — config value displayed as peak:
+  ```python
+  typer.echo(f"  Peak concurrency: {max_concurrent}")
+  ```
+- cli.py:593 — config value passed as "peak":
+  ```python
+  _print_batch_summary(results, settings.max_concurrent_downloads, skipped_count)
+  ```
 
-**Recommendation:** Investigate intent: either remove the dead guards (and rely on `extract_streams` raising) or change `extract_streams` to return rather than raise on empty and let the guards own the error. Document whichever choice is made. Why it matters: dead defensive code hides the true error-propagation path and invites incorrect "fixes" later.
+**Recommendation:** Track actual concurrent in-flight downloads by incrementing/decrementing a counter when _download_single starts/completes (or when the semaphore is acquired/released) and report the measured peak. Effort: small. Priority: recommended.
 
 ---
 
-### DF-005: Stale merge temp files can inflate progress and defeat resume cleanup
+### DF-005: Batch progress display only refreshes on download completion, not in real time
 
 | Field | Value |
 |-------|-------|
 | **ID** | DF-005 |
 | **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/ffmpeg_utils.py`, `src/vkdownloader/services/segment_downloader.py` |
+| **Affected Modules** | src/vkdownloader/cli.py (_run_batch_with_progress) |
 | **Classification** | advisory |
 
-**Description:** `_merge_segments_batched` writes intermediate merge files named `batch_{NNNNN}.ts` directly into the same `segments_dir` as the real segments (`ffmpeg_utils.py:165`). The resume bookkeeping then globs `segments_dir.glob("*.ts")` in two places: `_run_download_session` computes `existing_segment_count` (`segment_downloader.py:818`) to decide whether to clear stale metadata, and `_tally_and_merge` counts `len(segments_dir.glob("*.ts"))` for progress (`segment_downloader.py:547`). A `batch_*.ts` file left over from an interrupted/partial merge (the `finally` in `_merge_segments_batched` only unlinks *temp_files* it created, `ffmpeg_utils.py:271-275`) matches the `*.ts` glob and is counted as a downloaded segment, overstating progress and preventing the fresh-start metadata clear. This is an edge case (requires a prior failed merge) but is a genuine data-integrity gap in naming/cleanup.
+**Description:** The batch progress display refreshes only after each await coro completes in the as_completed loop (cli.py:307-320). The typer.echo at line 320 runs only after a full video download finishes. During a long-running download, progress callbacks do update _progress_manager (line 96), but the display is never refreshed. The user sees stale progress (frozen on the last completed download) for the entire duration of in-progress downloads, with no indication of ongoing activity.
 
 **Evidence:**
-- `ffmpeg_utils.py:165` — `batch_output = temp_dir / f"batch_{batch_start:05d}.ts"` inside `segments_dir`.
-- `segment_downloader.py:818` and `segment_downloader.py:547` — `*.ts` glob collides with `batch_*.ts`.
-- `ffmpeg_utils.py:271-275` — `finally` only removes `temp_files` it appended, not arbitrary leftovers.
+- cli.py:305-320 — display only updated post-completion:
+  ```python
+  for coro in asyncio.as_completed(tasks):
+      try:
+          await coro
+      except asyncio.CancelledError:
+          ...
+      except Exception:
+          logger.exception("unexpected_error_in_batch_progress")
+      typer.echo(f"\r{await _format_progress(total)}", nl=False)  # only after await coro
+  ```
+- cli.py:95-96 — callbacks update _progress_manager.update_sync(url_index, ...) but display isn't refreshed between completions.
 
-**Recommendation:** Store intermediate merge files in a dedicated subdirectory (e.g. `segments_dir / "_merge"`) or name them so they do not match the segment glob (e.g. prefix with a non-digit/dot). Why it matters: keeps resume bookkeeping and progress counts accurate; avoids a confusing over-count after an interrupted merge.
+**Recommendation:** Run a background asyncio.create_task that polls _progress_manager.get_formatted_progress(total) at a 1-second interval and refreshes the display independently of download completions; cancel the polling task after all downloads finish. Effort: small. Priority: recommended.
 
 ---
 
@@ -133,22 +195,21 @@ alwaysApply: false
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 0 |
-| MEDIUM | 3 |
-| LOW | 2 |
+| HIGH | 1 |
+| MEDIUM | 1 |
+| LOW | 3 |
 
 ## Mandatory Fixes
 
-- **DF-001** — Synchronize `ProgressManager.update_sync` (remove false event-loop-serialization assumption in threaded yt-dlp path).
-- **DF-002** — Make segment resume recover numeric-quality downloads (catch `QualityNotAvailableError` / fall back to best in `_attempt_segment_resume`).
-- **DF-003** — Stop conflating `Settings` validation `ValueError` with URL-format errors; align `download` and `batch` handling.
+- **[DF-001]** Add a content-size check after segment download: validate `len(content) > 0` (or `st_size > 0`) on HTTP 200 responses in both `_run_parallel_download_with_backoff` (segment_downloader.py:160-163) and `_retry_429_with_backoff` / `_download_segment_sequential` (downloader_throttle.py:182-183, 112-114). Treat empty content as a retryable failure so the segment is re-attempted instead of being merged as 0 bytes.
+- **[DF-002]** Bind on-disk segments to the current playlist in the resume logic: either include a URL/content digest in the segment filename, or store a playlist signature in the segments directory and clear stale files at session start. At minimum, delete .ts files whose indices exceed the current playlist length.
 
 ## Advisory Recommendations
 
-- **DF-004** — Remove or re-home the unreachable empty-streams guards; document the real error path.
-- **DF-005** — Isolate merge temp files from the segment glob to keep resume/progress bookkeeping correct.
+- **[DF-003]** Fix failed_indices computation in _tally_and_merge to report actual segment indices (not task-list positions) for accurate diagnostics.
+- **[DF-004]** Measure and report actual peak concurrency in the batch summary instead of echoing the configured max_concurrent_downloads value.
+- **[DF-005]** Add a background polling task to refresh the progress display in real time during long-running batch downloads.
 
 ## Doc Updates Needed
 
-- No explicit documentation-only updates identified; the code-level fixes above (DF-001 docstrings, DF-002 behavior) should be reflected in any docs describing progress reporting and the yt-dlp→segment resume fallback.
-
+- **[DOC-UPDATE]** Document the resume behavior: segments are identified by index only (no content validation), so playlist changes between runs may cause stale segment reuse. Consider documenting this as a known limitation until DF-002 is resolved. Effort: trivial.

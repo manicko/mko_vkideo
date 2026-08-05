@@ -84,4 +84,3 @@ def cleanup_signal_handlers() -> None:
                 pass
 
     _registered_signals.clear()
-

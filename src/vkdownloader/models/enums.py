@@ -48,4 +48,3 @@ class CookieSource(StrEnum):
     NONE = "none"
     BROWSER = "browser"
     FILE = "file"
-

@@ -1,6 +1,7 @@
 """Configuration module for VK Video Downloader."""
 
 import logging
+import os
 from pathlib import Path
 
 import structlog
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     Note: unknown VKDOWNLOADER_* environment variables are silently ignored due to
     pydantic-settings v2 extra='forbid' limitation — it only applies to explicit
     kwargs passed to the model constructor, not to environment variables.
+    Use :func:`warn_unknown_env_vars` to detect typos before construction.
 
     The .env file is resolved relative to the current working directory (CWD),
     not relative to the package installation location.
@@ -141,6 +143,43 @@ class Settings(BaseSettings):
         "extra": "forbid",
         "env_prefix": "VKDOWNLOADER_",
     }
+
+
+_ENV_VAR_PREFIX = "VKDOWNLOADER_"
+
+
+def _build_valid_env_vars() -> set[str]:
+    """Build the set of valid VKDOWNLOADER_* environment variable names."""
+    return {_ENV_VAR_PREFIX + name.upper() for name in Settings.model_fields}
+
+
+def warn_unknown_env_vars() -> list[str]:
+    """Warn about unknown VKDOWNLOADER_* environment variables.
+
+    pydantic-settings v2 with ``extra='forbid'`` only rejects unknown kwargs
+    passed to the model constructor, not unknown environment variables. A
+    misspelled ``VKDOWNLOADER_*`` variable is silently dropped and the default
+    value is used, which can cause confusing "my config isn't taking effect"
+    behavior.
+
+    This function scans ``os.environ`` for any ``VKDOWNLOADER_``-prefixed key
+    not present in the model's field names and emits a warning log for each.
+
+    Returns:
+        List of unknown environment variable names found.
+    """
+    valid_env_vars = _build_valid_env_vars()
+    unknown = [
+        key for key in os.environ if key.startswith(_ENV_VAR_PREFIX) and key not in valid_env_vars
+    ]
+    for key in unknown:
+        logger.warning(
+            "unknown_env_var_ignored",
+            var=key,
+            valid_vars=sorted(valid_env_vars),
+            hint="Variable is not a recognized setting and will be ignored. Check for typos.",
+        )
+    return unknown
 
 
 def setup_logging(settings: Settings | None = None) -> None:

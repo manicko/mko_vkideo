@@ -496,7 +496,7 @@ Download using yt-dlp with automatic segment-based resume fallback on failure.
 **Flow:**
 1. Try yt-dlp download
 2. On failure with partial file: get fresh token via browser (forced) + switch to segment download
-3. Segment download resumes from last checkpoint
+3. Segment download resumes from existing segment files on disk
 
 **Note:** Token refresh during resume always forces browser launch, regardless of `cookie_source` setting.
 
@@ -518,11 +518,9 @@ Request model for HLS download with segment-level resume support.
 | `output_file` | Path | Output file path. |
 | `quality` | str | Quality string (default: "best"). |
 | `cookies` | str \| None | Cookies string for CDN authentication. |
-| `settings` | Settings \| None | Application settings. |
-| `extractor` | VKVideoExtractor \| None | Extractor for token refresh. |
-| `backoff_coordinator` | URLBackoffCoordinator \| None | For shared rate limiting across URLs. |
 | `progress_callback` | Callable[[str, int, int], None] \| None | Callback for per-URL segment progress (video_id, downloaded, total). |
-| `semaphore` | asyncio.Semaphore \| None | Shared semaphore for work-stealing concurrency. |
+
+> **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.
 
 ---
 
@@ -535,8 +533,8 @@ Represents a video stream with URL and quality information.
 **Attributes:**
 | Name | Type | Description |
 |------|------|-------------|
-| url | HttpUrl | Stream URL |
-| format | StreamFormat | Stream format (HLS, DASH, MP4) |
+| url | str | Stream URL |
+| format | StreamFormat | Stream format (HLS, MP4) |
 | quality | str | Quality string (e.g., "720p", "best") |
 | resolution | str \| None | Resolution string |
 | bitrate | int \| None | Bitrate in kbps |

@@ -1,86 +1,104 @@
----
-name: 04-security-findings
-description: Security & secret management audit findings for mko_vkideo
-agent: audit-executor
-alwaysApply: false
----
+﻿# Phase 04 Audit Findings — Security & Secret Management
 
-# Phase 04 Audit Findings — Security & Secret Management
-
-**Executor:** audit-executor
-**Template:** .kilo/commands/audit/phases/04-audit-security.md
+**Executor:** auditor
+**Template:** .ai/audit/templates/audit-findings.md
 **Status:** complete
 **Validated:** no
 
 ---
 
-## Runtime Verification Summary
+## Runtime Verification
 
-| Step | Result |
-|------|--------|
-| R1 — Credential Leak Search | No hardcoded secrets. `.env` gitignored + untracked; only fake test fixtures (`token=secret`, `vk=secret123`). |
-| R2 — Logger Audit | All log calls either redact URLs via `_strip_auth_params` or log only cookie *paths* at debug. Cookie/settings contents never logged. |
-| R3 — File Permission / Ignore Check | `.env` and `*_cookies.txt` are gitignored and untracked (`git check-ignore .env` → `.gitignore:28`). |
-| R4 — Import Verification | `security.py`, `cookies.py` have no import-time side effects that leak credentials. |
-| R5 — Linter / Type Checker | `ruff check` → All checks passed; `mypy` → Success, no issues (2 formatting-only nits in unrelated files). |
-| R6 — Test Suite | 233 passed (incl. 35 security-relevant tests in `test_security.py`, `test_url_sanitizer.py`, `test_config.py`). |
+| Step | Check | Result |
+|------|-------|--------|
+| R1 | Credential leak search (hardcoded keys/tokens/passwords/private keys across repo incl. `.env`) | No hardcoded secrets found. `.env` is untracked and contains placeholder-only (commented) values. Test fixtures use fake values (`mytoken`, `abc123`, `xyz789`). |
+| R2 | Logger audit for secret leakage | No cookie/token/value contents logged. URLs sanitized via `_strip_auth_params` except one outlier (see SEC-002). |
+| R3 | VCS ignore & file-permission check | `.env` ignored. `*_cookies.txt` ignored (verified `git check-ignore` matches dot-prefixed `.{stem}_cookies.txt`). Cookie files created with `0o600` via `os.open`. |
+| R4 | Import verification (no import-time credential side effects) | `Import OK — no side effects` |
+| R5 | Linter / type checker | `ruff check` OK; `ruff format --check` OK (38 files); `mypy` strict OK (23 files, no issues) |
+| R6 | Test suite | `pytest` → 248 passed |
 
 ---
 
 ## Findings
 
-### SEC-001: yt-dlp cookie file is written into the user-chosen download directory instead of a private location
+### SEC-001: Live session-cookie file written to shared downloads directory and not crash-safe
 
 | Field | Value |
 |-------|-------|
 | **ID** | SEC-001 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py` (lines 186, 190), `src/vkdownloader/services/cookies.py` (`_write_netscape_cookie_file`) |
-| **Classification** | advisory |
+| **Severity** | HIGH |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/cookies.py` |
+| **Classification** | mandatory |
 
-**Description:**
-The yt-dlp download path writes live session cookies (a credential that authenticates the user's VK session) into `output_file.parent / f".{output_file.stem}_cookies.txt"` — i.e. the **download/output directory the user supplies on the CLI** (`--output` / `download_dir` setting). This is inconsistent with the ffmpeg path, which correctly writes the equivalent credential to a `tempfile.mkstemp(...)` private temp file (`_temp_headers_file`, `downloader.py:59-77`, created 0o600 and auto-cleaned).
-
-Because the file lands in the user-selected output directory:
-- If the user downloads to a cloud-synced folder (OneDrive/Dropbox/Google Drive) or any shared location, the credential file is briefly materialized there and can be uploaded/synced/exposed before its `finally`-based cleanup runs.
-- Cleanup is **not** guaranteed: the file is created inside `_build_ytdlp_options` (line 187/191) *before* the executor task closure (whose `finally` deletes it, line 616-619) is even scheduled. If the executor task is cancelled between scheduling and execution, the file is orphaned in the output directory.
-
-The file is correctly gitignored (`*_cookies.txt`) and created with `0o600` on Unix, and on Windows the `os.open` mode is a no-op (default user-only ACL), so this is not a critical leak — but it is a real deviation from the guideline that credentials belong in a private/temp location, and from the ffmpeg path's own secure pattern.
+**Description:** When browser cookies are captured for authenticated downloads, live VK session cookies are serialized into a Netscape-format cookie file and written into the **download output directory** (`output_file.parent`), which defaults to `~/Downloads/vkdownloader` — a folder commonly cloud-synced (OneDrive, Dropbox, iCloud) and shared. The file is deleted only inside a `finally` block of the inner `_download()` closure, so an abnormal termination (SIGKILL, OOM-kill, hard crash, power loss) leaves plaintext session credentials persisted on disk in the user's downloads folder (and synced-cloud trash). This deviates from the credential-file invariant that live credentials must reside in a private, crash-reclaimable location.
 
 **Evidence:**
-```python
-# src/vkdownloader/services/downloader.py:184-192
-cookie_file: Path | None = None
-if raw_cookies:
-    cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"   # <- output dir, not temp/private
-    _write_netscape_cookie_file(cookie_file, raw_cookies)
-    ydl_opts["cookiefile"] = str(cookie_file)
-elif cookies:
-    cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-    _write_netscape_cookie_file(cookie_file, cookies)
-```
-```python
-# src/vkdownloader/services/downloader.py:615-619  (cleanup only inside the closure)
-finally:
-    if cookie_file is not None and cookie_file.exists():
-        cookie_file.unlink()
-        logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
-```
-Contrast with the ffmpeg path, which uses a guaranteed-cleanup private temp file:
-```python
-# src/vkdownloader/services/downloader.py:71-77
-fd, path = tempfile.mkstemp(suffix=".headers", prefix="vk_ffmpeg_")
-...
-finally:
-    Path(path).unlink(missing_ok=True)
-```
+- `src/vkdownloader/services/downloader.py:188-189` — cookie file path is the output directory:
+  ```python
+  cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
+  _write_netscape_cookie_file(cookie_file, raw_cookies)
+  ```
+- `src/vkdownloader/services/downloader.py:639-643` — cleanup only in `finally` (not crash-safe):
+  ```python
+  finally:
+      if cookie_file is not None and cookie_file.exists():
+          cookie_file.unlink()
+          logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+  ```
+- Contrast: secure pattern already used for ffmpeg headers at `downloader.py:70` uses `tempfile.mkstemp(...)` (system temp dir, `0o600`, owner-only). Cookie files use no private-temp placement.
+- Mitigations present but incomplete: `_write_netscape_cookie_file` creates the file `0o600` (`services/cookies.py:72`); `*_cookies.txt` is gitignored. Neither covers the abnormal-termination window or the synced-folder exposure.
 
-**Recommendation:**
-- **What:** Write the yt-dlp Netscape cookie file to a private temp location (e.g. `tempfile.mkstemp(suffix=".txt", prefix="vk_cookies_")`, which is 0o600 on all platforms) instead of `output_file.parent`, and rely on `tempfile`'s `finally`-based cleanup rather than the executor closure's `finally`. Keep yt-dlp's `cookiefile` option pointing at that temp path.
-- **Why:** Removes the credential from the user-supplied output tree entirely (no cloud-sync / shared-folder exposure) and removes the dependency on the executor task reaching its `finally` for secure deletion — matching the already-correct ffmpeg path and eliminating an orphaned-credential edge case.
-- **Effort:** small
-- **Priority:** recommended (not mandatory)
+**Recommendation [BEST-PRACTICE]:** Write the Netscape cookie file to a private temp file via `tempfile.mkstemp` (matching `_temp_headers_file`) and clean it up in the same `finally`, so live credentials never land in a user-facing/synced downloads folder. Effort: trivial. Priority: recommended.
+
+---
+
+### SEC-002: Raw user-supplied URL logged verbatim in batch-invalid-URL warning, bypassing `_strip_auth_params`
+
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-002 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Classification** | advisory |
+
+**Description:** In the batch command, URLs read from the user's URL file that fail the video-ID pattern check are logged verbatim via `logger.warning("invalid_url_in_batch", url=stripped)`. Every other URL log call in the codebase wraps the URL in `_strip_auth_params()` (see `extractor.py:59,83,88,125,138,161,218,236`; `downloader.py:303,598,628,707,750,775,802`; `segment_downloader.py:486,797`; `network_monitor.py:66,80,94,102,113,119,136`) precisely to prevent signed CDN / `access_key`-bearing VK URLs from leaking into logs. This is the sole outlier. VK video URLs may carry an `access_key` query parameter (a credential granting access to private videos); logging them raw to structured logs (which may be redirected to a file) violates the "Secrets never logged" invariant.
+
+**Evidence:**
+- `src/vkdownloader/cli.py:574-575`:
+  ```python
+  if not VIDEO_ID_PATTERN.search(stripped):
+      logger.warning("invalid_url_in_batch", url=stripped)
+  ```
+
+**Recommendation [BEST-PRACTICE]:** Pass the URL through `_strip_auth_params(stripped)` (or log only the parsed `video_id`) before `logger.warning`, consistent with the rest of the codebase. Effort: trivial. Priority: recommended.
+
+---
+
+### SEC-003: Validation error handler echoes raw received config values to stderr (latent secret leakage)
+
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-003 |
+| **Severity** | LOW |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Classification** | advisory |
+
+**Description:** `_format_validation_error` appends the raw, unvalidated config input value (`err.get("input")`) to the user-facing error message via `f"    Received: {received!r}"`. This message is emitted with `typer.echo(..., err=True)` (cli.py:474,596), which in production/systemd contexts is captured into log files. The "Error messages don't leak secrets" invariant is therefore violated by pattern: the code has no guard against echoing sensitive input. No finding is rated higher only because `Settings` currently defines no secret-bearing fields (cookies are obtained via live browser automation, not config) — the leak is latent and would become active if any secret field is ever added to configuration.
+
+**Evidence:**
+- `src/vkdownloader/cli.py:61-64`:
+  ```python
+  received = err.get("input")
+  lines.append(f"  - {loc}: {msg}")
+  if received is not None:
+      lines.append(f"    Received: {received!r}")
+  ```
+
+**Recommendation [BEST-PRACTICE]:** Do not echo raw received values; replace with a redacted placeholder (e.g., `"<redacted>"`) or a type-only summary for sensitive field names. Effort: trivial. Priority: recommended (forward-looking hardening).
 
 ---
 
@@ -89,18 +107,22 @@ finally:
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 0 |
+| HIGH | 1 |
 | MEDIUM | 0 |
-| LOW | 1 |
+| LOW | 2 |
 
 ## Mandatory Fixes
 
-None.
+- **[SEC-001]** Relocate the Netscape cookie file from the download output directory to a private `tempfile.mkstemp` location (owner-only, system temp), cleaned up in the existing `finally`. Eliminates live-session-cookie persistence in a commonly cloud-synced downloads folder after abnormal termination. `src/vkdownloader/services/downloader.py:188-189` (write site) and `downloader.py:639-643` (cleanup).
 
 ## Advisory Recommendations
 
-- **SEC-001** (LOW): Write yt-dlp cookie file to a private temp location instead of the download directory, matching the ffmpeg path's secure pattern.
+- **[SEC-002]** Route the batch `invalid_url_in_batch` log through `_strip_auth_params` (or log only `video_id`) so invalid URLs — which may carry VK `access_key` credentials — are redacted like every other URL log call. `src/vkdownloader/cli.py:575`. Effort: trivial.
+- **[SEC-003]** Stop echoing raw `received` config values in `_format_validation_error`; emit a redacted placeholder. Defense-in-depth against future secret-bearing config fields leaking to captured stderr/logs. `src/vkdownloader/cli.py:61-64`. Effort: trivial.
 
 ## Doc Updates Needed
 
-None.
+- (None)
+
+---
+

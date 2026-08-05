@@ -19,6 +19,8 @@ class NetworkMonitor:
     """Monitors network traffic to capture m3u8 URLs from responses."""
 
     M3U8_PATTERN = re.compile(r"(?:https?://)?[^\s\"'<>]+\.m3u8(?:\?[^\s\"'<>]*)?")
+    # Maximum response body size (in bytes) to parse for m3u8 URLs
+    MAX_JSON_BODY_BYTES: int = 1_000_000
 
     def __init__(self, page: Page) -> None:
         """
@@ -72,7 +74,7 @@ class NetworkMonitor:
             if content_length is not None:
                 try:
                     size_bytes = int(content_length)
-                    if size_bytes >= 1_000_000:  # ~1MB threshold
+                    if size_bytes >= self.MAX_JSON_BODY_BYTES:
                         logger.debug(
                             "skipping_oversized_json_response",
                             url=_strip_auth_params(url),
@@ -80,9 +82,30 @@ class NetworkMonitor:
                         )
                         return
                 except ValueError:
-                    pass  # Invalid content-length header, proceed without guard
+                    pass  # Invalid content-length header, fall through to body check
+
+            # Enforce a byte cap even when Content-Length is absent
+            # (chunked/streamed responses may omit the header).
             try:
-                data = await response.json()
+                body = await response.body()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "response_body_error",
+                    url=_strip_auth_params(url),
+                    error=str(e.__class__.__name__),
+                )
+                return
+
+            if len(body) >= self.MAX_JSON_BODY_BYTES:
+                logger.debug(
+                    "skipping_oversized_json_response",
+                    url=_strip_auth_params(url),
+                    size=len(body),
+                )
+                return
+
+            try:
+                data = json.loads(body)
                 self._extract_urls_from_json(data)
             except json.JSONDecodeError:
                 logger.warning(

@@ -405,9 +405,7 @@ class TestRetry429WithBackoff:
         mock_context.__aexit__ = AsyncMock(return_value=None)
         mock_session.get = MagicMock(return_value=mock_context)
 
-        with patch(
-            "vkdownloader.services.downloader_throttle.logger.warning"
-        ) as mock_warning:
+        with patch("vkdownloader.services.downloader_throttle.logger.warning") as mock_warning:
             with patch(
                 "vkdownloader.services.downloader_throttle._strip_auth_params",
                 return_value="https://example.com/segment.ts",
@@ -569,7 +567,9 @@ class TestWaitWithShutdown:
             # Simulate timeout (no shutdown)
             raise TimeoutError()
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for):
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for
+        ):
             result = await _wait_with_shutdown(0.1, mock_event, 0, "https://example.com/segment.ts")
 
         assert result is False
@@ -583,7 +583,9 @@ class TestWaitWithShutdown:
             # Simulate shutdown triggered - return immediately
             return None
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for):
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for", side_effect=mock_wait_for
+        ):
             result = await _wait_with_shutdown(0.1, mock_event, 0, "https://example.com/segment.ts")
 
         assert result is True
@@ -596,7 +598,9 @@ class TestWaitWithShutdown:
         async def mock_sleep(delay: float) -> None:
             sleep_called.append(delay)
 
-        with patch("vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=mock_sleep):
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.sleep", side_effect=mock_sleep
+        ):
             result = await _wait_with_shutdown(0.1, None, 0, "https://example.com/segment.ts")
 
         assert result is False

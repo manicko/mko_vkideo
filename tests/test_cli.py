@@ -87,9 +87,7 @@ class TestDownloadCommand:
             patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                side_effect=KeyboardInterrupt()
-            )
+            mock_extractor.extract_streams = AsyncMock(side_effect=KeyboardInterrupt())
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -584,6 +582,19 @@ class TestConfigurationErrors:
             assert result.exit_code == 1
             assert "Failed to read URL file" in result.output
             assert "Traceback" not in result.output
+
+    def test_download_invalid_env_var_shows_concise_error(self, tmp_path: Path) -> None:
+        """Verify invalid VKDOWNLOADER_* env var produces concise error with field info."""
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890"],
+            env={"VKDOWNLOADER_MAX_RETRIES": "notanint"},
+        )
+
+        assert result.exit_code == 1
+        assert "Configuration error" in result.output
+        assert "max_retries" in result.output
+        assert "Traceback" not in result.output
 
 
 class TestCliHelp:

@@ -66,6 +66,14 @@ vkdownloader download "https://vkvideo.ru/video-123_456" --method yt-dlp
 vkdownloader download "https://vkvideo.ru/video-123_456" -o ./videos
 ```
 
+
+```bash
+vkdownloader download "https://vkvideo.ru/video-225794656_456243903" --quality 1440 --method yt-dlp --output ".\Shows" --no-ssl-verify
+
+```
+
+
+
 ### Batch Download
 
 Create a file with video URLs (one per line):
@@ -74,6 +82,7 @@ Create a file with video URLs (one per line):
 vkdownloader batch ./urls.txt --quality best
 ```
 
+
 ## Programmatic Usage
 
 ```python
@@ -81,6 +90,7 @@ import asyncio
 from pathlib import Path
 from vkdownloader.services.downloader import perform_download
 from vkdownloader.models.enums import DownloadMethod
+
 
 async def download_video():
     # Simple download with method selection
@@ -91,6 +101,7 @@ async def download_video():
         method=DownloadMethod.AUTO,
     )
     return result
+
 
 asyncio.run(download_video())
 ```

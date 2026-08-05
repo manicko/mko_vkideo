@@ -1,6 +1,5 @@
 """Tests for domain models."""
 
-
 from vkdownloader.models.enums import StreamFormat
 from vkdownloader.models.video import Stream, Video, VideoWithStreams
 

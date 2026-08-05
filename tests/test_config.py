@@ -1,9 +1,11 @@
 """Tests for configuration module."""
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
-from vkdownloader.config import Settings
+from vkdownloader.config import Settings, warn_unknown_env_vars
 from vkdownloader.models.enums import CookieSource, LogLevel
 
 
@@ -169,3 +171,48 @@ def test_log_level_validation() -> None:
     with pytest.raises(ValidationError) as exc_info:
         Settings(log_level="INVALID")
     assert "log_level" in str(exc_info.value)
+
+
+class TestWarnUnknownEnvVars:
+    """Tests for the unknown environment variable typo guard."""
+
+    def test_no_unknown_env_vars_returns_empty(self) -> None:
+        """warn_unknown_env_vars returns empty list when only valid vars are set."""
+        # Ensure no unknown VKDOWNLOADER_* vars are set
+        original = dict(os.environ)
+        try:
+            # Remove any VKDOWNLOADER_* vars to get a clean state
+            for key in list(os.environ):
+                if key.startswith("VKDOWNLOADER_"):
+                    del os.environ[key]
+            assert warn_unknown_env_vars() == []
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
+
+    def test_detects_unknown_env_var(self) -> None:
+        """warn_unknown_env_vars detects and returns misspelled env var names."""
+        original = dict(os.environ)
+        try:
+            for key in list(os.environ):
+                if key.startswith("VKDOWNLOADER_"):
+                    del os.environ[key]
+            os.environ["VKDOWNLOADER_MAXRETRIES"] = "9"  # typo: missing underscore
+            result = warn_unknown_env_vars()
+            assert "VKDOWNLOADER_MAXRETRIES" in result
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
+
+    def test_ignores_non_prefixed_env_vars(self) -> None:
+        """warn_unknown_env_vars only checks VKDOWNLOADER_ prefixed vars."""
+        original = dict(os.environ)
+        try:
+            for key in list(os.environ):
+                if key.startswith("VKDOWNLOADER_"):
+                    del os.environ[key]
+            os.environ["SOME_OTHER_VAR"] = "value"
+            assert warn_unknown_env_vars() == []
+        finally:
+            os.environ.clear()
+            os.environ.update(original)

@@ -147,4 +147,3 @@ class TestSanitizeTitle:
         assert not result.startswith(" ")
         assert not result.endswith(" ")
         assert len(result) == 100
-

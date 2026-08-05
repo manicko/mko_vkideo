@@ -1,142 +1,448 @@
----
-name: audit-findings
-description: Structured findings template for audit phase output
-agent: audit-executor
-alwaysApply: false
----
-
-# Phase 01 Audit Findings — Entry Point & Command Layer (CLI)
+# Phase 01 Audit Findings - Entry Point & Command Layer
 
 **Executor:** auditor
-**Template:** .kilo/commands/audit/phases/01-audit-cli.md
-**Status:** complete
+**Template:** .ai/audit/templates/audit-findings.md
+**Status:** in-progress
 **Validated:** no
 
-**Output mode:** `problems-only: true` — only problems are documented.
+---
 
-## Runtime Verification Summary (evidence baseline)
+## Runtime Verification Evidence
 
-| Step | Command | Result |
-|------|---------|--------|
-| R1 Import | `uv run python -c "import vkdownloader.cli"` | OK (no import/dependency errors) |
-| R2 Help | `uv run vkdownloader --help` / `download --help` / `batch --help` | Exit 0, all commands & options enumerated |
-| R3 Lint | `uv run ruff check src/vkdownloader/cli.py` | `All checks passed!` (exit 0) |
-| R3 Format | `uv run ruff format --check src/vkdownloader/cli.py` | `1 file already formatted` (exit 0) |
-| R3 Types | `uv run mypy src/vkdownloader/cli.py` | `Success: no issues found` (exit 0) |
-| R4 Tests | `uv run pytest tests/test_cli.py -q` | `19 passed` (exit 0) |
+### R1 - Import Verification
 
-> R1–R4 pass. The findings below come from behavior exercised at runtime and code inspection of paths **not** covered by the passing tests (all CLI tests mock `vkdownloader.cli.Settings`, so the real settings-construction and file-read paths are never exercised).
+`uv run python -c "import vkdownloader.cli"` produces `IMPORT OK` (exit 0).
+The entry-point module and all downstream submodules (config, exceptions,
+models.*, services.*, utils.*, infrastructure.*) are importable. No
+broken dependencies.
+
+### R2 - Entry Point Help / Schema Verification
+
+| Command | Result |
+|---------|--------|
+| `app --help` (via CliRunner) | Exit 0 - lists `download` and `batch` commands |
+| `download --help` | Exit 0 - all options documented |
+| `batch --help` | Exit 0 - all options documented |
+| `python -m vkdownloader.cli --help` | **Exit 0 - NO output produced** (see CLI-001) |
+| `python -m vkdownloader --help` | **Exit 1 - no __main__.py** at package level |
+| `download <invalid-url>` | Exit 1 - "Invalid URL format" |
+| `download --cookie-source file` | Exit 1 - "Configuration error", no traceback |
+| `download --quality invalid` | Exit 2 - Typer enum validation error |
+
+### R3 - Linter and Type Checker
+
+| Tool | Result |
+|------|--------|
+| `uv run ruff check src/ tests/` | **All checks passed!** (exit 0) |
+| `uv run mypy src/vkdownloader/` | **Success** (exit 0) - one config note: unused tests.* section (see CLI-008) |
+
+### R4 - Test Suite
+
+`uv run pytest tests/test_cli.py -v` -> **23 passed** (0.70s)
+`uv run pytest tests/` -> **248 passed** (9.64s)
+No skipped or failing tests.
 
 ---
 
 ## Findings
 
-### CLI-001: Raw traceback leaks to user for pre-`try` failures (Settings construction, logging setup, batch file read)
+### CLI-001: `python -m vkdownloader.cli` silently exits with no output
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-001 |
-| **Severity** | HIGH |
-| **Type** | RUNTIME-ERROR |
-| **Affected Modules** | `src/vkdownloader/cli.py` (`download` lines 391-395, 436; `batch_download` lines 526-536, 556) |
-| **Classification** | mandatory |
+| **Severity** | MEDIUM |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Classification** | advisory |
 
-**Description:** Both command handlers perform failure-prone work *outside* their `try/except` blocks. In `download`, `Settings(...)`, `setup_logging(settings)` and `_log_env_file_path()` run at lines 392-395, but the guarding `try` only starts at line 436. In `batch_download`, `Settings(...)` (527), `setup_logging` (528) and `urls_file.read_text()` (536) all run before the `try` at line 556. Any exception from these calls (invalid config value, `OSError` creating the log-file directory, `UnicodeDecodeError`/`OSError` reading the URL file) bypasses all handling and prints a full Python traceback. This violates dimension 1 "Consistent error handling / No raw tracebacks leak to the user".
+**Description:**
 
-**Evidence:** Reproduced with a value that fails `Settings` validation:
-```
-$ uv run vkdownloader download "https://vkvideo.ru/video-1_1" --cookie-source file
-+----------------- Traceback (most recent call last) -----------------+
-| C:\...\src\vkdownloader\cli.py:392 in download                      |
-| > 392  settings = Settings(cookie_source=cookie_source, ...)        |
-| C:\...\pydantic_settings\main.py:247 in __init__ ...                |
-+---------------------------------------------------------------------+
-ValidationError: 1 validation error for Settings
-cookie_source
-  Value error, CookieSource.FILE is not implemented. ...
-EXIT=1
-```
-The 130-char stack trace is shown to the end user instead of a one-line message. Note `pydantic.ValidationError` is not a subclass of `ValueError`, so even the existing `except ValueError` (line 445) would not catch it — but it is unreachable anyway because construction is outside the `try`.
+Running `python -m vkdownloader.cli --help` produces zero output and exits 0.
+The module defines a `cli()` entry-point function (cli.py lines 606-608) but
+never invokes it at module level -- there is no `if __name__ == "__main__":
+cli()` guard, and no `src/vkdownloader/__main__.py` file exists. Users who
+invoke the package or module via the standard `python -m` pattern get no
+feedback whatsoever, contrary to every Python CLI convention.
 
-**Recommendation:** Move `Settings(...)`, `setup_logging(...)`, and `urls_file.read_text()` inside the guarded region (or wrap them in a dedicated `try` that maps `ValidationError`/`OSError`/`UnicodeDecodeError` to a concise `typer.echo(..., err=True)` + `raise typer.Exit(code=1)`). This is the entry layer's responsibility: no downstream/config exception should reach the terminal as a traceback.
+**Evidence:**
+
+- cli.py lines 606-608: `def cli() -> None: app()` -- no `__main__` guard.
+- `glob("src/vkdownloader/**/__main__.py")` -> no files found.
+- Runtime: `uv run python -m vkdownloader.cli --help` -> exit 0, no stdout/stderr.
+- Runtime: `uv run python -m vkdownloader --help` -> exit 1 (no __main__.py).
+- Console-script entry point (`vkdownloader = "vkdownloader.cli:cli"` in
+  pyproject.toml line 42) works because it calls cli() explicitly, but
+  `python -m` does not.
+- Installation docs (docs/01-tools/installation.md line 145) only document
+  `vkdownloader --help`, never `python -m`.
+
+**Recommendation:**
+
+Add `if __name__ == "__main__": cli()` at the bottom of cli.py and create
+`src/vkdownloader/__main__.py` calling cli(). This enables both
+`python -m vkdownloader` and `python -m vkdownloader.cli`. Effort: trivial.
+Priority: recommended.
 
 ---
 
-### CLI-002: `CookieSource.FILE` is offered as a valid CLI choice but always crashes
+### CLI-002: Download orchestration logic duplicated in the entry layer
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-002 |
 | **Severity** | MEDIUM |
 | **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/cli.py` (`--cookie-source` options, lines 374-379 & 503-508), `src/vkdownloader/models/enums.py` (line 50), `src/vkdownloader/config.py` (lines 124-136) |
-| **Classification** | mandatory |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Classification** | advisory |
 
-**Description:** The `--cookie-source` option is typed as the full `CookieSource` enum, so `file` is advertised as a selectable value in `--help` (`[none|browser|file]`) and passes Typer's enum validation. However `Settings.validate_cookie_source` unconditionally raises `ValueError` for `file`. The result is that the CLI presents an option it can never honor, and selecting it produces the CLI-001 traceback rather than a clean rejection. Dimension 1 "Input validation: invalid options rejected with clear error messages, not silent defaults / crashes" is violated: the value is accepted at the parser layer and only rejected via an uncaught deep-stack error.
+**Description:**
 
-**Evidence:** `uv run vkdownloader download --help` renders `--cookie-source ... [none|browser|file]` with help text "none or browser (file not implemented)". Runtime invocation with `--cookie-source file` crashes (see CLI-001 evidence). No test covers this path (all `test_cli.py` cases patch `Settings`).
+The `download()` command handler (lines 384-508) contains a nested async
+function `_download()` (lines 418-455) that re-implements the exact same
+download orchestration already encapsulated in `_download_single()` (lines
+166-244) -- both functions live in the entry-point module. The `download()`
+handler should delegate to a single shared service function instead of
+re-implementing extraction, quality selection, output resolution, and
+download invocation inline.
 
-**Recommendation:** Make the exposed choice match reality. Either (a) restrict the CLI option to the implemented subset (e.g. a two-value enum or `click.Choice(["none","browser"])`) so `file` is rejected by Typer with a standard "invalid value" message, or (b) if `file` must remain in the domain enum for future use, catch the validation error at the handler boundary and print an actionable message. Preferred: option (a) — do not surface unimplemented choices in help.
+**Evidence:**
 
-### CLI-003: Batch URL file read uses platform-default encoding (non-portable, can crash on UTF-8 comments)
+`download._download()` (cli.py lines 418-455) duplicates the core sequence
+found in `_download_single()` (cli.py lines 195-227):
+
+| Step | `_download_single()` (batch) | `download._download()` (single) |
+|------|------------------------------|---------------------------------|
+| Create extractor | `VKVideoExtractor(settings=settings)` (line 199) | `VKVideoExtractor(settings=settings)` (line 423) |
+| Extract streams | `await extractor.extract_streams(url)` (line 200) | `await extractor.extract_streams(url)` (line 424) |
+| Guard empty streams | `QualityNotAvailableError(...)` (lines 203-208) | `QualityNotAvailableError(...)` (lines 427-432) |
+| Select quality | `selector.select(video.streams, quality)` (line 211) | `selector.select(video.streams, quality)` (line 439) |
+| Resolve output | `_resolve_output_file(...)` (line 213) | `_resolve_output_file(...)` (line 441) |
+| Download | `perform_download(...)` (lines 215-227) | `perform_download(...)` (lines 443-452) |
+
+The only material differences are: (1) `_download_single` handles batch
+context (semaphore, backoff coordinator, progress callback, index); (2)
+`download._download()` logs available qualities (lines 436-437); (3) return
+types differ (tuple vs Path). The shared extraction-to-download flow is
+identical and should not be duplicated.
+
+This violates the project guideline "Strict Separation of Concerns" and
+"Single Responsibility" -- the entry layer should parse arguments, delegate
+to a service, and present results, not contain parallel download
+orchestration.
+
+**Recommendation:**
+
+Extract the shared download orchestration (extract + guard empty streams +
+quality select + resolve output + `perform_download`) into a service-layer
+function (e.g., `services/downloader.py:download_video()`). Have both
+`download()` and `_download_single()` delegate to it, with batch-specific
+context (semaphore, backoff, progress) passed as optional parameters.
+Effort: medium. Priority: recommended.
+
+---
+
+### CLI-003: Path resolution and exception-mapping helpers live in the entry layer
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-003 |
-| **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py` (`batch_download`, line 536) |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/utils/security.py` |
 | **Classification** | advisory |
 
-**Description:** `urls_file.read_text()` is called with no `encoding=` argument, so it decodes using `locale.getpreferredencoding(False)`. On the project's stated target (Windows) this is typically `cp1252`, not UTF-8. A URL list authored in UTF-8 that contains non-ASCII characters — e.g. a Russian-language comment line (`# описание`), which is plausible for a ru-RU-focused tool — will either be mis-decoded or raise `UnicodeDecodeError`. Because the read is outside the `try` (see CLI-001), a decode failure surfaces as a raw traceback. Behavior also differs across machines/locales, undermining reproducibility.
+**Description:**
 
-**Evidence:** Line 536: `for line in urls_file.read_text().splitlines():` — no encoding specified. `Settings` targets a Windows/ru-RU environment (`locale="ru-RU"`, `timezone="Europe/Moscow"` in `config.py`), making non-ASCII batch files a realistic input. Existing batch tests only write pure-ASCII content (`test_cli.py` lines 119, 133, 147, 161, 211, 251), so this path is untested.
+The entry-point module `cli.py` contains two data-processing helpers that
+belong in the service/utils layer: `_resolve_output_file()` (lines 113-142,
+resolves output paths, validates against traversal, creates directories, and
+generates sanitized filenames) and `_map_exception_to_status()` (lines
+145-163, classifies download exceptions into user-facing status labels).
+These are not CLI-argument-handling concerns -- they are business-logic
+utilities that couple the entry layer to data and model details.
 
-**Recommendation:** Read with an explicit `encoding="utf-8"` (optionally `errors="replace"` or `utf-8-sig` to tolerate a BOM), and handle `OSError`/`UnicodeDecodeError` at the handler boundary with a concise error message. This makes batch input deterministic across platforms.
+**Evidence:**
+
+- cli.py lines 113-142: `_resolve_output_file()` imports `validate_output_path`
+  and `_sanitize_title` from `utils.security` (line 27), then adds path
+  resolution, directory creation, and filename templating logic inline. This
+  mixes path resolution (data concern) with filename generation (model
+  concern) inside the entry layer.
+- cli.py lines 145-163: `_map_exception_to_status()` maps
+  `QualityNotAvailableError`, `VideoNotFoundError`, and `VKDownloadError`
+  to string status labels. This classification logic is testable business
+  logic that is currently untestable in isolation because it is embedded in
+  the CLI module.
+- The project guidelines require "clear boundaries between UI, API, business
+  logic, and data layers" (project.md rule 3).
+
+**Recommendation:**
+
+Move `_resolve_output_file()` into `utils/security.py` alongside
+`validate_output_path` and `_sanitize_title` (it already uses both). Move
+`_map_exception_to_status()` into `exceptions.py` or a dedicated
+`services/exception_mapper.py` so it can be unit-tested independently.
+Effort: small. Priority: recommended.
 
 ---
 
-### CLI-004: Duplicated download-orchestration logic between single and batch paths (already diverged)
+### CLI-004: Batch command lacks catch-all exception handler
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-004 |
 | **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py` (`_download_single` lines 140-218; `download._download` lines 397-434) |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
 | **Classification** | advisory |
 
-**Description:** The core "extract streams -> guard empty streams -> select quality -> resolve output file -> perform_download" sequence is implemented twice: once in `_download_single` (batch) and once in the nested `_download()` inside the `download` command. The two copies have already drifted, which is exactly the failure mode duplication causes:
-- The single path logs `available_streams` / `available_qualities` (lines 414-416); the batch path does not, so batch runs give the user no visibility into what qualities existed.
-- Error handling differs: the single path raises typed exceptions to the outer handler; the batch path maps them to status strings via `_map_exception_to_status`.
-Any future change to the extraction/selection flow must be made in both places or they diverge further. This is orchestration logic living in the entry layer that should be a single shared service function.
+**Description:**
 
-**Evidence:** Compare lines 173-201 (`_download_single`) with lines 402-431 (`download._download`) — near-identical bodies differing only in logging and context/semaphore handling. The divergence in quality-logging is observable at runtime (batch summary output contains no available-quality info).
+The `download()` command handler has a catch-all `except Exception` (line 505)
+that logs the error internally and shows a friendly "An error occurred during
+download" message to the user. The `batch_download()` command handler (lines
+511-603) has **no equivalent catch-all** -- only `ValidationError`, `OSError`,
+and `(KeyboardInterrupt, asyncio.CancelledError)` are caught. Any other
+unexpected exception from `asyncio.run(_run_batch_with_progress(...))`
+would propagate as a raw traceback, inconsistent with the `download()`
+handler and the documented exit-code behavior.
 
-**Recommendation:** Extract one shared coroutine (e.g. `download_one(url, quality, method, settings, ctx) -> result`) in the service layer that both commands call. The CLI handlers then only parse args, invoke the service, and present results/errors. This removes drift risk and thins the handlers per dimension 1.
+**Evidence:**
+
+`download()` error handling (cli.py lines 473-508):
+```python
+except ValidationError as e:
+except ValueError:
+except (KeyboardInterrupt, asyncio.CancelledError):
+except QualityNotAvailableError as e:
+except VideoNotFoundError:
+except Exception:                    # catch-all (line 505)
+    logger.exception("download_failed")
+    typer.echo("An error occurred during download", err=True)
+    raise typer.Exit(code=1) from None
+```
+
+`batch_download()` error handling (cli.py lines 595-603):
+```python
+except ValidationError as e:
+except OSError as e:
+except (KeyboardInterrupt, asyncio.CancelledError):
+    # NO catch-all except Exception
+```
+
+If `_run_batch_with_progress()` raises an unexpected exception (e.g., a bug
+in semaphore creation, progress-manager state, or `asyncio.gather`), the
+user sees a full Python traceback instead of a clean error message and
+exit code 1.
+
+**Recommendation:**
+
+Add a catch-all `except Exception` handler to `batch_download()` mirroring
+`download()`'s pattern: `logger.exception("batch_download_failed")` followed
+by `typer.echo("An error occurred during batch download", err=True)` and
+`raise typer.Exit(code=1) from None`. Effort: trivial. Priority: recommended.
 
 ---
 
-### CLI-005: Business logic (URL parsing/filtering, filename generation, error->status mapping) lives in the entry layer
+### CLI-005: Redundant double-await and redundant exception handling in batch loop
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-005 |
 | **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py` (`batch_download` lines 532-544; `_resolve_output_file` lines 87-116; `_map_exception_to_status` lines 119-137) |
+| **Affected Modules** | `src/vkdownloader/cli.py` |
 | **Classification** | advisory |
 
-**Description:** Dimension 1/2 require the entry layer to contain only parsing, delegation, and presentation. Several pieces of domain logic are instead embedded in `cli.py`:
-- **Batch URL parsing/filtering** (lines 532-544): comment/blank stripping and VK-URL validation via `VIDEO_ID_PATTERN.search` is domain input processing performed inline in the handler.
-- **Output filename construction** (`_resolve_output_file`): directory resolution, title sanitization, and `.mp4` naming policy are business rules living in the entry module.
-- **Exception-to-status translation** (`_map_exception_to_status`): builds user/domain status semantics from exception internals.
+**Description:**
 
-None of these are covered by service-layer tests because they are CLI-local; they also cannot be reused by any non-CLI caller.
+`_run_batch_with_progress()` (lines 247-335) iterates tasks via
+`asyncio.as_completed()` (line 305) but discards each result with a bare
+`await coro` (line 307). It then immediately calls
+`asyncio.gather(*tasks, return_exceptions=True)` (line 323) to re-collect
+the same already-completed task results. The `as_completed` loop's
+`except Exception` handler (line 316) also logs exceptions that `gather`
+already captures as return values, creating redundant exception handling.
 
-**Evidence:** `batch_download` imports and uses `VIDEO_ID_PATTERN` from the extractor (line 23, used line 540) to filter inputs; `_resolve_output_file` (lines 104-114) implements naming policy; `_map_exception_to_status` (lines 128-137) encodes domain status strings — all inside `cli.py`.
+**Evidence:**
 
-**Recommendation:** Move URL-list parsing/validation into a service helper (e.g. `load_batch_urls(path) -> (valid, skipped)`), and consider relocating filename policy to the download/service layer. Keep handlers limited to parse -> call service -> present. Advisory; low risk for current size, but it improves testability and reuse.
+cli.py lines 305-332:
+```python
+for coro in asyncio.as_completed(tasks):
+    try:
+        await coro                       # result discarded
+    except asyncio.CancelledError:
+        ...
+        raise
+    except Exception:
+        logger.exception("unexpected_error_in_batch_progress")  # redundant
+    typer.echo(f"\\r{await _format_progress(total)}", nl=False)
+
+typer.echo()
+results = await asyncio.gather(*tasks, return_exceptions=True)  # re-fetches
+```
+
+`_download_single()` (the task coroutine) catches `QualityNotAvailableError`,
+`VideoNotFoundError`, and `VKDownloadError` internally (returning status
+tuples), so the `as_completed` loop's `except Exception` only fires for truly
+unexpected exceptions -- which `gather(return_exceptions=True)` then captures
+again at line 323 and converts to status tuples at lines 325-332. The
+logging at line 316 provides no additional information beyond what the
+results processing already records.
+
+**Recommendation:**
+
+Simplify the pattern: use a single `asyncio.gather(return_exceptions=True)`
+for result collection and process exceptions in the results-mapping step.
+If live progress updates are needed, use a `progress_callback` parameter on
+the tasks themselves rather than an `as_completed` loop that discards
+results. Effort: small. Priority: recommended.
+
+---
+
+### CLI-006: Single `download` command shows no progress feedback
+
+| Field | Value |
+|-------|-------|
+| **ID** | CLI-006 |
+| **Severity** | LOW |
+| **Type** | DOC-UPDATE |
+| **Affected Modules** | `src/vkdownloader/cli.py`, `docs/99-reference/cli-reference.md`, `docs/99-reference/cli-reference-clean.md` |
+| **Classification** | advisory |
+
+**Description:**
+
+The `download()` command invokes `perform_download()` without a
+`progress_callback` (cli.py lines 443-452), so single-download users see no
+live progress -- just a brief "Downloaded: <path>" message on success. The
+`batch_download()` command uses `ProgressManager` and per-URL progress
+callbacks (lines 279-294), and the docs explicitly acknowledge the gap: "the
+single `download` command shows no live progress during execution"
+(cli-reference.md line 17; cli-reference-clean.md line 17). This is an
+inconsistent user experience between the two commands.
+
+**Evidence:**
+
+- cli.py lines 443-452: `perform_download(url, str(stream.quality),
+  output_file, method, extractor, settings, video_data=video,
+  selected_stream=stream)` -- no `progress_callback` kwarg passed.
+- cli.py lines 279-294: `batch_download()` creates callbacks via
+  `_create_progress_callback()` and wires them through
+  `DownloadContext(progress_callback=callbacks[i])`.
+- `docs/99-reference/cli-reference.md` line 17: "the single `download`
+  command shows no live progress during execution."
+- `docs/01-tools/vkdownloader-overview.md` lines 173-197: documents
+  `FfmpegProgress`, `ProgressParser`, and `progress_callback` infrastructure
+  that exists but is not wired into the single `download` command.
+
+**Recommendation:**
+
+Wire the existing `ProgressManager` + `_create_progress_callback()` mechanism
+(already proven in batch) into the single `download` command so both commands
+provide consistent progress feedback. At minimum, document the limitation
+prominently in the `download` command's help text and the CLI reference docs
+so users know to use `batch` for progress visibility. Effort: medium.
+Priority: recommended.
+
+---
+
+### CLI-007: Incorrect thread-safety claim in progress callback docstring
+
+| Field | Value |
+|-------|-------|
+| **ID** | CLI-007 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/services/downloader_throttle.py`, `src/vkdownloader/services/downloader.py` |
+| **Classification** | advisory |
+
+**Description:**
+
+The `_create_progress_callback()` docstring (cli.py lines 88-93) and the
+`ProgressManager.update_sync()` docstring (downloader_throttle.py lines
+106-121) both claim that progress callbacks "execute sequentially in the
+single-threaded asyncio event loop" and are safe to call without lock
+protection. In reality, yt-dlp progress hooks fire inside a thread-pool
+executor (`loop.run_in_executor`), so callbacks execute from worker threads
+-- not the event loop thread.
+
+**Evidence:**
+
+- cli.py lines 88-93: docstring states "callbacks execute sequentially in
+  the single-threaded asyncio event loop."
+- downloader.py lines 622-648: yt-dlp's `_download()` runs via
+  `loop.run_in_executor(None, _download)`:
+  ```python
+  loop = asyncio.get_running_loop()
+  download_task = asyncio.ensure_future(loop.run_in_executor(None, _download))
+  ```
+  yt-dlp's progress hook (`_progress_hook`, lines 199-212) is called from
+  within this executor thread, invoking `progress_callback(video_id,
+  downloaded, total)` -- which calls `update_sync()` from a worker thread.
+- downloader_throttle.py lines 106-121: `update_sync()` docstring states
+  "This method is for use with sync callbacks that run within the asyncio
+  event loop." -- incorrect; the callbacks run in executor threads.
+- In CPython, dict assignment is GIL-atomic so no data corruption occurs in
+  practice, but the documentation is misleading and the pattern is fragile
+  if the GIL assumptions change.
+
+**Recommendation:**
+
+Correct both docstrings to accurately state that progress callbacks run in
+executor threads (not the event loop). If thread-safety is a concern beyond
+CPython's GIL, use the async `update()` method (which acquires the asyncio
+lock) -- but note this would require the callback to schedule an async
+callback via `asyncio.run_coroutine_threadsafe()`. Effort: trivial (docstring
+fix) to small (locking change). Priority: recommended.
+
+---
+
+### CLI-008: mypy config has unused `tests.*` override section
+
+| Field | Value |
+|-------|-------|
+| **ID** | CLI-008 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `pyproject.toml` |
+| **Classification** | advisory |
+
+**Description:**
+
+Running `uv run mypy src/vkdownloader/` emits the warning
+`unused section(s): module = ['tests.*']`. The `[[tool.mypy.overrides]]`
+block for `tests.*` (pyproject.toml lines 89-91) is never matched because
+the mypy invocation only scans `src/vkdownloader/`, not `tests/`. The override
+is silently ignored, producing confusing noise for developers running type
+checks.
+
+**Evidence:**
+
+- pyproject.toml lines 89-91:
+  ```toml
+  [[tool.mypy.overrides]]
+  module = "tests.*"
+  disallow_untyped_defs = false
+  ```
+- pyproject.toml lines 93-95 (the `vkdownloader.cli` override IS used and
+  correct):
+  ```toml
+  [[tool.mypy.overrides]]
+  module = "vkdownloader.cli"
+  disallow_untyped_decorators = false
+  ```
+- Runtime: `uv run mypy src/vkdownloader/` -> "pyproject.toml: note: unused
+  section(s): module = ['tests.*']"
+
+**Recommendation:**
+
+Either (a) add a separate mypy invocation for tests (e.g.,
+`mypy src/ tests/`) so the override is exercised, or (b) scope the `tests.*`
+override so it only appears when tests are included in the scan. The
+`vkdownloader.cli` override should be retained -- it correctly suppresses
+`disallow_untyped_decorators` for Typer's decorator-based command functions.
+Effort: trivial. Priority: recommended.
 
 ---
 
@@ -145,29 +451,31 @@ None of these are covered by service-layer tests because they are CLI-local; the
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 1 |
+| HIGH | 0 |
 | MEDIUM | 3 |
-| LOW | 1 |
+| LOW | 5 |
 
 ## Mandatory Fixes
 
-- **CLI-001** (HIGH) — Pre-`try` failures (Settings construction, logging setup, batch file read) leak raw tracebacks to the user. Wrap/relocate these calls into guarded error handling.
-- **CLI-002** (MEDIUM) — `--cookie-source file` is advertised as a valid choice but always crashes; restrict the exposed CLI choices to implemented values (or reject cleanly).
+No findings classified as mandatory (security, data loss, or correctness
+violations). All 8 findings are advisory.
 
 ## Advisory Recommendations
 
-- **CLI-003** (MEDIUM) — Read the batch URL file with explicit `encoding="utf-8"` and handle decode/OS errors; current platform-default decoding is non-portable.
-- **CLI-004** (MEDIUM) — Deduplicate the single/batch download orchestration into one shared service coroutine; the two copies have already diverged (missing available-quality logging in batch).
-- **CLI-005** (LOW) — Move URL parsing/filtering, filename generation, and exception->status mapping out of `cli.py` into the service layer.
+| ID | Severity | Summary |
+|----|----------|---------|
+| CLI-001 | MEDIUM | `python -m vkdownloader.cli` produces no output -- add `__main__` guard and `__main__.py` |
+| CLI-002 | MEDIUM | Download orchestration duplicated in entry layer -- extract to service-layer function |
+| CLI-003 | LOW | `_resolve_output_file` and `_map_exception_to_status` belong in utils/exceptions layer |
+| CLI-004 | MEDIUM | `batch_download()` missing catch-all `except Exception` -- inconsistent error handling |
+| CLI-005 | LOW | Redundant `as_completed` + `gather` double-await and exception logging in batch loop |
+| CLI-006 | LOW | Single `download` command has no progress feedback -- wire in existing `ProgressManager` |
+| CLI-007 | LOW | Progress callback docstrings falsely claim event-loop-thread execution |
+| CLI-008 | LOW | mypy `tests.*` override section is unused when scanning `src/` only |
 
 ## Doc Updates Needed
 
-- The `--cookie-source` help text and `config.py` docstrings acknowledge "file not implemented", yet the value remains selectable. If CLI-002 is fixed by removing `file` from the exposed choices, the "(file not implemented)" note in the option help (cli.py lines 378, 507) and the `cookie_source` field description (`config.py` line 97) become obsolete and should be updated.
-
----
-
-## Notes / Non-findings (context only, not counted)
-
-- No reverse imports found: a search for imports of `vkdownloader.cli` inside `src/` returned nothing — layer-boundary import direction (dimension 2) is clean.
-- Async bridging via `asyncio.run` and signal-handler setup/cleanup inside the async context is structurally sound; no nested-loop or double-run issues observed in code. (Windows `add_signal_handler` NotImplementedError fallback to `signal.signal` exists in `services/signal_handlers.py`; deeper runtime interruption behavior belongs to the services phase.)
-- Exit codes are meaningful (0 success, 1 failure, 130 on interrupt) — no finding.
+| ID | Label | Description |
+|----|-------|-------------|
+| CLI-001 | [DOC-UPDATE] | Installation docs should document `python -m vkdownloader` invocation |
+| CLI-006 | [DOC-UPDATE] | CLI reference docs should prominently warn that `download` shows no live progress |

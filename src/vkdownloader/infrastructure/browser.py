@@ -6,6 +6,7 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 from structlog import get_logger
 
 from ..config import Settings
+from ..exceptions import ExtractionError
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,7 @@ class BrowserManager:
         except Exception:
             logger.error("browser_launch_failed", exc_info=True)
             await playwright_instance.stop()
-            raise
+            raise ExtractionError("Failed to launch browser for video extraction") from None
 
         self.playwright = playwright_instance
         self.browser = browser
@@ -50,13 +51,19 @@ class BrowserManager:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Close browser and stop Playwright."""
+        """Close browser and stop Playwright.
+
+        Guarantees ``playwright.stop()`` runs even if ``browser.close()``
+        raises, preventing orphaned Playwright driver subprocesses.
+        """
         logger.info("closing_browser")
 
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
+        try:
+            if self.browser:
+                await self.browser.close()
+        finally:
+            if self.playwright:
+                await self.playwright.stop()
 
     async def create_stealth_page(self) -> Page:
         """

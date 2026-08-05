@@ -12,8 +12,15 @@ def test_select_best_quality() -> None:
     """Test quality selector chooses best stream."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270),
-        Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
+        Stream(
+            url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270
+        ),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
     ]
 
     result = selector.select(streams, QualityEnum.BEST)
@@ -24,9 +31,18 @@ def test_select_worst_quality() -> None:
     """Test quality selector chooses worst stream."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270),
-        Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
+        Stream(
+            url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270
+        ),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
     ]
 
     result = selector.select(streams, QualityEnum.WORST)
@@ -37,8 +53,15 @@ def test_quality_not_available_raises() -> None:
     """Test quality selector raises QualityNotAvailableError when requested quality not found."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
-        Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
     ]
 
     # Request 480p which doesn't exist - should raise QualityNotAvailableError
@@ -57,8 +80,12 @@ def test_select_specific_quality() -> None:
     """Test quality selector chooses specific quality when available."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
-        Stream(url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360
+        ),
     ]
 
     result = selector.select(streams, QualityEnum.Q480)
@@ -79,7 +106,9 @@ def test_list_available_qualities() -> None:
     streams = [
         Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720"),
         Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080"),
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720"),  # duplicate
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720"
+        ),  # duplicate
     ]
 
     qualities = selector.list_available_qualities(streams)
@@ -90,8 +119,12 @@ def test_find_quality_match_returns_matching_stream() -> None:
     """Test _find_quality_match finds stream by quality string."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
-        Stream(url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360
+        ),
     ]
 
     result = selector._find_quality_match(streams, "480")
@@ -103,8 +136,12 @@ def test_find_quality_match_returns_none_for_no_match() -> None:
     """Test _find_quality_match returns None when quality not found."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
-        Stream(url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480", height=360
+        ),
     ]
 
     result = selector._find_quality_match(streams, "1080")
@@ -115,8 +152,12 @@ def test_find_quality_match_handles_p_suffix() -> None:
     """Test _find_quality_match matches quality with or without p suffix."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720p", height=540),
-        Stream(url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480p", height=360),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720p", height=540
+        ),
+        Stream(
+            url="https://example.com/480p.m3u8", format=StreamFormat.HLS, quality="480p", height=360
+        ),
     ]
 
     # Match with "720" against stream quality "720p"
@@ -129,9 +170,18 @@ def test_get_fallback_stream_returns_best_quality() -> None:
     """Test _get_fallback_stream returns stream with highest resolution."""
     selector = QualitySelector()
     streams = [
-        Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540),
-        Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
-        Stream(url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270),
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
+        Stream(
+            url="https://example.com/240p.m3u8", format=StreamFormat.HLS, quality="240", height=270
+        ),
     ]
 
     result = selector._get_fallback_stream(streams)
@@ -144,7 +194,12 @@ def test_get_fallback_stream_handles_none_height() -> None:
     selector = QualitySelector()
     streams = [
         Stream(url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720"),
-        Stream(url="https://example.com/1080p.m3u8", format=StreamFormat.HLS, quality="1080", height=1080),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
     ]
 
     result = selector._get_fallback_stream(streams)

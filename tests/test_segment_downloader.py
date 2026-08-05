@@ -132,9 +132,7 @@ class TestFetchPlaylistWithRetry:
         assert fetch_statuses == [410, 200]
 
     @pytest.mark.asyncio
-    async def test_no_refresh_when_status_not_403_or_410(
-        self, test_settings: Settings
-    ) -> None:
+    async def test_no_refresh_when_status_not_403_or_410(self, test_settings: Settings) -> None:
         """Test that non-403/410 errors return None without refreshing."""
         video_url = "https://vkvideo.ru/video-12345_67890"
         m3u8_url = "https://example.com/initial.m3u8"
@@ -231,9 +229,7 @@ class TestFetchPlaylistWithRetry:
         assert refresh_call_count == 0
 
     @pytest.mark.asyncio
-    async def test_refresh_failure_falls_through(
-        self, test_settings: Settings
-    ) -> None:
+    async def test_refresh_failure_falls_through(self, test_settings: Settings) -> None:
         """Test that a refresh returning None yields no retry and returns None."""
         video_url = "https://vkvideo.ru/video-12345_67890"
         m3u8_url = "https://example.com/initial.m3u8"

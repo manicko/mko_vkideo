@@ -30,6 +30,7 @@ from .ffmpeg_utils import (
     _build_ffmpeg_concat_command,
     _merge_segments_batched,
     cancel_ffmpeg_process,
+    check_ffmpeg_available,
     read_progress,
 )
 from .quality import QualitySelector
@@ -39,9 +40,7 @@ from .segment_downloader import (
     _download_segment_parallel,
     _download_segment_sequential,
     _fetch_playlist_with_retry,
-    _load_downloaded_count,
     _parse_m3u8_segments,
-    _save_downloaded_count,
     download_hls_with_resume,
 )
 from .signal_handlers import setup_signal_handlers
@@ -136,6 +135,7 @@ def _build_ytdlp_options(
     raw_cookies: list[Cookie] | None,
     video_id: str,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    shutdown_event: asyncio.Event | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     """
     Build yt-dlp options dictionary for video download.
@@ -149,6 +149,8 @@ def _build_ytdlp_options(
         raw_cookies: Optional raw Cookie objects for Netscape format.
         video_id: Video ID for progress callback.
         progress_callback: Optional callback for download progress.
+        shutdown_event: Optional asyncio.Event checked by the progress hook
+            to abort in-progress downloads during graceful shutdown.
 
     Returns:
         Tuple of (ydl_opts dict, cookie_file Path or None).
@@ -191,10 +193,15 @@ def _build_ytdlp_options(
         _write_netscape_cookie_file(cookie_file, cookies)
         ydl_opts["cookiefile"] = str(cookie_file)
 
-    # Add progress hook if callback provided
-    if progress_callback:
+    # Add progress hook with shutdown signal awareness
+    if shutdown_event is not None or progress_callback is not None:
 
         def _progress_hook(d: dict[str, Any]) -> None:
+            # Abort in-progress download promptly when shutdown is requested
+            if shutdown_event is not None and shutdown_event.is_set():
+                raise RuntimeError("Download cancelled")
+            if progress_callback is None:
+                return
             if d.get("status") == "downloading":
                 downloaded = d.get("downloaded_bytes", 0)
                 total = d.get("total_bytes_estimate", 0) or d.get("total_bytes", 0)
@@ -226,8 +233,7 @@ def _build_ytdlp_options(
 #   * segment_downloader.py:
 #       download_hls_with_resume, _cleanup_segments, _download_segment,
 #       _download_segment_parallel, _download_segment_sequential,
-#       _fetch_playlist_with_retry, _load_downloaded_count,
-#       _parse_m3u8_segments, _save_downloaded_count
+#       _fetch_playlist_with_retry, _parse_m3u8_segments
 #   * downloader_throttle.py:
 #       _retry_429_with_backoff
 #   * cookies.py:
@@ -239,6 +245,7 @@ __all__ = [
     "HLSDownloader",
     "ProgressParser",
     "cancel_ffmpeg_process",
+    "check_ffmpeg_available",
     "download_hls_with_resume",
     "download_with_ytdlp_with_resume_fallback",
     "perform_download",
@@ -252,11 +259,9 @@ __all__ = [
     "_download_segment_parallel",
     "_download_segment_sequential",
     "_fetch_playlist_with_retry",
-    "_load_downloaded_count",
     "_merge_segments_batched",
     "_parse_m3u8_segments",
     "_retry_429_with_backoff",
-    "_save_downloaded_count",
     "setup_signal_handlers",
 ]
 
@@ -331,60 +336,78 @@ class HLSDownloader:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stderr_chunks: list[bytes] = []
+            try:
+                stderr_chunks: list[bytes] = []
 
-            shutdown_event = get_shutdown_event()
+                shutdown_event = get_shutdown_event()
 
-            async def _monitor_progress() -> None:
-                """Read progress and call callback, while collecting stderr for error handling."""
-                assert process.stderr is not None
-                async for progress in read_progress(process.stderr, stderr_collector=stderr_chunks):
-                    if shutdown_event.is_set():
-                        if not await cancel_ffmpeg_process(process):
-                            logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
-                        break
-                    if progress_callback:
-                        progress_callback(progress)
+                async def _monitor_progress() -> None:
+                    """Read progress and call callback, while collecting stderr for error handling."""
+                    assert process.stderr is not None
+                    async for progress in read_progress(
+                        process.stderr, stderr_collector=stderr_chunks
+                    ):
+                        if shutdown_event.is_set():
+                            if not await cancel_ffmpeg_process(process):
+                                logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                            break
+                        if progress_callback:
+                            progress_callback(progress)
 
-            async def _drain_stderr() -> None:
-                """Drain stderr to prevent buffer deadlock when no callback is provided."""
-                assert process.stderr is not None
-                while True:
-                    if shutdown_event.is_set():
-                        if not await cancel_ffmpeg_process(process):
-                            logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
-                        break
-                    line = await process.stderr.readline()
-                    if not line:
-                        break
-                    stderr_chunks.append(line)
+                async def _drain_stderr() -> None:
+                    """Drain stderr to prevent buffer deadlock when no callback is provided."""
+                    assert process.stderr is not None
+                    while True:
+                        if shutdown_event.is_set():
+                            if not await cancel_ffmpeg_process(process):
+                                logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                            break
+                        line = await process.stderr.readline()
+                        if not line:
+                            break
+                        stderr_chunks.append(line)
 
-            # Run process wait and stderr reading concurrently
-            if progress_callback:
-                process_task = asyncio.create_task(process.wait())
-                monitor_task = asyncio.create_task(_monitor_progress())
-                await _await_first_and_cancel_others(process_task, monitor_task)
-            else:
-                process_task = asyncio.create_task(process.wait())
-                drain_task = asyncio.create_task(_drain_stderr())
-                await _await_first_and_cancel_others(process_task, drain_task)
+                # Run process wait and stderr reading concurrently.
+                # _await_first_and_cancel_others may cancel process.wait() if the
+                # reader task finishes first (e.g. read_progress breaks on
+                # "progress=end" before ffmpeg exits). We reap the process
+                # afterwards to ensure returncode is set before the success check.
+                if progress_callback:
+                    process_task = asyncio.create_task(process.wait())
+                    monitor_task = asyncio.create_task(_monitor_progress())
+                    await _await_first_and_cancel_others(process_task, monitor_task)
+                else:
+                    process_task = asyncio.create_task(process.wait())
+                    drain_task = asyncio.create_task(_drain_stderr())
+                    await _await_first_and_cancel_others(process_task, drain_task)
 
-            stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
+                # Ensure the process is fully reaped before reading returncode.
+                # If wait() was cancelled, returncode may still be None.
+                if process.returncode is None:
+                    await process.wait()
 
-            if shutdown_event.is_set():
-                if not await cancel_ffmpeg_process(process):
-                    logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
-                return None
+                stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
-            if process.returncode != 0:
-                error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
-                logger.error(
-                    "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
-                )
-                return None
+                if shutdown_event.is_set():
+                    if not await cancel_ffmpeg_process(process):
+                        logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                    return None
 
-            logger.info("ffmpeg_download_completed", output=str(output_file))
-            return output_file
+                if process.returncode != 0:
+                    error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
+                    logger.error(
+                        "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
+                    )
+                    return None
+
+                logger.info("ffmpeg_download_completed", output=str(output_file))
+                return output_file
+            finally:
+                # Guarantee ffmpeg is terminated even on CancelledError or
+                # unhandled exception, preventing orphaned processes.
+                if process.returncode is None:
+                    if not await cancel_ffmpeg_process(process):
+                        logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
 
 
 async def download_with_ytdlp_with_resume_fallback(
@@ -593,6 +616,7 @@ async def _download_with_ytdlp(
         raw_cookies,
         video_id,
         progress_callback,
+        shutdown_event=shutdown_event,
     )
 
     def _download() -> str:
@@ -731,6 +755,10 @@ async def perform_download(
     if settings is None:
         settings = Settings()
 
+    # Probe ffmpeg availability once at startup so users learn about a missing
+    # binary before a long download fails at the merge step.
+    check_ffmpeg_available()
+
     if extractor is None:
         extractor = VKVideoExtractor(settings=settings)
 
@@ -768,6 +796,14 @@ async def perform_download(
                 progress_callback=progress_callback,
             )
         case DownloadMethod.FFMPEG:
+            if not settings.ssl_verify:
+                logger.warning(
+                    "ssl_verify_ignored_for_ffmpeg",
+                    url=_strip_auth_params(url),
+                    hint="The --no-ssl-verify flag is not applied to the direct ffmpeg "
+                    "download path; use --method yt-dlp or --method auto for SSL "
+                    "verification control on the CDN connection.",
+                )
             m3u8_url, cookies, raw_cookies = await _resolve_cookies(
                 extractor, settings, url, m3u8_url, quality
             )

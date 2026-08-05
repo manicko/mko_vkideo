@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,35 @@ from pathlib import Path
 from structlog import get_logger
 
 logger = get_logger(__name__)
+
+# Module-level cache: PATH lookup happens only once per process lifetime
+_ffmpeg_available: bool | None = None
+
+
+def check_ffmpeg_available() -> bool:
+    """Check whether the ``ffmpeg`` binary is present on the system PATH.
+
+    Results are cached within the process so the (cheap) ``shutil.which``
+    lookup runs at most once. When ``ffmpeg`` is not found a warning is
+    emitted on the first detection, so users learn about the missing
+    dependency *before* a long download finishes and the merge step fails
+    with an opaque ``FileNotFoundError``.
+
+    Returns:
+        ``True`` if ``ffmpeg`` was found on ``PATH``, ``False`` otherwise.
+    """
+    global _ffmpeg_available
+    if _ffmpeg_available is None:
+        _ffmpeg_available = shutil.which("ffmpeg") is not None
+        if not _ffmpeg_available:
+            logger.warning(
+                "ffmpeg_not_found",
+                hint=(
+                    "ffmpeg binary not found on PATH; downloads using ffmpeg "
+                    "or segment merge will fail"
+                ),
+            )
+    return _ffmpeg_available
 
 
 @dataclass

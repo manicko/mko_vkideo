@@ -1,11 +1,11 @@
 """Tests for browser infrastructure: BrowserManager and NetworkMonitor."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.exceptions import ExtractionError
 from vkdownloader.infrastructure.browser import BrowserManager
 from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor
 
@@ -56,6 +56,46 @@ class TestBrowserManager:
         mock_browser.close.assert_called_once()
         mock_playwright.stop.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_browser_manager_context_exit_stops_playwright_on_browser_close_error(
+        self, test_settings: Settings
+    ) -> None:
+        """Test playwright.stop() is called even when browser.close() raises."""
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+        mock_browser.close = AsyncMock(side_effect=RuntimeError("close failed"))
+        mock_playwright = AsyncMock()
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        # __aexit__ guarantees playwright.stop() runs via try/finally,
+        # but does not suppress the browser.close() exception
+        with pytest.raises(RuntimeError, match="close failed"):
+            await manager.__aexit__(None, None, None)
+
+        mock_browser.close.assert_called_once()
+        # playwright.stop() must still run despite browser.close() raising
+        mock_playwright.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_browser_manager_launch_failure_raises_extraction_error(
+        self, test_settings: Settings
+    ) -> None:
+        """Test that browser launch failure is wrapped in ExtractionError."""
+        manager = BrowserManager(settings=test_settings)
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_playwright:
+            mock_instance = AsyncMock()
+            mock_playwright.return_value.start = AsyncMock(return_value=mock_instance)
+            mock_instance.chromium.launch = AsyncMock(side_effect=RuntimeError("launch failed"))
+            mock_instance.stop = AsyncMock()
+
+            with pytest.raises(ExtractionError, match="Failed to launch browser"):
+                await manager.__aenter__()
+
+            # playwright.stop() should be called during cleanup
+            mock_instance.stop.assert_called_once()
+
 
 class TestNetworkMonitor:
     """Tests for NetworkMonitor class."""
@@ -101,8 +141,8 @@ class TestNetworkMonitor:
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json = AsyncMock(
-            return_value={"url": "https://cdn.example.com/stream.m3u8", "data": "value"}
+        mock_response.body = AsyncMock(
+            return_value=b'{"url": "https://cdn.example.com/stream.m3u8", "data": "value"}'
         )
 
         await monitor._intercept_response(mock_response)
@@ -124,11 +164,7 @@ class TestNetworkMonitor:
         mock_page = MagicMock()
         monitor = NetworkMonitor(mock_page)
 
-        data: JsonValue = {
-            "video": {
-                "quality": [{"url": "https://example.com/720p.m3u8"}]
-            }
-        }
+        data: JsonValue = {"video": {"quality": [{"url": "https://example.com/720p.m3u8"}]}}
         monitor._extract_urls_from_json(data)
 
         assert "https://example.com/720p.m3u8" in monitor.m3u8_urls
@@ -143,7 +179,7 @@ class TestNetworkMonitor:
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json = AsyncMock(side_effect=json.JSONDecodeError("test", "test", 0))
+        mock_response.body = AsyncMock(return_value=b"invalid json data")
 
         # Should not raise - exception handled gracefully
         await monitor._intercept_response(mock_response)
@@ -160,9 +196,27 @@ class TestNetworkMonitor:
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json = AsyncMock(side_effect=RuntimeError("network error"))
+        mock_response.body = AsyncMock(side_effect=RuntimeError("network error"))
 
         # Should not raise - exception handled gracefully
         await monitor._intercept_response(mock_response)
         # No URL should be extracted (error)
+        assert len(monitor.m3u8_urls) == 0
+
+    @pytest.mark.asyncio
+    async def test_network_monitor_skips_oversized_body_without_content_length(self) -> None:
+        """Test NetworkMonitor skips JSON parsing when body exceeds cap and Content-Length is absent."""
+        mock_page = MagicMock()
+        mock_page.on = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        mock_response = MagicMock()
+        mock_response.url = "https://api.example.com/video"
+        mock_response.headers = {"content-type": "application/json"}
+        # No content-length header; body exceeds the 1 MB cap
+        mock_response.body = AsyncMock(return_value=b"x" * 1_000_000)
+
+        await monitor._intercept_response(mock_response)
+
+        # No URL should be extracted (body too large)
         assert len(monitor.m3u8_urls) == 0

@@ -5,6 +5,8 @@ import re
 
 import yt_dlp
 from playwright.async_api import Cookie, Page
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from structlog import get_logger
 
 from ..config import Settings
@@ -209,7 +211,12 @@ class VKVideoExtractor:
             page = await browser.create_stealth_page()
             monitor = NetworkMonitor(page)
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except (PlaywrightError, PlaywrightTimeoutError) as e:
+                raise ExtractionError(
+                    f"Failed to navigate to video page: {_strip_auth_params(url)}"
+                ) from e
             await asyncio.sleep(self.settings.browser_pre_interaction_wait)
             await self._simulate_video_interaction(page)
             await asyncio.sleep(self.settings.browser_post_interaction_wait)
@@ -272,5 +279,5 @@ class VKVideoExtractor:
         try:
             await page.click(".VideoPlayer")
             logger.debug("clicked_video_player")
-        except TimeoutError:
+        except PlaywrightTimeoutError:
             logger.debug("video_player_click_failed", exc_info=True)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import random
 import ssl
 from collections.abc import Callable
@@ -198,10 +197,10 @@ async def _do_parallel_download_attempt(
     attempt: int,
     max_retries: int,
     download_timeout: int = 300,
-) -> bool:
+) -> bool | None:
     """Perform a single download attempt in parallel mode.
 
-    Returns True on success, False for fatal errors.
+    Returns True on success, None for retryable status codes, False for fatal errors.
     """
     result = await _run_parallel_download_with_backoff(
         session,
@@ -214,7 +213,7 @@ async def _do_parallel_download_attempt(
         max_retries,
         download_timeout=download_timeout,
     )
-    return result is True
+    return result
 
 
 async def _try_single_download_attempt(
@@ -227,8 +226,12 @@ async def _try_single_download_attempt(
     attempt: int,
     max_retries: int,
     download_timeout: int = 300,
-) -> bool:
-    """Try a single download attempt, return True on success. Handles exceptions."""
+) -> bool | None:
+    """Try a single download attempt, return True on success. Handles exceptions.
+
+    Returns True on success, None for retryable failures (including network
+    errors), False for fatal HTTP status codes (non-retryable).
+    """
     try:
         return await _do_parallel_download_attempt(
             session,
@@ -243,7 +246,7 @@ async def _try_single_download_attempt(
         )
     except aiohttp.ClientError as e:
         logger.error("segment_download_error", error=str(e))
-        return False
+        return None
 
 
 async def _download_segment_parallel(
@@ -279,7 +282,7 @@ async def _download_segment_parallel(
         if await _check_backoff_before_attempt(backoff_coordinator, video_url, shutdown_event):
             return False
 
-        if await _try_single_download_attempt(
+        result = await _try_single_download_attempt(
             session,
             segment_url,
             output_path,
@@ -289,8 +292,13 @@ async def _download_segment_parallel(
             attempt,
             max_retries,
             download_timeout=download_timeout,
-        ):
+        )
+        if result is True:
             return True
+        if result is False:
+            # Fatal error (non-retryable HTTP status) — fail fast, no retry
+            return False
+        # result is None: retryable, continue loop
 
     return False
 
@@ -347,33 +355,18 @@ async def _download_segment(
     )
 
 
-def _load_downloaded_count(metadata_file: Path) -> int:
-    """Load downloaded segment count from metadata."""
-    if metadata_file.exists():
-        try:
-            with open(metadata_file, encoding="utf-8") as f:
-                data: dict[str, int] = json.load(f)
-                return data.get("downloaded_count", 0)
-        except (json.JSONDecodeError, OSError):
-            return 0
-    return 0
+def _cleanup_segments(segments_dir: Path) -> None:
+    """Clean up downloaded segments.
 
-
-def _save_downloaded_count(metadata_file: Path, count: int) -> None:
-    """Save downloaded segment count to metadata."""
-    with open(metadata_file, "w", encoding="utf-8") as f:
-        json.dump({"downloaded_count": count}, f)
-
-
-def _cleanup_segments(segments_dir: Path, metadata_file: Path) -> None:
-    """Clean up downloaded segments."""
+    Args:
+        segments_dir: Directory containing downloaded segments.
+    """
     for f in segments_dir.glob("*"):
         f.unlink()
     try:
         segments_dir.rmdir()
     except OSError:
         pass
-    metadata_file.unlink(missing_ok=True)
 
 
 async def _refresh_token_and_retry(
@@ -523,7 +516,6 @@ async def _await_and_cancel(
 
 async def _tally_and_merge(
     download_results: list[bool],
-    metadata_file: Path,
     segments: list[str],
     segments_dir: Path,
     output_file: Path,
@@ -532,9 +524,11 @@ async def _tally_and_merge(
 ) -> Path | None:
     """Tally download results and merge if all segments downloaded.
 
+    Uses ``download_results`` to detect per-segment failures explicitly,
+    falling back to filesystem count for progress reporting.
+
     Args:
-        download_results: Results from completed download tasks.
-        metadata_file: Path to progress metadata file.
+        download_results: Results from completed download tasks (True = success).
         segments: List of all segment URLs.
         segments_dir: Directory containing downloaded segments.
         output_file: Final output file path.
@@ -545,17 +539,23 @@ async def _tally_and_merge(
         Path to merged file on success, None otherwise.
     """
     downloaded_count = len(list(segments_dir.glob("*.ts")))
+
     if progress_callback:
         video_id = video_url.split("_")[-1] if "_" in video_url else video_url
         progress_callback(video_id, downloaded_count, len(segments))
 
-    # All downloaded - merge in batches and persist metadata on completion
+    # Detect failed segments explicitly from download results
+    if download_results and not all(download_results):
+        failed_indices = [i for i, r in enumerate(download_results) if not r]
+        logger.warning("segment_download_failed", failed_indices=failed_indices)
+        return None
+
+    # All segments present on disk — merge
     if downloaded_count == len(segments):
         logger.info("merging_segments", count=len(segments))
-        _save_downloaded_count(metadata_file, downloaded_count)
         result = await _merge_segments_batched(segments_dir, output_file, len(segments))
         if result:
-            _cleanup_segments(segments_dir, metadata_file)
+            _cleanup_segments(segments_dir)
         return result
 
     return None
@@ -563,7 +563,6 @@ async def _tally_and_merge(
 
 async def _process_downloaded_segments(
     tasks: list[asyncio.Task[bool]],
-    metadata_file: Path,
     segments: list[str],
     segments_dir: Path,
     output_file: Path,
@@ -574,7 +573,6 @@ async def _process_downloaded_segments(
 
     Args:
         tasks: List of download tasks to await.
-        metadata_file: Path to progress metadata file.
         segments: List of all segment URLs.
         segments_dir: Directory containing downloaded segments.
         output_file: Final output file path.
@@ -589,7 +587,6 @@ async def _process_downloaded_segments(
         return None
     return await _tally_and_merge(
         download_results,
-        metadata_file,
         segments,
         segments_dir,
         output_file,
@@ -695,7 +692,6 @@ async def _run_download_session(
     headers: dict[str, str],
     settings: Settings,
     segments_dir: Path,
-    metadata_file: Path,
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
@@ -710,7 +706,6 @@ async def _run_download_session(
         headers: Request headers to use.
         settings: Application settings.
         segments_dir: Directory for downloaded segments.
-        metadata_file: Path to progress metadata file.
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
         video_url: Video URL for progress callback and coordinator keying.
@@ -737,8 +732,7 @@ async def _run_download_session(
             return None
 
         segments = _parse_m3u8_segments(playlist_content)
-        downloaded_count = _load_downloaded_count(metadata_file)
-        logger.info("found_segments", count=len(segments), resume_from=downloaded_count)
+        logger.info("found_segments", count=len(segments))
 
         semaphore_to_use = (
             semaphore
@@ -765,7 +759,6 @@ async def _run_download_session(
 
         return await _process_downloaded_segments(
             tasks,
-            metadata_file,
             segments,
             segments_dir,
             output_file,
@@ -811,13 +804,7 @@ async def download_hls_with_resume(
     output_file = validate_output_path(request.output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
-    metadata_file = output_file.parent / f".{output_file.stem}_progress.json"
     segments_dir.mkdir(parents=True, exist_ok=True)
-
-    # Clear stale metadata on fresh start (no existing segments)
-    existing_segment_count = len(list(segments_dir.glob("*.ts"))) if segments_dir.exists() else 0
-    if existing_segment_count == 0 and metadata_file.exists():
-        metadata_file.unlink(missing_ok=True)
 
     headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
@@ -832,7 +819,6 @@ async def download_hls_with_resume(
             headers,
             settings,
             segments_dir,
-            metadata_file,
             output_file,
             request.progress_callback,
             request.video_url,
