@@ -760,19 +760,23 @@ async def _download_with_ytdlp(
     # yt-dlp takes the URL as its final positional argument
     cmd.append(video_url)
 
+    # yt-dlp writes progress and most output to stdout by default (confirmed
+    # empirically). Using stdout=PIPE + stderr=STDOUT merges all output into a
+    # single stream, avoiding dual-pipe deadlock complexity while preserving
+    # error messages for structured logging on failure.
     process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
 
-        stderr_chunks: list[bytes] = []
+        output_chunks: list[bytes] = []
 
         async def _monitor_progress() -> None:
-            """Read stderr, parse yt-dlp progress, invoke callback."""
-            assert process.stderr is not None
+            """Read stdout, parse yt-dlp progress, invoke callback."""
+            assert process.stdout is not None
             while True:
                 if shutdown_event.is_set():
                     if not await cancel_subprocess(process):
@@ -782,23 +786,23 @@ async def _download_with_ytdlp(
                             url=_strip_auth_params(video_url),
                         )
                     break
-                line = await process.stderr.readline()
+                line = await process.stdout.readline()
                 if not line:
                     break
                 # Echo yt-dlp progress output to the console, restoring
                 # pre-migration behavior where quiet=False let yt-dlp
-                # stream [download] % speed ETA lines directly to stderr.
+                # stream [download] % speed ETA lines directly to stdout.
                 sys.stderr.write(line.decode())
                 sys.stderr.flush()
-                stderr_chunks.append(line)
+                output_chunks.append(line)
                 progress = _parse_ytdlp_progress(line.decode())
                 if progress is not None and progress_callback is not None:
                     downloaded, total = progress
                     progress_callback(video_id, downloaded, total)
 
-        async def _drain_stderr() -> None:
-            """Drain stderr to prevent buffer deadlock when no callback."""
-            assert process.stderr is not None
+        async def _drain_output() -> None:
+            """Drain stdout to prevent buffer deadlock when no callback."""
+            assert process.stdout is not None
             while True:
                 if shutdown_event.is_set():
                     if not await cancel_subprocess(process):
@@ -808,13 +812,13 @@ async def _download_with_ytdlp(
                             url=_strip_auth_params(video_url),
                         )
                     break
-                line = await process.stderr.readline()
+                line = await process.stdout.readline()
                 if not line:
                     break
                 # Echo yt-dlp output to the console (progress, warnings, errors).
                 sys.stderr.write(line.decode())
                 sys.stderr.flush()
-                stderr_chunks.append(line)
+                output_chunks.append(line)
 
         if progress_callback:
             process_task = asyncio.create_task(process.wait())
@@ -822,14 +826,14 @@ async def _download_with_ytdlp(
             await _await_first_and_cancel_others(process_task, monitor_task)
         else:
             process_task = asyncio.create_task(process.wait())
-            drain_task = asyncio.create_task(_drain_stderr())
+            drain_task = asyncio.create_task(_drain_output())
             await _await_first_and_cancel_others(process_task, drain_task)
 
         # Ensure the process is fully reaped before reading returncode.
         if process.returncode is None:
             await process.wait()
 
-        stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
+        output_data = b"".join(output_chunks) if output_chunks else b""
 
         if shutdown_event.is_set():
             if not await cancel_subprocess(process):
@@ -842,7 +846,7 @@ async def _download_with_ytdlp(
             return None
 
         if process.returncode != 0:
-            error_msg = stderr_data.decode() if stderr_data else "Unknown yt-dlp error"
+            error_msg = output_data.decode() if output_data else "Unknown yt-dlp error"
             logger.error(
                 "download_failed",
                 url=_strip_auth_params(video_url),

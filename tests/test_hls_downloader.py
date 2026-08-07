@@ -878,8 +878,8 @@ class TestBrowserCookiesIntegration:
         mock_process = AsyncMock()
         mock_process.returncode = 0
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
         mock_process.wait = AsyncMock(return_value=0)
 
         # Track the command that was passed to create_subprocess_exec
@@ -1309,8 +1309,8 @@ class TestDownloadMethodLogging:
         mock_process = AsyncMock()
         mock_process.returncode = 0
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
         mock_process.wait = AsyncMock(return_value=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -2229,9 +2229,9 @@ class TestYtDlpSubprocessShutdown:
         mock_process = AsyncMock()
         mock_process.returncode = 0
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_stderr_line: list[bytes] = []
-        mock_process.stderr.readline = AsyncMock(side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stderr_line else mock_stderr_line.pop(0))
+        mock_process.stdout = AsyncMock()
+        mock_stdout_line: list[bytes] = []
+        mock_process.stdout.readline = AsyncMock(side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stdout_line else mock_stdout_line.pop(0))
         mock_process.wait = AsyncMock(return_value=0)
 
         # Patch cancel_subprocess to track it's called
@@ -2265,8 +2265,8 @@ class TestYtDlpSubprocessShutdown:
         mock_process = AsyncMock()
         mock_process.returncode = None
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
         # Simulate the outer task being cancelled while waiting for process
         mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
 
@@ -2298,8 +2298,8 @@ class TestYtDlpSubprocessShutdown:
         mock_process = AsyncMock()
         mock_process.returncode = 1
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_process.stderr.readline = AsyncMock(
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(
             side_effect=[b"ERROR: video not found\n", b""]
         )
         mock_process.wait = AsyncMock(return_value=1)
@@ -2315,10 +2315,10 @@ class TestYtDlpSubprocessShutdown:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_ytdlp_stderr_progress_written_to_console(
+    async def test_ytdlp_stdout_progress_written_to_console(
         self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Test that yt-dlp stderr progress lines are echoed to the console."""
+        """Test that yt-dlp stdout progress lines are echoed to the console."""
         from vkdownloader.services.downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
@@ -2328,8 +2328,8 @@ class TestYtDlpSubprocessShutdown:
         mock_process = AsyncMock()
         mock_process.returncode = 0
         mock_process.pid = 12345
-        mock_process.stderr = AsyncMock()
-        mock_process.stderr.readline = AsyncMock(
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(
             side_effect=[progress_line, b""]
         )
         mock_process.wait = AsyncMock(return_value=0)
