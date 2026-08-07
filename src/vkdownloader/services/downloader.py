@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 import sys
 import tempfile
 from collections.abc import AsyncIterator, Callable
@@ -216,6 +217,24 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     total = int(size * multiplier)
     downloaded = int(total * pct / 100)
     return downloaded, total
+
+
+def _echo_ytdlp_line(line: str) -> None:
+    """Echo a yt-dlp output line to the console.
+
+    Progress lines (e.g. ``[download]  40.3% of 649.37MiB ...``) are
+    rewritten in-place using carriage returns to restore the
+    pre-migration behavior where yt-dlp used ``\\r`` for live progress
+    updates.  Non-progress lines use newlines as-is.
+    """
+    if _parse_ytdlp_progress(line) is not None:
+        text = line.rstrip("\n\r")
+        width = shutil.get_terminal_size((80, 24)).columns
+        sys.stderr.write("\r" + text.ljust(width)[:width] + "\r")
+        sys.stderr.flush()
+    else:
+        sys.stderr.write(line)
+        sys.stderr.flush()
 
 
 def _build_ytdlp_cli_command(
@@ -547,6 +566,7 @@ async def download_with_ytdlp_with_resume_fallback(
     if settings is None:
         settings = Settings()
 
+    shutdown_event = get_shutdown_event()
     retry_count = 0
 
     while retry_count <= MAX_RESUME_RETRIES:
@@ -560,6 +580,13 @@ async def download_with_ytdlp_with_resume_fallback(
             return result
 
         retry_count += 1
+
+        if shutdown_event.is_set():
+            logger.info(
+                "yt_dlp_download_cancelled",
+                url=_strip_auth_params(video_url),
+            )
+            return None
 
         # Check for partial file - switch to segment download with fresh token
         validated_output = validate_output_path(output_file, warning=False)
@@ -789,12 +816,8 @@ async def _download_with_ytdlp(
                 line = await process.stdout.readline()
                 if not line:
                     break
-                # Echo yt-dlp progress output to the console, restoring
-                # pre-migration behavior where quiet=False let yt-dlp
-                # stream [download] % speed ETA lines directly to stdout.
                 decoded = line.decode(errors="replace")
-                sys.stderr.write(decoded)
-                sys.stderr.flush()
+                _echo_ytdlp_line(decoded)
                 output_chunks.append(line)
                 progress = _parse_ytdlp_progress(decoded)
                 if progress is not None and progress_callback is not None:
@@ -816,10 +839,8 @@ async def _download_with_ytdlp(
                 line = await process.stdout.readline()
                 if not line:
                     break
-                # Echo yt-dlp output to the console (progress, warnings, errors).
                 decoded = line.decode(errors="replace")
-                sys.stderr.write(decoded)
-                sys.stderr.flush()
+                _echo_ytdlp_line(decoded)
                 output_chunks.append(line)
 
         if progress_callback:
@@ -838,12 +859,6 @@ async def _download_with_ytdlp(
         output_data = b"".join(output_chunks) if output_chunks else b""
 
         if shutdown_event.is_set():
-            if not await cancel_subprocess(process):
-                logger.warning(
-                    "yt_dlp_cancel_not_clean",
-                    pid=process.pid,
-                    url=_strip_auth_params(video_url),
-                )
             logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
             return None
 
@@ -1062,6 +1077,8 @@ async def perform_download(
                     progress_callback=ffmpeg_progress_callback,
                 )
                 if result is None:
+                    if get_shutdown_event().is_set():
+                        return None
                     logger.info("ffmpeg_failed_fallback_to_segment_download")
                     result = await download_hls_with_resume(
                         HLSDownloadRequest(

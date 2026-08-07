@@ -26,8 +26,8 @@ from .services.downloader import download_video
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VIDEO_ID_PATTERN
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
-from .utils.url_sanitizer import _strip_auth_params
 from .utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
+from .utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
@@ -522,6 +522,8 @@ def download(
     except VideoNotFoundError:
         typer.echo("Video not found. Verify the URL is correct and the video is public.", err=True)
         raise typer.Exit(code=1) from None
+    except typer.Exit:
+        raise
     except Exception:
         logger.exception("download_failed", url=_strip_auth_params(url))
         typer.echo("An error occurred during download", err=True)
