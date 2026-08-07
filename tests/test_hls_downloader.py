@@ -564,8 +564,9 @@ class TestYtdlpCliCommand:
         )
 
         assert cmd[0] == sys.executable
-        assert cmd[1] == "-m"
-        assert cmd[2] == "yt_dlp"
+        assert cmd[1] == "-u"
+        assert cmd[2] == "-m"
+        assert cmd[3] == "yt_dlp"
 
     def test_cli_command_includes_hls_prefer_native(self, test_settings: Settings) -> None:
         """Test CLI command includes --hls-prefer-native for native HLS with cookie support."""

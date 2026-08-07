@@ -249,6 +249,7 @@ def _build_ytdlp_cli_command(
 
     cmd: list[str] = [
         sys.executable,
+        "-u",  # Unbuffered stderr — critical for real-time progress passthrough with PIPE
         "-m",
         "yt_dlp",
         "-o",
