@@ -63,11 +63,11 @@ class QualitySelector:
             Selected Stream object.
 
         Raises:
-            ValueError: If streams list is empty.
-            QualityNotAvailableError: If requested quality is not available.
+            QualityNotAvailableError: If the streams list is empty or the
+                requested quality is not available.
         """
         if not streams:
-            raise ValueError("Cannot select from empty streams list")
+            raise QualityNotAvailableError("", [], "Cannot select quality from empty streams list")
 
         match quality:
             case QualityEnum.BEST:

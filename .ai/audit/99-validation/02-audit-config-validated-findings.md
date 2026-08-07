@@ -109,9 +109,7 @@ def expand_tilde_paths(cls, v: Path | None) -> Path | None:
 ```
 `Path("")` is not `None`, so the guard is skipped. Same for `download_dir`.
 
-**Recommendation (confirmed):** Add a `mode="before"` validator that converts empty strings to
-`None` before pydantic coerces them to `Path`. (For `download_dir`, the implementer must decide
-fail-fast ValidationError vs. default fallback — see Rollout Analysis.)
+**Recommendation (confirmed):** Add a `mode="before"` validator (following the existing pattern at `validate_cookie_source`, config.py:126-138) that converts empty strings to `None` for both `log_file` and `download_dir` **before** pydantic coerces them to `Path`. For `download_dir` specifically: an empty `VKDOWNLOADER_DOWNLOAD_DIR=` should produce a `ValidationError` (fail-fast), consistent with the project's `validate_cookie_source` pattern that rejects invalid `CookieSource.FILE` at construction (config.py:126-138) and the `extra='forbid'` configuration. The `ValidationError` is caught by `cli.py:475` (`except ValidationError as e:`) and rendered via `_format_validation_error`, giving the user a clear error message. This avoids the silent fall-back to CWD (current behavior) and aligns with the project's fail-fast convention for misconfigured settings. Effort: trivial. Priority: mandatory.
 
 **Effort:** trivial · **Priority:** mandatory — startup failure when following the documented example.
 
@@ -272,9 +270,7 @@ await asyncio.sleep(self.settings.browser_post_interaction_wait)
 > - **See also:** CFG-005 (Phase 02) shares the `CookieSource.FILE` root cause; separate because it
 >   targets the `.env` comment, not the cross-doc inconsistency + dead code.
 
-**Recommendation:** Align docs to state `ValidationError` is raised at construction (not
-`NotImplementedError`). Remove or explicitly inert-mark the unreachable `NotImplementedError` at
-`extractor.py:129-132` (investigate per the project's dead-code policy).
+**Recommendation:** Remove the unreachable `NotImplementedError` branch at `extractor.py:129-132` (the `validate_cookie_source` validator at config.py:126-138 already rejects `CookieSource.FILE` at construction, making this branch dead code). Retain the `CookieSource.FILE` enum value in `enums.py:49` for forward compatibility. Update the `.env` template comment (line 26) to list only `(none, browser)` to match the validator. Align `configuration.md:66` and `cli-reference-clean.md:198` to state `ValidationError` is raised at construction (not `NotImplementedError`). Effort: small. Priority: recommended.
 **Effort:** small · **Priority:** recommended
 
 ### CFG-007: Installation `.env` example is incomplete, has wrong `throttled_rate`, and contains empty `LOG_FILE`  [RECLASSIFIED]
@@ -452,17 +448,21 @@ with a fresh token re-extract. Default is 10000 (10KB/s)." Propagate to `api-ref
 ## Rollout Analysis
 
 - **CFG-001 (code root-cause fix):** Add a `mode="before"` validator mapping `""` -> `None` on
-  `log_file` and `download_dir`.
+  `log_file` and `download_dir`, following the existing `validate_cookie_source` pattern (config.py:126-138).
   - `log_file` (`Path | None`): `""` -> `None` -> no `FileHandler` -> safe, backward-compatible
     (previously crashed).
   - `download_dir` (`Path`, non-optional, default `Path.home()/Downloads/vkdownloader`): `""` -> `None`
     -> pydantic `ValidationError` (fail-fast). This is a **behavior change** (silent CWD -> fail-fast
-    config error caught at `cli.py:473` and shown via `_format_validation_error`). Decision required:
-    fail-fast (ValidationError) **or** fall back to the default `download_dir`. Either acceptable;
-    document the choice. Not architecture-breaking.
-- **CFG-006 (dead-code removal):** Removing `extractor.py:129-132` is **safe** — unreachable
-  (validator blocks `FILE` at construction) and `tests/test_extractor.py:289-294` asserts
-  construction-time rejection (not the extractor branch), so no test depends on it. Low risk.
+    config error caught at `cli.py:475` and shown via `_format_validation_error`). **Decision: fail-fast** —
+    consistent with the project's existing `validate_cookie_source` rejection pattern (config.py:126-138)
+    and the `extra='forbid'` convention. An empty `download_dir` is a misconfiguration, not a value to
+    silently fall back. The `ValidationError` is user-facing via `_format_validation_error`. Not architecture-breaking.
+- **CFG-006 (dead-code removal):** The unreachable `NotImplementedError` branch at `extractor.py:129-132`
+  should be **removed** (not inert-marked), since the `validate_cookie_source` validator at config.py:126-138
+  already blocks `CookieSource.FILE` at construction, making the branch truly dead. The `CookieSource.FILE`
+  enum value is retained in `enums.py:49` for forward compatibility. Removal is safe — `tests/test_extractor.py:289-294`
+  asserts construction-time rejection (not the extractor branch), so no test depends on it. The `.env` template
+  comment (line 26) listing `file` as valid should be updated to `(none, browser)` to match the validator. Low risk.
 - **Doc/template batch (CFG-002, 003, 004, 005, 007, 009, 010):** pure text changes, no runtime
   impact; can be applied together.
 - **CFG-008 (`.env.example`):** additive, no runtime impact.
@@ -496,8 +496,10 @@ with a fresh token re-extract. Default is 10000 (10KB/s)." Propagate to `api-ref
 
 - **CFG-001 (HIGH, mandatory):** Add a `mode="before"` validator to convert empty-string env values
   to `None` for `log_file` (and `download_dir`), preventing the startup crash when the documented
-  empty `VKDOWNLOADER_LOG_FILE=` example is followed. Decision required for `download_dir`: fail-fast
-  (`ValidationError`) or default fallback.
+  empty `VKDOWNLOADER_LOG_FILE=` example is followed. For `download_dir`, the empty-string-to-None
+  transform produces a `ValidationError` (fail-fast), consistent with the project's
+  `validate_cookie_source` rejection pattern — **this is the chosen approach, not left as an option**.
+  The `ValidationError` is caught at `cli.py:475` and shown via `_format_validation_error`.
 
 ## Advisory Recommendations
 
@@ -507,8 +509,7 @@ with a fresh token re-extract. Default is 10000 (10KB/s)." Propagate to `api-ref
 - **CFG-004 (DOC-UPDATE):** Add `browser_pre_interaction_wait`/`browser_post_interaction_wait` rows to
   `api-reference.md` settings table.
 - **CFG-005 (DOC-UPDATE):** Remove `file` from the `.env` cookie_source comment (line 26).
-- **CFG-006 (SPEC-DEVIATION):** Correct `configuration.md:66` and `cli-reference-clean.md:198` to state
-  `ValidationError` is raised; remove or explicitly inert-mark `extractor.py:129-132` dead code.
+- **CFG-006 (SPEC-DEVIATION):** Remove the unreachable `NotImplementedError` branch at `extractor.py:129-132` (the `validate_cookie_source` validator at config.py:126-138 already blocks `CookieSource.FILE` at construction). Retain the `CookieSource.FILE` enum value in `enums.py:49` for forward compatibility. Update `.env` template comment (line 26) to list only `(none, browser)`. Align `configuration.md:66` and `cli-reference-clean.md:198` to state `ValidationError` is raised at construction (not `NotImplementedError`).
 - **CFG-007 (DOC-UPDATE):** Fix `installation.md:106-125` example: `throttled_rate=10000`, non-empty
   `LOG_FILE`, and add the three missing fields.
 - **CFG-008 (BEST-PRACTICE):** Add a tracked `.env.example` with all 16 settings (commented).

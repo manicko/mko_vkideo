@@ -13,18 +13,19 @@ from structlog import get_logger
 
 from .config import Settings, setup_logging, warn_unknown_env_vars
 from .exceptions import (
+    InvalidVideoUrlError,
     QualityNotAvailableError,
+    QualityParseError,
     VideoNotFoundError,
     VKDownloadError,
+    _map_exception_to_status,
 )
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
-from .models.video import VideoWithStreams
-from .services.downloader import perform_download
+from .services.downloader import download_video
 from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
-from .services.extractor import VIDEO_ID_PATTERN, VKVideoExtractor
-from .services.quality import QualitySelector
+from .services.extractor import VIDEO_ID_PATTERN
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
-from .utils.security import _sanitize_title, validate_output_path
+from .utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
@@ -36,7 +37,7 @@ def _log_env_file_path() -> None:
     """Log the resolved .env file path at debug level."""
     env_file = Path(".env")
     if env_file.exists():
-        logger.debug(f".env file resolved to: {env_file.resolve()}")
+        logger.debug("env_file_resolved", path=str(env_file.resolve()))
     else:
         logger.debug(".env file not found; using environment variables or defaults only")
 
@@ -58,12 +59,59 @@ def _format_validation_error(error: ValidationError) -> str:
     for err in error.errors():
         loc = ".".join(str(part) for part in err.get("loc", ()))
         msg = err.get("msg", "validation failed")
-        received = err.get("input")
         lines.append(f"  - {loc}: {msg}")
-        if received is not None:
-            lines.append(f"    Received: {received!r}")
+        lines.append("    Received: <redacted>")
     lines.append("Fix the offending value(s) and try again.")
     return "\n".join(lines)
+
+
+@dataclass
+class ConcurrencyTracker:
+    """Track the peak number of concurrently in-flight downloads.
+
+    Incremented when a download acquires the shared semaphore and
+    decremented when it releases, so the peak reflects actual
+    concurrency rather than the configured maximum.
+    """
+
+    _current: int = 0
+    peak: int = 0
+
+    def acquire(self) -> None:
+        self._current += 1
+        if self._current > self.peak:
+            self.peak = self._current
+
+    def release(self) -> None:
+        self._current -= 1
+
+
+class _TrackedSemaphore:
+    """Semaphore wrapper that tracks peak concurrency.
+
+    Implements the async context manager protocol so it can be used
+    in place of ``asyncio.Semaphore`` in ``async with`` blocks.
+    """
+
+    def __init__(self, semaphore: asyncio.Semaphore, tracker: ConcurrencyTracker) -> None:
+        self._semaphore = semaphore
+        self._tracker = tracker
+
+    async def acquire(self) -> bool:
+        await self._semaphore.acquire()
+        self._tracker.acquire()
+        return True
+
+    def release(self) -> None:
+        self._tracker.release()
+        self._semaphore.release()
+
+    async def __aenter__(self) -> _TrackedSemaphore:
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self.release()
 
 
 @dataclass
@@ -74,6 +122,7 @@ class DownloadContext:
     shared_semaphore: asyncio.Semaphore | None = None
     backoff_coordinator: URLBackoffCoordinator | None = None
     progress_callback: Callable[[str, int, int], None] | None = None
+    peak_tracker: ConcurrencyTracker | None = None
 
 
 def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]:
@@ -86,10 +135,12 @@ def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]
         Callback function that updates shared progress state.
 
     Thread-safety:
-        Uses `update_sync()` which performs direct assignment without lock protection.
-        This is safe because callbacks execute sequentially in the single-threaded
-        asyncio event loop. The async lock in `get_formatted_progress()` protects the
-        read path, ensuring consistent reads while callbacks write concurrently.
+        Uses `update_sync()` which performs direct dict assignment without lock
+        protection. This is safe under CPython's GIL (dict.__setitem__ is
+        atomic). However, callbacks fire from yt-dlp's thread-pool executor
+        (loop.run_in_executor), not from the asyncio event loop thread. The
+        async lock in `get_formatted_progress()` protects the read path,
+        ensuring consistent reads while callbacks write from worker threads.
     """
 
     def callback(video_id: str, downloaded: int, total: int) -> None:
@@ -110,57 +161,19 @@ async def _format_progress(url_count: int) -> str:
     return await _progress_manager.get_formatted_progress(url_count)
 
 
-def _resolve_output_file(
-    video: VideoWithStreams,
-    output: Path,
-    settings: Settings,
-    index: int,
-) -> Path:
-    """Resolve output file path with sanitized filename.
+async def _poll_progress_display(total: int, refresh_interval: float = 1.0) -> None:
+    """Continuously refresh the progress display at a fixed interval.
+
+    Runs as a background task during batch downloads so the user sees
+    live progress updates rather than only when a download completes.
 
     Args:
-        video: Video with metadata for filename generation.
-        output: Output directory override (or "." for default).
-        settings: Application settings with default download_dir.
-        index: Index for fallback filename (batch context).
-
-    Returns:
-        Resolved Path to the output file.
+        total: Total number of URLs in the batch.
+        refresh_interval: Seconds between display refreshes.
     """
-    output_path = output if str(output) != "." else settings.download_dir
-    output_path = Path(output_path).resolve()
-
-    validated_output = validate_output_path(output_path, warning=False)
-    validated_output.mkdir(parents=True, exist_ok=True)
-
-    safe_title = _sanitize_title(video.title) if video.title else None
-    if safe_title:
-        output_file = validated_output / f"{safe_title}_{video.id}.mp4"
-    else:
-        output_file = validated_output / f"{index}_{video.id}.mp4"
-
-    return output_file
-
-
-def _map_exception_to_status(exc: Exception) -> str:
-    """Map exception to status label for batch results.
-
-    Args:
-        exc: The exception to map.
-
-    Returns:
-        Status label string (e.g., "no_streams", "video_not_found", "download_error").
-    """
-    if isinstance(exc, QualityNotAvailableError):
-        # Distinguish empty-stream case from missing quality
-        if not exc.available and exc.requested:
-            return f"no_streams: {exc}"
-        return f"quality_not_available: requested {exc.requested}p, available: {', '.join(exc.available)}"
-    if isinstance(exc, VideoNotFoundError):
-        return f"video_not_found: {exc}"
-    if isinstance(exc, VKDownloadError):
-        return f"download_error: {exc}"
-    return f"unexpected_error: {type(exc).__name__}"
+    while True:
+        typer.echo(f"\r{await _format_progress(total)}", nl=False)
+        await asyncio.sleep(refresh_interval)
 
 
 async def _download_single(
@@ -191,43 +204,29 @@ async def _download_single(
     shared_semaphore = context.shared_semaphore if context else None
     backoff_coordinator = context.backoff_coordinator if context else None
     progress_callback = context.progress_callback if context else None
+    peak_tracker = context.peak_tracker if context else None
+
+    # Wrap semaphore with concurrency tracker so peak is measured at the
+    # actual point of concurrency limiting, not the configured maximum.
+    tracked_semaphore = None
+    if shared_semaphore is not None and peak_tracker is not None:
+        tracked_semaphore = _TrackedSemaphore(shared_semaphore, peak_tracker)
 
     try:
-        # Merge CLI max_retries override with settings object
-        if max_retries_override is not None:
-            settings = settings.model_copy(update={"max_retries": max_retries_override})
-        extractor = VKVideoExtractor(settings=settings)
-        video = await extractor.extract_streams(url)
-
-        # Guard against empty streams to provide accurate error message
-        if not video.streams:
-            raise QualityNotAvailableError(
-                str(quality),
-                [],
-                "No streams found for this video; the video may be private or unavailable",
-            )
-
-        selector = QualitySelector()
-        stream = selector.select(video.streams, quality)
-
-        output_file = _resolve_output_file(video, output, settings, index)
-
-        result = await perform_download(
+        result = await download_video(
             url,
-            str(stream.quality),
-            output_file,
+            quality,
+            output,
             method,
-            extractor,
             settings,
+            max_retries_override=max_retries_override,
             backoff_coordinator=backoff_coordinator,
-            semaphore=shared_semaphore,
+            semaphore=tracked_semaphore,
             progress_callback=progress_callback,
-            video_data=video,
-            selected_stream=stream,
+            output_index=index,
         )
-
         status = "success" if result else "failed"
-        return (url, str(output_file) if result else "", status)
+        return (url, str(result) if result else "", status)
 
     except asyncio.CancelledError:
         # Re-raise CancelledError to allow batch cancellation
@@ -238,10 +237,10 @@ async def _download_single(
         return (url, "", _map_exception_to_status(e))
     except VKDownloadError as e:
         return (url, "", _map_exception_to_status(e))
-    except Exception:
-        # Log unexpected exceptions to surface bugs instead of silently swallowing them
-        logger.exception("unexpected_error_in_batch_download", url=url)
-        raise
+    except Exception as e:
+        # Log unexpected exceptions to surface bugs, then return as a status tuple
+        logger.exception("unexpected_error_in_batch_download", url=_strip_auth_params(url))
+        return (url, "", _map_exception_to_status(e))
 
 
 async def _run_batch_with_progress(
@@ -251,7 +250,7 @@ async def _run_batch_with_progress(
     settings: Settings,
     max_retries: int | None,
     output: Path,
-) -> list[tuple[str, str, str]]:
+) -> tuple[list[tuple[str, str, str]], int]:
     """Run batch download with progress tracking.
 
     Args:
@@ -269,6 +268,7 @@ async def _run_batch_with_progress(
     setup_signal_handlers()
     try:
         # Create shared semaphore and backoff coordinator at batch level
+        concurrency_tracker = ConcurrencyTracker()
         shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
         backoff_coordinator = URLBackoffCoordinator()
 
@@ -292,6 +292,7 @@ async def _run_batch_with_progress(
                         shared_semaphore=shared_semaphore,
                         backoff_coordinator=backoff_coordinator,
                         progress_callback=callbacks[i],
+                        peak_tracker=concurrency_tracker,
                     ),
                 )
             )
@@ -302,34 +303,37 @@ async def _run_batch_with_progress(
         # Initial progress display in per-URL format
         typer.echo(f"\r{await _format_progress(total)}", nl=False)
 
-        for coro in asyncio.as_completed(tasks):
-            try:
-                await coro
-            except asyncio.CancelledError:
-                # Cancel remaining tasks on interrupt
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                # Wait for cancellation to propagate
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            except Exception:
-                # Log unexpected exceptions and continue - errors captured in gather results
-                logger.exception("unexpected_error_in_batch_progress")
-            # Update progress display with \r overwrite
-            typer.echo(f"\r{await _format_progress(total)}", nl=False)
+        # Background task for real-time progress display
+        progress_task = asyncio.create_task(_poll_progress_display(total))
 
-        typer.echo()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Process results: keep tuples, label CancelledError as cancelled, other exceptions as download_error
-        return [
-            r
-            if isinstance(r, tuple)
-            else (urls[i], "", "cancelled")
-            if isinstance(r, asyncio.CancelledError)
-            else (urls[i], "", f"download_error: {str(r)}")
-            for i, r in enumerate(results)
-        ]
+        try:
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    await coro
+                except asyncio.CancelledError:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+
+            typer.echo()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            processed_results = [
+                r
+                if isinstance(r, tuple)
+                else (urls[i], "", "cancelled")
+                if isinstance(r, asyncio.CancelledError)
+                else (urls[i], "", f"download_error: {str(r)}")
+                for i, r in enumerate(results)
+            ]
+            return processed_results, concurrency_tracker.peak
+        finally:
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
     finally:
         # Cleanup signal handlers to allow re-registration on subsequent loops
         cleanup_signal_handlers()
@@ -344,7 +348,7 @@ def _print_batch_summary(
 
     Args:
         results: List of result tuples (url, output_path, status).
-        max_concurrent: Maximum concurrent downloads setting.
+        peak_concurrent: Measured peak concurrency during the batch.
         skipped_count: Number of invalid URLs skipped during validation.
     """
     # Print results
@@ -384,20 +388,20 @@ app = typer.Typer(
 @app.command()
 def download(
     url: str = typer.Argument(..., help="VK Video URL to download"),
-    quality: QualityEnum = typer.Option(QualityEnum.BEST, help="Video quality selection"),  # noqa: B008
-    output: Path = typer.Option(  # noqa: B008
+    quality: QualityEnum = typer.Option(QualityEnum.BEST, help="Video quality selection"),
+    output: Path = typer.Option(
         ".",
         "--output",
         "-o",
         help="Output directory for downloaded video",
     ),
-    method: DownloadMethod = typer.Option(  # noqa: B008
+    method: DownloadMethod = typer.Option(
         DownloadMethod.AUTO,
         "--method",
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
-    cookie_source: CookieSource = typer.Option(  # noqa: B008
+    cookie_source: CookieSource = typer.Option(
         CookieSource.NONE,
         "--cookie-source",
         "-c",
@@ -413,45 +417,24 @@ def download(
 
     Extracts available streams, selects the requested quality, and downloads the video
     to the specified output directory.
+
+    Note: This command does not show live progress during download. For real-time
+    per-URL progress display, use the ``batch`` command instead.
     """
 
     async def _download() -> Path | None:
         """Async implementation of video download."""
-        # Setup signal handlers inside async context
         setup_signal_handlers()
         try:
-            extractor = VKVideoExtractor(settings=settings)
-            video = await extractor.extract_streams(url)
-
-            # Guard against empty streams to provide accurate error message
-            if not video.streams:
-                raise QualityNotAvailableError(
-                    str(quality),
-                    [],
-                    "No streams found for this video; the video may be private or unavailable",
-                )
-
-            selector = QualitySelector()
-            available = selector.list_available_qualities(video.streams)
-            logger.info("available_streams", count=len(video.streams))
-            logger.info("available_qualities", qualities=available[:8])
-
-            stream = selector.select(video.streams, quality)
-
-            output_file = _resolve_output_file(video, output, settings, 0)
-
-            return await perform_download(
+            return await download_video(
                 url,
-                str(stream.quality),
-                output_file,
+                quality,
+                output,
                 method,
-                extractor,
                 settings,
-                video_data=video,
-                selected_stream=stream,
+                log_available_qualities=True,
             )
         finally:
-            # Cleanup signal handlers to allow re-registration on subsequent loops
             cleanup_signal_handlers()
 
     try:
@@ -473,7 +456,14 @@ def download(
     except ValidationError as e:
         typer.echo(_format_validation_error(e), err=True)
         raise typer.Exit(code=1) from None
-    except ValueError:
+    except QualityParseError as e:
+        typer.echo(
+            f"Invalid quality value: {e.quality}. "
+            "Use one of: 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, best, worst.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except InvalidVideoUrlError:
         typer.echo(
             "Invalid URL format. Expected format: https://vkvideo.ru/video-{owner_id}_{video_id}",
             err=True,
@@ -510,28 +500,28 @@ def download(
 
 @app.command("batch")
 def batch_download(
-    urls_file: Path = typer.Argument(  # noqa: B008
+    urls_file: Path = typer.Argument(
         ...,
         exists=True,
         help="Path to file containing video URLs (one per line)",
     ),
-    quality: QualityEnum = typer.Option(  # noqa: B008
+    quality: QualityEnum = typer.Option(
         QualityEnum.BEST,
         help="Video quality selection for all downloads",
     ),
-    output: Path = typer.Option(  # noqa: B008
+    output: Path = typer.Option(
         ".",
         "--output",
         "-o",
         help="Output directory for downloaded videos",
     ),
-    method: DownloadMethod = typer.Option(  # noqa: B008
+    method: DownloadMethod = typer.Option(
         DownloadMethod.AUTO,
         "--method",
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
-    cookie_source: CookieSource = typer.Option(  # noqa: B008
+    cookie_source: CookieSource = typer.Option(
         CookieSource.NONE,
         "--cookie-source",
         "-c",
@@ -572,7 +562,7 @@ def batch_download(
             if not stripped or stripped.startswith("#"):
                 continue
             if not VIDEO_ID_PATTERN.search(stripped):
-                logger.warning("invalid_url_in_batch", url=stripped)
+                logger.warning("invalid_url_in_batch", url=_strip_auth_params(stripped))
                 skipped_count += 1
                 continue
             valid_urls.append(stripped)
@@ -587,10 +577,10 @@ def batch_download(
             typer.echo(f"No URLs found in {urls_file}", err=True)
             raise typer.Exit(code=1)
 
-        results = asyncio.run(
+        results, peak_concurrent = asyncio.run(
             _run_batch_with_progress(valid_urls, quality, method, settings, max_retries, output)
         )
-        _print_batch_summary(results, settings.max_concurrent_downloads, skipped_count)
+        _print_batch_summary(results, peak_concurrent, skipped_count)
 
     except ValidationError as e:
         typer.echo(_format_validation_error(e), err=True)
@@ -601,8 +591,16 @@ def batch_download(
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
+    except Exception:
+        logger.exception("batch_download_failed")
+        typer.echo("An error occurred during batch download", err=True)
+        raise typer.Exit(code=1) from None
 
 
 def cli() -> None:
     """Entry point for CLI execution."""
     app()
+
+
+if __name__ == "__main__":
+    cli()

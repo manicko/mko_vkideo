@@ -10,7 +10,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from structlog import get_logger
 
 from ..config import Settings
-from ..exceptions import ExtractionError, VideoNotFoundError
+from ..exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
 from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import CookieSource, StreamFormat
@@ -49,11 +49,11 @@ class VKVideoExtractor:
             Tuple of (owner_id, video_id) extracted from URL.
 
         Raises:
-            ValueError: If URL does not contain valid video identifier.
+            InvalidVideoUrlError: If URL does not contain a valid video identifier.
         """
         match = self.VIDEO_ID_PATTERN.search(url)
         if not match:
-            raise ValueError(f"Invalid VK video URL: {_strip_auth_params(url)}")
+            raise InvalidVideoUrlError(url)
         owner_id, video_id = match.group(1), match.group(2)
         logger.debug(
             "parsed_video_id", owner_id=owner_id, video_id=video_id, url=_strip_auth_params(url)
@@ -73,7 +73,7 @@ class VKVideoExtractor:
             VideoWithStreams containing available quality variants.
 
         Raises:
-            ValueError: If URL does not contain valid video identifier.
+            InvalidVideoUrlError: If URL does not contain a valid video identifier.
             VideoNotFoundError: If no streams are found for the video.
             ExtractionError: If extraction fails.
         """
@@ -109,7 +109,7 @@ class VKVideoExtractor:
             Tuple of (streams list, cookies string for ffmpeg headers, raw cookies for Netscape).
 
         Raises:
-            ValueError: If URL does not contain valid video identifier.
+            InvalidVideoUrlError: If URL does not contain a valid video identifier.
             VideoNotFoundError: If no streams are found for the video.
         """
         owner_id, video_id = self.parse_video_id(url)
@@ -125,11 +125,6 @@ class VKVideoExtractor:
                 raise VideoNotFoundError(f"No streams found for video: {_strip_auth_params(url)}")
             logger.info("extraction_complete", video_id=video_id_full, streams_count=len(streams))
             return streams, None, None
-
-        if self.settings.cookie_source == CookieSource.FILE:
-            raise NotImplementedError(
-                "CookieSource.FILE is not implemented. Use --cookie-source browser or none instead."
-            )
 
         # Existing browser launch logic for BROWSER mode or forced
         streams, cookies, raw_cookies = await self._extract_with_browser(url, video_id_full)

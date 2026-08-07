@@ -28,14 +28,12 @@ class TestDownloadCommand:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -45,7 +43,7 @@ class TestDownloadCommand:
 
             mock_download.return_value = tmp_path / "test_video_1080.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
@@ -66,7 +64,7 @@ class TestDownloadCommand:
         """Check error handling for bad URLs."""
         invalid_url = "https://example.com/invalid"
 
-        with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+        with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
             with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                 mock_settings_cls.return_value = MagicMock(log_file=None)
                 result = runner.invoke(
@@ -76,15 +74,16 @@ class TestDownloadCommand:
                 )
 
         assert result.exit_code == 1
-        assert "Invalid URL format" in result.output or "Invalid VK video URL" in result.output
+        assert "Invalid URL format" in result.output
+        assert "Traceback" not in result.output
 
     def test_download_keyboard_interrupt(
         self, tmp_path: Path, sample_video_url: str, mock_m3u8_content: str
     ) -> None:
         """Check that KeyboardInterrupt is handled with proper exit code."""
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(side_effect=KeyboardInterrupt())
@@ -95,7 +94,7 @@ class TestDownloadCommand:
             mock_selector.select.return_value = MagicMock(quality="1080")
             mock_selector_cls.return_value = mock_selector
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
@@ -167,9 +166,9 @@ class TestBatchCommand:
             raise VideoNotFoundError("Video not found")
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(side_effect=mock_extract_side_effect)
@@ -182,7 +181,7 @@ class TestBatchCommand:
 
             mock_download.return_value = tmp_path / "video1.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
@@ -209,14 +208,12 @@ class TestBatchCommand:
         urls_file.write_text("https://vkvideo.ru/video-1_1\n")
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")]))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -225,7 +222,7 @@ class TestBatchCommand:
 
             mock_download.return_value = tmp_path / "video1.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
@@ -253,14 +250,12 @@ class TestBatchCommand:
         )
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")]))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -269,7 +264,7 @@ class TestBatchCommand:
 
             mock_download.return_value = tmp_path / "video1.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
@@ -303,14 +298,12 @@ class TestQualityOptionValidation:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download"),
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download"),
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -320,7 +313,7 @@ class TestQualityOptionValidation:
             )
             mock_selector_cls.return_value = mock_selector
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
@@ -354,14 +347,12 @@ class TestQualityOptionValidation:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -371,7 +362,7 @@ class TestQualityOptionValidation:
 
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
@@ -407,14 +398,12 @@ class TestMethodOptionValidation:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -424,7 +413,7 @@ class TestMethodOptionValidation:
 
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(log_file=None)
                     result = runner.invoke(
@@ -450,14 +439,12 @@ class TestSslVerifyOption:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -467,7 +454,7 @@ class TestSslVerifyOption:
 
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,
@@ -500,14 +487,12 @@ class TestSslVerifyOption:
         ]
 
         with (
-            patch("vkdownloader.cli.VKVideoExtractor") as mock_extractor_cls,
-            patch("vkdownloader.cli.QualitySelector") as mock_selector_cls,
-            patch("vkdownloader.cli.perform_download") as mock_download,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
-            )
+            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -517,7 +502,7 @@ class TestSslVerifyOption:
 
             mock_download.return_value = tmp_path / "test_video_720.mp4"
 
-            with patch("vkdownloader.cli.validate_output_path", return_value=tmp_path):
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
                 with patch("vkdownloader.cli.Settings") as mock_settings_cls:
                     mock_settings_cls.return_value = MagicMock(
                         max_concurrent_downloads=4,

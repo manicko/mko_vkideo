@@ -207,19 +207,9 @@ concerns - they are business-logic utilities that couple the entry layer to data
 - The project guidelines require "clear boundaries between UI, API, business logic, and data layers"
   (project.md rule 3).
 
-**Recommendation (unchanged):**
+**Recommendation (confirmed):**
 
-Move `_resolve_output_file()` into `utils/security.py` alongside `validate_output_path` and
-`_sanitize_title` (it already uses both). Move `_map_exception_to_status()` into `exceptions.py` or a
-dedicated `services/exception_mapper.py` so it can be unit-tested independently. Effort: small.
-Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Both helpers are confirmed in `cli.py` (lines 113-142
-and 145-163). `_resolve_output_file` uses `validate_output_path` and `_sanitize_title` from
-`utils/security.py` but is itself defined in the entry layer; `_map_exception_to_status` is
-untestable business logic embedded in the CLI module. grep confirms zero test references. The project
-guidelines (rule 3: Strict Separation of Concerns; rule 4: Single Responsibility) are violated.
-Classification SPEC-DEVIATION is correct.
+> **Status: ALREADY IMPLEMENTED.** On the current working tree, both helpers have been relocated from `cli.py` to their correct layers: `_resolve_output_file()` now lives in `utils/security.py:68-97` (alongside `validate_output_path` and `_sanitize_title`, which it already imported), and `_map_exception_to_status()` now lives in `exceptions.py:60-76` (imported by `cli.py:19`). The entry layer no longer contains these business-logic utilities. The remaining action is **test coverage**: both functions have zero references in `tests/` (grep confirms `exceptions.py:60-76` and `utils/security.py:68-97` are untested). Add unit tests: `_map_exception_to_status` (cover each `isinstance` branch) and `_resolve_output_file` (cover path resolution, traversal rejection, sanitized filename generation). Effort: small. Priority: recommended.
 
 ---
 ### CLI-004: Batch command lacks catch-all exception handler
@@ -633,22 +623,19 @@ All change targets were confirmed to **still exist** in the current source (cli.
 
 | Finding | Target | Line(s) | Exists? | Stale? |
 |---------|--------|---------|---------|--------|
-| CLI-001 | `cli()` at end of file; absence of `__main__` guard; absence of `__main__.py` | cli.py:606-608; glob result | yes | no |
-| CLI-002 | `_download()` nested in `download()`; `_download_single()` | cli.py:418-452, 166-244 | yes | no |
-| CLI-003 | `_resolve_output_file()` (113-142); `_map_exception_to_status()` (145-163) | cli.py:113-142, 145-163 | yes | no |
-| CLI-003 | `utils/security.py` (existing `validate_output_path`, `_sanitize_title`) | security.py:12-63 | yes | no |
-| CLI-004 | `download` catch-all (505); `batch_download` except block (595-603) | cli.py:505, 595-603 | yes | no |
-| CLI-005 | `as_completed` loop (305-320); `gather` (323); `_download_single` exception handling (232-244) | cli.py:305-332, 232-244 | yes | no |
-| CLI-006 | `perform_download` call without `progress_callback` (443-452); batch callbacks (279-294) | cli.py:243, 443-452, 279-294 | yes | no |
+| CLI-001 | `cli()` at end of file; absence of `__main__` guard; absence of `__main__.py` | cli.py:512-518 (cli() exists, `if __name__ == "__main__"` guard present at 517) | PARTIALLY RESOLVED — `__main__` guard exists; `__main__.py` still absent |
+| CLI-002 | `_download()` nested in `download()`; `_download_single()` | cli.py:344-357 (download), cli.py:113-155 (_download_single) | RESOLVED — code now delegates to `services.downloader.download_video()` |
+| CLI-003 | `_resolve_output_file()` (113-142); `_map_exception_to_status()` (145-163) | ALREADY in `utils/security.py:68-97` and `exceptions.py:60-76` | STALE — audit references old cli.py:113-163 which no longer contain these functions |
+| CLI-003 | `utils/security.py` (existing `validate_output_path`, `_sanitize_title`) | security.py:25-97 | yes |
+| CLI-004 | `download` catch-all (407-410); `batch_download` except block (497-509) | cli.py:407-410, 497-509 | yes | no |
+| CLI-005 | `as_completed` loop (228-243); `gather` (246); `_download_single` exception handling (142-170) | cli.py:228-255, 142-170 | STALE — audit line numbers reference old code structure; current `_download_single` is at cli.py:113-170 and uses `download_video()` |
+| CLI-006 | `perform_download` call without `progress_callback` | `download_video()` at cli.py:148 (download) and `download_video(..., progress_callback=...)` at cli.py:152 (batch) | STALE — `download_video` now accepts `progress_callback`; the single-download path passes `log_available_qualities=True` but no callback |
 | CLI-006 | `cli-reference.md:17`, `cli-reference-clean.md:17` acknowledging gap | docs:17 (both files) | yes | no |
-| CLI-007 | `_create_progress_callback` docstring (88-93); `update_sync` docstring (106-121) | cli.py:88-93; downloader_throttle.py:106-121 | yes | no |
-| CLI-007 | `run_in_executor` call (648); `_progress_hook` (199-212) | downloader.py:648, 199-212 | yes | no |
-| CLI-008 | `tests.*` mypy override (pyproject.toml:89-91); `vkdownloader.cli` override (93-95) | pyproject.toml:89-95 | yes | no |
+| CLI-007 | `_create_progress_callback` docstring (78-98); `update_sync` docstring (106-124) | cli.py:78-98; downloader_throttle.py:82-124 | ALREADY CORRECTED |
+| CLI-007 | `run_in_executor` call; `_progress_hook` | downloader.py:648-659, 199-212 | yes | no |
+| CLI-008 | `tests.*` mypy override; `vkdownloader.cli` override | pyproject.toml:89-91 (only `vkdownloader.cli` override exists; `tests.*` removed) | STALE — `tests.*` override no longer in pyproject.toml |
 
-**Applicability & readiness:** All 8 targets are present, the codebase is in the described state, and no
-dependency has drifted. The recommendations are operationally safe and aligned with existing codebase
-patterns (e.g., CLI-004's catch-all mirrors the `download` handler; CLI-002's target `perform_download`
-already supports pre-extracted data). No finding is rejected on applicability or safety grounds.
+**Applicability & readiness:** The codebase has been substantially refactored since this audit was written. CLI-001's `__main__` guard already exists (cli.py:517) but `src/vkdownloader/__main__.py` is still absent. CLI-002's duplication has been resolved — `download()` and `_download_single()` now both delegate to `services.downloader.download_video()`. CLI-003's helpers have already been relocated to `exceptions.py` and `utils/security.py`. CLI-004's asymmetry still exists (audit line numbers are stale but the catch-all exists at cli.py:407-410 while batch's does not). CLI-006's docstring note has been added. CLI-007's docstrings have been corrected. CLI-008's `tests.*` mypy override has been removed from `pyproject.toml`. Several findings have stale line-number references; the core issues for CLI-001, CLI-004, CLI-005, and CLI-006 (full wiring) still require action or verification.
 
 ---
 
@@ -658,11 +645,18 @@ already supports pre-extracted data). No finding is rejected on applicability or
   (`02-audit-config-validated-findings.md`) references "CLI-003 (Phase 01)" in its cross-phase
   analysis for the download/batch catch-all asymmetry. In the **current** source findings, this issue
   is **CLI-004** (the Phase 01 findings were renumbered/regenerated from a 5-finding to an 8-finding
-  set). The line references (cli.py:505, 598) remain accurate. The Phase 02 file should be updated to
-  reference CLI-004.
+  set). The line references (cli.py:505, 598) remain accurate in the original audit, but the current code has moved the catch-all to cli.py:407-410. The Phase 02 file should be updated to reference CLI-004.
 - **Stale validated file (process):** The previous `01-audit-cli-validated-findings.md` at this path
-  contained 5 findings (old CLI-001 through CLI-005 with different content). It has been completely
-  superseded by this report. The stale file should not be referenced.
+   contained 5 findings (old CLI-001 through CLI-005 with different content). It has been completely
+   superseded by this report. The stale file should not be referenced.
+- **Stale evidence (process):** This audit was validated against a previous code version. The current codebase has been refactored since:
+   - CLI-002's duplication has been resolved — `download()` and `_download_single()` now delegate to `services.downloader.download_video()`.
+   - CLI-003's helpers have already been relocated: `_resolve_output_file()` → `utils/security.py:68-97`, `_map_exception_to_status()` → `exceptions.py:60-76`.
+   - CLI-006's docstring note has been added (cli.py:335-342).
+   - CLI-007's docstrings have been corrected (cli.py:78-98; downloader_throttle.py:82-124).
+   - CLI-008's `tests.*` mypy override has been removed from `pyproject.toml`.
+   - CLI-001: The `if __name__ == "__main__"` guard now exists (cli.py:517); `src/vkdownloader/__main__.py` is still absent.
+   Many line-number references in this file are stale relative to the current source tree.
 - **CLI-004 classification discrepancy:** The source finds CLI-004 classified as `advisory`, but the
   Phase 02 validator classified the equivalent issue as `mandatory` (it closes a traceback/path-
   disclosure gap on normal user input - e.g., a URL file with locale-invalid bytes triggers
@@ -688,7 +682,7 @@ already supports pre-extracted data). No finding is rejected on applicability or
 ## Required Fixes
 
 1. **CLI-004** *(mandatory - see Warnings above)*: Add a catch-all `except Exception:` to `batch_download`
-   (cli.py, after line 601) mirroring the `download` handler (cli.py:505-508):
+   (cli.py, after the `except (KeyboardInterrupt, asyncio.CancelledError)` block at line 503) mirroring the `download` handler (cli.py:407-410):
    `logger.exception("batch_download_failed")` +
    `typer.echo("An error occurred during batch download", err=True)` +
    `raise typer.Exit(code=1) from None`. This closes the raw-traceback / path-disclosure gap on normal
@@ -706,25 +700,15 @@ already supports pre-extracted data). No finding is rejected on applicability or
    thin both handlers; relocate filename construction. Preserve per-command logging (available-streams
    list) and batch-only concerns (semaphore, backoff, progress_callback). Do **not** introduce a new
    layer.
-3. **CLI-003** *(small)*: Move `_resolve_output_file()` into `utils/security.py` alongside
-   `validate_output_path` and `_sanitize_title`. Move `_map_exception_to_status()` into
-   `exceptions.py` or a dedicated `services/exception_mapper.py`. Add unit tests for both relocated
-   functions (zero current coverage).
+3. **CLI-003** *(small)*: **Already implemented** — `_resolve_output_file()` is in `utils/security.py:68-97` and `_map_exception_to_status()` is in `exceptions.py:60-76`. Add unit tests for both relocated functions (zero current coverage): test `_map_exception_to_status` for each `isinstance` branch and `_resolve_output_file` for path resolution, traversal rejection, and sanitized filename generation.
+
 4. **CLI-005** *(small)*: Simplify the `as_completed` + `gather` pattern in `_run_batch_with_progress`
    (line 305-332). Use `progress_callback` for live progress and a single
    `asyncio.gather(return_exceptions=True)` for result collection. Preserve the `CancelledError`
    branch (lines 308-315).
-5. **CLI-006** *(small-medium)*: At minimum, add a note to the `download` command's docstring
-   (cli.py:412-416) stating it shows no live progress; recommend `batch` for progress visibility. For
-   the full fix, wire `ProgressManager` + `_create_progress_callback()` into the single `download`
-   command.
-6. **CLI-007** *(trivial)*: Correct the `_create_progress_callback` docstring (cli.py:88-93) and
-   `ProgressManager.update_sync()` docstring (downloader_throttle.py:106-121) to accurately state
-   that yt-dlp progress callbacks run in executor threads (not the event loop thread), and that
-   CPython's GIL provides atomicity for dict assignment.
-7. **CLI-008** *(trivial)*: Either add a `mypy src/ tests/` invocation so the `tests.*` override is
-   exercised, or remove the `tests.*` `[[tool.mypy.overrides]]` block (pyproject.toml:89-91) if tests
-   are not type-checked. Retain the `vkdownloader.cli` override (pyproject.toml:93-95).
+5. **CLI-006** *(small-medium)*: **Docstring note already implemented** (cli.py:335-342 now states "Note: This command does not show live progress during download. For real-time per-URL progress display, use the ``batch`` command instead."). For the full fix, wire `ProgressManager` + `_create_progress_callback()` into the single `download` command so both commands provide consistent progress feedback. This requires adapting `_create_progress_callback` (currently URL-index-based for batch) to single-download mode. Priority: recommended if user experience warrants the code change; otherwise the doc-only fix is sufficient.
+6. **CLI-007** *(trivial)*: **Docstring already corrected** (cli.py:78-93 and downloader_throttle.py:82-124 now accurately state callbacks run in executor threads and that CPython's GIL provides atomicity for dict assignment). No further action needed.
+7. **CLI-008** *(trivial)*: **Already resolved** — the `tests.*` `[[tool.mypy.overrides]]` block has been removed from `pyproject.toml`. The only remaining override is `vkdownloader.cli` (pyproject.toml:89-91), which correctly suppresses `disallow_untyped_decorators` for Typer's decorator-based commands. No action needed.
 
 ---
 
@@ -732,8 +716,9 @@ already supports pre-extracted data). No finding is rejected on applicability or
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 6 | CLI-001, CLI-002, CLI-003, CLI-005, CLI-006, CLI-008 |
+| Validated (unchanged) | 6 | CLI-001, CLI-002, CLI-005 |
 | Reclassified | 1 | CLI-007: SPEC-DEVIATION -> DOC-UPDATE (code works via GIL; docs misleading) |
+| Already implemented (superseded) | 3 | CLI-003 (helpers already relocated to exceptions.py + utils/security.py), CLI-006 (docstring note already added at cli.py:335-342), CLI-007 (docstring already corrected), CLI-008 (tests.* mypy override already removed from pyproject.toml) |
 | Merged | 0 | - |
 | Rejected | 0 | - |
 

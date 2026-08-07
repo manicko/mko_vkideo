@@ -445,6 +445,7 @@ result = await download_hls_with_resume(request)
 **Features:**
 - Downloads segments individually with progress tracking
 - Resumes from last downloaded segment on interruption
+- Playlist signature validation: stores SHA-256 hash of segment URLs in `.signature` file; stale segments from a previous playlist are automatically cleared on resume
 - Refreshes expired m3u8 tokens via browser automation (when cookie_source=BROWSER)
 - Applies anti-detection delay in sequential mode (max_concurrent_downloads=1)
 - Cleans up partial downloads on failure
@@ -844,12 +845,14 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `user_agent` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
 | `timezone` | `Europe/Moscow` | Timezone for stealth configuration |
 | `locale` | `ru-RU` | Locale for browser stealth |
+| `browser_pre_interaction_wait` | `5` | Seconds to wait before video interaction in browser extraction (1-30) |
+| `browser_post_interaction_wait` | `8` | Seconds to wait after video interaction in browser extraction (1-30) |
 | `max_retries` | `3` | Maximum retry attempts (1-10) |
 | `download_timeout` | `300` | Download timeout in seconds (30-3600) |
 | `ssl_verify` | `True` | Verify SSL certificates for CDN connections |
 | `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
 | `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
-| `throttled_rate` | `100000` | Minimum bytes/sec before throttling triggers re-extract |
+| `throttled_rate` | `10000` | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s). |
 | `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
 | `cookie_source` | `NONE` | Cookie acquisition strategy: none, browser (file is not implemented) |
 | `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |

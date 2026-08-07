@@ -6,7 +6,7 @@ import asyncio
 import os
 import tempfile
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,14 +15,15 @@ from playwright.async_api import Cookie
 from structlog import get_logger
 
 from ..config import Settings
-from ..exceptions import ExtractionError, QualityNotAvailableError
+from ..exceptions import ExtractionError, QualityNotAvailableError, QualityParseError
 from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, DownloadMethod, QualityEnum
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
-from ..utils.security import validate_output_path
+from ..utils.security import _resolve_output_file, validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
-from .cookies import _cookies_to_netscape, _write_netscape_cookie_file
+from .concurrency import SemaphoreLike
+from .cookies import _cookies_to_netscape
 from .downloader_throttle import _retry_429_with_backoff, get_shutdown_event
 from .ffmpeg_utils import (
     FfmpegProgress,
@@ -52,6 +53,44 @@ logger = get_logger(__name__)
 
 # Maximum retry attempts for getting new token on resume failure
 MAX_RESUME_RETRIES = 3
+
+
+def _semaphore_context(semaphore: SemaphoreLike | None) -> Any:
+    """Return an async context manager for semaphore acquisition.
+
+    When ``semaphore`` is None (single-download mode), returns a no-op context
+    manager so callers can always use ``async with _semaphore_context(semaphore):``.
+    """
+    if semaphore is not None:
+        return semaphore
+    return nullcontext()
+
+
+def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
+    """Create a temporary Netscape cookie file in the system temp directory.
+
+    Unlike writing to the download output directory (which may be cloud-synced),
+    the system temp directory is private and not synced, reducing the risk of
+    live session-cookie leakage on abnormal termination.
+
+    Args:
+        cookies: Either a raw cookie string (Netscape format) or a list of
+            Playwright Cookie objects.
+
+    Returns:
+        Path to the temporary cookie file (created with 0o600 permissions
+        via tempfile.mkstemp). The caller is responsible for cleanup.
+    """
+    content = _cookies_to_netscape(cookies)
+    fd, path = tempfile.mkstemp(suffix=".cookies.txt", prefix="vk_cookies_")
+    try:
+        os.write(fd, content.encode())
+        os.close(fd)
+    except Exception:
+        os.close(fd)
+        Path(path).unlink(missing_ok=True)
+        raise
+    return Path(path)
 
 
 @asynccontextmanager
@@ -106,24 +145,22 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
     Parse quality string to QualityEnum for stream selection.
 
     Args:
-        quality: Quality string (e.g., "720", "1080", "best", "worst").
+        quality: Quality string (e.g., "720", "1080", "best", "worst", "720p").
 
     Returns:
         QualityEnum value matching the string.
 
     Raises:
-        ValueError: If quality string cannot be parsed to QualityEnum.
+        QualityParseError: If quality string cannot be parsed to QualityEnum.
     """
     try:
         return QualityEnum(quality)
     except ValueError:
-        # If not a valid enum value, try to match with Q-prefixed values
         normalized = quality.rstrip("p") if quality else "best"
         try:
-            # Try matching Q-prefixed enum (e.g., "720" -> "Q720")
-            return QualityEnum(f"Q{normalized}")
+            return QualityEnum(normalized)
         except ValueError:
-            raise ValueError(f"Invalid quality value: {quality}") from None
+            raise QualityParseError(quality) from None
 
 
 def _build_ytdlp_options(
@@ -185,12 +222,10 @@ def _build_ytdlp_options(
     # Add cookies file generation if cookies provided
     cookie_file: Path | None = None
     if raw_cookies:
-        cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-        _write_netscape_cookie_file(cookie_file, raw_cookies)
+        cookie_file = _create_temp_cookie_file(raw_cookies)
         ydl_opts["cookiefile"] = str(cookie_file)
     elif cookies:
-        cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-        _write_netscape_cookie_file(cookie_file, cookies)
+        cookie_file = _create_temp_cookie_file(cookies)
         ydl_opts["cookiefile"] = str(cookie_file)
 
     # Add progress hook with shutdown signal awareness
@@ -248,6 +283,7 @@ __all__ = [
     "check_ffmpeg_available",
     "download_hls_with_resume",
     "download_with_ytdlp_with_resume_fallback",
+    "download_video",
     "perform_download",
     "read_progress",
     "_await_first_and_cancel_others",
@@ -315,7 +351,7 @@ class HLSDownloader:
         )
 
         async with _temp_headers_file(headers_content) as headers_file:
-            cmd = [
+            cmd: list[str] = [
                 "ffmpeg",
                 "-y",
                 "-progress",
@@ -323,12 +359,10 @@ class HLSDownloader:
                 "-nostats",
                 "-headers",
                 f"@{headers_file}",  # Safe: only filename in args
-                "-i",
-                m3u8_url,
-                "-c",
-                "copy",
-                str(output_file),
             ]
+            if not self.settings.ssl_verify:
+                cmd.extend(["-tls_verify", "0"])
+            cmd.extend(["-i", m3u8_url, "-c", "copy", str(output_file)])
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -421,7 +455,7 @@ async def download_with_ytdlp_with_resume_fallback(
     raw_cookies: list[Cookie] | None = None,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
-    semaphore: asyncio.Semaphore | None = None,
+    semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based fallback on failure.
@@ -500,7 +534,7 @@ async def _attempt_segment_resume(
     extractor: VKVideoExtractor | None,
     settings: Settings,
     backoff_coordinator: URLBackoffCoordinator | None,
-    semaphore: asyncio.Semaphore | None,
+    semaphore: SemaphoreLike | None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
@@ -632,7 +666,6 @@ async def _download_with_ytdlp(
                 ydl.download([video_url])
             return str(output_file)
         except Exception as e:
-            # Re-raise as DownloadError to distinguish from cancellation
             if "cancelled" in str(e).lower() or shutdown_event.is_set():
                 raise RuntimeError("Download cancelled") from e
             raise
@@ -721,7 +754,7 @@ async def perform_download(
     extractor: VKVideoExtractor | None = None,
     settings: Settings | None = None,
     backoff_coordinator: URLBackoffCoordinator | None = None,
-    semaphore: asyncio.Semaphore | None = None,
+    semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     video_data: VideoWithStreams | None = None,
     selected_stream: Stream | None = None,
@@ -777,77 +810,178 @@ async def perform_download(
 
         m3u8_url = str(streams[0].url)
 
-    match method:
-        case DownloadMethod.YTDLP:
-            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
-                extractor, settings, url, m3u8_url, quality
-            )
-            return await download_with_ytdlp_with_resume_fallback(
-                url,
-                m3u8_url,
-                output_file,
-                quality,
-                extractor,
-                settings,
-                cookies=cookies,
-                raw_cookies=raw_cookies,
-                backoff_coordinator=backoff_coordinator,
-                semaphore=semaphore,
-                progress_callback=progress_callback,
-            )
-        case DownloadMethod.FFMPEG:
-            if not settings.ssl_verify:
-                logger.warning(
-                    "ssl_verify_ignored_for_ffmpeg",
-                    url=_strip_auth_params(url),
-                    hint="The --no-ssl-verify flag is not applied to the direct ffmpeg "
-                    "download path; use --method yt-dlp or --method auto for SSL "
-                    "verification control on the CDN connection.",
-                )
-            m3u8_url, cookies, raw_cookies = await _resolve_cookies(
-                extractor, settings, url, m3u8_url, quality
-            )
-            downloader = HLSDownloader(settings=settings)
-            result = await downloader.download_with_ffmpeg(m3u8_url, output_file, quality, cookies)
-            if result is None:
-                logger.info("ffmpeg_failed_fallback_to_segment_download")
-                result = await download_hls_with_resume(
-                    HLSDownloadRequest(
-                        video_url=url,
-                        m3u8_url=m3u8_url,
-                        output_file=output_file,
-                        quality=quality,
-                        cookies=cookies,
-                        progress_callback=progress_callback,
-                    ),
-                    settings=settings,
-                    extractor=extractor,
-                    backoff_coordinator=backoff_coordinator,
-                    semaphore=semaphore,
-                )
-            return result
-        case DownloadMethod.AUTO:
-            # Auto: try yt-dlp first (more reliable), segment download for resume
-            if settings.cookie_source == CookieSource.NONE:
-                # Skip browser cookie resolution when explicitly disabled
-                m3u8_url, cookies, raw_cookies = m3u8_url, None, None
-            else:
+    # Acquire the shared semaphore (if provided) to bound concurrency across
+    # all download methods. When None (single-download mode), no limiting.
+    semaphore_context = _semaphore_context(semaphore)
+
+    async with semaphore_context:
+        match method:
+            case DownloadMethod.YTDLP:
                 m3u8_url, cookies, raw_cookies = await _resolve_cookies(
                     extractor, settings, url, m3u8_url, quality
                 )
-            return await download_with_ytdlp_with_resume_fallback(
-                url,
-                m3u8_url,
-                output_file,
-                quality,
-                extractor,
-                settings,
-                cookies=cookies,
-                raw_cookies=raw_cookies,
-                backoff_coordinator=backoff_coordinator,
-                semaphore=semaphore,
-                progress_callback=progress_callback,
-            )
-        case _:
-            logger.error("unknown_download_method", method=str(method))
-            return None
+                return await download_with_ytdlp_with_resume_fallback(
+                    url,
+                    m3u8_url,
+                    output_file,
+                    quality,
+                    extractor,
+                    settings,
+                    cookies=cookies,
+                    raw_cookies=raw_cookies,
+                    backoff_coordinator=backoff_coordinator,
+                    semaphore=semaphore,
+                    progress_callback=progress_callback,
+                )
+            case DownloadMethod.FFMPEG:
+                if not settings.ssl_verify:
+                    logger.warning(
+                        "ssl_verify_ignored_for_ffmpeg",
+                        url=_strip_auth_params(url),
+                        hint="The --no-ssl-verify flag is not applied to the direct ffmpeg "
+                        "download path; use --method yt-dlp or --method auto for SSL "
+                        "verification control on the CDN connection.",
+                    )
+                m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                    extractor, settings, url, m3u8_url, quality
+                )
+                downloader = HLSDownloader(settings=settings)
+
+                ffmpeg_progress_callback: Callable[[FfmpegProgress], None] | None = None
+                if progress_callback is not None:
+                    video_id = url.split("_")[-1] if "_" in url else url
+
+                    def _ffmpeg_progress_adapter(fp: FfmpegProgress) -> None:
+                        downloaded = fp.total_size if fp.total_size is not None else 0
+                        progress_callback(video_id, downloaded, downloaded)
+
+                    ffmpeg_progress_callback = _ffmpeg_progress_adapter
+
+                result = await downloader.download_with_ffmpeg(
+                    m3u8_url,
+                    output_file,
+                    quality,
+                    cookies,
+                    progress_callback=ffmpeg_progress_callback,
+                )
+                if result is None:
+                    logger.info("ffmpeg_failed_fallback_to_segment_download")
+                    result = await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url=url,
+                            m3u8_url=m3u8_url,
+                            output_file=output_file,
+                            quality=quality,
+                            cookies=cookies,
+                            progress_callback=progress_callback,
+                        ),
+                        settings=settings,
+                        extractor=extractor,
+                        backoff_coordinator=backoff_coordinator,
+                        semaphore=semaphore,
+                    )
+                return result
+            case DownloadMethod.AUTO:
+                # Auto: try yt-dlp first (more reliable), segment download for resume
+                if settings.cookie_source == CookieSource.NONE:
+                    # Skip browser cookie resolution when explicitly disabled
+                    m3u8_url, cookies, raw_cookies = m3u8_url, None, None
+                else:
+                    m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                        extractor, settings, url, m3u8_url, quality
+                    )
+                return await download_with_ytdlp_with_resume_fallback(
+                    url,
+                    m3u8_url,
+                    output_file,
+                    quality,
+                    extractor,
+                    settings,
+                    cookies=cookies,
+                    raw_cookies=raw_cookies,
+                    backoff_coordinator=backoff_coordinator,
+                    semaphore=semaphore,
+                    progress_callback=progress_callback,
+                )
+            case _:
+                logger.error("unknown_download_method", method=str(method))
+                return None
+
+
+async def download_video(
+    url: str,
+    quality: QualityEnum,
+    output: Path,
+    method: DownloadMethod,
+    settings: Settings,
+    *,
+    max_retries_override: int | None = None,
+    log_available_qualities: bool = False,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+    semaphore: SemaphoreLike | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    output_index: int = 0,
+) -> Path | None:
+    """Extract streams, select quality, resolve output, and download a video.
+
+    Shared orchestration for single-download and batch-download CLI handlers.
+    Encapsulates the extract -> guard-empty -> select -> resolve -> download
+    pipeline so that both entry-point paths delegate to a single implementation.
+
+    Args:
+        url: Video URL to download.
+        quality: Video quality selection.
+        output: Output directory for downloaded video.
+        method: Download method (yt-dlp, ffmpeg, or auto).
+        settings: Application settings with environment-loaded values.
+        max_retries_override: Optional max_retries override from CLI.
+        log_available_qualities: If True, log available stream qualities.
+        backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
+        semaphore: Optional shared semaphore for concurrency control.
+        progress_callback: Optional callback for per-URL segment progress.
+        output_index: Index for fallback filename (0 for single, index for batch).
+
+    Returns:
+        Path to the downloaded file on success, None on failure.
+
+    Raises:
+        QualityNotAvailableError: If no streams found or requested quality unavailable.
+        VideoNotFoundError: If the video cannot be found or is unavailable.
+    """
+    if max_retries_override is not None:
+        settings = settings.model_copy(update={"max_retries": max_retries_override})
+
+    extractor = VKVideoExtractor(settings=settings)
+    video = await extractor.extract_streams(url)
+
+    if not video.streams:
+        raise QualityNotAvailableError(
+            str(quality),
+            [],
+            "No streams found for this video; the video may be private or unavailable",
+        )
+
+    selector = QualitySelector()
+
+    if log_available_qualities:
+        available = selector.list_available_qualities(video.streams)
+        logger.info("available_streams", count=len(video.streams))
+        logger.info("available_qualities", qualities=available[:8])
+
+    stream = selector.select(video.streams, quality)
+
+    output_file = _resolve_output_file(video, output, settings, output_index)
+
+    return await perform_download(
+        url,
+        str(stream.quality),
+        output_file,
+        method,
+        extractor,
+        settings,
+        backoff_coordinator=backoff_coordinator,
+        semaphore=semaphore,
+        progress_callback=progress_callback,
+        video_data=video,
+        selected_stream=stream,
+    )

@@ -190,27 +190,27 @@ violates the "Secrets never logged" invariant.
 
 **Evidence (verified):**
 
-- `src/vkdownloader/cli.py:574-575` (cited site):
+- `src/vkdownloader/cli.py:475-477` (cited site):
   ```python
   if not VIDEO_ID_PATTERN.search(stripped):
       logger.warning("invalid_url_in_batch", url=stripped)
   ```
-- `src/vkdownloader/cli.py:242-244` (additional, NOT cited by the finding):
+- `src/vkdownloader/cli.py:167-169` (additional, NOT cited by the finding):
   ```python
   except Exception:
       logger.exception("unexpected_error_in_batch_download", url=url)
       raise
   ```
-- `url` at `:243` is the raw parameter of `_download_single` (passed to `extractor.extract_streams(url)`
-  at `:200` and `perform_download(url, ...)` at `:216`); never routed through `_strip_auth_params`.
+- `url` at `:169` is the raw parameter of `_download_single` (passed to `download_video` at cli.py:143); never routed through `_strip_auth_params`.
 - `_strip_auth_params` (`utils/url_sanitizer.py:6`) reduces URLs to
   `scheme://netloc/***REDACTED***`; used at 34 sites; `cli.py` has **0** imports/usages
   (`cli.py` is absent from the `_strip_auth_params` grep results).
 
-**Recommendation (expanded):** Pass both `url=stripped` (`:575`) and `url=url` (`:243`) through
-`_strip_auth_params()` before logging, consistent with the rest of the codebase. `cli.py` must import
-`_strip_auth_params` from `utils.url_sanitizer`. (Alternatively log only the parsed `video_id`.)
-Effort: trivial.
+**Recommendation (confirmed):** Import `_strip_auth_params` from `utils.url_sanitizer` into `cli.py` and route both URL-emitting logger calls through it:
+  - `cli.py:477` — `logger.warning("invalid_url_in_batch", url=stripped)` -> `url=_strip_auth_params(stripped)`
+  - `cli.py:169` — `logger.exception("unexpected_error_in_batch_download", url=url)` -> `url=_strip_auth_params(url)`
+
+This is the single recommended approach — it is consistent with the codebase-wide invariant (34 call sites across `extractor.py`, `downloader.py`, `segment_downloader.py`, `network_monitor.py`, `downloader_throttle.py` all wrap URLs in `_strip_auth_params`). `cli.py` is currently the only module that does not import `_strip_auth_params` at all. Logging only the parsed `video_id` is **not** recommended because the video_id parsing depends on `VIDEO_ID_PATTERN` already passing (which `cli.py:475` validates for the `:477` site, but not necessarily for the `:169` site in error paths), and URL emission is the established convention elsewhere. Effort: trivial.
 
 **Validation decision:** VALIDATED as `SPEC-DEVIATION` (code deviates from the codebase-wide
 sanitization invariant; docs don't govern this). The scope claim is corrected: there are two raw-URL
@@ -271,8 +271,7 @@ not config) — the leak is latent and would become active if any secret field i
   `throttled_rate`, `http_chunk_size`, `cookie_source`, `log_level`, `log_file`. None are secret
   credentials.
 
-**Recommendation (confirmed):** Do not echo raw received values; emit a redacted placeholder
-(e.g. `"<redacted>"`) or a type-only summary for sensitive field names. Effort: trivial.
+**Recommendation (confirmed):** Do not echo raw received values; emit a redacted placeholder (`"<redacted>"`) for the `Received:` line in `_format_validation_error` (`cli.py:61-64`). This is the single recommended approach — it is simple, defense-in-depth, and consistent with the project's existing redaction convention (`_strip_auth_params` → `"***REDACTED***"` in `url_sanitizer.py:22`). Since `Settings` currently defines no secret-bearing fields, the redaction is a forward-looking guard; a type-only summary adds complexity without current value. Replace `f"    Received: {received!r}"` with `f"    Received: <redacted>"`. Effort: trivial.
 
 **Validation decision: VALIDATED (`BEST-PRACTICE`, unchanged).**
 
@@ -361,16 +360,12 @@ R2 ("URLs sanitized via `_strip_auth_params` except one outlier") is **partially
 
 ## Advisory Recommendations
 
-- **SEC-002 (LOW, advisory):** Import `_strip_auth_params` into `cli.py` and route both URL-emitting logger
-  calls through it:
-  - `cli.py:575` — `logger.warning("invalid_url_in_batch", url=...)` -> `url=_strip_auth_params(stripped)`
-    (or log only `video_id`).
-  - `cli.py:243` — `logger.exception("unexpected_error_in_batch_download", url=url)` ->
-    `url=_strip_auth_params(url)`.
+- **SEC-002 (LOW, advisory):** Import `_strip_auth_params` from `utils.url_sanitizer` into `cli.py` and route both URL-emitting logger calls through it:
+  - `cli.py:477` — `logger.warning("invalid_url_in_batch", url=stripped)` -> `url=_strip_auth_params(stripped)`
+  - `cli.py:169` — `logger.exception("unexpected_error_in_batch_download", url=url)` -> `url=_strip_auth_params(url)`
   - Effort: trivial.
-- **SEC-003 (LOW, advisory):** In `_format_validation_error` (`cli.py:61-64`), do not echo the raw
-  `received` value; emit a redacted placeholder (e.g. `"<redacted>"`) or a type-only summary for sensitive
-  field names. Defense-in-depth against future secret-bearing config fields. Effort: trivial.
+- **SEC-003 (LOW, advisory):** In `_format_validation_error` (`cli.py:58-64`), do not echo the raw
+  `received` value; emit a redacted placeholder `"<redacted>"` for the `Received:` line. Defense-in-depth against future secret-bearing config fields. Effort: trivial.
 
 ---
 

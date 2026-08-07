@@ -48,3 +48,21 @@ class CookieSource(StrEnum):
     NONE = "none"
     BROWSER = "browser"
     FILE = "file"
+
+
+class ErrorCode(StrEnum):
+    """Machine-readable error codes for structured logging and filtering.
+
+    Each domain exception carries one of these codes so that log
+    aggregators and users can filter and group by specific failure
+    modes in structured (JSON) logs.
+    """
+
+    VIDEO_NOT_FOUND = "video_not_found"
+    INVALID_URL = "invalid_url"
+    QUALITY_NOT_AVAILABLE = "quality_not_available"
+    QUALITY_PARSE_ERROR = "quality_parse_error"
+    EXTRACTION_ERROR = "extraction_error"
+    DOWNLOAD_ERROR = "download_error"
+    PATH_TRAVERSAL = "path_traversal"
+    UNEXPECTED_ERROR = "unexpected_error"

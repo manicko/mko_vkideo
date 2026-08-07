@@ -4,7 +4,9 @@ from pathlib import Path
 
 from structlog import get_logger
 
+from ..config import Settings
 from ..exceptions import DownloadError
+from ..models.video import VideoWithStreams
 
 logger = get_logger(__name__)
 
@@ -61,3 +63,35 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
         pass
 
     return resolved
+
+
+def _resolve_output_file(
+    video: VideoWithStreams,
+    output: Path,
+    settings: Settings,
+    index: int,
+) -> Path:
+    """Resolve output file path with sanitized filename.
+
+    Args:
+        video: Video with metadata for filename generation.
+        output: Output directory override (or "." for default).
+        settings: Application settings with default download_dir.
+        index: Index for fallback filename (batch context).
+
+    Returns:
+        Resolved Path to the output file.
+    """
+    output_path = output if str(output) != "." else settings.download_dir
+    output_path = Path(output_path).resolve()
+
+    validated_output = validate_output_path(output_path, warning=False)
+    validated_output.mkdir(parents=True, exist_ok=True)
+
+    safe_title = _sanitize_title(video.title) if video.title else None
+    if safe_title:
+        output_file = validated_output / f"{safe_title}_{video.id}.mp4"
+    else:
+        output_file = validated_output / f"{index}_{video.id}.mp4"
+
+    return output_file

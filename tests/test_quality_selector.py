@@ -93,10 +93,12 @@ def test_select_specific_quality() -> None:
 
 
 def test_select_empty_streams_raises() -> None:
-    """Test quality selector raises ValueError for empty streams."""
+    """Test quality selector raises QualityNotAvailableError for empty streams."""
     selector = QualitySelector()
 
-    with pytest.raises(ValueError, match="Cannot select from empty streams list"):
+    with pytest.raises(
+        QualityNotAvailableError, match="Cannot select quality from empty streams list"
+    ):
         selector.select([], QualityEnum.BEST)
 
 

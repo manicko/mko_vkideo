@@ -160,7 +160,7 @@ class TestMergeBatchSegments:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await _merge_batch_segments([segment1, segment2], tmp_path)
+            result = await _merge_batch_segments([segment1, segment2], tmp_path, 300)
 
             # Should return path to batch output
             assert result is not None
@@ -185,7 +185,7 @@ class TestMergeBatchSegments:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            await _merge_batch_segments([segment1, segment2], tmp_path)
+            await _merge_batch_segments([segment1, segment2], tmp_path, 300)
 
             # Input files should be removed
             assert not segment1.exists()
@@ -207,7 +207,7 @@ class TestMergeBatchSegments:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            await _merge_batch_segments([segment1], tmp_path)
+            await _merge_batch_segments([segment1], tmp_path, 300)
 
             # File list should be removed
             file_list = tmp_path / "batch_list_0.txt"
@@ -229,7 +229,7 @@ class TestMergeBatchSegments:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await _merge_batch_segments([segment1], tmp_path)
+            result = await _merge_batch_segments([segment1], tmp_path, 300)
 
             assert result is None
 
@@ -257,7 +257,7 @@ class TestPerformFinalMerge:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await _perform_final_merge([temp_file1, temp_file2], output)
+            result = await _perform_final_merge([temp_file1, temp_file2], output, 300)
 
             assert result is True
 
@@ -281,7 +281,7 @@ class TestPerformFinalMerge:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            await _perform_final_merge([temp_file1, temp_file2], output)
+            await _perform_final_merge([temp_file1, temp_file2], output, 300)
 
             assert not temp_file1.exists()
             assert not temp_file2.exists()
@@ -304,7 +304,7 @@ class TestPerformFinalMerge:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            await _perform_final_merge([temp_file1], output)
+            await _perform_final_merge([temp_file1], output, 300)
 
             final_list = tmp_path / "final_list.txt"
             assert not final_list.exists()
@@ -327,7 +327,7 @@ class TestPerformFinalMerge:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result = await _perform_final_merge([temp_file1], output)
+            result = await _perform_final_merge([temp_file1], output, 300)
 
             assert result is False
 
@@ -349,7 +349,7 @@ class TestPerformFinalMerge:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
-            await _perform_final_merge([temp_file1], output)
+            await _perform_final_merge([temp_file1], output, 300)
 
             # Verify stderr was captured with PIPE
             call_kwargs = mock_exec.call_args[1]

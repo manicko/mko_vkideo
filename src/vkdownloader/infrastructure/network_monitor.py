@@ -88,7 +88,7 @@ class NetworkMonitor:
             # (chunked/streamed responses may omit the header).
             try:
                 body = await response.body()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(
                     "response_body_error",
                     url=_strip_auth_params(url),
@@ -113,7 +113,7 @@ class NetworkMonitor:
                     url=_strip_auth_params(url),
                     reason="invalid_json_in_response",
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(
                     "response_json_error",
                     url=_strip_auth_params(url),

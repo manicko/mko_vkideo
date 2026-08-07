@@ -6,7 +6,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vkdownloader.exceptions import DownloadError
-from vkdownloader.utils.security import _sanitize_title, validate_output_path
+from vkdownloader.models.enums import StreamFormat
+from vkdownloader.models.video import Stream, VideoWithStreams
+from vkdownloader.utils.security import _resolve_output_file, _sanitize_title, validate_output_path
 
 
 class TestValidateOutputPath:
@@ -147,3 +149,73 @@ class TestSanitizeTitle:
         assert not result.startswith(" ")
         assert not result.endswith(" ")
         assert len(result) == 100
+
+
+class TestResolveOutputFile:
+    """Tests for _resolve_output_file path resolution."""
+
+    def _make_video(self, title: str | None = "Test Video", video_id: str = "12345_67890") -> VideoWithStreams:
+        return VideoWithStreams(
+            id=video_id,
+            title=title,
+            streams=[Stream(url="https://example.com/stream.m3u8", format=StreamFormat.HLS, quality="720")],
+        )
+
+    def test_uses_output_directory_when_provided(self, tmp_path: Path) -> None:
+        """Test that a provided output directory is used."""
+        settings = MagicMock(download_dir=Path("/default"))
+        video = self._make_video()
+        output_dir = tmp_path / "downloads"
+
+        result = _resolve_output_file(video, output_dir, settings, 0)
+
+        assert result.parent == output_dir.resolve()
+        assert result.name == "Test Video_12345_67890.mp4"
+
+    def test_uses_settings_download_dir_when_output_is_dot(self, tmp_path: Path) -> None:
+        """Test that settings.download_dir is used when output is '.'."""
+        settings = MagicMock(download_dir=tmp_path / "default_downloads")
+        video = self._make_video()
+
+        result = _resolve_output_file(video, Path("."), settings, 0)
+
+        assert result.parent == (tmp_path / "default_downloads").resolve()
+        assert result.name == "Test Video_12345_67890.mp4"
+
+    def test_falls_back_to_index_when_title_none(self, tmp_path: Path) -> None:
+        """Test that fallback filename uses index when title is None."""
+        settings = MagicMock(download_dir=tmp_path)
+        video = self._make_video(title=None)
+
+        result = _resolve_output_file(video, Path("."), settings, 3)
+
+        assert result.name == "3_12345_67890.mp4"
+
+    def test_falls_back_to_index_when_title_empty(self, tmp_path: Path) -> None:
+        """Test that fallback filename uses index when title is empty string."""
+        settings = MagicMock(download_dir=tmp_path)
+        video = self._make_video(title="")
+
+        result = _resolve_output_file(video, Path("."), settings, 5)
+
+        assert result.name == "5_12345_67890.mp4"
+
+    def test_creates_output_directory_if_missing(self, tmp_path: Path) -> None:
+        """Test that the output directory is created if it doesn't exist."""
+        settings = MagicMock(download_dir=tmp_path)
+        video = self._make_video()
+        output_dir = tmp_path / "nested" / "downloads"
+
+        result = _resolve_output_file(video, output_dir, settings, 0)
+
+        assert output_dir.exists()
+        assert result.parent == output_dir.resolve()
+
+    def test_sanitizes_title_in_filename(self, tmp_path: Path) -> None:
+        """Test that illegal characters in title are sanitized."""
+        settings = MagicMock(download_dir=tmp_path)
+        video = self._make_video(title="My:Video/Title")
+
+        result = _resolve_output_file(video, Path("."), settings, 0)
+
+        assert result.name == "My_Video_Title_12345_67890.mp4"

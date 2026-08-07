@@ -82,10 +82,11 @@ class ProgressManager:
     Thread-safety notes:
         - The `_state` dict is accessed via async methods (update, clear, get_formatted_progress)
           with lock protection for thread-safe access across async tasks.
-        - For sync callbacks (e.g., progress callbacks from segment downloads), use
-          `update_sync()` which relies on single-event-loop execution semantics.
+        - For sync callbacks (e.g., yt-dlp progress hooks called from a thread-pool
+          executor), use `update_sync()` which relies on CPython's GIL to make
+          dict.__setitem__ atomic.
         - The async lock protects the read path in get_formatted_progress, ensuring consistent
-          reads while callbacks may write concurrently.
+          reads while callbacks may write concurrently from worker threads.
     """
 
     def __init__(self) -> None:
@@ -106,9 +107,11 @@ class ProgressManager:
     def update_sync(self, url_index: int, downloaded: int, total: int) -> None:
         """Update progress for a URL from sync callbacks in the same event loop.
 
-        This method is for use with sync callbacks that run within the asyncio event loop.
-        It performs direct assignment without lock protection, relying on the guarantee that
-        these callbacks execute sequentially in the single-threaded event loop.
+        This method is for use with sync callbacks that may run outside the
+        asyncio event loop thread (e.g., yt-dlp progress hooks called from a
+        thread-pool executor via loop.run_in_executor). It performs direct
+        dict assignment without lock protection, relying on CPython's GIL
+        which makes dict.__setitem__ atomic.
 
         Args:
             url_index: Index of the URL in the batch for tracking.
@@ -116,7 +119,8 @@ class ProgressManager:
             total: Total bytes to download.
 
         Note:
-            Do not call this method from true multi-threaded contexts; use `update()` instead.
+            For truly multi-threaded contexts beyond CPython's GIL guarantees, use
+            the async `update()` method instead, which acquires the asyncio lock.
         """
         self._state[url_index] = (downloaded, total)
 
@@ -168,7 +172,12 @@ async def _retry_429_with_backoff(
     """
     sanitized_url = _strip_auth_params(segment_url)
     shutdown_event = get_shutdown_event()
-    client_timeout = aiohttp.ClientTimeout(total=download_timeout)
+    client_timeout = aiohttp.ClientTimeout(
+        total=download_timeout,
+        connect=min(30, download_timeout // 4),
+        sock_connect=30,
+        sock_read=60,
+    )
 
     for attempt in range(max_retries):
         if shutdown_event.is_set():
@@ -180,7 +189,13 @@ async def _retry_429_with_backoff(
                 segment_url, headers=headers, timeout=client_timeout
             ) as response:
                 if response.status == 200:
-                    return await response.read()
+                    content = await response.read()
+                    if len(content) == 0:
+                        logger.warning(
+                            "empty_segment_content", segment_index=segment_index, url=sanitized_url
+                        )
+                        return None
+                    return content
 
                 if response.status not in RETRYABLE_STATUS_CODES:
                     logger.warning(

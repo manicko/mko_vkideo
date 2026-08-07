@@ -86,7 +86,7 @@ class Settings(BaseSettings):
         default=10000,
         ge=1000,
         le=1000000,
-        description="Minimum download rate in bytes/sec before throttling triggers re-extract. Default is conservative (10KB/s) to avoid aborting legitimate slow downloads; yt-dlp will abort below this threshold.",
+        description="Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s).",
     )
     http_chunk_size: int = Field(
         default=10485760,
@@ -109,9 +109,23 @@ class Settings(BaseSettings):
         description="Optional log file path",
     )
 
+    @field_validator("download_dir", "log_file", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
+
     @field_validator("download_dir", "log_file", mode="after")
     @classmethod
     def expand_tilde_paths(cls, v: Path | None) -> Path | None:
+        """Expand ``~`` and resolve to an absolute path.
+
+        ``None`` values are passed through unchanged (empty-string inputs
+        are handled separately by ``empty_string_to_none`` and are not
+        coerced to ``None`` here -- see CFG-001 for the related crash
+        behaviour when ``LOG_FILE`` is an empty string).
+        """
         if v is None:
             return v
         return v.expanduser().resolve()
@@ -119,6 +133,11 @@ class Settings(BaseSettings):
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, v: str | LogLevel) -> LogLevel:
+        """Coerce log level to uppercase and parse into LogLevel enum.
+
+        Accepts a ``LogLevel`` directly or a string (e.g. ``"info"`` or
+        ``"INFO"``), normalizing case for case-insensitive input.
+        """
         if isinstance(v, LogLevel):
             return v
         return LogLevel(v.upper())
@@ -142,6 +161,7 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "extra": "forbid",
         "env_prefix": "VKDOWNLOADER_",
+        "hide_input_in_errors": True,
     }
 
 
@@ -217,8 +237,11 @@ def setup_logging(settings: Settings | None = None) -> None:
 
     structlog.configure(
         processors=[
+            structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
             structlog.processors.JSONRenderer()
             if settings.log_file
             else structlog.dev.ConsoleRenderer(),

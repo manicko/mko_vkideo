@@ -19,6 +19,7 @@ from vkdownloader.services.downloader import (
     _cleanup_segments,
     _cookies_to_netscape,
     _parse_m3u8_segments,
+    _parse_quality_to_enum,
     _resolve_cookies,
     download_hls_with_resume,
 )
@@ -402,22 +403,30 @@ class TestYtdlpOptions:
 
     def test_ytdlp_options_includes_throttled_rate(self, test_settings: Settings) -> None:
         """Test yt-dlp options include throttled_rate setting."""
-        ydl_opts = {
-            "throttledratelimit": test_settings.throttled_rate,
-            "http_chunk_size": test_settings.http_chunk_size,
-        }
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
 
-        assert "throttledratelimit" in ydl_opts
         assert ydl_opts["throttledratelimit"] == 10000
 
     def test_ytdlp_options_includes_http_chunk_size(self, test_settings: Settings) -> None:
         """Test yt-dlp options include http_chunk_size setting."""
-        ydl_opts = {
-            "throttledratelimit": test_settings.throttled_rate,
-            "http_chunk_size": test_settings.http_chunk_size,
-        }
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
 
-        assert "http_chunk_size" in ydl_opts
         assert ydl_opts["http_chunk_size"] == 10485760
 
     def test_ytdlp_options_custom_values(self) -> None:
@@ -426,15 +435,63 @@ class TestYtdlpOptions:
             max_concurrent_downloads=8, throttled_rate=200000, http_chunk_size=5242880
         )
 
-        ydl_opts = {
-            "max_concurrent_downloads": custom_settings.max_concurrent_downloads,
-            "throttledratelimit": custom_settings.throttled_rate,
-            "http_chunk_size": custom_settings.http_chunk_size,
-        }
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=custom_settings.user_agent,
+            settings=custom_settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
 
-        assert ydl_opts["max_concurrent_downloads"] == 8
+        assert ydl_opts["concurrent_fragments"] == 8
         assert ydl_opts["throttledratelimit"] == 200000
         assert ydl_opts["http_chunk_size"] == 5242880
+
+    def test_ytdlp_options_nocheckcertificate(self, test_settings: Settings) -> None:
+        """Test nocheckcertificate reflects ssl_verify setting."""
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
+
+        assert ydl_opts["nocheckcertificate"] is False
+
+    def test_ytdlp_options_nocheckcertificate_disabled(self, test_settings: Settings) -> None:
+        """Test nocheckcertificate is True when ssl_verify is False."""
+        settings = test_settings.model_copy(update={"ssl_verify": False})
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=settings.user_agent,
+            settings=settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
+
+        assert ydl_opts["nocheckcertificate"] is True
+
+    def test_ytdlp_options_http_headers(self, test_settings: Settings) -> None:
+        """Test yt-dlp options include http_headers with user agent."""
+        ydl_opts, _ = _build_ytdlp_options(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent="TestAgent/1.0",
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+            video_id="test",
+        )
+
+        assert ydl_opts["http_headers"]["User-Agent"] == "TestAgent/1.0"
+        assert ydl_opts["http_headers"]["Referer"] == "https://vkvideo.ru/"
 
 
 class TestParallelSegmentsDownload:
@@ -495,20 +552,26 @@ class TestParallelSegmentsDownload:
     async def test_parallel_download_uses_gather(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test that parallel download uses asyncio.gather for concurrency."""
+        """Test that parallel download downloads all segments via gather."""
         from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
         output_path = tmp_path / "video.mp4"
 
-        gather_called = False
+        download_count = 0
 
-        async def mock_gather(*tasks: Any, **kwargs: Any) -> list[bool]:
-            nonlocal gather_called
-            gather_called = True
-            # Return True for each task
-            return [True] * len(tasks)
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+            **kwargs: Any,
+        ) -> bool:
+            nonlocal download_count
+            download_count += 1
+            output_path.write_bytes(b"segment data")
+            return True
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
@@ -516,23 +579,23 @@ class TestParallelSegmentsDownload:
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
-                return_value=True,
+                side_effect=mock_download_segment,
             ):
                 with patch(
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    with patch("asyncio.gather", side_effect=mock_gather):
-                        await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
-                            ),
-                            settings=test_settings,
-                        )
+                    await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                        ),
+                        settings=test_settings,
+                    )
 
-        assert gather_called, "asyncio.gather should be called for concurrent downloads"
+        # Verify all segments were downloaded (gather is invoked internally)
+        assert download_count == 2
 
     @pytest.mark.asyncio
     async def test_shared_semaphore_parameter(
@@ -612,7 +675,7 @@ class TestBrowserCookiesIntegration:
             mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
 
             # Mock run_in_executor to call the function synchronously
-            with patch("vkdownloader.services.downloader.asyncio.get_event_loop") as mock_loop:
+            with patch("vkdownloader.services.downloader.asyncio.get_running_loop") as mock_loop:
 
                 def run_in_executor_side_effect(executor: Any, func: Any, *args: Any) -> Any:
                     # Call the sync function directly and return the result
@@ -1043,7 +1106,7 @@ class TestDownloadMethodLogging:
         with patch("vkdownloader.services.downloader.yt_dlp") as mock_yt:
             mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
 
-            with patch("vkdownloader.services.downloader.asyncio.get_event_loop") as mock_loop:
+            with patch("vkdownloader.services.downloader.asyncio.get_running_loop") as mock_loop:
 
                 def run_in_executor_side_effect(executor: Any, func: Any, *args: Any) -> Any:
                     async def coro() -> str:
@@ -1617,6 +1680,11 @@ class TestDownloadSegmentRealExecution:
         # Should return False immediately (fail-fast), not retry 3 times
         assert result is False
         assert mock_session.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_download_segment_main_sequential_dispatch(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
         """Test _download_segment dispatches to sequential mode when max_concurrent=1."""
         segment_url = "https://example.com/segment.ts"
         output_path = tmp_path / "00000.ts"
@@ -2046,7 +2114,7 @@ class TestFfmpegAvailabilityCheck:
 
 
 class TestSslVerifyFfmpegWarning:
-    """Tests for INT-006: ssl_verify warning when using ffmpeg method."""
+    """Tests for INT-005: ssl_verify warning when using ffmpeg method."""
 
     @pytest.mark.asyncio
     async def test_perform_download_ffmpeg_ssl_verify_warning(
@@ -2099,3 +2167,33 @@ class TestSslVerifyFfmpegWarning:
         # Verify ssl_verify warning was logged for ffmpeg method
         ssl_warnings = [m for m in log_messages if "ssl_verify_ignored_for_ffmpeg" in m["message"]]
         assert len(ssl_warnings) >= 1
+
+
+class TestParseQualityToEnum:
+    """Tests for _parse_quality_to_enum quality string parsing."""
+
+    def test_parse_numeric_quality(self) -> None:
+        """Test parsing numeric quality strings without p suffix."""
+        assert _parse_quality_to_enum("720") == QualityEnum("720")
+        assert _parse_quality_to_enum("1080") == QualityEnum("1080")
+
+    def test_parse_quality_with_p_suffix(self) -> None:
+        """Test parsing quality strings with p suffix are stripped."""
+        assert _parse_quality_to_enum("720p") == QualityEnum("720")
+        assert _parse_quality_to_enum("480p") == QualityEnum("480")
+
+    def test_parse_named_qualities(self) -> None:
+        """Test parsing named quality strings."""
+        assert _parse_quality_to_enum("best") == QualityEnum.BEST
+        assert _parse_quality_to_enum("worst") == QualityEnum.WORST
+
+    def test_parse_unknown_quality_raises(self) -> None:
+        """Test that unparseable quality strings raise QualityParseError."""
+        from vkdownloader.exceptions import QualityParseError
+
+        with pytest.raises(QualityParseError):
+            _parse_quality_to_enum("invalid_quality")
+
+    def test_parse_empty_quality_defaults_to_best(self) -> None:
+        """Test that empty quality string defaults to BEST."""
+        assert _parse_quality_to_enum("") == QualityEnum.BEST

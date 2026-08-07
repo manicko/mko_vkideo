@@ -153,6 +153,34 @@ async def cancel_ffmpeg_process(
         return False
 
 
+async def _await_ffmpeg_with_timeout(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+) -> tuple[bytes | None, bytes | None]:
+    """Await ffmpeg process communication with timeout and graceful cancellation.
+
+    Wraps ``process.communicate()`` in ``asyncio.wait_for`` and ensures the
+    process is terminated via ``cancel_ffmpeg_process`` on cancellation or
+    timeout, preventing orphaned ffmpeg subprocesses.
+
+    Args:
+        process: The ffmpeg subprocess to await.
+        timeout: Maximum seconds to wait for the process to complete.
+
+    Returns:
+        Tuple of (stdout, stderr) on success.
+
+    Raises:
+        asyncio.TimeoutError: If the process does not complete within ``timeout``.
+    """
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        return stdout, stderr
+    except (TimeoutError, asyncio.CancelledError):
+        await cancel_ffmpeg_process(process)
+        raise
+
+
 def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> list[str]:
     """Build ffmpeg concat command for merging files.
 
@@ -180,12 +208,15 @@ def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> lis
     return cmd
 
 
-async def _merge_batch_segments(batch_files: list[Path], temp_dir: Path) -> Path | None:
+async def _merge_batch_segments(
+    batch_files: list[Path], temp_dir: Path, download_timeout: float = 300.0
+) -> Path | None:
     """Merge a batch of segments into a single temp file.
 
     Args:
         batch_files: List of segment file paths to merge.
         temp_dir: Directory for temp files.
+        download_timeout: Maximum seconds for the ffmpeg subprocess to complete.
 
     Returns:
         Path to merged batch file on success, None on failure.
@@ -208,7 +239,11 @@ async def _merge_batch_segments(batch_files: list[Path], temp_dir: Path) -> Path
         stderr=asyncio.subprocess.PIPE,
     )
 
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await _await_ffmpeg_with_timeout(process, download_timeout)
+    except TimeoutError:
+        logger.error("batch_merge_timeout", timeout=download_timeout)
+        return None
 
     if process.returncode != 0:
         error = stderr.decode() if stderr else "Unknown error"
@@ -223,12 +258,15 @@ async def _merge_batch_segments(batch_files: list[Path], temp_dir: Path) -> Path
     return batch_output
 
 
-async def _perform_final_merge(temp_files: list[Path], output_file: Path) -> bool:
+async def _perform_final_merge(
+    temp_files: list[Path], output_file: Path, download_timeout: float = 300.0
+) -> bool:
     """Merge all batch temp files into final output.
 
     Args:
         temp_files: List of batch temp file paths to merge.
         output_file: Final output file path.
+        download_timeout: Maximum seconds for the ffmpeg subprocess to complete.
 
     Returns:
         True on success, False on failure.
@@ -248,7 +286,11 @@ async def _perform_final_merge(temp_files: list[Path], output_file: Path) -> boo
         stderr=asyncio.subprocess.PIPE,
     )
 
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await _await_ffmpeg_with_timeout(process, download_timeout)
+    except TimeoutError:
+        logger.error("final_merge_timeout", timeout=download_timeout)
+        return False
 
     if process.returncode == 0:
         logger.info("merge_completed", output=str(output_file))
@@ -261,13 +303,16 @@ async def _perform_final_merge(temp_files: list[Path], output_file: Path) -> boo
     return False
 
 
-async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: int) -> Path | None:
+async def _merge_segments_batched(
+    segments_dir: Path, output_file: Path, count: int, download_timeout: float = 300.0
+) -> Path | None:
     """Merge segments in batches to avoid command line limits.
 
     Args:
         segments_dir: Directory containing segment files.
         output_file: Final output file path.
         count: Total number of segments to merge.
+        download_timeout: Maximum seconds for each ffmpeg subprocess to complete.
 
     Returns:
         Path to output file on success, None on failure.
@@ -286,7 +331,7 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
                 missing = [f.name for f in batch_files if not f.exists()]
                 raise FileNotFoundError(f"Missing segment files for merge: {missing}")
 
-            result = await _merge_batch_segments(batch_files, segments_dir)
+            result = await _merge_batch_segments(batch_files, segments_dir, download_timeout)
             if result is None:
                 return None
 
@@ -294,7 +339,7 @@ async def _merge_segments_batched(segments_dir: Path, output_file: Path, count: 
 
         # Final merge of all batches
         if temp_files:
-            if await _perform_final_merge(temp_files, output_file):
+            if await _perform_final_merge(temp_files, output_file, download_timeout):
                 return output_file
 
         return None

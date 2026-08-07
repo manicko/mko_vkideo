@@ -64,8 +64,8 @@ vkdownloader download [OPTIONS] URL
 | `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `1440`, `2160`, `best`, `worst` |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
-| `--cookie-source` | | str | `none` | Cookie strategy: `none`, `browser`, or `file` |
-| `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+| `--cookie-source` | | str | `none` | Cookie strategy: `none` or `browser` (file not implemented) |
+| `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
 **Behavior:**
 
@@ -122,8 +122,8 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--quality` | | str | `best` | Video quality selection for all downloads |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
-| `--cookie-source` | | str | `none` | Cookie strategy: `none`, `browser`, or `file` |
-| `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+| `--cookie-source` | | str | `none` | Cookie strategy: `none` or `browser` (file not implemented) |
+| `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
 **Environment Variables:**
 
@@ -195,7 +195,7 @@ Available cookie source values for `--cookie-source` option:
 |-------|-------------|
 | `none` | No browser launch, fastest for public videos (default) |
 | `browser` | Launch browser to extract real cookies for authenticated content |
-| `file` | Load cookies from external file (future enhancement) |
+| `file` | Raising `ValidationError` at construction; not implemented. Use `none` or `browser` instead |
 
 ---
 

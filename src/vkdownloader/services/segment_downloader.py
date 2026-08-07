@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import ssl
 from collections.abc import Callable
@@ -18,10 +19,13 @@ from ..config import Settings
 from ..models.enums import CookieSource
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
+from .concurrency import SemaphoreLike
 from .downloader_throttle import (
     RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
+    _parse_retry_after,
     _retry_429_with_backoff,
+    _wait_with_shutdown,
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
@@ -52,7 +56,7 @@ class DownloadPolicy:
     """
 
     session: aiohttp.ClientSession
-    semaphore: asyncio.Semaphore
+    semaphore: SemaphoreLike | asyncio.Semaphore
     headers: dict[str, str]
     max_concurrent_downloads: int
     backoff_coordinator: URLBackoffCoordinator | None
@@ -76,6 +80,56 @@ def _parse_m3u8_segments(content: str) -> list[str]:
         if line and not line.startswith("#"):
             segments.append(line)
     return segments
+
+
+_PLAYLIST_SIGNATURE_FILE = ".signature"
+
+
+def _compute_playlist_signature(segments: list[str]) -> str:
+    """Compute a SHA-256 signature of the segment URL list.
+
+    Used to detect playlist changes between download sessions so stale
+    segments from a previous playlist are not silently reused.
+
+    Args:
+        segments: List of segment URLs from the current playlist.
+
+    Returns:
+        Hexadecimal SHA-256 digest string.
+    """
+    joined = "\n".join(segments)
+    return hashlib.sha256(joined.encode()).hexdigest()
+
+
+def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
+    """Remove stale segment files that belong to a previous playlist.
+
+    If the playlist signature does not match the one on disk, all ``*.ts``
+    files in ``segments_dir`` are stale and must be removed before
+    downloading the current playlist's segments.
+
+    Args:
+        segments_dir: Directory containing downloaded segments.
+        segments: List of segment URLs from the current playlist.
+    """
+    if not segments_dir.exists():
+        return
+
+    signature = _compute_playlist_signature(segments)
+    signature_file = segments_dir / _PLAYLIST_SIGNATURE_FILE
+
+    if signature_file.exists():
+        stored = signature_file.read_text(encoding="utf-8").strip()
+        if stored == signature:
+            return
+
+    stale_count = len(list(segments_dir.glob("*.ts")))
+    if stale_count:
+        logger.info("clearing_stale_segments", count=stale_count)
+    for stale_file in segments_dir.glob("*.ts"):
+        stale_file.unlink(missing_ok=True)
+
+    signature_file.write_text(signature, encoding="utf-8")
 
 
 async def _download_segment_sequential(
@@ -109,7 +163,7 @@ async def _download_segment_sequential(
         max_retries=max_retries,
         download_timeout=download_timeout,
     )
-    if content is not None:
+    if content is not None and len(content) > 0:
         with open(output_path, "wb") as f:
             f.write(content)
         return True
@@ -155,20 +209,31 @@ async def _run_parallel_download_with_backoff(
 
     Returns True on success, None for retryable status codes, False for fatal errors.
     """
-    client_timeout = aiohttp.ClientTimeout(total=download_timeout)
+    connect_timeout = min(30, download_timeout // 4)
+    client_timeout = aiohttp.ClientTimeout(
+        total=download_timeout,
+        connect=connect_timeout,
+        sock_connect=30,
+        sock_read=60,
+    )
     async with session.get(segment_url, headers=headers, timeout=client_timeout) as response:
         if response.status == 200:
+            content = await response.read()
+            if len(content) == 0:
+                logger.warning("empty_segment_content", segment_url=_strip_auth_params(segment_url))
+                return None
             with open(output_path, "wb") as f:
-                f.write(await response.read())
+                f.write(content)
             return True
 
         logger.warning("segment_download_failed", status=response.status)
         await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, video_url)
 
         if _should_continue_on_retry(response.status, attempt, max_retries):
-            # Exponential backoff with full jitter instead of a fixed 1.0s sleep.
-            delay = _compute_backoff_delay(response.status, attempt, None)
-            await asyncio.sleep(delay)
+            retry_after_seconds = _parse_retry_after(response)
+            delay = _compute_backoff_delay(response.status, attempt, retry_after_seconds)
+            shutdown_event = get_shutdown_event()
+            await _wait_with_shutdown(delay, shutdown_event, attempt, video_url or "unknown")
             return None
 
         return False
@@ -185,35 +250,6 @@ async def _check_backoff_before_attempt(
         if was_paused and shutdown_event.is_set():
             return True
     return False
-
-
-async def _do_parallel_download_attempt(
-    session: aiohttp.ClientSession,
-    segment_url: str,
-    output_path: Path,
-    headers: dict[str, str],
-    backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str | None,
-    attempt: int,
-    max_retries: int,
-    download_timeout: int = 300,
-) -> bool | None:
-    """Perform a single download attempt in parallel mode.
-
-    Returns True on success, None for retryable status codes, False for fatal errors.
-    """
-    result = await _run_parallel_download_with_backoff(
-        session,
-        segment_url,
-        output_path,
-        headers,
-        backoff_coordinator,
-        video_url,
-        attempt,
-        max_retries,
-        download_timeout=download_timeout,
-    )
-    return result
 
 
 async def _try_single_download_attempt(
@@ -233,7 +269,7 @@ async def _try_single_download_attempt(
     errors), False for fatal HTTP status codes (non-retryable).
     """
     try:
-        return await _do_parallel_download_attempt(
+        return await _run_parallel_download_with_backoff(
             session,
             segment_url,
             output_path,
@@ -441,7 +477,12 @@ async def _fetch_playlist_with_retry(
 ) -> str | None:
     """Fetch m3u8 playlist with token refresh on 403/410."""
     current_url = m3u8_url
-    client_timeout = aiohttp.ClientTimeout(total=settings.download_timeout)
+    client_timeout = aiohttp.ClientTimeout(
+        total=settings.download_timeout,
+        connect=min(30, settings.download_timeout // 4),
+        sock_connect=30,
+        sock_read=60,
+    )
 
     for _ in range(max_retries):
         result = await _fetch_single_playlist(session, current_url, headers, client_timeout)
@@ -488,15 +529,15 @@ def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnecto
 
 
 async def _await_and_cancel(
-    tasks: list[asyncio.Task[bool]],
-) -> list[bool] | None:
+    tasks: list[asyncio.Task[tuple[int, bool]]],
+) -> list[tuple[int, bool]] | None:
     """Await segment download tasks with cancellation handling.
 
     Args:
-        tasks: List of download tasks to await.
+        tasks: List of download tasks to await. Each task returns (segment_index, success).
 
     Returns:
-        List of download results on success, None if cancelled.
+        List of (segment_index, success) tuples on success, None if cancelled.
     """
     if not tasks:
         return None
@@ -515,12 +556,13 @@ async def _await_and_cancel(
 
 
 async def _tally_and_merge(
-    download_results: list[bool],
+    download_results: list[tuple[int, bool]],
     segments: list[str],
     segments_dir: Path,
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
+    download_timeout: int,
 ) -> Path | None:
     """Tally download results and merge if all segments downloaded.
 
@@ -528,12 +570,13 @@ async def _tally_and_merge(
     falling back to filesystem count for progress reporting.
 
     Args:
-        download_results: Results from completed download tasks (True = success).
+        download_results: List of (segment_index, success) tuples from completed tasks.
         segments: List of all segment URLs.
         segments_dir: Directory containing downloaded segments.
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
         video_url: Video URL for progress callback video_id extraction.
+        download_timeout: Maximum seconds for ffmpeg subprocess merge operations.
 
     Returns:
         Path to merged file on success, None otherwise.
@@ -545,15 +588,17 @@ async def _tally_and_merge(
         progress_callback(video_id, downloaded_count, len(segments))
 
     # Detect failed segments explicitly from download results
-    if download_results and not all(download_results):
-        failed_indices = [i for i, r in enumerate(download_results) if not r]
+    if download_results and not all(r for _, r in download_results):
+        failed_indices = [idx for idx, r in download_results if not r]
         logger.warning("segment_download_failed", failed_indices=failed_indices)
         return None
 
     # All segments present on disk — merge
     if downloaded_count == len(segments):
         logger.info("merging_segments", count=len(segments))
-        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+        result = await _merge_segments_batched(
+            segments_dir, output_file, len(segments), float(download_timeout)
+        )
         if result:
             _cleanup_segments(segments_dir)
         return result
@@ -562,22 +607,24 @@ async def _tally_and_merge(
 
 
 async def _process_downloaded_segments(
-    tasks: list[asyncio.Task[bool]],
+    tasks: list[asyncio.Task[tuple[int, bool]]],
     segments: list[str],
     segments_dir: Path,
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
+    download_timeout: int,
 ) -> Path | None:
     """Process downloaded segments and merge if complete.
 
     Args:
-        tasks: List of download tasks to await.
+        tasks: List of download tasks to await. Each returns (segment_index, success).
         segments: List of all segment URLs.
         segments_dir: Directory containing downloaded segments.
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
         video_url: Video URL for progress callback video_id extraction.
+        download_timeout: Maximum seconds for ffmpeg subprocess merge operations.
 
     Returns:
         Path to merged file on success, None otherwise.
@@ -592,13 +639,14 @@ async def _process_downloaded_segments(
         output_file,
         progress_callback,
         video_url,
+        download_timeout,
     )
 
 
 async def _download_segment_concurrent(
     task: SegmentTask,
     policy: DownloadPolicy,
-) -> bool:
+) -> tuple[int, bool]:
     """Download a segment with semaphore rate limiting.
 
     Args:
@@ -606,7 +654,7 @@ async def _download_segment_concurrent(
         policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
 
     Returns:
-        True on success, False on failure.
+        Tuple of (segment_index, success) where success is True on download success.
     """
     shutdown_event = get_shutdown_event()
 
@@ -648,13 +696,13 @@ async def _download_segment_concurrent(
             except TimeoutError:
                 pass
 
-        return result
+        return task.idx, result
 
 
 def _create_segment_download_tasks(
     segments: list[str],
     policy: DownloadPolicy,
-) -> list[asyncio.Task[bool]]:
+) -> list[asyncio.Task[tuple[int, bool]]]:
     """Create tasks for downloading missing segments.
 
     Skips segments whose .ts file already exists with non-zero size.
@@ -697,7 +745,7 @@ async def _run_download_session(
     video_url: str,
     extractor: VKVideoExtractor | None,
     backoff_coordinator: URLBackoffCoordinator | None,
-    semaphore: asyncio.Semaphore | None,
+    semaphore: SemaphoreLike | None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -734,6 +782,8 @@ async def _run_download_session(
         segments = _parse_m3u8_segments(playlist_content)
         logger.info("found_segments", count=len(segments))
 
+        _clear_stale_segments(segments_dir, segments)
+
         semaphore_to_use = (
             semaphore
             if semaphore is not None
@@ -764,6 +814,7 @@ async def _run_download_session(
             output_file,
             progress_callback,
             video_url,
+            settings.download_timeout,
         )
 
 
@@ -772,7 +823,7 @@ async def download_hls_with_resume(
     settings: Settings | None = None,
     extractor: VKVideoExtractor | None = None,
     backoff_coordinator: URLBackoffCoordinator | None = None,
-    semaphore: asyncio.Semaphore | None = None,
+    semaphore: SemaphoreLike | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -813,8 +864,9 @@ async def download_hls_with_resume(
     if request.cookies:
         headers["Cookie"] = request.cookies
 
+    success = False
     try:
-        return await _run_download_session(
+        result = await _run_download_session(
             request.m3u8_url,
             headers,
             settings,
@@ -826,9 +878,15 @@ async def download_hls_with_resume(
             backoff_coordinator,
             semaphore,
         )
+        if result is not None:
+            success = True
+            return result
+        return None
     except Exception:
-        _log_preserve_segments(segments_dir)
         raise
+    finally:
+        if not success:
+            _log_preserve_segments(segments_dir)
 
 
 def _log_preserve_segments(segments_dir: Path) -> None:

@@ -89,10 +89,11 @@ When `max_concurrent_downloads=1` (sequential mode), the downloader applies:
 
 ## What Doesn't Work
 
-1. **`ffmpeg -ssl_verification`** - Invalid option, causes immediate failure
+1. **`ffmpeg -ssl_verification`** - Invalid option, causes immediate failure. Correct flag is `-tls_verify 0`.
 2. **Headless browser** - May be detected and blocked by VK
 3. **Long-running ffmpeg downloads** - Token expiration leads to incomplete downloads
 4. **Cookie-only approach without browser** - Cookies expire/invalidate without active session
+5. **yt-dlp cancellation in batch mode** - yt-dlp runs in an executor thread that cannot be terminated by `asyncio.CancelledError`; the thread persists as a zombie until process exit. This is a CPython `concurrent.futures` limitation: `Future.cancel()` returns `False` for running futures. No workaround within the current architecture. |
 
 ## Recommended Usage
 

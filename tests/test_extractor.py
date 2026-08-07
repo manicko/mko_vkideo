@@ -7,7 +7,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import ValidationError
 
 from vkdownloader.config import Settings
-from vkdownloader.exceptions import ExtractionError, VideoNotFoundError
+from vkdownloader.exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
 from vkdownloader.models.enums import CookieSource, StreamFormat
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape
@@ -40,19 +40,19 @@ def test_parse_video_id_various_urls() -> None:
 
 
 def test_parse_video_id_invalid() -> None:
-    """Test parse_video_id raises ValueError for invalid URL."""
+    """Test parse_video_id raises InvalidVideoUrlError for invalid URL."""
     extractor = VKVideoExtractor()
     invalid_url = "https://example.com/invalid"
 
-    with pytest.raises(ValueError, match="Invalid VK video URL"):
+    with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
         extractor.parse_video_id(invalid_url)
 
 
 def test_parse_video_id_empty_string() -> None:
-    """Test parse_video_id raises ValueError for empty string."""
+    """Test parse_video_id raises InvalidVideoUrlError for empty string."""
     extractor = VKVideoExtractor()
 
-    with pytest.raises(ValueError, match="Invalid VK video URL"):
+    with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
         extractor.parse_video_id("")
 
 
@@ -124,8 +124,7 @@ class TestExtractionErrors:
             ydl_opts = mock_ydl_class.call_args[0][0]
             assert ydl_opts["nocheckcertificate"] is True
 
-    @pytest.mark.asyncio
-    async def test_format_cookies_for_ffmpeg(self) -> None:
+    def test_format_cookies_for_ffmpeg(self) -> None:
         """Test _format_cookies_for_ffmpeg correctly formats cookies for ffmpeg header."""
         extractor = VKVideoExtractor()
 
@@ -169,8 +168,7 @@ class TestExtractionErrors:
         assert "badname" in result
         assert "value" in result
 
-    @pytest.mark.asyncio
-    async def test_format_cookies_for_ffmpeg_all_cookies_included(self) -> None:
+    def test_format_cookies_for_ffmpeg_all_cookies_included(self) -> None:
         """Test that _format_cookies_for_ffmpeg includes all cookies without truncation."""
         extractor = VKVideoExtractor()
 
@@ -182,8 +180,7 @@ class TestExtractionErrors:
         assert result.count("=") == 50  # 50 cookies
         assert "c49=v49" in result  # Last cookie should be present
 
-    @pytest.mark.asyncio
-    async def test_cookies_to_netscape_preserves_domain(self) -> None:
+    def test_cookies_to_netscape_preserves_domain(self) -> None:
         """Test that _cookies_to_netscape preserves cookie domains from Cookie objects."""
         cookies = [
             {"name": "session", "value": "abc", "domain": ".vk.com"},
@@ -201,8 +198,7 @@ class TestExtractionErrors:
         cookie_lines = [line for line in lines if "\t" in line and not line.startswith("#")]
         assert len(cookie_lines) == 3
 
-    @pytest.mark.asyncio
-    async def test_cookies_to_netscape_backward_compatible(self) -> None:
+    def test_cookies_to_netscape_backward_compatible(self) -> None:
         """Test that _cookies_to_netscape still works with string input (backward compat)."""
         cookies = "vk=abc123; session=xyz789"
         result = _cookies_to_netscape(cookies)
@@ -295,14 +291,14 @@ class TestExtractionErrors:
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_invalid_url(self) -> None:
-        """Test extract_streams raises ValueError for invalid URL format."""
+        """Test extract_streams raises InvalidVideoUrlError for invalid URL format."""
         extractor = VKVideoExtractor()
         invalid_url = "https://example.com/invalid"
 
-        with pytest.raises(ValueError, match="Invalid VK video URL"):
+        with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
             await extractor.extract_streams(invalid_url)
 
-        with pytest.raises(ValueError, match="Invalid VK video URL"):
+        with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
             await extractor.extract_streams_with_cookies(invalid_url)
 
     @pytest.mark.asyncio
