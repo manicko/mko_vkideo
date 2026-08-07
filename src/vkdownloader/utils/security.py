@@ -6,6 +6,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import DownloadError
+from ..models.enums import ErrorCode
 from ..models.video import VideoWithStreams
 
 logger = get_logger(__name__)
@@ -43,7 +44,9 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
     # Check for path traversal in original path string
     path_str = str(path)
     if ".." in path_str:
-        raise DownloadError(f"Path traversal detected in output path: {path}")
+        exc = DownloadError(f"Path traversal detected in output path: {path}")
+        exc.error_code = ErrorCode.PATH_TRAVERSAL
+        raise exc
 
     # Resolve to absolute path
     resolved = path.resolve()
@@ -57,6 +60,7 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
                 "output_path_inside_repository",
                 path=str(resolved),
                 repo_root=str(repo_root),
+                error_code="output_path_in_repo",
             )
     except ValueError:
         # Path is outside repo root - this is expected for normal use

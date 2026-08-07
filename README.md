@@ -123,3 +123,39 @@ See [API Reference](docs/01-tools/api-reference.md) for complete API documentati
 ## Quality Selection
 
 See [Quality Selection Guide](docs/01-tools/quality-selection.md) for quality selection options.
+
+## Error Handling & Logging
+
+### Exception Hierarchy
+
+All domain errors inherit from `VKDownloadError` and carry a machine-readable `ErrorCode` (StrEnum), a `status_label()` for batch results, and a `log_context()` dict for structured logging.
+
+| Exception | Error Code | Status Label | Description |
+|-----------|-----------|-------------|-------------|
+| `VKDownloadError` | `UNEXPECTED_ERROR` | `error: unexpected_error` | Base exception; also the catch-all for unexpected failures. |
+| `InvalidVideoUrlError` | `INVALID_URL` | `invalid_url` | URL does not match VK video pattern. |
+| `VideoNotFoundError` | `VIDEO_NOT_FOUND` | `video_not_found` | Video not found or no streams returned. |
+| `QualityNotAvailableError` | `QUALITY_NOT_AVAILABLE` | `quality_not_available` / `no_streams` | Requested quality not in available streams. |
+| `QualityParseError` | `QUALITY_PARSE_ERROR` | `invalid_quality` | Quality string cannot be parsed. |
+| `ExtractionError` | `EXTRACTION_ERROR` | `extraction_error` | Stream extraction failed (yt-dlp or browser). |
+| `DownloadError` | `DOWNLOAD_ERROR` | `download_error` | Download or path-safety failure. |
+| `DownloadError(ErrorCode.PATH_TRAVERSAL)` | `PATH_TRAVERSAL` | `download_error` | Output path contains path traversal. |
+
+The legacy `_map_exception_to_status()` helper and `_EXCEPTION_STATUS_HANDLERS` dict are retained for backward compatibility. New code paths use `status_label()` directly on exception instances.
+
+### Logging
+
+Logging uses `structlog` with a structured processor chain. When `--log-file` is set, logs are emitted as JSON; otherwise they use a human-readable console format.
+
+**Processor chain:**
+
+1. `merge_contextvars` — merges structlog context variables (correlation IDs)
+2. `add_log_level` — adds log level to every entry
+3. `TimeStamper(fmt="iso", utc=True)` — UTC ISO-8601 timestamp
+4. `format_exc_info` — structured traceback frames when `exc_info=True`
+5. `UnicodeDecoder()` — safe decoding of non-ASCII log content
+6. JSON or Console renderer
+
+**Correlation IDs:** Each download operation (single or batch) is assigned an 8-character hex correlation ID via `generate_correlation_id()`. The ID is bound to the structlog context and automatically included in every log entry within that operation. Use `--log-file` to get JSON output with correlation IDs for log aggregation.
+
+**URL redaction:** All log entries that include URLs pass them through `_strip_auth_params()` which replaces path and query parameters with `***REDACTED***`, preventing signed CDN tokens from leaking into logs.

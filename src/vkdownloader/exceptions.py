@@ -218,6 +218,9 @@ def _quality_not_available_status(exc: QualityNotAvailableError) -> str:
 
 
 _EXCEPTION_STATUS_HANDLERS: dict[type[Exception], Callable[..., str]] = {
+    ExtractionError: lambda e: f"extraction_error: {e}",
+    DownloadError: lambda e: f"download_error: {e}",
+    InvalidVideoUrlError: lambda e: f"invalid_url: {e}",
     QualityNotAvailableError: _quality_not_available_status,
     QualityParseError: lambda e: f"invalid_quality: {e.quality}",
     VideoNotFoundError: lambda e: f"video_not_found: {e}",

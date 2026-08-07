@@ -15,11 +15,12 @@ from vkdownloader.models.video import Stream
 from vkdownloader.services.downloader import (
     FfmpegProgress,
     HLSDownloader,
-    _build_ytdlp_options,
+    _build_ytdlp_cli_command,
     _cleanup_segments,
     _cookies_to_netscape,
     _parse_m3u8_segments,
     _parse_quality_to_enum,
+    _parse_ytdlp_progress,
     _resolve_cookies,
     download_hls_with_resume,
 )
@@ -398,100 +399,293 @@ class TestCookiesToNetscape:
         assert "malformed\t" not in result
 
 
-class TestYtdlpOptions:
-    """Tests for yt-dlp options configuration."""
+class TestYtdlpCliCommand:
+    """Tests for yt-dlp CLI command builder."""
 
-    def test_ytdlp_options_includes_throttled_rate(self, test_settings: Settings) -> None:
-        """Test yt-dlp options include throttled_rate setting."""
-        ydl_opts, _ = _build_ytdlp_options(
+    def test_cli_command_includes_throttled_rate(self, test_settings: Settings) -> None:
+        """Test CLI command includes --throttled-rate from settings."""
+        cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
             user_agent=test_settings.user_agent,
             settings=test_settings,
             cookies=None,
             raw_cookies=None,
-            video_id="test",
         )
 
-        assert ydl_opts["throttledratelimit"] == 10000
+        assert "--throttled-rate" in cmd
+        idx = cmd.index("--throttled-rate")
+        assert cmd[idx + 1] == str(test_settings.throttled_rate)
 
-    def test_ytdlp_options_includes_http_chunk_size(self, test_settings: Settings) -> None:
-        """Test yt-dlp options include http_chunk_size setting."""
-        ydl_opts, _ = _build_ytdlp_options(
+    def test_cli_command_includes_http_chunk_size(self, test_settings: Settings) -> None:
+        """Test CLI command includes --http-chunk-size from settings."""
+        cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
             user_agent=test_settings.user_agent,
             settings=test_settings,
             cookies=None,
             raw_cookies=None,
-            video_id="test",
         )
 
-        assert ydl_opts["http_chunk_size"] == 10485760
+        assert "--http-chunk-size" in cmd
+        idx = cmd.index("--http-chunk-size")
+        assert cmd[idx + 1] == str(test_settings.http_chunk_size)
 
-    def test_ytdlp_options_custom_values(self) -> None:
-        """Test yt-dlp options accept custom settings values."""
+    def test_cli_command_custom_values(self) -> None:
+        """Test CLI command accepts custom settings values."""
         custom_settings = Settings(
             max_concurrent_downloads=8, throttled_rate=200000, http_chunk_size=5242880
         )
 
-        ydl_opts, _ = _build_ytdlp_options(
+        cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
             user_agent=custom_settings.user_agent,
             settings=custom_settings,
             cookies=None,
             raw_cookies=None,
-            video_id="test",
         )
 
-        assert ydl_opts["concurrent_fragments"] == 8
-        assert ydl_opts["throttledratelimit"] == 200000
-        assert ydl_opts["http_chunk_size"] == 5242880
+        assert "-N" in cmd
+        idx = cmd.index("-N")
+        assert cmd[idx + 1] == "8"
 
-    def test_ytdlp_options_nocheckcertificate(self, test_settings: Settings) -> None:
-        """Test nocheckcertificate reflects ssl_verify setting."""
-        ydl_opts, _ = _build_ytdlp_options(
-            output_file=Path("/tmp/test.mp4"),
-            quality_str="720",
-            user_agent=test_settings.user_agent,
-            settings=test_settings,
-            cookies=None,
-            raw_cookies=None,
-            video_id="test",
-        )
+        idx = cmd.index("--throttled-rate")
+        assert cmd[idx + 1] == "200000"
 
-        assert ydl_opts["nocheckcertificate"] is False
+        idx = cmd.index("--http-chunk-size")
+        assert cmd[idx + 1] == "5242880"
 
-    def test_ytdlp_options_nocheckcertificate_disabled(self, test_settings: Settings) -> None:
-        """Test nocheckcertificate is True when ssl_verify is False."""
+    def test_cli_command_no_certificates_when_ssl_verify_false(self, test_settings: Settings) -> None:
+        """Test --no-check-certificates is added when ssl_verify is False."""
         settings = test_settings.model_copy(update={"ssl_verify": False})
-        ydl_opts, _ = _build_ytdlp_options(
+        cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
             user_agent=settings.user_agent,
             settings=settings,
             cookies=None,
             raw_cookies=None,
-            video_id="test",
         )
 
-        assert ydl_opts["nocheckcertificate"] is True
+        assert "--no-check-certificates" in cmd
 
-    def test_ytdlp_options_http_headers(self, test_settings: Settings) -> None:
-        """Test yt-dlp options include http_headers with user agent."""
-        ydl_opts, _ = _build_ytdlp_options(
+    def test_cli_command_no_certificates_absent_when_ssl_verify_true(self, test_settings: Settings) -> None:
+        """Test --no-check-certificates is absent when ssl_verify is True (default)."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "--no-check-certificates" not in cmd
+
+    def test_cli_command_includes_user_agent_and_referer(self, test_settings: Settings) -> None:
+        """Test CLI command includes --user-agent and --referer."""
+        cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
             user_agent="TestAgent/1.0",
             settings=test_settings,
             cookies=None,
             raw_cookies=None,
-            video_id="test",
         )
 
-        assert ydl_opts["http_headers"]["User-Agent"] == "TestAgent/1.0"
-        assert ydl_opts["http_headers"]["Referer"] == "https://vkvideo.ru/"
+        assert "--user-agent" in cmd
+        idx = cmd.index("--user-agent")
+        assert cmd[idx + 1] == "TestAgent/1.0"
+
+        assert "--referer" in cmd
+        idx = cmd.index("--referer")
+        assert cmd[idx + 1] == "https://vkvideo.ru/"
+
+    def test_cli_command_includes_no_part_flag(self, test_settings: Settings) -> None:
+        """Test CLI command includes --no-part to prevent orphan .part files."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "--no-part" in cmd
+
+    def test_cli_command_includes_newline_flag(self, test_settings: Settings) -> None:
+        """Test CLI command includes --newline for parseable progress output."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "--newline" in cmd
+
+    def test_cli_command_includes_output_and_format(self, test_settings: Settings) -> None:
+        """Test CLI command includes -o output_file and -f format selector."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "-o" in cmd
+        idx = cmd.index("-o")
+        assert cmd[idx + 1] == str(Path("/tmp/test.mp4"))
+
+        assert "-f" in cmd
+        idx = cmd.index("-f")
+        assert "best[height<=720]" in cmd[idx + 1]
+
+    def test_cli_command_format_best_when_quality_not_digit(self, test_settings: Settings) -> None:
+        """Test format selector is 'best' when quality is non-numeric."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="best",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "-f" in cmd
+        idx = cmd.index("-f")
+        assert cmd[idx + 1] == "best"
+
+    def test_cli_command_uses_python_module(self, test_settings: Settings) -> None:
+        """Test CLI command uses sys.executable -m yt_dlp for environment consistency."""
+        import sys
+
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert cmd[0] == sys.executable
+        assert cmd[1] == "-m"
+        assert cmd[2] == "yt_dlp"
+
+    def test_cli_command_creates_cookie_file_for_cookies(self, test_settings: Settings) -> None:
+        """Test CLI command creates cookie file and adds --cookies flag when raw_cookies provided."""
+        from playwright.async_api import Cookie
+
+        raw_cookies = [
+            Cookie(
+                name="vk",
+                value="abc123",
+                domain="vkvideo.ru",
+                path="/",
+            )
+        ]
+        cmd, cookie_file = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=raw_cookies,
+        )
+
+        assert cookie_file is not None
+        assert cookie_file.exists()
+        assert "--cookies" in cmd
+        idx = cmd.index("--cookies")
+        assert cmd[idx + 1] == str(cookie_file)
+
+    def test_cli_command_creates_cookie_file_for_string_cookies(self, test_settings: Settings) -> None:
+        """Test CLI command creates cookie file for string cookies."""
+        cmd, cookie_file = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies="vk=abc123",
+            raw_cookies=None,
+        )
+
+        assert cookie_file is not None
+        assert cookie_file.exists()
+        assert "--cookies" in cmd
+
+
+class TestYtdlpProgressParsing:
+    """Tests for _parse_ytdlp_progress."""
+
+    def test_parse_progress_mib(self) -> None:
+        """Test parsing progress line with MiB total."""
+        line = "[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        # 649.37 * 1024 * 1024 bytes
+        assert total == int(649.37 * 1024 * 1024)
+        # downloaded = total * 40.3 / 100
+        assert downloaded == int(total * 40.3 / 100)
+
+    def test_parse_progress_kib(self) -> None:
+        """Test parsing progress line with KiB total."""
+        line = "[download]   10.0% of 500.00KiB at 100.00KiB/s ETA 00:04"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == 500 * 1024
+        assert downloaded == 50 * 1024
+
+    def test_parse_progress_gib(self) -> None:
+        """Test parsing progress line with GiB total."""
+        line = "[download]   50.0% of 1.50GiB at 1.00MiB/s ETA 00:08"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == int(1.50 * 1024 ** 3)
+        assert downloaded == total // 2
+
+    def test_parse_progress_gb(self) -> None:
+        """Test parsing progress line with GB (SI) total."""
+        line = "[download]   25.0% of 2.00GB at 5.00MB/s ETA 00:60"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == 2_000_000_000
+        assert downloaded == 500_000_000
+
+    def test_parse_progress_100_percent(self) -> None:
+        """Test parsing progress line at 100%."""
+        line = "[download]  100.0% of 100.00MiB at 2.00MiB/s ETA 00:00"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert downloaded == total
+
+    def test_parse_non_progress_line_returns_none(self) -> None:
+        """Test non-progress lines return None."""
+        assert _parse_ytdlp_progress("[download] Destination: /tmp/video.mp4") is None
+        assert _parse_ytdlp_progress("ERROR: Unable to download") is None
+        assert _parse_ytdlp_progress("") is None
+
+    def test_parse_100_percent_with_mb_unit(self) -> None:
+        """Test parsing 100% with MB unit."""
+        line = "[download]  100.0% of 100.00MB at 2.00MB/s ETA 00:00"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == 100_000_000
+        assert downloaded == total
 
 
 class TestParallelSegmentsDownload:
@@ -662,47 +856,44 @@ class TestBrowserCookiesIntegration:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that cookies are passed to yt-dlp via cookie file and cleaned up."""
-        from typing import Any
-
         from vkdownloader.services.downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
 
-        mock_ydl_instance = MagicMock()
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
 
-        with patch("vkdownloader.services.downloader.yt_dlp") as mock_yt:
-            mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
+        # Track the command that was passed to create_subprocess_exec
+        captured_cmd: list[str] = []
 
-            # Mock run_in_executor to call the function synchronously
-            with patch("vkdownloader.services.downloader.asyncio.get_running_loop") as mock_loop:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
 
-                def run_in_executor_side_effect(executor: Any, func: Any, *args: Any) -> Any:
-                    # Call the sync function directly and return the result
-                    result: str | Path = func()
+        with patch(
+            "asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec
+        ):
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                output_file,
+                "720",
+                test_settings,
+                cookies=cookies,
+            )
 
-                    # Return a coroutine that resolves to the result
-                    async def coro() -> str:
-                        return str(result)
+        # Verify --cookies flag was in the command
+        assert "--cookies" in captured_cmd
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        # Cookie file should have been cleaned up after download completes
+        assert not cookie_file_path.exists(), "Cookie file should be cleaned up after download"
 
-                    return coro()
-
-                mock_loop.return_value.run_in_executor = run_in_executor_side_effect
-
-                await _download_with_ytdlp(
-                    "https://vkvideo.ru/video-12345_67890",
-                    output_file,
-                    "720",
-                    test_settings,
-                    cookies=cookies,
-                )
-
-        # Cookie file should be cleaned up after download completes
-        cookie_file = tmp_path / f".{output_file.stem}_cookies.txt"
-        assert not cookie_file.exists(), "Cookie file should be cleaned up after download"
-
-        # Verify cookiefile option was set correctly in ydl_opts
-        # by checking the cookie format is correct
+        # Verify the cookie format is correct
         from vkdownloader.services.downloader import _cookies_to_netscape
 
         netscape = _cookies_to_netscape(cookies)
@@ -1101,28 +1292,21 @@ class TestDownloadMethodLogging:
 
         output_file = tmp_path / "video.mp4"
 
-        mock_ydl_instance = MagicMock()
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
 
-        with patch("vkdownloader.services.downloader.yt_dlp") as mock_yt:
-            mock_yt.YoutubeDL.return_value.__enter__ = lambda self: mock_ydl_instance
-
-            with patch("vkdownloader.services.downloader.asyncio.get_running_loop") as mock_loop:
-
-                def run_in_executor_side_effect(executor: Any, func: Any, *args: Any) -> Any:
-                    async def coro() -> str:
-                        return str(output_file)
-
-                    return coro()
-
-                mock_loop.return_value.run_in_executor = run_in_executor_side_effect
-
-                with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
-                    result = await _download_with_ytdlp(
-                        "https://vkvideo.ru/video-12345_67890",
-                        output_file,
-                        "720",
-                        test_settings,
-                    )
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
 
         # Check that starting_ytdlp_download was logged
         starting_logs = [m for m in log_messages if "starting_ytdlp_download" in m["message"]]
@@ -2012,80 +2196,109 @@ class TestResolveCookies:
                 )
 
 
-class TestYtDlpShutdownHook:
-    """Tests for INT-004: yt-dlp progress hook responds to shutdown signal."""
+class TestYtDlpSubprocessShutdown:
+    """Tests for INT-004: yt-dlp subprocess responds to shutdown signal."""
 
-    def test_progress_hook_raises_on_shutdown(
+    @pytest.mark.asyncio
+    async def test_ytdlp_cancelled_on_shutdown_returns_none(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test progress hook raises RuntimeError when shutdown_event is set."""
-        shutdown_event = asyncio.Event()
+        """Test that _download_with_ytdlp returns None when shutdown_event is set."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.downloader_throttle import get_shutdown_event
+
+        # Set shutdown signal before download starts
+        shutdown_event = get_shutdown_event()
         shutdown_event.set()
 
-        ydl_opts, _ = _build_ytdlp_options(
-            tmp_path / "out.mp4",
-            "720",
-            "test-agent",
-            test_settings,
-            None,
-            None,
-            "12345_67890",
-            progress_callback=None,
-            shutdown_event=shutdown_event,
-        )
+        output_file = tmp_path / "video.mp4"
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_stderr_line: list[bytes] = []
+        mock_process.stderr.readline = AsyncMock(side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stderr_line else mock_stderr_line.pop(0))
+        mock_process.wait = AsyncMock(return_value=0)
 
-        hook = ydl_opts["progress_hooks"][0]
-        with pytest.raises(RuntimeError, match="Download cancelled"):
-            hook({"status": "downloading", "downloaded_bytes": 0, "total_bytes_estimate": 100})
+        # Patch cancel_ffmpeg_process to track it's called
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.downloader.cancel_ffmpeg_process",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_cancel:
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
 
-    def test_progress_hook_no_shutdown_passes_through(
+        assert result is None
+        # cancel_ffmpeg_process should have been called for shutdown
+        mock_cancel.assert_awaited()
+        shutdown_event.clear()
+
+    @pytest.mark.asyncio
+    async def test_ytdlp_subprocess_terminated_on_cancelled_error(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test progress hook does not raise when shutdown_event is not set."""
-        shutdown_event = asyncio.Event()
+        """Test that CancelledError triggers process termination and re-raises."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
 
-        captured: list[str] = []
+        output_file = tmp_path / "video.mp4"
 
-        def callback(video_id: str, downloaded: int, total: int) -> None:
-            captured.append(video_id)
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.readline = AsyncMock(return_value=b"")
+        # Simulate the outer task being cancelled while waiting for process
+        mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
 
-        ydl_opts, _ = _build_ytdlp_options(
-            tmp_path / "out.mp4",
-            "720",
-            "test-agent",
-            test_settings,
-            None,
-            None,
-            "12345_67890",
-            progress_callback=callback,
-            shutdown_event=shutdown_event,
-        )
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.downloader.cancel_ffmpeg_process",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_cancel:
+                with pytest.raises(asyncio.CancelledError):
+                    await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                    )
 
-        hook = ydl_opts["progress_hooks"][0]
-        hook({"status": "downloading", "downloaded_bytes": 50, "total_bytes_estimate": 100})
-        # Callback should have been invoked
-        assert captured == ["12345_67890"]
+        mock_cancel.assert_awaited()
 
-    def test_shutdown_hook_registered_without_callback(
+    @pytest.mark.asyncio
+    async def test_ytdlp_returncode_nonzero_returns_none(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test progress hook is registered even without a progress callback when shutdown_event is set."""
-        shutdown_event = asyncio.Event()
+        """Test that non-zero returncode returns None with error logging."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
 
-        ydl_opts, _ = _build_ytdlp_options(
-            tmp_path / "out.mp4",
-            "720",
-            "test-agent",
-            test_settings,
-            None,
-            None,
-            "12345_67890",
-            progress_callback=None,
-            shutdown_event=shutdown_event,
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.readline = AsyncMock(
+            side_effect=[b"ERROR: video not found\n", b""]
         )
+        mock_process.wait = AsyncMock(return_value=1)
 
-        assert "progress_hooks" in ydl_opts
-        assert len(ydl_opts["progress_hooks"]) == 1
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                output_file,
+                "720",
+                test_settings,
+            )
+
+        assert result is None
 
 
 class TestFfmpegAvailabilityCheck:

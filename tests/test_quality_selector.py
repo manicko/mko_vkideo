@@ -102,6 +102,17 @@ def test_select_empty_streams_raises() -> None:
         selector.select([], QualityEnum.BEST)
 
 
+def test_select_empty_streams_error_status_label() -> None:
+    """Test that empty-streams QualityNotAvailableError maps to no_streams status."""
+    selector = QualitySelector()
+
+    with pytest.raises(QualityNotAvailableError) as exc_info:
+        selector.select([], QualityEnum.BEST)
+
+    assert exc_info.value.status_label() == "no_streams"
+    assert exc_info.value.error_code is not None  # Error code is set
+
+
 def test_list_available_qualities() -> None:
     """Test list_available_qualities returns sorted unique qualities."""
     selector = QualitySelector()

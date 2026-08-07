@@ -13,6 +13,7 @@ from structlog import get_logger
 
 from .config import Settings, setup_logging, warn_unknown_env_vars
 from .exceptions import (
+    ExtractionError,
     InvalidVideoUrlError,
     QualityNotAvailableError,
     QualityParseError,
@@ -26,6 +27,7 @@ from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
 from .services.extractor import VIDEO_ID_PATTERN
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from .utils.url_sanitizer import _strip_auth_params
+from .utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
 
 logger = get_logger(__name__)
 
@@ -212,6 +214,11 @@ async def _download_single(
     if shared_semaphore is not None and peak_tracker is not None:
         tracked_semaphore = _TrackedSemaphore(shared_semaphore, peak_tracker)
 
+    # Bind a per-operation correlation ID so every log entry within this
+    # download carries a traceable identifier in both single and batch mode.
+    correlation_id = generate_correlation_id()
+    bind_correlation_id(correlation_id)
+
     try:
         result = await download_video(
             url,
@@ -232,15 +239,29 @@ async def _download_single(
         # Re-raise CancelledError to allow batch cancellation
         raise
     except QualityNotAvailableError as e:
-        return (url, "", _map_exception_to_status(e))
+        return (url, "", e.status_label())
     except VideoNotFoundError as e:
-        return (url, "", _map_exception_to_status(e))
+        return (url, "", e.status_label())
+    except ExtractionError as e:
+        logger.error(
+            "extraction_error",
+            url=_strip_auth_params(url),
+            correlation_id=correlation_id,
+            **e.log_context(),
+        )
+        return (url, "", e.status_label())
     except VKDownloadError as e:
-        return (url, "", _map_exception_to_status(e))
+        return (url, "", e.status_label())
     except Exception as e:
         # Log unexpected exceptions to surface bugs, then return as a status tuple
-        logger.exception("unexpected_error_in_batch_download", url=_strip_auth_params(url))
+        logger.exception(
+            "unexpected_error_in_batch_download",
+            url=_strip_auth_params(url),
+            correlation_id=correlation_id,
+        )
         return (url, "", _map_exception_to_status(e))
+    finally:
+        clear_correlation_id()
 
 
 async def _run_batch_with_progress(
@@ -266,11 +287,19 @@ async def _run_batch_with_progress(
     """
     # Setup signal handlers inside async context
     setup_signal_handlers()
+    batch_correlation_id = generate_correlation_id()
+    bind_correlation_id(batch_correlation_id)
     try:
         # Create shared semaphore and backoff coordinator at batch level
         concurrency_tracker = ConcurrencyTracker()
         shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
         backoff_coordinator = URLBackoffCoordinator()
+
+        logger.info(
+            "batch_download_started",
+            url_file_count=len(urls),
+            batch_correlation_id=batch_correlation_id,
+        )
 
         # Clear progress state for this batch
         await _progress_manager.clear()
@@ -324,7 +353,7 @@ async def _run_batch_with_progress(
                 if isinstance(r, tuple)
                 else (urls[i], "", "cancelled")
                 if isinstance(r, asyncio.CancelledError)
-                else (urls[i], "", f"download_error: {str(r)}")
+                else (urls[i], "", f"unexpected_error: {type(r).__name__}")
                 for i, r in enumerate(results)
             ]
             return processed_results, concurrency_tracker.peak
@@ -337,6 +366,7 @@ async def _run_batch_with_progress(
     finally:
         # Cleanup signal handlers to allow re-registration on subsequent loops
         cleanup_signal_handlers()
+        clear_correlation_id()
 
 
 def _print_batch_summary(
@@ -493,7 +523,7 @@ def download(
         typer.echo("Video not found. Verify the URL is correct and the video is public.", err=True)
         raise typer.Exit(code=1) from None
     except Exception:
-        logger.exception("download_failed")
+        logger.exception("download_failed", url=_strip_auth_params(url))
         typer.echo("An error occurred during download", err=True)
         raise typer.Exit(code=1) from None
 
@@ -592,7 +622,11 @@ def batch_download(
         typer.echo("\nDownload cancelled", err=True)
         raise typer.Exit(code=130) from None
     except Exception:
-        logger.exception("batch_download_failed")
+        logger.exception(
+            "batch_download_failed",
+            url_file=str(urls_file),
+            url_count=len(valid_urls),
+        )
         typer.echo("An error occurred during batch download", err=True)
         raise typer.Exit(code=1) from None
 

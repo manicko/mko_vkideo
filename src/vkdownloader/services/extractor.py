@@ -182,8 +182,14 @@ class VKVideoExtractor:
                 except ExtractionError:
                     raise
                 except Exception as e:
-                    logger.warning("ytdlp_extraction_error", error=str(e))
-                    raise ExtractionError(f"Failed to extract video data: {e}") from e
+                    logger.warning(
+                        "ytdlp_extraction_error",
+                        error=str(e),
+                        url=_strip_auth_params(url),
+                    )
+                    raise ExtractionError(
+                        f"Extraction failed for {_strip_auth_params(url)}: {e}"
+                    ) from e
 
             return found_streams, title
 
@@ -275,4 +281,4 @@ class VKVideoExtractor:
             await page.click(".VideoPlayer")
             logger.debug("clicked_video_player")
         except PlaywrightTimeoutError:
-            logger.debug("video_player_click_failed", exc_info=True)
+            logger.debug("video_player_click_failed", exc_info=True, phase="video_interaction")

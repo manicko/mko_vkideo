@@ -216,3 +216,15 @@ class TestWarnUnknownEnvVars:
         finally:
             os.environ.clear()
             os.environ.update(original)
+
+    def test_hide_input_in_errors_is_true(self) -> None:
+        """Settings should hide input values in error messages."""
+        assert Settings.model_config["hide_input_in_errors"] is True
+
+    def test_validation_error_hides_input_values(self) -> None:
+        """Validation errors should not leak raw input values."""
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(max_retries="not_a_number")
+        error_str = str(exc_info.value)
+        assert "not_a_number" not in error_str
+        assert "max_retries" in error_str

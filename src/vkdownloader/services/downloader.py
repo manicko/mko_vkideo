@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import sys
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yt_dlp
 from playwright.async_api import Cookie
 from structlog import get_logger
 
@@ -163,90 +164,131 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
             raise QualityParseError(quality) from None
 
 
-def _build_ytdlp_options(
+# yt-dlp progress line format: [download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+_YTDLP_PROGRESS_RE = re.compile(
+    r"\[download\]\s+"
+    r"(?P<pct>\d+(?:\.\d+)?)%"
+    r"\s+of\s+"
+    r"(?P<size>\d+(?:\.\d+)?)"
+    r"(?P<size_unit>[KMG]?i?B)"
+    r"\s+at\s+"
+    r"(?P<speed>[\d.]+)"
+    r"(?P<speed_unit>[KMG]?i?B/s)"
+    r"\s+ETA\s+"
+    r"(?P<eta>\d{2}:\d{2})"
+)
+
+# Size unit multipliers to bytes
+_SIZE_UNITS: dict[str, int] = {
+    "B": 1,
+    "KiB": 1024,
+    "MiB": 1024 ** 2,
+    "GiB": 1024 ** 3,
+    "TiB": 1024 ** 4,
+    "KB": 1000,
+    "MB": 1000 ** 2,
+    "GB": 1000 ** 3,
+    "TB": 1000 ** 4,
+}
+
+
+def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
+    """Parse a yt-dlp progress line into (downloaded_bytes, total_bytes).
+
+    yt-dlp with ``--newline`` writes lines like::
+
+        [download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+
+    Args:
+        line: A decoded stderr line from the yt-dlp subprocess.
+
+    Returns:
+        Tuple of (downloaded_bytes, total_bytes) if the line matches the
+        yt-dlp download-progress pattern, otherwise ``None``.
+    """
+    match = _YTDLP_PROGRESS_RE.search(line)
+    if match is None:
+        return None
+    pct = float(match.group("pct"))
+    size = float(match.group("size"))
+    size_unit = match.group("size_unit")
+    multiplier = _SIZE_UNITS.get(size_unit, 1)
+    total = int(size * multiplier)
+    downloaded = int(total * pct / 100)
+    return downloaded, total
+
+
+def _build_ytdlp_cli_command(
     output_file: Path,
     quality_str: str,
     user_agent: str,
     settings: Settings,
     cookies: str | None,
     raw_cookies: list[Cookie] | None,
-    video_id: str,
-    progress_callback: Callable[[str, int, int], None] | None = None,
-    shutdown_event: asyncio.Event | None = None,
-) -> tuple[dict[str, Any], Path | None]:
-    """
-    Build yt-dlp options dictionary for video download.
+) -> tuple[list[str], Path | None]:
+    """Build a yt-dlp CLI command list and optional temp cookie file path.
+
+    The command is executed via ``asyncio.create_subprocess_exec`` so the
+    yt-dlp process can be properly terminated on cancellation or shutdown.
 
     Args:
-        output_file: Path to save downloaded video.
-        quality_str: Quality string without p suffix (e.g., 720).
-        user_agent: User agent string for requests.
+        output_file: Path to save the downloaded video.
+        quality_str: Quality string without ``p`` suffix (e.g., ``"720"``).
+        user_agent: User agent string for HTTP requests.
         settings: Application settings.
-        cookies: Optional cookies string for backward compatibility.
-        raw_cookies: Optional raw Cookie objects for Netscape format.
-        video_id: Video ID for progress callback.
-        progress_callback: Optional callback for download progress.
-        shutdown_event: Optional asyncio.Event checked by the progress hook
-            to abort in-progress downloads during graceful shutdown.
+        cookies: Optional raw cookie string (Netscape format) for backward compat.
+        raw_cookies: Optional list of Playwright Cookie objects for Netscape format.
 
     Returns:
-        Tuple of (ydl_opts dict, cookie_file Path or None).
+        Tuple of (command list, cookie_file Path or None).
     """
-    # Build format selector: use height filter for numeric quality, bare best otherwise
+    # Build format selector: use height filter for numeric quality, bare "best" otherwise
     format_selector = (
         f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
     )
 
-    # yt-dlp boundary: its options mapping accepts heterogeneous values (str, int,
-    # bool, nested dicts, callables) and is not statically typed upstream, so `Any`
-    # is the pragmatic value type at this integration edge.
-    ydl_opts: dict[str, Any] = {
-        "outtmpl": str(output_file),
-        "quiet": False,
-        "no_warnings": True,
-        "format": format_selector,
-        "nocheckcertificate": not settings.ssl_verify,
-        "hls_prefer_native": True,
-        "concurrent_fragments": settings.max_concurrent_downloads,
-        "throttledratelimit": settings.throttled_rate,
-        "http_chunk_size": settings.http_chunk_size,
-        "http_headers": {
-            "User-Agent": user_agent,
-            "Referer": "https://vkvideo.ru/",
-        },
-        "socket_timeout": settings.download_timeout,
-        "retries": settings.max_retries,
-        "fragment_retries": settings.max_retries,
-    }
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "-o",
+        str(output_file),
+        "-f",
+        format_selector,
+        "--newline",
+        "--no-part",
+        "--no-warnings",
+        "--socket-timeout",
+        str(settings.download_timeout),
+        "-R",
+        str(settings.max_retries),
+        "--fragment-retries",
+        str(settings.max_retries),
+        "-N",
+        str(settings.max_concurrent_downloads),
+        "--throttled-rate",
+        str(settings.throttled_rate),
+        "--http-chunk-size",
+        str(settings.http_chunk_size),
+        "--user-agent",
+        user_agent,
+        "--referer",
+        "https://vkvideo.ru/",
+    ]
 
-    # Add cookies file generation if cookies provided
+    if not settings.ssl_verify:
+        cmd.append("--no-check-certificates")
+
+    # Add cookies file if cookies are provided
     cookie_file: Path | None = None
     if raw_cookies:
         cookie_file = _create_temp_cookie_file(raw_cookies)
-        ydl_opts["cookiefile"] = str(cookie_file)
+        cmd.extend(["--cookies", str(cookie_file)])
     elif cookies:
         cookie_file = _create_temp_cookie_file(cookies)
-        ydl_opts["cookiefile"] = str(cookie_file)
+        cmd.extend(["--cookies", str(cookie_file)])
 
-    # Add progress hook with shutdown signal awareness
-    if shutdown_event is not None or progress_callback is not None:
-
-        def _progress_hook(d: dict[str, Any]) -> None:
-            # Abort in-progress download promptly when shutdown is requested
-            if shutdown_event is not None and shutdown_event.is_set():
-                raise RuntimeError("Download cancelled")
-            if progress_callback is None:
-                return
-            if d.get("status") == "downloading":
-                downloaded = d.get("downloaded_bytes", 0)
-                total = d.get("total_bytes_estimate", 0) or d.get("total_bytes", 0)
-                progress_callback(video_id, downloaded, total or 1)
-            elif d.get("status") == "finished":
-                progress_callback(video_id, 1, 1)
-
-        ydl_opts["progress_hooks"] = [_progress_hook]
-
-    return ydl_opts, cookie_file
+    return cmd, cookie_file
 
 
 # Backward-compatibility re-export facade.
@@ -260,7 +302,8 @@ def _build_ytdlp_options(
 #   * Owned by this module (downloader.py):
 #       HLSDownloader, perform_download,
 #       download_with_ytdlp_with_resume_fallback,
-#       _build_ytdlp_options, _await_first_and_cancel_others
+#       _build_ytdlp_cli_command, _parse_ytdlp_progress,
+#       _await_first_and_cancel_others
 #   * ffmpeg_utils.py:
 #       FfmpegProgress, ProgressParser, read_progress,
 #       cancel_ffmpeg_process, _build_ffmpeg_concat_command,
@@ -288,7 +331,7 @@ __all__ = [
     "read_progress",
     "_await_first_and_cancel_others",
     "_build_ffmpeg_concat_command",
-    "_build_ytdlp_options",
+    "_build_ytdlp_cli_command",
     "_cleanup_segments",
     "_cookies_to_netscape",
     "_download_segment",
@@ -383,7 +426,11 @@ class HLSDownloader:
                     ):
                         if shutdown_event.is_set():
                             if not await cancel_ffmpeg_process(process):
-                                logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                                logger.warning(
+                                    "ffmpeg_cancel_not_clean",
+                                    pid=process.pid,
+                                    url=_strip_auth_params(m3u8_url),
+                                )
                             break
                         if progress_callback:
                             progress_callback(progress)
@@ -394,7 +441,11 @@ class HLSDownloader:
                     while True:
                         if shutdown_event.is_set():
                             if not await cancel_ffmpeg_process(process):
-                                logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                                logger.warning(
+                                    "ffmpeg_cancel_not_clean",
+                                    pid=process.pid,
+                                    url=_strip_auth_params(m3u8_url),
+                                )
                             break
                         line = await process.stderr.readline()
                         if not line:
@@ -424,13 +475,20 @@ class HLSDownloader:
 
                 if shutdown_event.is_set():
                     if not await cancel_ffmpeg_process(process):
-                        logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                        logger.warning(
+                            "ffmpeg_cancel_not_clean",
+                            pid=process.pid,
+                            url=_strip_auth_params(m3u8_url),
+                        )
                     return None
 
                 if process.returncode != 0:
                     error_msg = stderr_data.decode() if stderr_data else "Unknown ffmpeg error"
                     logger.error(
-                        "ffmpeg_download_failed", returncode=process.returncode, error=error_msg
+                        "ffmpeg_download_failed",
+                        url=_strip_auth_params(m3u8_url),
+                        returncode=process.returncode,
+                        error=error_msg,
                     )
                     return None
 
@@ -441,7 +499,11 @@ class HLSDownloader:
                 # unhandled exception, preventing orphaned processes.
                 if process.returncode is None:
                     if not await cancel_ffmpeg_process(process):
-                        logger.warning("ffmpeg_cancel_not_clean", pid=process.pid)
+                        logger.warning(
+                            "ffmpeg_cancel_not_clean",
+                            pid=process.pid,
+                            url=_strip_auth_params(m3u8_url),
+                        )
 
 
 async def download_with_ytdlp_with_resume_fallback(
@@ -521,7 +583,11 @@ async def download_with_ytdlp_with_resume_fallback(
             return segment_result
 
     # All retries exhausted without success
-    logger.error("max_retries_exceeded")
+    logger.error(
+        "max_retries_exceeded",
+        url=_strip_auth_params(video_url),
+        retries=settings.max_retries,
+    )
     return None
 
 
@@ -560,6 +626,7 @@ async def _attempt_segment_resume(
     """
     logger.warning(
         "download_interrupted_switching_to_segments",
+        url=_strip_auth_params(video_url),
         path=str(output_file),
         size=output_file.stat().st_size,
         retry=retry_count,
@@ -587,6 +654,7 @@ async def _attempt_segment_resume(
             except QualityNotAvailableError:
                 logger.error(
                     "requested_quality_not_available_in_browser_streams",
+                    url=_strip_auth_params(video_url),
                     quality=quality,
                     available=[s.quality for s in browser_streams],
                 )
@@ -609,9 +677,17 @@ async def _attempt_segment_resume(
                 semaphore=semaphore,
             )
     except (ExtractionError, OSError) as e:
-        logger.warning("failed_to_refresh_token", error=str(e))
+        logger.warning(
+            "failed_to_refresh_token",
+            url=_strip_auth_params(video_url),
+            error=str(e),
+        )
     except ValueError as e:
-        logger.error("invalid_quality_for_browser_streams", error=str(e))
+        logger.error(
+            "invalid_quality_for_browser_streams",
+            url=_strip_auth_params(video_url),
+            error=str(e),
+        )
         raise
 
     return None
@@ -626,73 +702,161 @@ async def _download_with_ytdlp(
     raw_cookies: list[Cookie] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
-    """Download using yt-dlp."""
+    """Download video using yt-dlp via subprocess.
+
+    Uses ``asyncio.create_subprocess_exec`` instead of ``run_in_executor``
+    so the yt-dlp process can be properly terminated (SIGTERM -> SIGKILL)
+    on cancellation or shutdown. yt-dlp has its own ``--socket-timeout``,
+    ``-R`` (retries), ``--fragment-retries``, and ``-N`` (concurrent
+    fragments) for network robustness — no application-level download
+    timeout is imposed, avoiding premature kill of legitimate long downloads.
+
+    Args:
+        video_url: VK video URL to download.
+        output_file: Path to save the downloaded video.
+        quality: Quality string (e.g., "720", "1080").
+        settings: Application settings.
+        cookies: Optional cookies string for backward compatibility.
+        raw_cookies: Optional raw Cookie objects for Netscape format.
+        progress_callback: Optional callback for per-URL progress updates.
+
+    Returns:
+        Path to the output file on success, None on failure.
+    """
     logger.info(
         "starting_ytdlp_download",
         url=_strip_auth_params(video_url),
         output=str(output_file),
         quality=quality,
     )
+
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
+    video_id = video_url.split("_")[-1] if "_" in video_url else video_url
     shutdown_event = get_shutdown_event()
 
-    # Extract video_id for progress callback (matches segment downloader pattern)
-    video_id = video_url.split("_")[-1] if "_" in video_url else video_url
+    if not settings.ssl_verify:
+        logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
 
-    # Build yt-dlp options using extracted helper (must happen before _download closure captures it)
-    ydl_opts, cookie_file = _build_ytdlp_options(
+    cmd, cookie_file = _build_ytdlp_cli_command(
         output_file,
         quality_str,
         user_agent,
         settings,
         cookies,
         raw_cookies,
-        video_id,
-        progress_callback,
-        shutdown_event=shutdown_event,
     )
+    # yt-dlp takes the URL as its final positional argument
+    cmd.append(video_url)
 
-    def _download() -> str:
-        # Check shutdown before starting download
-        if shutdown_event.is_set():
-            raise RuntimeError("Download cancelled")
-
-        if not settings.ssl_verify:
-            logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
-            return str(output_file)
-        except Exception as e:
-            if "cancelled" in str(e).lower() or shutdown_event.is_set():
-                raise RuntimeError("Download cancelled") from e
-            raise
-        finally:
-            # Clean up cookie file after download completes (success or failure)
-            if cookie_file is not None and cookie_file.exists():
-                cookie_file.unlink()
-                logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
-
-    loop = asyncio.get_running_loop()
-
-    # Create task for the executor to allow cancellation
-    download_task = asyncio.ensure_future(loop.run_in_executor(None, _download))
-
+    process: asyncio.subprocess.Process | None = None
     try:
-        result = await download_task
-        return Path(result)
-    except asyncio.CancelledError:
-        logger.info("yt_dlp_download_cancelled")
-        # Cancel the executor task (though the thread will continue, it will be
-        # cleaned up when the process exits or on subsequent runs)
-        if not download_task.done():
-            download_task.cancel()
-        raise
-    except (RuntimeError, OSError) as e:
-        logger.error("download_failed", error=str(e))
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stderr_chunks: list[bytes] = []
+
+        async def _monitor_progress() -> None:
+            """Read stderr, parse yt-dlp progress, invoke callback."""
+            assert process.stderr is not None
+            while True:
+                if shutdown_event.is_set():
+                    if not await cancel_ffmpeg_process(process):
+                        logger.warning(
+                            "yt_dlp_cancel_not_clean",
+                            pid=process.pid,
+                            url=_strip_auth_params(video_url),
+                        )
+                    break
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                stderr_chunks.append(line)
+                progress = _parse_ytdlp_progress(line.decode())
+                if progress is not None and progress_callback is not None:
+                    downloaded, total = progress
+                    progress_callback(video_id, downloaded, total)
+
+        async def _drain_stderr() -> None:
+            """Drain stderr to prevent buffer deadlock when no callback."""
+            assert process.stderr is not None
+            while True:
+                if shutdown_event.is_set():
+                    if not await cancel_ffmpeg_process(process):
+                        logger.warning(
+                            "yt_dlp_cancel_not_clean",
+                            pid=process.pid,
+                            url=_strip_auth_params(video_url),
+                        )
+                    break
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                stderr_chunks.append(line)
+
+        if progress_callback:
+            process_task = asyncio.create_task(process.wait())
+            monitor_task = asyncio.create_task(_monitor_progress())
+            await _await_first_and_cancel_others(process_task, monitor_task)
+        else:
+            process_task = asyncio.create_task(process.wait())
+            drain_task = asyncio.create_task(_drain_stderr())
+            await _await_first_and_cancel_others(process_task, drain_task)
+
+        # Ensure the process is fully reaped before reading returncode.
+        if process.returncode is None:
+            await process.wait()
+
+        stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
+
+        if shutdown_event.is_set():
+            if not await cancel_ffmpeg_process(process):
+                logger.warning(
+                    "yt_dlp_cancel_not_clean",
+                    pid=process.pid,
+                    url=_strip_auth_params(video_url),
+                )
+            logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
+            return None
+
+        if process.returncode != 0:
+            error_msg = stderr_data.decode() if stderr_data else "Unknown yt-dlp error"
+            logger.error(
+                "download_failed",
+                url=_strip_auth_params(video_url),
+                returncode=process.returncode,
+                error=error_msg,
+            )
+            return None
+
+        logger.info("ytdlp_download_completed", output=str(output_file))
+        return output_file
+
+    except FileNotFoundError:
+        # yt-dlp module / Python interpreter not found
+        logger.error(
+            "ytdlp_not_found",
+            url=_strip_auth_params(video_url),
+            exc_info=True,
+        )
         return None
+    except asyncio.CancelledError:
+        logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
+        if process is not None and process.returncode is None:
+            if not await cancel_ffmpeg_process(process):
+                logger.warning(
+                    "yt_dlp_cancel_not_clean",
+                    pid=process.pid,
+                    url=_strip_auth_params(video_url),
+                )
+        raise
+    finally:
+        if cookie_file is not None and cookie_file.exists():
+            cookie_file.unlink(missing_ok=True)
+            logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
 
 
 async def _resolve_cookies(
@@ -805,8 +969,16 @@ async def perform_download(
         streams = video_data.streams
 
         if not streams:
-            logger.error("no_streams_found", url=_strip_auth_params(url))
-            return None
+            logger.error(
+                "no_streams_found",
+                url=_strip_auth_params(url),
+                error_code="no_streams",
+            )
+            raise QualityNotAvailableError(
+                str(quality),
+                [],
+                "No streams found after extraction; the video may be private or unavailable",
+            )
 
         m3u8_url = str(streams[0].url)
 
@@ -904,7 +1076,11 @@ async def perform_download(
                     progress_callback=progress_callback,
                 )
             case _:
-                logger.error("unknown_download_method", method=str(method))
+                logger.error(
+                    "unknown_download_method",
+                    url=_strip_auth_params(url),
+                    method=str(method),
+                )
                 return None
 
 
