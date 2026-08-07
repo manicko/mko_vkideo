@@ -23,7 +23,7 @@ from .exceptions import (
 )
 from .models.enums import CookieSource, DownloadMethod, QualityEnum
 from .services.downloader import download_video
-from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator
+from .services.downloader_throttle import ProgressManager, URLBackoffCoordinator, get_shutdown_event
 from .services.extractor import VIDEO_ID_PATTERN
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from .utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
@@ -456,7 +456,7 @@ def download(
         """Async implementation of video download."""
         setup_signal_handlers()
         try:
-            return await download_video(
+            result = await download_video(
                 url,
                 quality,
                 output,
@@ -466,6 +466,15 @@ def download(
             )
         finally:
             cleanup_signal_handlers()
+
+        # Distinguish user-initiated cancellation from genuine download
+        # failure.  The signal handler sets a shutdown Event (rather than
+        # raising KeyboardInterrupt), so we inspect it inside the async
+        # context — ContextVar changes inside asyncio.run() are NOT visible
+        # to the caller (asyncio.run copies the context).
+        if result is None and get_shutdown_event().is_set():
+            raise KeyboardInterrupt
+        return result
 
     try:
         # Detect misspelled VKDOWNLOADER_* env vars before construction
@@ -500,7 +509,7 @@ def download(
         )
         raise typer.Exit(code=1) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
-        typer.echo("\nDownload cancelled", err=True)
+        typer.echo("\nDownload cancelled by user", err=True)
         raise typer.Exit(code=130) from None
     except QualityNotAvailableError as e:
         # Access structured fields directly instead of parsing error message
@@ -621,8 +630,10 @@ def batch_download(
         typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
         raise typer.Exit(code=1) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
-        typer.echo("\nDownload cancelled", err=True)
+        typer.echo("\nDownload cancelled by user", err=True)
         raise typer.Exit(code=130) from None
+    except typer.Exit:
+        raise
     except Exception:
         logger.exception(
             "batch_download_failed",

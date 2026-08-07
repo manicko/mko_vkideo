@@ -271,6 +271,8 @@ def _build_ytdlp_cli_command(
         "-u",  # Unbuffered stderr — critical for real-time progress passthrough with PIPE
         "-m",
         "yt_dlp",
+        "--encoding",
+        "utf-8",
         "-o",
         str(output_file),
         "-f",
