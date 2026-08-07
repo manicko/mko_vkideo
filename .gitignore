@@ -26,3 +26,6 @@ wheels/
 
 # Environment configuration
 .env
+
+# Temp backup files
+old_downloader_tmp.txt
