@@ -31,7 +31,7 @@ from .ffmpeg_utils import (
     ProgressParser,
     _build_ffmpeg_concat_command,
     _merge_segments_batched,
-    cancel_ffmpeg_process,
+    cancel_subprocess,
     check_ffmpeg_available,
     read_progress,
 )
@@ -306,7 +306,7 @@ def _build_ytdlp_cli_command(
 #       _await_first_and_cancel_others
 #   * ffmpeg_utils.py:
 #       FfmpegProgress, ProgressParser, read_progress,
-#       cancel_ffmpeg_process, _build_ffmpeg_concat_command,
+#       cancel_subprocess, _build_ffmpeg_concat_command,
 #       _merge_segments_batched
 #   * segment_downloader.py:
 #       download_hls_with_resume, _cleanup_segments, _download_segment,
@@ -322,7 +322,7 @@ __all__ = [
     "FfmpegProgress",
     "HLSDownloader",
     "ProgressParser",
-    "cancel_ffmpeg_process",
+    "cancel_subprocess",
     "check_ffmpeg_available",
     "download_hls_with_resume",
     "download_with_ytdlp_with_resume_fallback",
@@ -425,7 +425,7 @@ class HLSDownloader:
                         process.stderr, stderr_collector=stderr_chunks
                     ):
                         if shutdown_event.is_set():
-                            if not await cancel_ffmpeg_process(process):
+                            if not await cancel_subprocess(process):
                                 logger.warning(
                                     "ffmpeg_cancel_not_clean",
                                     pid=process.pid,
@@ -440,7 +440,7 @@ class HLSDownloader:
                     assert process.stderr is not None
                     while True:
                         if shutdown_event.is_set():
-                            if not await cancel_ffmpeg_process(process):
+                            if not await cancel_subprocess(process):
                                 logger.warning(
                                     "ffmpeg_cancel_not_clean",
                                     pid=process.pid,
@@ -474,7 +474,7 @@ class HLSDownloader:
                 stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
                 if shutdown_event.is_set():
-                    if not await cancel_ffmpeg_process(process):
+                    if not await cancel_subprocess(process):
                         logger.warning(
                             "ffmpeg_cancel_not_clean",
                             pid=process.pid,
@@ -498,7 +498,7 @@ class HLSDownloader:
                 # Guarantee ffmpeg is terminated even on CancelledError or
                 # unhandled exception, preventing orphaned processes.
                 if process.returncode is None:
-                    if not await cancel_ffmpeg_process(process):
+                    if not await cancel_subprocess(process):
                         logger.warning(
                             "ffmpeg_cancel_not_clean",
                             pid=process.pid,
@@ -774,7 +774,7 @@ async def _download_with_ytdlp(
             assert process.stderr is not None
             while True:
                 if shutdown_event.is_set():
-                    if not await cancel_ffmpeg_process(process):
+                    if not await cancel_subprocess(process):
                         logger.warning(
                             "yt_dlp_cancel_not_clean",
                             pid=process.pid,
@@ -800,7 +800,7 @@ async def _download_with_ytdlp(
             assert process.stderr is not None
             while True:
                 if shutdown_event.is_set():
-                    if not await cancel_ffmpeg_process(process):
+                    if not await cancel_subprocess(process):
                         logger.warning(
                             "yt_dlp_cancel_not_clean",
                             pid=process.pid,
@@ -831,7 +831,7 @@ async def _download_with_ytdlp(
         stderr_data = b"".join(stderr_chunks) if stderr_chunks else b""
 
         if shutdown_event.is_set():
-            if not await cancel_ffmpeg_process(process):
+            if not await cancel_subprocess(process):
                 logger.warning(
                     "yt_dlp_cancel_not_clean",
                     pid=process.pid,
@@ -864,7 +864,7 @@ async def _download_with_ytdlp(
     except asyncio.CancelledError:
         logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
         if process is not None and process.returncode is None:
-            if not await cancel_ffmpeg_process(process):
+            if not await cancel_subprocess(process):
                 logger.warning(
                     "yt_dlp_cancel_not_clean",
                     pid=process.pid,

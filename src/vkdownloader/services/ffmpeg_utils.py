@@ -125,21 +125,24 @@ async def read_progress(
                 progress = FfmpegProgress()  # Reset for next block
 
 
-async def cancel_ffmpeg_process(
+async def cancel_subprocess(
     process: asyncio.subprocess.Process,
     *,
     timeout: float = 5.0,
 ) -> bool:
-    """Cancel and terminate an ffmpeg process gracefully.
+    """Cancel and terminate a subprocess gracefully (SIGTERM → SIGKILL).
+
+    Works with any ``asyncio.subprocess.Process``, including both ffmpeg and
+    yt-dlp subprocesses.
 
     Args:
-        process: The ffmpeg process to cancel.
+        process: The asyncio subprocess to cancel.
         timeout: Seconds to wait for graceful termination before force kill.
 
     Returns:
         True if process was cancelled, False if process was already gone.
     """
-    logger.info("cancelling_ffmpeg_process", pid=process.pid)
+    logger.info("cancelling_subprocess", pid=process.pid)
     try:
         process.terminate()
         try:
@@ -153,6 +156,13 @@ async def cancel_ffmpeg_process(
         return False
 
 
+# Backward-compatible alias — this function was originally named
+# cancel_ffmpeg_process when it only managed ffmpeg processes. It was
+# generalized for yt-dlp subprocesses as well; the old name is kept so
+# existing imports from downstream code and tests continue to work.
+cancel_ffmpeg_process = cancel_subprocess
+
+
 async def _await_ffmpeg_with_timeout(
     process: asyncio.subprocess.Process,
     timeout: float,
@@ -160,8 +170,8 @@ async def _await_ffmpeg_with_timeout(
     """Await ffmpeg process communication with timeout and graceful cancellation.
 
     Wraps ``process.communicate()`` in ``asyncio.wait_for`` and ensures the
-    process is terminated via ``cancel_ffmpeg_process`` on cancellation or
-    timeout, preventing orphaned ffmpeg subprocesses.
+    process is terminated via ``cancel_subprocess`` on cancellation or
+    timeout, preventing orphaned subprocesses.
 
     Args:
         process: The ffmpeg subprocess to await.

@@ -11,7 +11,7 @@ from vkdownloader.services.ffmpeg_utils import (
     _merge_batch_segments,
     _merge_segments_batched,
     _perform_final_merge,
-    cancel_ffmpeg_process,
+    cancel_subprocess,
 )
 
 
@@ -69,8 +69,8 @@ class TestBuildFfmpegConcatCommand:
         assert "copy" in cmd  # Stream copy
 
 
-class TestCancelFfmpegProcess:
-    """Tests for cancel_ffmpeg_process function."""
+class TestCancelSubprocess:
+    """Tests for cancel_subprocess function."""
 
     @pytest.mark.asyncio
     async def test_terminate_on_success(self) -> None:
@@ -86,7 +86,7 @@ class TestCancelFfmpegProcess:
         mock_process.returncode = 0
         mock_process.pid = 12345
 
-        result = await cancel_ffmpeg_process(mock_process)
+        result = await cancel_subprocess(mock_process)
 
         mock_process.terminate.assert_called_once()
         mock_process.kill.assert_not_called()
@@ -114,7 +114,7 @@ class TestCancelFfmpegProcess:
 
         mock_process.wait = mock_wait
 
-        result = await cancel_ffmpeg_process(mock_process, timeout=0.01)  # Short timeout
+        result = await cancel_subprocess(mock_process, timeout=0.01)  # Short timeout
 
         mock_process.terminate.assert_called_once()
         mock_process.kill.assert_called_once()
@@ -132,10 +132,16 @@ class TestCancelFfmpegProcess:
 
         mock_process.wait = mock_wait
 
-        result = await cancel_ffmpeg_process(mock_process)
+        result = await cancel_subprocess(mock_process)
 
         mock_process.terminate.assert_called_once()
         assert result is False
+
+    def test_backward_compatible_alias(self) -> None:
+        """Test that cancel_ffmpeg_process alias still works."""
+        from vkdownloader.services import ffmpeg_utils
+
+        assert ffmpeg_utils.cancel_ffmpeg_process is ffmpeg_utils.cancel_subprocess
 
 
 class TestMergeBatchSegments:

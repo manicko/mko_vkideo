@@ -2233,10 +2233,10 @@ class TestYtDlpSubprocessShutdown:
         mock_process.stderr.readline = AsyncMock(side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stderr_line else mock_stderr_line.pop(0))
         mock_process.wait = AsyncMock(return_value=0)
 
-        # Patch cancel_ffmpeg_process to track it's called
+        # Patch cancel_subprocess to track it's called
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             with patch(
-                "vkdownloader.services.downloader.cancel_ffmpeg_process",
+                "vkdownloader.services.downloader.cancel_subprocess",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_cancel:
@@ -2248,7 +2248,7 @@ class TestYtDlpSubprocessShutdown:
                 )
 
         assert result is None
-        # cancel_ffmpeg_process should have been called for shutdown
+        # cancel_subprocess should have been called for shutdown
         mock_cancel.assert_awaited()
         shutdown_event.clear()
 
@@ -2271,7 +2271,7 @@ class TestYtDlpSubprocessShutdown:
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             with patch(
-                "vkdownloader.services.downloader.cancel_ffmpeg_process",
+                "vkdownloader.services.downloader.cancel_subprocess",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_cancel:
