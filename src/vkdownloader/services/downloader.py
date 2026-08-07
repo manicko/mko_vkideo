@@ -784,6 +784,11 @@ async def _download_with_ytdlp(
                 line = await process.stderr.readline()
                 if not line:
                     break
+                # Echo yt-dlp progress output to the console, restoring
+                # pre-migration behavior where quiet=False let yt-dlp
+                # stream [download] % speed ETA lines directly to stderr.
+                sys.stderr.write(line.decode())
+                sys.stderr.flush()
                 stderr_chunks.append(line)
                 progress = _parse_ytdlp_progress(line.decode())
                 if progress is not None and progress_callback is not None:
@@ -805,6 +810,9 @@ async def _download_with_ytdlp(
                 line = await process.stderr.readline()
                 if not line:
                     break
+                # Echo yt-dlp output to the console (progress, warnings, errors).
+                sys.stderr.write(line.decode())
+                sys.stderr.flush()
                 stderr_chunks.append(line)
 
         if progress_callback:

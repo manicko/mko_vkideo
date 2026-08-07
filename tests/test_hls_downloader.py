@@ -2313,6 +2313,42 @@ class TestYtDlpSubprocessShutdown:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_ytdlp_stderr_progress_written_to_console(
+        self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that yt-dlp stderr progress lines are echoed to the console."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.readline = AsyncMock(
+            side_effect=[progress_line, b""]
+        )
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                output_file,
+                "720",
+                test_settings,
+            )
+
+        assert result == output_file
+        captured = capsys.readouterr()
+        assert "[download]" in captured.err
+        assert "40.3%" in captured.err
+        assert "649.37MiB" in captured.err
+        assert "983.45KiB/s" in captured.err
+        assert "06:43" in captured.err
+
 
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""
