@@ -256,7 +256,7 @@ def _build_ytdlp_cli_command(
         "-f",
         format_selector,
         "--newline",
-        "--no-part",
+        "--hls-prefer-native",
         "--no-warnings",
         "--socket-timeout",
         str(settings.download_timeout),
@@ -643,14 +643,24 @@ async def _attempt_segment_resume(
         if browser_streams:
             try:
                 quality_enum = _parse_quality_to_enum(quality)
-                selector = QualitySelector()
-                selected_stream = selector.select(browser_streams, quality_enum)
-                m3u8_url = str(selected_stream.url)
-                logger.info(
-                    "fresh_token_obtained_for_resume",
-                    quality=quality,
-                    selected_quality=selected_stream.quality,
-                )
+                # Browser streams always have quality="best" with height=None.
+                # Only run quality selection for BEST; for numeric qualities, reuse the
+                # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
+                if quality_enum == QualityEnum.BEST:
+                    selector = QualitySelector()
+                    selected_stream = selector.select(browser_streams, quality_enum)
+                    m3u8_url = str(selected_stream.url)
+                    logger.info(
+                        "fresh_token_obtained_for_resume",
+                        quality=quality,
+                        selected_quality=selected_stream.quality,
+                    )
+                else:
+                    logger.info(
+                        "browser_streams_selected_with_preselected_url_for_resume",
+                        quality=quality,
+                        m3u8_url=_strip_auth_params(m3u8_url),
+                    )
             except QualityNotAvailableError:
                 logger.error(
                     "requested_quality_not_available_in_browser_streams",

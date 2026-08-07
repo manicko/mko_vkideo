@@ -503,19 +503,6 @@ class TestYtdlpCliCommand:
         idx = cmd.index("--referer")
         assert cmd[idx + 1] == "https://vkvideo.ru/"
 
-    def test_cli_command_includes_no_part_flag(self, test_settings: Settings) -> None:
-        """Test CLI command includes --no-part to prevent orphan .part files."""
-        cmd, _ = _build_ytdlp_cli_command(
-            output_file=Path("/tmp/test.mp4"),
-            quality_str="720",
-            user_agent=test_settings.user_agent,
-            settings=test_settings,
-            cookies=None,
-            raw_cookies=None,
-        )
-
-        assert "--no-part" in cmd
-
     def test_cli_command_includes_newline_flag(self, test_settings: Settings) -> None:
         """Test CLI command includes --newline for parseable progress output."""
         cmd, _ = _build_ytdlp_cli_command(
@@ -579,6 +566,32 @@ class TestYtdlpCliCommand:
         assert cmd[0] == sys.executable
         assert cmd[1] == "-m"
         assert cmd[2] == "yt_dlp"
+
+    def test_cli_command_includes_hls_prefer_native(self, test_settings: Settings) -> None:
+        """Test CLI command includes --hls-prefer-native for native HLS with cookie support."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "--hls-prefer-native" in cmd
+
+    def test_cli_command_does_not_include_no_part(self, test_settings: Settings) -> None:
+        """Test CLI command does not include --no-part (lets yt-dlp use .part files)."""
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "--no-part" not in cmd
 
     def test_cli_command_creates_cookie_file_for_cookies(self, test_settings: Settings) -> None:
         """Test CLI command creates cookie file and adds --cookies flag when raw_cookies provided."""
@@ -2299,6 +2312,58 @@ class TestYtDlpSubprocessShutdown:
             )
 
         assert result is None
+
+
+class TestAttemptSegmentResumeQuality:
+    """Tests for _attempt_segment_resume quality handling with browser streams."""
+
+    @pytest.mark.asyncio
+    async def test_attempt_segment_resume_numeric_quality_does_not_raise(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test _attempt_segment_resume handles numeric quality without QualityNotAvailableError.
+
+        Browser streams only have quality="best", so numeric qualities must reuse
+        the pre-selected m3u8_url (mirroring the _resolve_cookies BEST-only guard).
+        """
+        from vkdownloader.services.downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        output_file.write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], None, None)
+        )
+
+        with patch(
+            "vkdownloader.services.downloader.download_hls_with_resume",
+            new_callable=AsyncMock,
+            return_value=output_file,
+        ):
+            result = await _attempt_segment_resume(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/stale.m3u8",
+                output_file,
+                "1080",
+                retry_count=1,
+                extractor=mock_extractor,
+                settings=test_settings,
+                backoff_coordinator=None,
+                semaphore=None,
+            )
+
+        assert result == output_file
+        mock_extractor.extract_streams_with_cookies.assert_awaited_once_with(
+            "https://vkvideo.ru/video-12345_67890", force_browser=True
+        )
 
 
 class TestFfmpegAvailabilityCheck:
