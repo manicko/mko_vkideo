@@ -701,6 +701,33 @@ class TestYtdlpProgressParsing:
         assert total == 100_000_000
         assert downloaded == total
 
+    def test_parse_progress_eta_dash_format(self) -> None:
+        """Test parsing progress with dash ETA (eta exceeds 99 hours)."""
+        line = "[download]   0.0% of    4.93GiB at   10.37KiB/s ETA --:--:--"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == int(4.93 * 1024 ** 3)
+        assert downloaded == 0
+
+    def test_parse_progress_eta_unknown_speed(self) -> None:
+        """Test parsing progress with Unknown speed and ETA (just started)."""
+        line = "[download]   0.0% of    4.93GiB at  Unknown B/s ETA Unknown"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == int(4.93 * 1024 ** 3)
+        assert downloaded == 0
+
+    def test_parse_progress_hh_mm_ss_eta(self) -> None:
+        """Test parsing progress with HH:MM:SS ETA format."""
+        line = "[download]   30.0% of 1.50GiB at 1.00MiB/s ETA 01:01:00"
+        result = _parse_ytdlp_progress(line)
+        assert result is not None
+        downloaded, total = result
+        assert total == int(1.50 * 1024 ** 3)
+        assert downloaded == int(total * 30.0 / 100)
+
 
 class TestParallelSegmentsDownload:
     """Tests for parallel segment download with semaphore."""

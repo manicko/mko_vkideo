@@ -165,7 +165,18 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
             raise QualityParseError(quality) from None
 
 
-# yt-dlp progress line format: [download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+# yt-dlp progress line format (with --newline):
+#   [download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+#
+# yt-dlp produces several ETA formats depending on the calculated value:
+#   - MM:SS        e.g. "06:43"         (eta < 1 hour)
+#   - HH:MM:SS     e.g. "01:01:00"      (1h <= eta <= 99h)
+#   - --:--:--     (eta > 99h or unknown, e.g. very large file / slow speed)
+#   - "Unknown"    (speed is 0, eta not yet calculated)
+#
+# Speed can also be "Unknown B/s" right after start.  The regex uses
+# permissive patterns for speed/eta because _parse_ytdlp_progress() only
+# reads pct, size, and size_unit -- speed/eta groups exist for clarity only.
 _YTDLP_PROGRESS_RE = re.compile(
     r"\[download\]\s+"
     r"(?P<pct>\d+(?:\.\d+)?)%"
@@ -173,10 +184,9 @@ _YTDLP_PROGRESS_RE = re.compile(
     r"(?P<size>\d+(?:\.\d+)?)"
     r"(?P<size_unit>[KMG]?i?B)"
     r"\s+at\s+"
-    r"(?P<speed>[\d.]+)"
-    r"(?P<speed_unit>[KMG]?i?B/s)"
+    r"(?P<speed>.+?)"
     r"\s+ETA\s+"
-    r"(?P<eta>\d{2}:\d{2})"
+    r"(?P<eta>\S+)"
 )
 
 # Size unit multipliers to bytes
@@ -199,6 +209,7 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     yt-dlp with ``--newline`` writes lines like::
 
         [download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+        [download]   0.0% of    4.93GiB at   10.37KiB/s ETA --:--:--
 
     Args:
         line: A decoded stderr line from the yt-dlp subprocess.
