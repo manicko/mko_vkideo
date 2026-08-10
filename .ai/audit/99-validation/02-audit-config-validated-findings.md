@@ -1,389 +1,174 @@
-﻿# Phase 02 Audit Findings — Configuration & Settings Models (VALIDATED)
+﻿---
+name: 02-audit-config-validated-findings
+description: Validator-validated findings for Phase 02 (Configuration & Settings Models)
+agent: validator
+---
 
-**Executor:** auditor (poolside/laguna-m.1:free)
-**Validator:** validator (poolside/laguna-m.1:free)
-**Template:** `.ai/audit/templates/audit-findings.md`
-**Source findings:** `.ai/audit/02-audit-config/findings.md`
+# Phase 02 Audit Findings (Validated) — Configuration & Settings Models
+
+**Executor:** auditor (Senior architecture auditor)
+**Validator:** validator (conservative, evidence-driven)
+**Template:** .ai/audit/templates/audit-findings.md
+**Phase template:** .kilo/commands/audit/phases/02-audit-config.md
 **Status:** complete
 **Validated:** yes
-
-> Validator note: this file is a verified copy of the source findings with inline validation
-> decisions applied. It is self-contained. Validation was performed against the working tree at
-> `C:\py_exp\mko_vkideo` on 2026-08-05, Python 3.12, pydantic 2.13.4 / pydantic-settings 2.14.2.
-
----
+**Problems-only:** yes (passing checks are omitted per phase output mode)
 
 ## Validation Methodology
 
-1. **Source** — read `src/vkdownloader/config.py`, `cli.py`, `models/enums.py`,
-   `services/extractor.py`, `services/downloader.py`.
-2. **Docs** — read `.env`, `.gitignore`, `docs/01-tools/installation.md`,
-   `docs/01-tools/api-reference.md`, `docs/11-guides/configuration.md`,
-   `docs/99-reference/cli-reference-clean.md`.
-3. **Runtime evidence** — reproduced the auditor's R1/R2 probes and additionally exercised the real
-   CLI via Typer `CliRunner` (`vkdownloader download` / `vkdownloader batch`) with
-   `VKDOWNLOADER_LOG_FILE=` set to an empty string.
-4. **Verification suite** — `pytest` (248 passed), `ruff check src/` (all passed),
-   `mypy src/vkdownloader/` (no issues in 23 files). All match audit R3/R4.
-5. **Cross-phase** — compared against Phase 01 (CLI) findings; one consistency note (CFG-001 vs CLI-003).
+Per .kilo/commands/audit/phases/99-audit-validate.md, each finding was validated against:
 
-### Decision legend
+1. Source code (src/vkdownloader/config.py, src/vkdownloader/cli.py, src/vkdownloader/models/enums.py)
+2. Tests (tests/test_config.py, tests/test_cli.py)
+3. Documentation (docs/11-guides/configuration.md, docs/01-tools/vkdownloader-overview.md, docs/01-tools/api-reference.md, docs/99-reference/cli-reference.md, docs/01-tools/installation.md)
+4. Actual runtime behavior - re-executed the auditor R1 scenarios with pydantic-settings 2.14.2 / pydantic 2.13.4 (Python 3.12)
 
-- **[VALIDATED]** Root cause verified against current code; recommendation stands unchanged.
-- **[RECLASSIFIED]** Valid, but `Type` adjusted: code-is-better-than-docs -> `DOC-UPDATE`.
-- **[KEEPS]** Hybrid finding retained because both code and docs deviate.
+### Environment
 
-### Validation-rule for SPEC-DEVIATION findings
+- pydantic-settings: 2.14.2
+- pydantic: 2.13.4
+- Ruff: ruff check src/vkdownloader/ -> all checks passed; ruff format --check src/vkdownloader/ -> flags services/downloader.py only
+- mypy src/vkdownloader/ -> 1 error at utils/correlation.py:55 (unused type:ignore); config.py and cli.py are mypy-clean
+- pytest: 325 total passed (Phase 01 record); config+CLI subset: 40 passed
 
-Applied verbatim: "Determine whether code should change or docs should change. If code is better than
-docs -> reclassify as DOC-UPDATE. If docs are better than code -> keep as spec deviation."
+---
+
+## Runtime Verification Records (confirmed)
+
+| Step | Command | Result |
+|------|---------|--------|
+| R1 | Instantiate Settings with valid/invalid/edge data | Confirmed. .env typo VKDOWNLOADER_MAXRETRIES=9 -> ValidationError (extra_forbidden); warn_unknown_env_vars() returns []; OS-env typo -> silently ignored, default 3 used, helper returns [VKDOWNLOADER_MAXRETRIES]; .env valid override MAX_RETRIES=5 -> loaded (proves .env IS read; failure is the unknown key, not loading) |
+| R2 | Load sample/test config through reader | Confirmed. No shipped .env or init/scaffold command exists; config is .env + VKDOWNLOADER_* env vars only |
+| R3 | uv run ruff check src/vkdownloader/ | Confirmed. Passed (0 errors). ruff format --check src/vkdownloader/ flags services/downloader.py (pre-existing, outside config scope). uv run mypy src/vkdownloader/ reports 1 error in utils/correlation.py:55 (unused type:ignore) -- unrelated to config; config.py/cli.py are mypy-clean |
+| R4 | uv run pytest (full suite; focus: tests/test_config.py + tests/test_cli.py) | Confirmed. 40 passed (config+CLI focus) |
+
+> Note: .gitignore:28 ignores .env; no .env or example template is committed, so there is no secret-leakage surface to report in this phase (template/secret checks pass -> omitted).
 
 ---
 
 ## Findings
 
-### CFG-001: Empty string env var for `log_file`/`download_dir` resolves to CWD, not None  [VALIDATED]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-001 |
-| **Severity** | HIGH |
-| **Type** | RUNTIME-ERROR |
-| **Validation Status** | VALIDATED (impact wording corrected — see note) |
-| **Affected Modules** | `config.py` (112-117, 140-145), `cli.py` (461-464, 505-508, 598-600), `installation.md` (124) |
-| **Classification** | mandatory |
+### CFG-001: .env-file unknown-variable typos raise an opaque ValidationError and bypass the documented typo guard
 
 > **Validation Note:**
-> - **Action:** validated (root cause confirmed; impact wording corrected).
-> - **Detail:** Verified empirically: `VKDOWNLOADER_LOG_FILE=` -> `Path("")` -> `expanduser().resolve()` ->
->   CWD, bypassing the `if v is None` guard (`config.py:115-116`). `setup_logging()` then constructs
->   `logging.FileHandler(CWD)` (`config.py:214`), raising an `OSError` subclass. The auditor wrote
->   `IsADirectoryError`; on POSIX that is accurate; on Windows the verified exception is
->   `PermissionError: [Errno 13] Permission denied: 'C:\py_experiment\mko_vkideo'` (both are
->   `OSError` subclasses). Not caught by the narrow `try/except OSError` around `mkdir`
->   (`config.py:201-206`) because `FileHandler` is instantiated outside that block (`config.py:214`).
-> - **Impact correction:** The finding says "the exception propagates up and crashes the CLI." In the
->   current CLI the exception is *caught*: `download` catches it via `except Exception` (`cli.py:505`,
->   -> traceback + "An error occurred during download", exit 1); `batch` catches it via `except OSError`
->   (`cli.py:598`, -> misleading "Failed to read URL file: .env -- PermissionError", exit 1). Verified by
->   running the real CLI (CliRunner). Net outcome: a **startup failure with exit code 1 and a confusing
->   traceback (download) / misleading message (batch)** when following the documented `installation.md:124`
->   example — not an unhandled traceback, but still a broken startup, justifying HIGH/mandatory priority.
-> - **Cross-phase:** see CLI-003 (Phase 01), which documents `download`'s catch-all and `batch`'s
->   narrower `except OSError`.
-> - **Fix refinement:** empty-string->None is correct and safe for `log_file` (`Path | None`). For
->   `download_dir` (non-optional `Path`) the same transform yields None -> pydantic ValidationError
->   (fail-fast). See Rollout Analysis for the behavior decision.
-> - **See also:** CFG-007 (Phase 02).
+> - **Action:** validated (reclassified)
+> - **Detail:** Empirically confirmed with pydantic-settings 2.14.2. A .env file containing a typo key (VKDOWNLOADER_MAXRETRIES=9) causes Settings() to raise ValidationError with [type=extra_forbidden], because extra='forbid' (config.py:162) does reject unknown keys sourced from the .env file. Meanwhile warn_unknown_env_vars() (config.py:176-202) scans os.environ only and returns [] for .env-sourced typos, so the helper cannot detect them. By contrast, an identical typo set in the OS environment (os.environ['VKDOWNLOADER_MAXRETRIES']='9') is silently ignored (default used) and IS caught by warn_unknown_env_vars(). The docs (config.py:19-26 docstring, config.py:179-183 warn_unknown_env_vars docstring, configuration.md:171-175) inaccurately state that all misspelled VKDOWNLOADER_* env vars are "silently ignored / silently dropped" -- this is true only for OS env vars, not .env file vars. Since .env is the documented primary configuration method (installation.md:104), the doc/code mismatch is a real deviation. Per type-specific rule "if code is better than docs -> reclassify as DOC-UPDATE": the code's fail-fast behavior for .env typos is acceptable, but the docs/docstring describing it are wrong -> the SPEC-DEVIATION portion is reclassified as DOC-UPDATE. The BEST-PRACTICE recommendations (extend typo guard to .env; surface valid names + "did you mean" on extra_forbidden) remain valid code improvements.
+> - **See also:** CLI-006 (Phase 01) shares overlap on .env/config error presentation; no conflict.
 
-**Description:** (source finding — reproduced for self-containment). The `Settings` model declares
-`log_file: Path | None` and `download_dir: Path` with an `expand_tilde_paths` field validator
-(mode="after") that calls `v.expanduser().resolve()`. When an environment variable or `.env` value is
-an empty string (e.g., `VKDOWNLOADER_LOG_FILE=`), pydantic-settings coerces the empty string to
-`Path("")` (equivalent to `Path(".")`), which is not `None`. The validator's `if v is None` guard is
-bypassed, and `Path("").expanduser().resolve()` resolves to the current working directory. This means
-an empty `VKDOWNLOADER_LOG_FILE=` value — shown as a copy-pasteable example at `installation.md:124` —
-produces a `log_file` pointing at a directory, not `None`. When `setup_logging()` (config.py:196-216)
-is called, it passes that CWD path to `logging.FileHandler()` (`config.py:214`), which raises an
-`OSError` because a directory cannot be opened as a file. This error is not caught by the
-`try/except OSError` around `mkdir()` (`config.py:201-206`) because `FileHandler` is created outside it.
+| Field | Value |
+|(originally)| — |
+| **ID** | CFG-001 |
+| **Severity** | HIGH |
+| **Type** | DOC-UPDATE, BEST-PRACTICE |
+| **Affected Modules** | src/vkdownloader/config.py, src/vkdownloader/cli.py, docs/11-guides/configuration.md |
+| **Classification** | advisory |
 
-**Evidence:** (verified)
-```text
-VKDOWNLOADER_LOG_FILE=''  ->  Settings().log_file == WindowsPath('C:/py_experiment/mko_vkideo')  (CWD, not None)
-Settings().log_file is None  ->  False
-setup_logging(settings) -> PermissionError: [Errno 13] Permission denied: 'C:\py_experiment\mko_vkideo'
-                             at logging.FileHandler(settings.log_file)  ->  config.py:214
-Real CLI (CliRunner):
-  download: exit_code=1, caught by except Exception (cli.py:505) -> traceback + "An error occurred during download"
-  batch:    exit_code=1, caught by except OSError (cli.py:598) -> "Failed to read URL file: .env — PermissionError"
-```
-Validator (`config.py:112-117`):
-```python
-@field_validator("download_dir", "log_file", mode="after")
-@classmethod
-def expand_tilde_paths(cls, v: Path | None) -> Path | None:
-    if v is None:
-        return v
-    return v.expanduser().resolve()
-```
-`Path("")` is not `None`, so the guard is skipped. Same for `download_dir`.
+**Description:** The Settings model sets extra='forbid' and ships warn_unknown_env_vars() to catch VKDOWNLOADER_* typos before construction. The docstrings (config.py:19-26, config.py:179-183) and configuration.md ("Environment Variable Caveats", configuration.md:171-175) state that misspelled VKDOWNLOADER_* variables are "silently ignored / silently dropped and the default is used," with the warning helper as the detection path. This is accurate ONLY for OS environment variables. For the .env file, extra='forbid' actually REJECTS unknown keys -- Settings() raises a hard ValidationError -- and warn_unknown_env_vars() cannot see .env content at all (it scans os.environ only, config.py:193). Since .env is the documented primary configuration method (installation.md:104), a single typo yields a dead-end error with no list of valid names and no remediation hint.
 
-**Recommendation (confirmed):** Add a `mode="before"` validator (following the existing pattern at `validate_cookie_source`, config.py:126-138) that converts empty strings to `None` for both `log_file` and `download_dir` **before** pydantic coerces them to `Path`. For `download_dir` specifically: an empty `VKDOWNLOADER_DOWNLOAD_DIR=` should produce a `ValidationError` (fail-fast), consistent with the project's `validate_cookie_source` pattern that rejects invalid `CookieSource.FILE` at construction (config.py:126-138) and the `extra='forbid'` configuration. The `ValidationError` is caught by `cli.py:475` (`except ValidationError as e:`) and rendered via `_format_validation_error`, giving the user a clear error message. This avoids the silent fall-back to CWD (current behavior) and aligns with the project's fail-fast convention for misconfigured settings. Effort: trivial. Priority: mandatory.
+**Evidence:** Runtime (R1), re-executed in a temp CWD with a .env file (pydantic-settings 2.14.2):
 
-**Effort:** trivial · **Priority:** mandatory — startup failure when following the documented example.
+- OS-env typo -- VKDOWNLOADER_MAXRETRIES=9 set in os.environ: Settings() succeeds, max_retries == 3 (default silently used); warn_unknown_env_vars() returns ['VKDOWNLOADER_MAXRETRIES'] and logs a valid_vars hint. Behavior matches the docs.
+- .env typo -- .env containing only VKDOWNLOADER_MAXRETRIES=9: os.environ before load is []; warn_unknown_env_vars() returns []; Settings() raises: ValidationError: vkdownloader_maxretries -> Extra inputs are not permitted [type=extra_forbidden]
+- .env valid override -- .env containing VKDOWNLOADER_MAX_RETRIES=5: Settings().max_retries == 5 (proves .env IS loaded; the failure is the unknown key, not loading itself).
+- Doc/code contradiction: config.py:19-26 / config.py:179-183 / configuration.md:171-175 all claim misspellings are "silently dropped, default used, warnable," but runtime shows .env typos are rejected outright and are unreachable by the warning helper.
+- Aggravator: cli.py:47-67 _format_validation_error labels every field as Received: <redacted, and model_config sets hide_input_in_errors=True (config.py:164), so the CLI-facing message hides the offending value entirely.
 
-### CFG-002: `.env` template file missing `headless` setting  [RECLASSIFIED]
+**Recommendation:** Two complementary, advisory changes:
+1. Make the pre-construction typo guard cover the .env file: parse the resolved .env (same key=value semantics pydantic-settings uses), strip the VKDOWNLOADER_ prefix, and compare against _build_valid_env_vars() so the existing valid_vars hint also fires for .env typos. It is already invoked before construction in cli.py:481/590.
+2. Improve the extra_forbidden UX: on an extra-field error, surface the valid VKDOWNLOADER_* names (reuse _build_valid_env_vars()) and a nearest-match "did you mean" hint instead of the bare pydantic message.
+3. Correct the docs (config.py:19-26, config.py:179-183, configuration.md:171-175) to state the true behavior: unknown OS-env vars are silently ignored (with warning); unknown .env keys raise ValidationError; advise users to inspect the .env file for typos.
+
+Effort: medium. Priority: recommended.
+
+---
+
+### CFG-002: Empty-string download_dir raises an opaque path_type ValidationError (asymmetric with log_file)
+
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** Empirically confirmed. Settings(download_dir='') raises ValidationError: download_dir -> Input is not a valid path for <class 'pathlib.Path'> [type=path_type] (input hidden by hide_input_in_errors=True, config.py:164). Settings(log_file='') instead succeeds with log_file=None (type NoneType). The asymmetry is real: the empty_string_to_none validator (config.py:112-117) maps "" -> None for both fields; None is valid for log_file (typed Path | None) but invalid for download_dir (typed Path), so the subsequent path_type coercion fails. Re-confirmed via env var: VKDOWNLOADER_DOWNLOAD_DIR="" -> identical path_type ValidationError. The inline comment at config.py:126-127 ("see CFG-001 ... when LOG_FILE is an empty string") misnames the field: LOG_FILE="" succeeds; DOWNLOAD_DIR="" is what crashes. No external doc claims different behavior, so this is a genuine code-consistency issue (BEST-PRACTICE/SPEC-DEVIATION), not a doc-vs-code mismatch. Recommendation is sound and low-risk (map "" to default or raise an actionable error). Settings.model_fields['download_dir'].default = Path.home() / "Downloads" / "vkdownloader" (config.py:76), available for the "use default" mapping.
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-002 |
 | **Severity** | MEDIUM |
-| **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `.env` (root), `config.py` (29-32), `configuration.md` (23, 49-53), `installation.md` (111) |
+| **Type** | BEST-PRACTICE, SPEC-DEVIATION |
+| **Affected Modules** | src/vkdownloader/config.py |
 | **Classification** | advisory |
 
-> **Validation Note:**
-> - **Action:** reclassified (code correct; template stale).
-> - **Detail:** `Settings.headless` (config.py:29-32, default `False`) is defined and documented
->   (`configuration.md:23,49-53`; `installation.md:111`). The `.env` template omits
->   `VKDOWNLOADER_HEADLESS` (verified by reading the 31-line `.env`). Code is better than the template.
-> - **See also:** CFG-007 — note `installation.md:111` *does* include headless (docs are internally
->   inconsistent: installation example has it, `.env` template does not).
+**Description:** The empty_string_to_none validator (config.py:112-117) converts "" -> None for BOTH download_dir and log_file. This is correct for log_file (typed Path | None, so None is valid). But download_dir is typed Path (non-optional), so None is not a valid path and the subsequent path_type coercion fails with an opaque message. The two path fields therefore handle an empty string asymmetrically: log_file degrades gracefully to "no file logging"; download_dir hard-fails. The inline comment at config.py:126-127 even misnames the field ("see CFG-001 ... when LOG_FILE is an empty string") -- in reality LOG_FILE="" succeeds while DOWNLOAD_DIR="" is what crashes.
 
-**Description:** The `.env` file at the repository root serves as a local config template with all
-settings commented out, but it does not include a `VKDOWNLOADER_HEADLESS` entry, despite `headless`
-being a valid `Settings` field (config.py:29-32, default `False`), documented in `configuration.md:23`
-and `installation.md:111`.
+**Evidence:** Runtime (R1), re-confirmed:
+- Settings(download_dir="") -> ValidationError: download_dir -> Input is not a valid path for <class 'pathlib.Path'> [type=path_type] input=None (input hidden by hide_input_in_errors=True).
+- Settings(log_file="") -> log_file=None, no error (type NoneType).
+- Same via env: VKDOWNLOADER_DOWNLOAD_DIR="" -> identical path_type ValidationError.
+- CLI-facing message (via CliRunner, download command with VKDOWNLOADER_DOWNLOAD_DIR=""): exit code 1, output: "Configuration error: one or more settings have invalid values. Check your .env file or VKDOWNLOADER_* environment variables: - download_dir: Input is not a valid path for <class 'pathlib.Path'> Received: <redacted> Fix the offending value(s) and try again."
 
-**Evidence:** `.env` root (read in full) contains no `VKDOWNLOADER_HEADLESS`. `Settings.model_fields`
-includes `headless`:
-```python
-headless: bool = Field(default=False, description="Run browser in headless mode (no GUI)")
-```
+**Impact:** A user who clears VKDOWNLOADER_DOWNLOAD_DIR (e.g. VKDOWNLOADER_DOWNLOAD_DIR= in .env, intending "use default") gets an opaque, redacted error pointing at download_dir with no indication that the value was the empty string. The natural expectation -- empty means "use default", consistent with how log_file="" already behaves -- is not met.
 
-**Recommendation:** Add a commented-out `VKDOWNLOADER_HEADLESS` entry to the `.env` template.
-**Effort:** trivial · **Priority:** recommended
+**Recommendation:** Unify empty-string handling for path fields and fix the misleading comment. Either:
+- (preferred) Treat "" for download_dir as "use default" by mapping it to Settings.model_fields["download_dir"].default in the existing empty_string_to_none/path validator (mirrors log_file graceful None), optionally logging a debug note; OR
+- raise an explicit, actionable error that names the variable (VKDOWNLOADER_DOWNLOAD_DIR), states the empty value was supplied, and suggests removing the line to use the default.
+
+Either approach is strictly better than the current redacted path_type error. Also correct the inline comment at config.py:126-127 to reference download_dir, not LOG_FILE.
+
+Effort: trivial. Priority: recommended.
 
 ---
 
-### CFG-003: API reference shows wrong `throttled_rate` default (100000 vs 10000)  [RECLASSIFIED]
+### CFG-003: Docs misstate the exception for CookieSource.FILE and are internally inconsistent
+
+> **Validation Note:**
+> - **Action:** reclassified (SPEC-DEVIATION -> DOC-UPDATE)
+> - **Detail:** Code at config.py:145-157 (validate_cookie_source) raises ValueError("CookieSource.FILE is not implemented..."), which pydantic surfaces as ValidationError at construction. Re-confirmed: Settings(cookie_source=CookieSource.FILE) -> ValidationError, loc ('cookie_source',), msg "CookieSource.FILE is not implemented. Use none or browser instead." tests/test_config.py:96-104 asserts the ValidationError and the message substring. The code is correct (a field validator raising ValueError/ValidationError is the idiomatic Pydantic pattern). The docs are the problem: vkdownloader-overview.md:63 claims "raises NotImplementedError"; api-reference.md:99 claims "Raises NotImplementedError"; while api-reference.md:656 (same doc) correctly states "Rejected with ValueError" -- an internal contradiction. Per type-specific rule "if code is better than docs -> reclassify as DOC-UPDATE": code is correct and idiomatic, docs are wrong -> reclassified to DOC-UPDATE. The FILE member remains in the CookieSource enum (enums.py:50) intentionally as an intent-documenting placeholder, so no code change is required.
+> - **See also:** CLI-006 (Phase 01) -- same root cause (CookieSource.FILE documentation does not match code). CFG-003 is the narrow doc-only subset (exception type); CLI-006 additionally covers --help advertising file as a selectable option. Marked as merge candidate / shared root cause; no code conflict between findings.
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-003 |
-| **Severity** | MEDIUM |
+| **Severity** | LOW |
 | **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `api-reference.md` (852), `installation.md` (119), `config.py` (86) |
+| **Affected Modules** | src/vkdownloader/config.py, docs/01-tools/vkdownloader-overview.md, docs/01-tools/api-reference.md |
 | **Classification** | advisory |
 
-> **Validation Note:**
-> - **Action:** reclassified (code correct; docs stale).
-> - **Detail:** Default is `10000` (verified at runtime: `Settings().throttled_rate == 10000`),
->   matching `configuration.md:34` and the `.env` template. Only `api-reference.md:852` (`100000`) and
->   `installation.md:119` (`100000`) are wrong.
-> - **See also:** CFG-007 overlaps on `installation.md:119`.
+**Description:** config.py:145-157 validate_cookie_source raises ValueError("CookieSource.FILE is not implemented...") inside a pydantic field_validator, which pydantic surfaces as a ValidationError at construction. Two docs instead claim NotImplementedError is raised, and one of them (api-reference.md) contradicts ITS OWN enum table.
 
-**Evidence:** Code (`config.py:85-89`, verified):
-```python
-throttled_rate: int = Field(default=10000, ge=1000, le=1000000, description="...yt-dlp will abort below this threshold.")
-```
-Runtime: `Settings().throttled_rate` -> `10000`. API ref (`api-reference.md:852`): `100000`.
-Installation (`installation.md:119`): `VKDOWNLOADER_THROTTLED_RATE=100000`. Config guide
-(`configuration.md:34`): `10000`.
+**Evidence:**
+- Code: config.py:145-157 raises ValueError; runtime (R1) / test_config.py:96-104 confirm Settings(cookie_source=CookieSource.FILE) -> ValidationError, loc ('cookie_source',), msg "CookieSource.FILE is not implemented. Use none or browser instead."
+- docs/01-tools/vkdownloader-overview.md:63: "file is not implemented and raises NotImplementedError"
+- docs/01-tools/api-reference.md:99: "When cookie_source=FILE: Raises NotImplementedError (not implemented)"
+- docs/01-tools/api-reference.md:656 (same doc, its own CookieSource table): "FILE ... Rejected with ValueError. Not implemented" -- i.e. api-reference.md contradicts itself.
 
-**Recommendation:** Update `api-reference.md:852` and `installation.md:119` to `10000`.
-**Effort:** trivial · **Priority:** recommended
+**Recommendation:** Update overview.md:63 and api-reference.md:99 to state that CookieSource.FILE is rejected at construction with a ValidationError (backed by ValueError in validate_cookie_source), matching api-reference.md:656. Keep file in the CookieSource enum (it documents intent and the validator message) but ensure all references agree on the exception type.
+
+Effort: trivial. Priority: recommended.
 
 ---
 
-### CFG-004: API reference missing `browser_pre_interaction_wait` and `browser_post_interaction_wait`  [RECLASSIFIED]
+### CFG-004: configuration.md implies --max-retries is available for the single download command, but it is batch-only
+
+> **Validation Note:**
+> - **Action:** reclassified (SPEC-DEVIATION -> DOC-UPDATE)
+> - **Detail:** Code confirms the download command (cli.py:418-445) exposes options url, quality, output, method, cookie_source, ssl_verify -- there is no --max-retries option. Only batch_download() (cli.py:542-581) defines --max-retries / -r (cli.py:576-581). Meanwhile cli-reference.md:121 correctly scopes --max-retries to the batch command only. The discrepancy is entirely in configuration.md:105-117, which lists "CLI Flag: --max-retries / -r" alongside "Applies to single downloads as well as batch downloads" without qualifying the flag is batch-scoped. Per type-specific rule "if code is better than docs -> reclassify as DOC-UPDATE": the code is correct (setting applies via env var to single downloads; the CLI flag is batch-only), the doc is misleading -> reclassified to DOC-UPDATE. The max_retries setting (env var VKDOWNLOADER_MAX_RETRIES) does apply to single downloads via Settings() construction, so the underlying behavior claim is half-right; only the CLI-flag scoping text is wrong.
 
 | Field | Value |
 |-------|-------|
 | **ID** | CFG-004 |
-| **Severity** | MEDIUM |
-| **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `api-reference.md` (840-856), `config.py` (57-68), `extractor.py` (220-222) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** reclassified (code correct; docs incomplete).
-> - **Detail:** Both fields exist (config.py:57-68), are consumed by `extractor.py:220,222`, and are
->   documented in `configuration.md:27-28`. Verified defaults: `5` and `8`. The `api-reference.md`
->   settings table omits both rows.
-
-**Evidence:** Code (config.py:57-68, verified):
-```python
-browser_pre_interaction_wait: int = Field(default=5, ge=1, le=30, ...)
-browser_post_interaction_wait: int = Field(default=8, ge=1, le=30, ...)
-```
-Consumer (extractor.py:220-222, verified):
-```python
-await asyncio.sleep(self.settings.browser_pre_interaction_wait)
-await self._simulate_video_interaction(page)
-await asyncio.sleep(self.settings.browser_post_interaction_wait)
-```
-
-**Recommendation:** Add both rows (default `5`/`8`, range 1-30) to the API reference settings table.
-**Effort:** trivial · **Priority:** recommended
-
----
-
-### CFG-005: `.env` template lists `file` as valid `cookie_source` option but code rejects it  [RECLASSIFIED]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-005 |
-| **Severity** | MEDIUM |
-| **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `.env` (line 26), `config.py` (97-99, 126-138), `enums.py` (49) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** reclassified (code correct/intentional; template stale).
-> - **Detail:** `CookieSource.FILE` exists in the enum but `validate_cookie_source` rejects it at
->   construction (config.py:126-138). The `.env` line 26 lists `file` as valid, contradicting the code.
->   Verified: `VKDOWNLOADER_COOKIE_SOURCE=file` -> `ValidationError: CookieSource.FILE is not
->   implemented`. The field description itself (config.py:99) already says "file not implemented"; only
->   the `.env` comment is stale.
-
-**Evidence:** Enum (enums.py:45-50, verified). Validator (config.py:126-138, verified). Runtime:
-`VKDOWNLOADER_COOKIE_SOURCE=file` -> `ValidationError: CookieSource.FILE is not implemented. Use
-'none' or 'browser' instead.` `.env` line 26: `# Cookie Source (none, browser, file) - controls browser launch for cookies`.
-
-**Recommendation:** Update the `.env` template comment to `(none, browser)` only.
-**Effort:** trivial · **Priority:** recommended
-
----
-
-### CFG-006: `CookieSource.FILE` documentation is inconsistent across docs + unreachable `NotImplementedError`  [KEEPS — SPEC-DEVIATION]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-006 |
-| **Severity** | MEDIUM |
-| **Type** | SPEC-DEVIATION |
-| **Validation Status** | VALIDATED (hybrid: docs-wrong AND dead code) |
-| **Affected Modules** | `configuration.md` (66), `cli-reference-clean.md` (198), `config.py` (126-138), `extractor.py` (129-132), `cli.py` (461) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** validated (kept as SPEC-DEVIATION).
-> - **Detail:** All sub-claims verified:
->   1. `configuration.md:66` says FILE "raises NotImplementedError" — false; actual is
->      `ValidationError` (config.py:126-138), confirmed at runtime and by
->      `tests/test_extractor.py:289-294` (asserts construction-time rejection).
->   2. `cli-reference-clean.md:198` says "future enhancement" — contradicts the rejection.
->   3. `extractor.py:129-132` (`if self.settings.cookie_source == CookieSource.FILE: raise
->      NotImplementedError(...)`) is **unreachable** in normal flow: the validator blocks `FILE` at
->      construction, so a validly-built `Settings` never carries `cookie_source == FILE`.
->      `extract_streams_with_cookies` is reachable (downloader.py:539,688; segment_downloader.py:389),
->      but the FILE branch is dead. CLI `--cookie-source file` -> `CookieSource.FILE` -> validator
->      raises `ValidationError` -> caught at `cli.py:473`, never reaching the extractor.
-> - **Rationale:** Both code (dead branch) and docs (wrong exception type) deviate -> not a pure
->   DOC-UPDATE. Retained.
-> - **See also:** CFG-005 (Phase 02) shares the `CookieSource.FILE` root cause; separate because it
->   targets the `.env` comment, not the cross-doc inconsistency + dead code.
-
-**Recommendation:** Remove the unreachable `NotImplementedError` branch at `extractor.py:129-132` (the `validate_cookie_source` validator at config.py:126-138 already rejects `CookieSource.FILE` at construction, making this branch dead code). Retain the `CookieSource.FILE` enum value in `enums.py:49` for forward compatibility. Update the `.env` template comment (line 26) to list only `(none, browser)` to match the validator. Align `configuration.md:66` and `cli-reference-clean.md:198` to state `ValidationError` is raised at construction (not `NotImplementedError`). Effort: small. Priority: recommended.
-**Effort:** small · **Priority:** recommended
-
-### CFG-007: Installation `.env` example is incomplete, has wrong `throttled_rate`, and contains empty `LOG_FILE`  [RECLASSIFIED]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-007 |
-| **Severity** | MEDIUM |
-| **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `installation.md` (106-125), `config.py` (defaults) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** reclassified (defaults correct; example wrong).
-> - **Detail:** Defaults verified correct (`throttled_rate=10000`, `headless` exists, etc.). The
->   `installation.md:106-125` example is wrong/incomplete (verified by direct read): missing the three
->   browser/cookie fields, `throttled_rate=100000`, and empty `VKDOWNLOADER_LOG_FILE=`.
-> - **Cross-finding:** sub-issue (3) is the same root cause as CFG-001. CFG-001 fixes the code
->   (validator); CFG-007 fixes the docs example (non-empty LOG_FILE). Complementary, independent.
-
-**Evidence:** `installation.md:106-125` (verified): missing
-`VKDOWNLOADER_BROWSER_PRE_INTERACTION_WAIT` / `_POST_` / `VKDOWNLOADER_COOKIE_SOURCE`;
-`VKDOWNLOADER_THROTTLED_RATE=100000`; `VKDOWNLOADER_LOG_FILE=` (empty, triggers CFG-001).
-
-**Recommendation:** `throttled_rate=10000`; give `LOG_FILE` a concrete path; add the three missing
-fields (commented).
-**Effort:** trivial · **Priority:** recommended
-
----
-
-### CFG-008: No tracked `.env.example` template for new users  [VALIDATED — BEST-PRACTICE]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-008 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Validation Status** | VALIDATED |
-| **Affected Modules** | `.gitignore` (28), `.env` (gitignored), `installation.md` (102-125) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** validated.
-> - **Detail:** `.gitignore:28` ignores `.env`. `Get-ChildItem -Force` of repo root confirms only
->   `.env` exists — no `.env.example`/`.env.template`/`.env.sample` anywhere. A tracked template is the
->   standard Python bootstrap pattern; low complexity, high onboarding value. Not rejected as
->   overengineering.
-
-**Recommendation:** Create a tracked `.env.example` with all 16 settings (commented).
-**Effort:** small · **Priority:** recommended
-
----
-
-### CFG-009: CLI reference shows `ssl_verify` default as `verify` instead of `true`  [RECLASSIFIED]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-009 |
 | **Severity** | LOW |
 | **Type** | DOC-UPDATE |
-| **Validation Status** | RECLASSIFIED from SPEC-DEVIATION |
-| **Affected Modules** | `cli-reference-clean.md` (68, 126), `cli.py` (406-410) |
+| **Affected Modules** | docs/11-guides/configuration.md, src/vkdownloader/cli.py, docs/99-reference/cli-reference.md |
 | **Classification** | advisory |
 
-> **Validation Note:**
-> - **Action:** reclassified (code correct; docs stale).
-> - **Detail:** `ssl_verify` defaults to `True` (cli.py:406-410; verified
->   `Settings().ssl_verify is True`). `configuration.md:31` (`true`) and `api-reference.md:849`
->   (`True`) are correct; only `cli-reference-clean.md:68,126` show the invalid token `verify`.
+**Description:** configuration.md documents max_retries with a CLI Flag: --max-retries / -r and text "Applies to single downloads as well as batch downloads," without qualifying that the flag is batch-only. The single download command exposes no --max-retries option, so a user following the guide and running vkdownloader download URL --max-retries 5 hits a Typer "no such option" error. (The max_retries setting does apply to single downloads via the VKDOWNLOADER_MAX_RETRIES env var -- only the CLI flag is batch-scoped.)
 
-**Recommendation:** Change `verify` -> `true` at `cli-reference-clean.md:68,126`.
-**Effort:** trivial · **Priority:** recommended
+**Evidence:**
+- src/vkdownloader/cli.py: download() (cli.py:418-445) options are url, quality, output, method, cookie_source, ssl_verify -- no --max-retries. Only batch_download() (cli.py:542-581, option at cli.py:576-581) defines --max-retries / -r.
+- docs/11-guides/configuration.md:105-117: lists CLI Flag: --max-retries / -r and "Applies to single downloads as well as batch downloads."
+- docs/99-reference/cli-reference.md:121 correctly scopes --max-retries to the batch command only.
 
----
+**Recommendation:** Clarify in configuration.md that --max-retries is a batch-only CLI flag and that single-download retry behavior is configured via the VKDOWNLOADER_MAX_RETRIES environment variable. Optionally consider whether the single download command should gain a --max-retries override for parity (design decision, not mandated).
 
-### CFG-010: `throttled_rate` field description is misleading ("triggers re-extract")  [KEEPS — SPEC-DEVIATION]
-
-| Field | Value |
-|-------|-------|
-| **ID** | CFG-010 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Validation Status** | VALIDATED |
-| **Affected Modules** | `config.py` (89), `api-reference.md` (852), `configuration.md` (34) |
-| **Classification** | advisory |
-
-> **Validation Note:**
-> - **Action:** validated (kept as SPEC-DEVIATION).
-> - **Detail:** The misleading text lives in the code (`Field(description=...)`, config.py:89), which
->   `api-reference.md:852` and `configuration.md:34` mirror. Because the *source of truth* (code
->   description) is itself wrong, this is not a doc-only fix. Verified: `throttledratelimit` is passed
->   to yt-dlp (downloader.py:174); re-extraction is a **separate** retry loop
->   `download_with_yydlp_with_resume_fallback` (downloader.py:455-491) -> `_attempt_segment_resume`
->   (fresh token). The description conflates yt-dlp's abort with the app's retry. Recommendation
->   accepted as accurate.
-
-**Recommendation:** Rewrite the description to: "Minimum download rate in bytes/sec. If yt-dlp's
-download rate falls below this threshold, yt-dlp aborts the download; the application then retries
-with a fresh token re-extract. Default is 10000 (10KB/s)." Propagate to `api-reference.md:852` and
-`configuration.md:34`.
-**Effort:** trivial · **Priority:** recommended
-
----
-
-## Runtime Verification Summary
-
-| Step | Status | Details |
-|------|--------|---------|
-| R1 — Model instantiation | Pass | Defaults correct (`throttled_rate=10000`, `ssl_verify=True`, `headless=False`, waits=5/8, `cookie_source=NONE`); `FILE` rejected with `ValidationError`; unknown kwargs rejected (`extra='forbid'`). |
-| R2 — Config loading | Pass (with bug) | Env vars load correctly. **Bug confirmed:** empty `VKDOWNLOADER_LOG_FILE=` -> CWD (not None); `setup_logging()` raises OSError (`PermissionError` Windows / `IsADirectoryError` POSIX) at `FileHandler` (config.py:214), uncaught by the mkdir guard. Real CLI: `download`->exit 1 via `except Exception`; `batch`->exit 1 via `except OSError` (misleading msg). |
-| R3 — Linter | Pass | `ruff check src/` -> All checks passed; `mypy src/vkdownloader/` -> Success, 23 files. |
-| R4 — Test suite | Pass | 248 passed (15 config tests). |
+Effort: trivial. Priority: recommended.
 
 ---
 
@@ -392,128 +177,78 @@ with a fresh token re-extract. Default is 10000 (10KB/s)." Propagate to `api-ref
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 1 |
-| MEDIUM | 6 |
-| LOW | 3 |
-| **Total** | **10** |
+| HIGH | 1 (CFG-001) |
+| MEDIUM | 1 (CFG-002) |
+| LOW | 2 (CFG-003, CFG-004) |
+
+## Mandatory Fixes
+
+_No findings classified as mandatory. All findings fail fast (no data loss / no silent insecure config): CFG-001's .env typo does raise (not silently misconfigure), and CFG-002's empty download_dir raises a ValidationError (caught and surfaced by the CLI)._
+
+## Advisory Recommendations
+
+- **CFG-001 (HIGH / DOC-UPDATE + BEST-PRACTICE):** Extend the typo guard (warn_unknown_env_vars) to also scan the resolved .env file, and improve the extra_forbidden message to list valid VKDOWNLOADER_* names / suggest nearest match; correct docs/docstring to reflect that .env typos raise (not silently-ignored) while OS-env-var typos are silently ignored. [SUPPORTS] operational reliability of the primary config path.
+- **CFG-002 (MEDIUM / BEST-PRACTICE):** Make empty-string handling consistent across path fields (treat download_dir="" as "use default", as log_file="" already degrades gracefully); fix the config.py:126-127 comment that misnames the crashing field. [BEST-PRACTICE] config robustness / UX.
+- **CFG-004 (LOW / DOC-UPDATE):** Document that --max-retries is batch-only and that single-download retries use VKDOWNLOADER_MAX_RETRIES. [DOC-UPDATE] clarity.
+
+## Doc Updates Needed
+
+- **CFG-001:** config.py docstring (lines 19-26, 179-183) and docs/11-guides/configuration.md ("Environment Variable Caveats", 171-175) -- state the true .env vs OS-env-var behavior.
+- **CFG-003:** docs/01-tools/vkdownloader-overview.md:63 and docs/01-tools/api-reference.md:99 -- CookieSource.FILE raises ValidationError (not NotImplementedError); align with api-reference.md:656.
+- **CFG-004:** docs/11-guides/configuration.md:105-117 -- scope --max-retries to the batch command.
+
+---
 
 ## Validation Summary
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 4 | CFG-001, CFG-006, CFG-008, CFG-010 |
-| Reclassified | 6 | CFG-002, CFG-003, CFG-004, CFG-005, CFG-007, CFG-009 — SPEC-DEVIATION -> DOC-UPDATE (code correct; docs/templates stale) |
-| Merged | 0 | — |
-| Rejected | 0 | — |
+| Validated (unchanged) | 1 | CFG-002 |
+| Reclassified | 3 | CFG-001 (SPEC-DEVIATION -> DOC-UPDATE, kept BEST-PRACTICE), CFG-003 (SPEC-DEVIATION -> DOC-UPDATE), CFG-004 (SPEC-DEVIATION -> DOC-UPDATE) |
+| Merged | 0 | -- |
+| Rejected | 0 | -- |
 
 ### Rejected Findings
 
-| ID | Title | Reason |
-|----|-------|--------|
-| _(none)_ | — | All findings verified against current code; none stale/duplicated/low-ROI/unsafe. |
+_None._ All four findings are technically correct, currently applicable, and architecturally sound. Each was empirically re-verified against the running codebase (pydantic-settings 2.14.2).
 
 ### Merged Findings
 
 | Original ID | Merged Into | Rationale |
 |-------------|-------------|----------|
-| _(none)_ | — | CFG-003 & CFG-007 overlap on `installation.md:119`; CFG-005 & CFG-006 share the `CookieSource.FILE` root cause. Retained separately (distinct artifacts/fix sites). |
+| CFG-003 | CLI-006 (Phase 01) | Same root cause: CookieSource.FILE documentation does not match code (ValueError/ValidationError, not NotImplementedError). CFG-003 is the narrow doc-only subset; CLI-006 additionally covers --help advertising file as selectable. Kept separate per-phase but flagged as shared root cause. |
 
 ### Reclassified Findings
 
 | ID | Original Type | New Type | Rationale |
 |----|---------------|----------|-----------|
-| CFG-002 | SPEC-DEVIATION | DOC-UPDATE | `headless` defined+documented; `.env` omits it. |
-| CFG-003 | SPEC-DEVIATION | DOC-UPDATE | Default `10000` verified; only api-ref/installation show `100000`. |
-| CFG-004 | SPEC-DEVIATION | DOC-UPDATE | Both wait fields defined+consumed+documented; api-ref omits. |
-| CFG-005 | SPEC-DEVIATION | DOC-UPDATE | `file` rejection intentional; only `.env` lists it. |
-| CFG-007 | SPEC-DEVIATION | DOC-UPDATE | Defaults correct; only `installation.md` example is wrong. |
-| CFG-009 | SPEC-DEVIATION | DOC-UPDATE | Default `True` verified; only cli-ref shows `verify`. |
-
----
-
-## Cross-Phase Analysis (Phase 01 CLI vs Phase 02 Config)
-
-- **CFG-001 (config) <-> CLI-003 (CLI):** Resolved by evidence. CFG-001 claims the empty-LOG_FILE
-  error "crashes the CLI"; CLI-003 documents that `download` has a catch-all `except Exception`
-  (`cli.py:505`) and `batch` has `except OSError` (`cli.py:598`) but no catch-all. Verified by
-  running the real CLI: the `PermissionError` is **caught** in both — not an unhandled traceback.
-  The findings are therefore **consistent** (both accurately describe handler structure); only
-  CFG-001's impact wording is overstated (corrected above).
-- **Remediation independence:** CLI-003's catch-all fix improves diagnostics but does **not** fix
-  CFG-001's root cause (empty string -> CWD). CFG-001 must be fixed at the root (validator). Order:
-  CFG-001 first (root cause), CLI-003 second (defense-in-depth).
-- **No conflicting runtime claims** between phases: R1-R4 summaries agree (248 tests pass,
-  ruff/mypy clean, same default values).
+| CFG-001 | SPEC-DEVIATION, BEST-PRACTICE | DOC-UPDATE, BEST-PRACTICE | Code behavior is correct/acceptable (fail-fast for .env typos); docs/docstring inaccurately claim all env-var typos are silently ignored. Code is better than docs -> DOC-UPDATE. BEST-PRACTICE (extend typo guard, improve error UX) retained. |
+| CFG-003 | DOC-UPDATE, SPEC-DEVIATION | DOC-UPDATE | Code correctly raises ValueError/ValidationError; docs wrongly claim NotImplementedError and contradict themselves. Code is correct -> DOC-UPDATE. |
+| CFG-004 | DOC-UPDATE, SPEC-DEVIATION | DOC-UPDATE | Code is correct (download command has no --max-retries); configuration.md misleadingly implies otherwise. Code is better than docs -> DOC-UPDATE. |
 
 ## Rollout Analysis
 
-- **CFG-001 (code root-cause fix):** Add a `mode="before"` validator mapping `""` -> `None` on
-  `log_file` and `download_dir`, following the existing `validate_cookie_source` pattern (config.py:126-138).
-  - `log_file` (`Path | None`): `""` -> `None` -> no `FileHandler` -> safe, backward-compatible
-    (previously crashed).
-  - `download_dir` (`Path`, non-optional, default `Path.home()/Downloads/vkdownloader`): `""` -> `None`
-    -> pydantic `ValidationError` (fail-fast). This is a **behavior change** (silent CWD -> fail-fast
-    config error caught at `cli.py:475` and shown via `_format_validation_error`). **Decision: fail-fast** —
-    consistent with the project's existing `validate_cookie_source` rejection pattern (config.py:126-138)
-    and the `extra='forbid'` convention. An empty `download_dir` is a misconfiguration, not a value to
-    silently fall back. The `ValidationError` is user-facing via `_format_validation_error`. Not architecture-breaking.
-- **CFG-006 (dead-code removal):** The unreachable `NotImplementedError` branch at `extractor.py:129-132`
-  should be **removed** (not inert-marked), since the `validate_cookie_source` validator at config.py:126-138
-  already blocks `CookieSource.FILE` at construction, making the branch truly dead. The `CookieSource.FILE`
-  enum value is retained in `enums.py:49` for forward compatibility. Removal is safe — `tests/test_extractor.py:289-294`
-  asserts construction-time rejection (not the extractor branch), so no test depends on it. The `.env` template
-  comment (line 26) listing `file` as valid should be updated to `(none, browser)` to match the validator. Low risk.
-- **Doc/template batch (CFG-002, 003, 004, 005, 007, 009, 010):** pure text changes, no runtime
-  impact; can be applied together.
-- **CFG-008 (`.env.example`):** additive, no runtime impact.
-- **Circular/hidden dependencies:** none. CFG-001 and CFG-007 share the empty-LOG_FILE root cause but
-  have independent fix sites (code validator vs. docs example).
-- **Anchors:** all fixes target stable artifacts (field definitions, doc files, the validator, the
-  dead branch) — no fragile line-only anchors.
+**Risks:** None. All four findings are advisory (non-mandatory). CFG-001 and CFG-002 involve small, isolated code changes; CFG-003 and CFG-004 (reclassified) are doc-only fixes requiring no code changes and zero execution risk.
+
+**Dependencies:** Independent. CFG-001 (typo guard + doc fix), CFG-002 (path handling + comment), CFG-003 (doc exception type), and CFG-004 (doc flag scoping) touch disjoint code/docs with no inter-dependency. No circular dependencies.
+
+**Sequencing:** No ordering constraint. Doc fixes (CFG-003, CFG-004) can land first with no code risk; code changes (CFG-001, CFG-002) are independent of each other. All four can be applied in any order.
+
+**Backward compatibility:** CFG-001 recommendation #3 (doc corrections) is purely descriptive. CFG-001 recommendations #1-#2 and CFG-002 recommendation change user-facing error messages only (error paths, not success paths); no API/CLI contract change. No migration needed.
 
 ## Execution Validation
 
-- **Targets exist:** `config.py` validators, `.env`, `.gitignore`, `extractor.py:129-132`,
-  `cli.py:505/598`, and all cited doc files are present (read-confirmed).
-- **Plan not stale:** all findings reproduced against the current working tree (defaults, empty-string
-  coercion, `CookieSource.FILE` rejection, dead branch) — codebase state matches the audit.
-- **Architecture consistent:** fixes follow existing patterns (a `mode="before"` validator already
-  exists for `cookie_source`/`log_level`; `.env` already uses commented-out template style).
-- **Task applicability:** all 10 findings applicable and executable. This report validates safety,
-  consistency, and applicability only — no source code was modified.
+**Applicability & readiness:**
+- CFG-001: Targets warn_unknown_env_vars() (config.py:176), _build_valid_env_vars() (config.py:171), _format_validation_error() (cli.py:47), and model_config (config.py:159). All targets confirmed to exist and match line references. Ready.
+- CFG-002: Target empty_string_to_none validator (config.py:112-117), expand_tilde_paths (config.py:119-131), download_dir field (config.py:75-78), log_file field (config.py:107-110). All confirmed. Ready.
+- CFG-003: Targets doc files only (vkdownloader-overview.md:63, api-reference.md:99). Code (config.py:145-157, enums.py:50) confirmed unchanged. Ready.
+- CFG-004: Targets doc file only (configuration.md:105-117). Code (cli.py:418-445, cli.py:542-581, cli-reference.md:121) confirmed. Ready.
+
+No stale assumptions, no drifted dependencies, no architectural integrity risk.
 
 ## Warnings
 
-- **Architectural risk:** none. CFG-006's dead branch is inert; removal is safe.
-- **Rollout risk (medium):** CFG-001's `download_dir` empty-string handling is a silent->fail-fast
-  behavior change. Assess before shipping (see Rollout Analysis).
-- **Dependency risk:** none.
-- **Documentation inconsistency (process):** Phase 01's
-  `.ai/audit/99-validation/01-audit-cli-validated-findings.md` is empty (0 bytes) — flagged for
-  maintainer process awareness.
-
-## Required Fixes (mandatory)
-
-- **CFG-001 (HIGH, mandatory):** Add a `mode="before"` validator to convert empty-string env values
-  to `None` for `log_file` (and `download_dir`), preventing the startup crash when the documented
-  empty `VKDOWNLOADER_LOG_FILE=` example is followed. For `download_dir`, the empty-string-to-None
-  transform produces a `ValidationError` (fail-fast), consistent with the project's
-  `validate_cookie_source` rejection pattern — **this is the chosen approach, not left as an option**.
-  The `ValidationError` is caught at `cli.py:475` and shown via `_format_validation_error`.
-
-## Advisory Recommendations
-
-- **CFG-002 (DOC-UPDATE):** Add commented `VKDOWNLOADER_HEADLESS` to `.env`.
-- **CFG-003 (DOC-UPDATE):** Correct `throttled_rate` default to `10000` in `api-reference.md:852` and
-  `installation.md:119`.
-- **CFG-004 (DOC-UPDATE):** Add `browser_pre_interaction_wait`/`browser_post_interaction_wait` rows to
-  `api-reference.md` settings table.
-- **CFG-005 (DOC-UPDATE):** Remove `file` from the `.env` cookie_source comment (line 26).
-- **CFG-006 (SPEC-DEVIATION):** Remove the unreachable `NotImplementedError` branch at `extractor.py:129-132` (the `validate_cookie_source` validator at config.py:126-138 already blocks `CookieSource.FILE` at construction). Retain the `CookieSource.FILE` enum value in `enums.py:49` for forward compatibility. Update `.env` template comment (line 26) to list only `(none, browser)`. Align `configuration.md:66` and `cli-reference-clean.md:198` to state `ValidationError` is raised at construction (not `NotImplementedError`).
-- **CFG-007 (DOC-UPDATE):** Fix `installation.md:106-125` example: `throttled_rate=10000`, non-empty
-  `LOG_FILE`, and add the three missing fields.
-- **CFG-008 (BEST-PRACTICE):** Add a tracked `.env.example` with all 16 settings (commented).
-- **CFG-009 (DOC-UPDATE):** Change `verify` -> `true` at `cli-reference-clean.md:68,126`.
-- **CFG-010 (SPEC-DEVIATION):** Rewrite the `throttled_rate` description in `config.py:89` and
-  propagate to `api-reference.md:852` and `configuration.md:34`.
-
+- **Documentation inconsistency (CFG-001):** The Settings class docstring (config.py:19-26) and warn_unknown_env_vars docstring (config.py:179-183) both state that extra='forbid' "only applies to explicit kwargs passed to the model constructor, not to environment variables." Runtime testing disproves this for .env-sourced variables (they ARE rejected). This docstring is actively misleading to maintainers and should be corrected alongside the user-facing docs.
+- **Cross-phase overlap (CFG-003 / CLI-006):** Phase 01 CLI-006 and Phase 02 CFG-003 address the same CookieSource.FILE documentation defect from different angles. Recommend consolidating the doc fixes to avoid duplicate effort and ensure consistent wording.
+- **Opaque error UX (CFG-001 / CFG-002):** hide_input_in_errors=True (config.py:164) combined with _format_validation_error hardcoding "Received: <redacted>" (cli.py:65) means users cannot see the offending value for any configuration error, increasing support friction for typo diagnosis.
+- **Latent test gap:** No test currently covers .env-file typo behavior or download_dir="" empty-string behavior. Adding pytest cases for both (using tmp_path + monkeypatch.chdir) would lock in the verified behavior and guard against regressions.

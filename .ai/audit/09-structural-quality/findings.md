@@ -1,200 +1,375 @@
 ﻿# Phase 09 Audit Findings — Structural Code Quality
 
-**Executor:** audit-executor (auditor)
+**Executor:** auditor (Senior architecture auditor)
 **Template:** .ai/audit/templates/audit-findings.md
+**Phase template:** .kilo/commands/audit/phases/09-structural-quality.md
 **Status:** complete
 **Validated:** no
+**Problems-only:** yes (passing checks and clean dimensions are omitted per phase output mode)
+
+**System under audit:** vkdownloader v0.1.0 — VK Video Downloader CLI (Python 3.12, uv, MIT).
+Source: `src/vkdownloader/`. Tests: `tests/`.
+
+This phase targets structural shape: cyclomatic complexity, nesting depth, function/file
+length, and control-flow patterns. Phases 01-08 findings are not re-filed; only the
+structural-quality evidence collected in this phase is recorded below.
 
 ---
 
-## Methodology (Runtime Verification)
+## Runtime Verification (mandatory)
 
-Runtime verification was executed against the project source tree (`src/`) and, where relevant, `tests/`. No Docker services exist in this repository (a `uv`-managed Python CLI tool with a `src/` layout; no `docker-compose*.y*`/`Dockerfile`), so the "Start services" step is N/A.
+| Step | Command | Result | Evidence |
+|------|---------|--------|----------|
+| R1 — Cyclomatic Complexity | `uv run radon cc src/vkdownloader -a -nc` | 10 functions rank C (CC >= 11); average C (12.9); 0 functions rank D+ | `_download_with_ytdlp` CC17; `_download_single` CC16; `perform_download` CC15; `_intercept_response` CC13; `batch_download` CC12; `download_with_ffmpeg` CC12; `_run_batch_with_progress` CC11; `_print_batch_summary` CC11; `download` CC11; `_merge_segments_batched` CC11 |
+| R2 — Maintainability Index | `uv run radon mi src/vkdownloader -s` | All 21 source files rank A (radon scale: A if MI>19, B if 9<MI<=19, C if MI<=9); no file ranks B/C | Lowest scores: `downloader.py` 37.13, `segment_downloader.py` 39.09, `cli.py` 44.00 — all still grade A; the low scores corroborate the god-module findings (STR-002) rather than forming a separate MI finding |
+| R3 — Function length | AST SLOC scan (blanks + comments excluded) | 16 functions exceed 50 SLOC; 4 exceed 100 SLOC | `perform_download` 152, `_download_with_ytdlp` 142, `download_with_ffmpeg` 122, `download` 104; twelve more in the 55-99 range |
+| R4 — Nesting depth | AST scan (if/for/while/try/with blocks) | 8 functions nest deeper than 3; 2 reach depth 5; 6 reach depth 4 | `_retry_429_with_backoff` (5), `_sync_extract` (5); six functions at depth 4 |
+| R5 — Control flow patterns | AST scan | 0 `for...else` (clean); 10 functions have >3 return statements; 19 internal functions >5 parameters | `_retry_429_with_backoff` 7 returns; `perform_download` / `download_with_ytdlp_with_resume_fallback` / `download_video` 11 params |
 
-- **R1 — Cyclomatic Complexity:** `radon cc src -s -a` → 131 blocks, average **A (3.78 ≤ 5 ✓)**; 7 functions rank C (CC 11–14); no function reached rank D/E/F (≥21).
-- **R2 — Maintainability Index:** `radon mi src -s` → all 19 files rank **A** (scores 42.17–100; A = score > 19). No rank B/C files.
-- **R3 — Function length:** AST walk (non-blank/non-comment lines). 3 functions >100 lines; 11 functions in the 50–100 line band.
-- **R4 — Nesting depth:** AST walk of `if/for/while/try/with`. 5 functions at depth 5; 3 at depth 4.
-- **R5 — Control-flow patterns:** `for…else` — none. Functions with >3 returns — 9. Functions with >5 parameters (excl. `self`, M=method) — 18.
+All measurements taken on 2026-08-09 against the live working tree.
 
 ---
 
 ## Findings
 
-### STR-001: God-module source files exceed the 300-line file threshold
+### STR-001: Project cyclomatic complexity exceeds the rank-A budget (average C, 10 rank-C functions)
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-001 |
-| **Severity** | MEDIUM |
+| **Severity** | HIGH |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/cli.py, src/vkdownloader/services/downloader.py, src/vkdownloader/services/segment_downloader.py |
+| **Affected Modules** | `src/vkdownloader/cli.py` (5 functions); `src/vkdownloader/services/downloader.py` (3 functions); `src/vkdownloader/infrastructure/network_monitor.py` (1); `src/vkdownloader/services/ffmpeg_utils.py` (1) |
 | **Classification** | advisory |
 
-**Description:** Three production modules exceed 300 SLOC (blanks/comments excluded), bundling multiple responsibilities into single files. This expands blast radius, makes targeted review slow, and discourages clean separation of concerns.
+**Description:** The project has no enforced complexity gate. `radon cc -a` reports an average
+complexity of **C (12.9)** — 2.6x the <= 5 target — driven by 10 functions at rank C (CC >= 11).
+Three of those cross the HIGH threshold of CC > 15: `_download_with_ytdlp` (CC 17),
+`_download_single` (CC 16), and `perform_download` (CC 15). No function reaches rank D (CC >= 21).
 
-**Evidence (radon raw):**
-| File | SLOC | LOC | LLOC |
-|------|------|-----|------|
-| cli.py | 403 | 608 | 258 |
-| downloader.py | 560 | 853 | 296 |
-| segment_downloader.py | 540 | 843 | 306 |
+The worst offenders are orchestration/dispatch functions that each combine several
+responsibilities: `perform_download` (downloader.py:966) dispatches three download strategies via
+`match/case` while also resolving cookies and managing a shared semaphore; `_download_with_ytdlp`
+(downloader.py:747) mixes subprocess management, progress parsing, output draining and error
+logging; `_download_single` (cli.py:181) carries a 6-branch `except` ladder that maps each
+exception type to a status tuple.
 
-**Recommendation:** Split each god module by responsibility (e.g. `downloader.py` → ytdlp/ffmpeg/hls sub-modules behind a thin dispatcher; extract batch-progress CLI plumbing from `cli.py`; partition `segment_downloader.py` into playlist/segment/orchestration concerns). Effort: medium. Priority: recommended.
+**Evidence:** `radon cc src/vkdownloader -s`:
+```
+cli.py:181 _download_single - C (16)
+cli.py:543 batch_download - C (12)
+cli.py:267 _run_batch_with_progress - C (11)
+cli.py:372 _print_batch_summary - C (11)
+cli.py:419 download - C (11)
+network_monitor.py:53 _intercept_response - C (13)
+downloader.py:747 _download_with_ytdlp - C (17)
+downloader.py:966 perform_download - C (15)
+downloader.py:393 download_with_ffmpeg - C (12)
+ffmpeg_utils.py:316 _merge_segments_batched - C (11)
+Average complexity: C (12.9)
+```
+
+**Recommendation:** Apply Extract Method to peel responsibilities out of each rank-C function
+(cookie resolution, progress parsing, strategy dispatch). Replace the `_download_single`
+per-type `except` ladder with a single `except VKDownloadError` plus the existing
+`exceptions._map_exception_to_status` lookup table. Introduce a CI complexity gate
+(`xenon --max-absolute A` or `radon` + threshold in CI) so CC cannot drift without blocking merge.
+Effort: medium; priority: recommended.
 
 ---
 
-### STR-002: Three functions exceed 100 code lines
+### STR-002: Two service modules are god-modules that exceed the 300-line file cap
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-002 |
 | **Severity** | HIGH |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/services/downloader.py, src/vkdownloader/cli.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py`; `src/vkdownloader/services/segment_downloader.py` |
 | **Classification** | advisory |
 
-**Description:** Functions this large resist isolated unit testing, hide multiple responsibilities, and frequently co-occur with high complexity and parameter counts (see STR-004/005/007).
+**Description:** `downloader.py` is 1218 LOC / **798 SLOC** (3x the 300-line file budget) and
+hosts 12 top-level functions including the three highest-CC functions in the project (STR-001).
+At 901 LOC / **571 SLOC**, `segment_downloader.py` is the second god-module: 24 functions spanning
+playlist fetching, retry/backoff, parallel HTTP I/O, concurrency coordination and segment merging
+with no internal boundaries — `_tally_and_merge` is CC 10, `_download_segment_concurrent` CC 9,
+`_download_segment_parallel` CC 9. These two files are the root cause of STR-001 and STR-005.
 
-**Evidence (AST, non-blank/non-comment lines):**
-| Function | Location | Code lines | CC | Params | Nesting |
-|----------|----------|-----------|----|--------|---------|
-| perform_download | downloader.py:716 | 123 | C(12) | 11 | 2 |
-| download | cli.py:385 | 107 | B(9) | 6 | 2 |
-| HLSDownloader.download_with_ffmpeg | downloader.py:281 | 105 | C(11) | 5 | 5 |
+**Evidence:** `radon raw src/vkdownloader` (SLOC excludes blank lines and comments, matching the
+phase definition):
+```
+downloader.py        LOC: 1218  LLOC: 414  SLOC: 798
+segment_downloader.py LOC: 901  LLOC: 340  SLOC: 571
+```
+`radon cc -s` confirms CC 17/15/12 (downloader.py) and CC 10/9/7/9/6 (segment_downloader.py).
 
-**Recommendation:** Extract cohesive sub-behaviours into single-purpose helpers (dispatch each `match` branch of `perform_download` to a strategy function; hoist the nested `_monitor_progress`/`_drain_stderr` helpers to module-level, which also resolves STR-005; extract header/cookie assembly). Effort: medium. Priority: recommended.
+**Recommendation:** Split `downloader.py` by download strategy (`ytdlp.py`, `ffmpeg.py`,
+`orchestrator.py`) and split `segment_downloader.py` into `playlist.py`,
+`segment_concurrency.py` and `segment_merger.py`. Each resulting module should stay well under
+300 SLOC and own one responsibility. Effort: large; priority: recommended (architectural).
 
 ---
 
-### STR-003: Eleven functions in the 50–100 code-line range
+### STR-003: Nesting depth 5 in `_retry_429_with_backoff` and `_sync_extract`
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-003 |
-| **Severity** | MEDIUM |
+| **Severity** | HIGH |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/services/{downloader,downloader_throttle,segment_downloader,network_monitor}.py, src/vkdownloader/cli.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader_throttle.py:149`; `src/vkdownloader/services/extractor.py:147` |
 | **Classification** | advisory |
 
-**Description:** Eleven functions exceed the 50-line single-responsibility guideline, indicating multi-step orchestration that is hard to follow top-to-bottom.
+**Description:** Two functions nest control flow to depth **5** (the project ceiling is 3).
 
-**Evidence (AST code-line counts):** `_build_ytdlp_options` downloader.py:129 (71); `_intercept_response` network_monitor.py:53 (59); `_attempt_segment_resume` downloader.py:494 (82); `_run_batch_with_progress` cli.py:247 (70); `_retry_429_with_backoff` downloader_throttle.py:145 (68); `_run_download_session` segment_downloader.py:690 (70); `download_with_ytdlp_with_resume_fallback` downloader.py:413 (66); `batch_download` cli.py:512 (82); `_download_single` cli.py:166 (65); `_download_with_ytdlp` downloader.py:586 (61); `download_hls_with_resume` segment_downloader.py:770 (55).
+- `downloader_throttle._retry_429_with_backoff` (downloader_throttle.py:149): the chain
+  `for attempt` -> `try` -> `async with session.get(...)` -> `if response.status == 200` ->
+  `if len(content) == 0` reaches depth 5 and produces **7 return** statements (STR-007).
+- `extractor._sync_extract` (extractor.py:147, a closure inside `_extract_with_ytdlp`):
+  `with yt_dlp.YoutubeDL(...)` -> `try` -> `for f in formats` ->
+  `if f.get("vcodec") != "none"` -> `if format_url:` reaches depth 5; the `Stream(...)`
+  construction block is purely a map and is the deepest, least-related part of the function.
 
-**Recommendation:** Apply Extract Method + early-return guard clauses to flatten exit paths and isolate testable units. Effort: medium. Priority: recommended.
+Deep nesting of `for/try/with/if` is exactly the arrow-code / pyramid-of-doom smell the phase
+targets; it is hard to test in isolation and obscures the retry/loop boundaries.
+
+**Evidence:** AST nesting-depth scan over `src/vkdownloader` (counting if/for/while/try/with):
+```
+downloader_throttle.py:149 _retry_429_with_backoff  -> nesting depth 5
+extractor.py:147 _sync_extract                   -> nesting depth 5
+```
+
+**Recommendation:** Flatten with Guard Clauses and single-exit structure. For
+`_retry_429_with_backoff`, return early on `shutdown_event` / non-retryable status and use a
+`continue` instead of multiple `return None`. For `_sync_extract`, extract the per-format `Stream`
+mapping into a helper so the loop body stays at depth <= 2. Effort: small for `_sync_extract`,
+medium for the retry loop; priority: recommended.
 
 ---
 
-### STR-004: Seven functions at cyclomatic complexity rank C (CC 11–14)
+### STR-004: Six functions nest control flow to depth 4
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-004 |
 | **Severity** | MEDIUM |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/cli.py, infrastructure/network_monitor.py, services/downloader.py, services/ffmpeg_utils.py |
+| **Affected Modules** | `src/vkdownloader/cli.py:267` (`_run_batch_with_progress`); `src/vkdownloader/infrastructure/network_monitor.py:53` (`_intercept_response`); `src/vkdownloader/infrastructure/network_monitor.py:123` (`_extract_urls_from_json`); `src/vkdownloader/services/downloader.py:635` (`_attempt_segment_resume`); `src/vkdownloader/services/downloader.py:393` (`download_with_ffmpeg`); `src/vkdownloader/services/ffmpeg_utils.py:94` (`read_progress`) |
 | **Classification** | advisory |
 
-**Description:** Project average CC is healthy (A, 3.78), but seven functions exceed the CC ≤ 10 guideline (rank C). These demand N-branch test matrices and are prime locations for edge-case bugs.
+**Description:** Six functions breach the depth-3 ceiling at depth 4. Several are the same
+dispatch/error sites flagged in STR-001 (rank-C CC is correlated with deep nesting).
+`read_progress` (ffmpeg_utils.py:94) reaches depth 4 via `while` -> `if parsed:` -> `elif progress`
+-> `if value == "end"`; `_extract_urls_from_json` via `if dict:` -> `for value` -> `if str...m3u8:`
+-> `if not in list`.
 
-**Evidence (radon cc -s):** `perform_download` downloader.py:716 C(12); `_intercept_response` network_monitor.py:53 C(13); `_download_single` cli.py:166 C(14); `_print_batch_summary` cli.py:338 C(11); `_run_batch_with_progress` cli.py:247 C(11); `download_with_ffmpeg` downloader.py:281 C(11); `_merge_segments_batched` ffmpeg_utils.py:264 C(11). No function reached rank D/E/F (≥21).
+**Evidence:** AST nesting-depth scan:
+```
+cli.py:267            _run_batch_with_progress     depth 4
+network_monitor.py:53 _intercept_response         depth 4
+network_monitor.py:123 _extract_urls_from_json    depth 4
+downloader.py:635     _attempt_segment_resume     depth 4
+downloader.py:393     download_with_ffmpeg        depth 4
+ffmpeg_utils.py:94    read_progress               depth 4
+```
 
-**Recommendation:** Reduce branch count via guard clauses (flatten the nested `if/elif/raise` in `_intercept_response`), replace type-dispatch chains with strategy objects, and extract `try` bodies into named helpers. Effort: medium. Priority: recommended.
+**Recommendation:** Push the deepest condition out with a Guard Clause (e.g. early-exit in the
+JSON walker) and Extract Method the deeply nested block. The shutdown/cancel handling that recurs
+across the depth-4 download functions is a consolidation candidate (see STR-008). Effort: small
+per function; priority: recommended.
 
 ---
 
-### STR-005: Five functions nest control flow to depth 5 (pyramid-of-doom)
+### STR-005: Sixteen functions exceed the 50-line length guideline (four exceed 100)
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-005 |
-| **Severity** | HIGH |
+| **Severity** | MEDIUM |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/cli.py, services/downloader.py, services/extractor.py, services/ffmpeg_utils.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` (7); `src/vkdownloader/cli.py` (4); `src/vkdownloader/services/segment_downloader.py` (2); `src/vkdownloader/services/downloader_throttle.py` (1); `src/vkdownloader/infrastructure/network_monitor.py` (1); `src/vkdownloader/services/extractor.py` (1) |
 | **Classification** | advisory |
 
-**Description:** Depth-5 nesting (>4) is the "arrow code" anti-pattern: the happy path is buried under nested conditionals, harming readability and making exit/continue points hard to trace.
+**Description:** Sixteen functions exceed 50 SLOC (the phase guideline), 4 of them exceed 100
+SLOC — the HIGH band. The four >100-SLOC functions are exactly the worst offenders in STR-001:
 
-**Evidence (AST nesting depth):**
-- `_run_batch_with_progress` cli.py:247 — nest=5 (try→for→try→for→if)
-- `download_with_ffmpeg` downloader.py:281 — nest=5 (deep nesting inside the nested `_monitor_progress`/`_drain_stderr` helpers defined within it)
-- `_extract_with_ytdlp` extractor.py:143 — nest=5 (contains the nested helper `_sync_extract` below)
-- `_sync_extract` extractor.py:152 — nest=5 (with→try→for→if→if); defined inside `_extract_with_ytdlp`
-- `read_progress` ffmpeg_utils.py:94 — nest=5 (while→if parsed→if handler→elif→if value=="end")
+| Function | File | SLOC | CC |
+|----------|------|------|----|
+| `perform_download` | downloader.py:966 | 152 | 15 |
+| `_download_with_ytdlp` | downloader.py:747 | 142 | 17 |
+| `download_with_ffmpeg` | downloader.py:393 | 122 | 12 |
+| `download` | cli.py:419 | 104 | 11 |
 
-**Recommendation:** Flatten with guard clauses/early returns and promote the nested helpers (`_monitor_progress`, `_drain_stderr`, `_sync_extract`) to module-level private functions — this also lowers the enclosing functions' nesting. Effort: small/medium. Priority: recommended.
+The remaining twelve (55-99 SLOC): `_run_batch_with_progress` (86), `_retry_429_with_backoff` (79),
+`download_with_ytdlp_with_resume_fallback` (77), `_run_download_session` (72), `_download_single`
+(71), `download_video` (66), `_attempt_segment_resume` (99), `batch_download` (91),
+`_build_ytdlp_cli_command` (65), `download_hls_with_resume` (62), `_intercept_response` (59),
+`_extract_with_ytdlp` (55).
+
+Note: `cli.py` `download` / `batch_download` are Typer command handlers; a substantial fraction of
+their SLOC is `typer.Option(...)` declarations rather than logic, so CC (11/12) is the stronger
+signal for those two than raw length.
+
+**Evidence:** AST SLOC scan (non-blank, non-comment lines per function body):
+```
+perform_download                          152
+_download_with_ytdlp                      142
+download_with_ffmpeg                      122
+download                                  104
+_attempt_segment_resume                   99
+batch_download                            91
+_run_batch_with_progress                  86
+_retry_429_with_backoff                   79
+download_with_ytdlp_with_resume_fallback  77
+_run_download_session                     72
+_download_single                          71
+download_video                            66
+_build_ytdlp_cli_command                  65
+download_hls_with_resume                  62
+_intercept_response                       59
+_extract_with_ytdlp                       55
+```
+
+**Recommendation:** Extract Method each function into cohesive sub-operations (validation, setup,
+dispatch, teardown). The >100-SLOC functions live in the god-modules of STR-002 and are best
+addressed by that split. Effort: large; priority: recommended.
 
 ---
 
-### STR-006: Three functions at nesting depth 4
+### STR-006: Nineteen internal functions take more than five parameters (recurring orchestration quintet)
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-006 |
 | **Severity** | MEDIUM |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/infrastructure/network_monitor.py, services/downloader_throttle.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py`; `src/vkdownloader/services/segment_downloader.py`; `src/vkdownloader/services/downloader_throttle.py`; `src/vkdownloader/cli.py` |
 | **Classification** | advisory |
 
-**Description:** Exceeds the ≤3 nesting guideline.
+**Description:** Nineteen internal functions exceed the 5-parameter guideline (the two Typer
+command handlers `cli.download` / `cli.batch_download` are excluded: their parameters are
+`typer.Option`/`typer.Argument` declarations, not call-site arguments). The dominant pattern is a
+recurring quintet threaded through every download helper: `extractor`, `settings`,
+`backoff_coordinator`, `semaphore`, `progress_callback` — the same five are passed (often
+positionally or as keyword args) across `perform_download` -> `download_with_ytdlp_with_resume_fallback`
+-> `_download_with_ytdlp` -> `download_hls_with_resume` -> `_run_download_session` ->
+`_run_parallel_download_with_backoff`. Leaders:
 
-**Evidence (AST):** `_intercept_response` network_monitor.py:53 nest=4; `_extract_urls_from_json` network_monitor.py:123 nest=4; `_retry_429_with_backoff` downloader_throttle.py:145 nest=4 (for→try→async-with→if).
+| Function | File:Line | Params |
+|----------|-----------|--------|
+| `perform_download` | downloader.py:966 | 11 |
+| `download_with_ytdlp_with_resume_fallback` | downloader.py:542 | 11 |
+| `download_video` | downloader.py:1142 | 11 |
+| `_attempt_segment_resume` | downloader.py:635 | 10 |
+| `_run_download_session` | segment_downloader.py:738 | 10 |
+| `_download_segment` | segment_downloader.py:342 | 10 |
+| `_run_parallel_download_with_backoff` | segment_downloader.py:197 | 9 |
+| `_try_single_download_attempt` | segment_downloader.py:255 | 9 |
+| `_download_segment_parallel` | segment_downloader.py:288 | 8 |
 
-**Recommendation:** Extract the innermost conditional blocks into small predicate/helper functions and use early returns to reduce indentation. Effort: small. Priority: recommended.
+(the remaining ten sit at 6-7 params, e.g. `_download_single` 7, `_download_with_ytdlp` 7,
+`_tally_and_merge` 7, `_retry_429_with_backoff` 6, `download_with_ffmpeg` 6).
+
+More than five parameters signals a function doing too much and creates fragile call sites
+(the codebase already relies heavily on keyword args to keep these calls readable).
+
+**Evidence:** AST parameter scan over `src/vkdownloader` (19 functions; Typer command handlers
+excluded).
+
+**Recommendation:** Bundle the repeated cross-cutting dependencies into the existing
+`DownloadContext` (`cli.py:120`) or a dedicated `DownloadDependencies` dataclass, and pass it
+plus the URL/quality-specific arguments. This collapses the 8-11-param signatures to 2-3.
+Effort: medium; priority: recommended.
 
 ---
 
-### STR-007: Parameter bloat — 18 functions exceed 5 parameters (excl. self)
+### STR-007: Ten functions use more than three return statements
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-007 |
-| **Severity** | MEDIUM |
+| **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/services/downloader.py, segment_downloader.py, downloader_throttle.py, cli.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader_throttle.py:149`; `src/vkdownloader/cli.py:181`; `src/vkdownloader/services/downloader.py:966,542,747`; `src/vkdownloader/services/segment_downloader.py:288,197,469`; `src/vkdownloader/services/downloader_throttle.py:241`; `src/vkdownloader/infrastructure/network_monitor.py:41` |
 | **Classification** | advisory |
 
-**Description:** High parameter counts signal that functions do too much and are painful to construct in tests. The download-orchestration layer is the most affected cluster.
+**Description:** Ten functions exceed the 3-return guideline:
 
-**Evidence (AST, real param count; `self` excluded for methods, M=method):** `perform_download` 11 (downloader.py:716); `download_with_ytdlp_with_resume_fallback` 11 (downloader.py:413); `_attempt_segment_resume` 10 (downloader.py:494); `_build_ytdlp_options` 9 (downloader.py:129); `_run_download_session` 9 (segment_downloader.py:690, M); `_download_segment` 9 (segment_downloader.py:306, M); `_run_parallel_download_with_backoff` 8 (segment_downloader.py:143, M); `_do_parallel_download_attempt` 8 (segment_downloader.py:190, M); `_try_single_download_attempt` 8 (segment_downloader.py:219, M); `_download_segment_parallel` 7 (segment_downloader.py:252, M); `_download_with_ytdlp` 7 (downloader.py:586); `_download_single` 7 (cli.py:166); `batch_download` 7 (cli.py:512); `_download_segment_sequential` 6 (segment_downloader.py:81, M); `_fetch_playlist_with_retry` 6 (segment_downloader.py:433, M); `_run_batch_with_progress` 6 (cli.py:247); `download` 6 (cli.py:385); `_retry_429_with_backoff` 6 (downloader_throttle.py:145).
+| Function | File:Line | Returns |
+|----------|-----------|---------|
+| `_retry_429_with_backoff` | downloader_throttle.py:149 | 7 |
+| `_download_single` | cli.py:181 | 6 |
+| `perform_download` | downloader.py:966 | 5 |
+| `download_with_ytdlp_with_resume_fallback` | downloader.py:542 | 5 |
+| `_download_segment_parallel` | segment_downloader.py:288 | 5 |
+| `_download_with_ytdlp` | downloader.py:747 | 4 |
+| `_run_parallel_download_with_backoff` | segment_downloader.py:197 | 4 |
+| `_fetch_playlist_with_retry` | segment_downloader.py:469 | 4 |
+| `_parse_retry_after` | downloader_throttle.py:241 | 4 |
+| `_normalize_url` | network_monitor.py:41 | 4 |
 
-**Recommendation:** Group related parameters into a configuration dataclass/Pydantic model (e.g. a `DownloadOptions` DTO) and pass that instead; this cuts call-site noise and improves test ergonomics. Effort: medium. Priority: recommended.
+`_retry_429_with_backoff` is the worst: depth-5 nesting (STR-003) *and* 7 returns, each returning
+`None` or `content` at different exit points, making the success/failure contract hard to follow.
+
+**Evidence:** AST return-statement scan; cross-referenced with the nesting analysis (STR-003).
+
+**Recommendation:** Collapse to a Single-Exit structure: assign to a `result` variable, use early
+`continue`/`break` for retry-loop exits, and return once at the end. This lowers cognitive load
+without changing behavior. Effort: small; priority: recommended.
 
 ---
 
-### STR-008: Nine functions have more than 3 return points
+### STR-008: Duplicated readline-and-cancel stream loops across download strategies
 
 | Field | Value |
 |-------|-------|
 | **ID** | STR-008 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | src/vkdownloader/cli.py, services/downloader.py, services/downloader_throttle.py, services/segment_downloader.py, infrastructure/network_monitor.py |
-| **Classification** | advisory |
-
-**Description:** Multiple returns make control-flow reasoning and branch coverage harder; several are type-dispatch chains better expressed as lookup tables. (No `for…else` usage was found — that specific anti-pattern is absent.)
-
-**Evidence (AST return count):** `_retry_429_with_backoff` downloader_throttle.py:145 — 6 returns; `_map_exception_to_status` cli.py:145 — 5 returns (if/elif exception→status dispatch, CC=6); `perform_download` downloader.py:716 — 5 returns (match-case); `_download_segment_parallel` segment_downloader.py:252 — 5; `_download_single` cli.py:166 — 4; `download_with_ytdlp_with_resume_fallback` downloader.py:413 — 4 (11 params); `_parse_retry_after` downloader_throttle.py:226 — 4; `_fetch_playlist_with_retry` segment_downloader.py:433 — 4; `_normalize_url` network_monitor.py:41 — 4.
-
-**Recommendation:** Replace the `_map_exception_to_status` if/elif chain with a dispatch dict keyed by exception class; collapse multiple early returns in leaf functions (`_parse_retry_after`, `_normalize_url`) into a single result variable where it improves clarity. Effort: small. Priority: recommended.
-
----
-
-### STR-009: God-module test suites exceed the 300-line file threshold
-
-| Field | Value |
-|-------|-------|
-| **ID** | STR-009 |
 | **Severity** | MEDIUM |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | tests/test_hls_downloader.py, tests/test_downloader_throttle.py, tests/test_cli.py, tests/test_ffmpeg_utils.py |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` (`_download_with_ytdlp`:817-857; `download_with_ffmpeg`:454-486) |
 | **Classification** | advisory |
 
-**Description:** Four test suites far exceed the 300-line guideline, making them slow to navigate, hard to extend, and expensive to load in isolation. Test maintainability degrades in lock-step with production complexity (cf. STR-001).
+**Description:** The two download strategies each define a near-identical pair of nested closures
+that read an asyncio `StreamReader` line-by-line, echo the line, append to a chunk list, and
+cancel the subprocess on shutdown:
 
-**Evidence (radon raw):** `test_hls_downloader.py` SLOC=1535 (LOC=2101); `test_downloader_throttle.py` SLOC=487 (LOC=683); `test_cli.py` SLOC=472 (LOC=622); `test_ffmpeg_utils.py` SLOC=319 (LOC=505). Also: `tests/test_extractor.py:128 TestExtractionErrors.test_format_cookies_for_ffmpeg` CC=15 (rank C).
+- `_download_with_ytdlp`: `_monitor_progress` (downloader.py:817) and `_drain_output` (840) —
+  same readline loop, same `shutdown_event` check, same `cancel_subprocess` + warning call.
+- `download_with_ffmpeg`: `_monitor_progress` (downloader.py:454) and `_drain_stderr` (471) —
+  same shape on `process.stderr`.
 
-**Recommendation:** Partition test suites by behaviour/fixture (e.g. retry vs throttling vs error-path cases) and parametrize the CC=15 test. Effort: medium. Priority: recommended.
+The two pairs differ only in whether a per-line parser/callback is invoked and whether stdout or
+stderr is read. Keeping the cancellation/shutdown logic in four copies is a correctness hazard: a
+fix to one shutdown path is unlikely to be mirrored to the other three.
+
+**Evidence:** `src/vkdownloader/services/downloader.py`:
+```python
+# downloader.py:817-857 (inside _download_with_ytdlp)
+async def _monitor_progress() -> None:
+    ...
+    while True:
+        if shutdown_event.is_set():
+            if not await cancel_subprocess(process):
+                logger.warning("yt_dlp_cancel_not_clean", ...)
+            break
+        line = await process.stdout.readline()
+        if not line:
+            break
+        decoded = line.decode(errors="replace")
+        _echo_ytdlp_line(decoded)
+        output_chunks.append(line)
+        progress = _parse_ytdlp_progress(decoded)
+        ...
+async def _drain_output() -> None:
+    ...  # same loop, no callback, on process.stdout
+```
+(and the structurally identical `_monitor_progress`/`_drain_stderr` pair on `process.stderr` at
+downloader.py:454-486).
+
+**Recommendation:** Extract a single
+`read_stream_with_shutdown(reader, on_line, on_shutdown_canceled)` async helper that performs the
+readline + shutdown-check + cancel + on_line callback, and have both strategies pass their
+differing `on_line` (parse progress vs. no-op). Effort: medium; priority: recommended.
 
 ---
 
@@ -203,23 +378,39 @@ Runtime verification was executed against the project source tree (`src/`) and, 
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 2 |
-| MEDIUM | 6 |
-| LOW | 1 |
+| HIGH | 3 (STR-001, STR-002, STR-003) |
+| MEDIUM | 4 (STR-004, STR-005, STR-006, STR-008) |
+| LOW | 1 (STR-007) |
+| **Total** | **8** |
 
 ## Mandatory Fixes
 
-(None — all findings are advisory structural-quality issues; no security, data-loss, or correctness defects were found in this dimension.)
+_No findings are classified as mandatory._ This pass targets structural quality (complexity,
+nesting, length, control flow); no security, data-loss, or correctness defects were introduced or
+exposed during measurement. All eight findings are advisory.
 
 ## Advisory Recommendations
 
-- STR-001: split the three god-module source files (cli.py, downloader.py, segment_downloader.py) by responsibility.
-- STR-002 / STR-003: extract methods and apply guard clauses to bring functions under 50 lines.
-- STR-004 / STR-005 / STR-006: reduce cyclomatic complexity and nesting via guard clauses, strategy objects, and module-level helpers.
-- STR-007: consolidate oversized parameter lists behind a DTO/dataclass.
-- STR-008: replace dispatch-style return chains with lookup tables.
-- STR-009: split the oversized test suites.
+- **STR-001 (HIGH):** Reduce cyclomatic complexity on the 10 rank-C functions via Extract Method
+  and a lookup table for exception mapping; add a CI complexity gate. [Cyclomatic Complexity]
+- **STR-002 (HIGH):** Split the `downloader.py` (798 SLOC) and `segment_downloader.py` (571 SLOC)
+  god-modules by responsibility so each file stays under 300 SLOC. [File Length / Function Length]
+- **STR-003 (HIGH):** Flatten depth-5 nesting in `_retry_429_with_backoff` and `_sync_extract` with
+  guard clauses and by extracting the `Stream` mapping helper. [Nesting Depth]
+- **STR-004 (MEDIUM):** Reduce six depth-4 functions to depth <= 3 via guard clauses / extraction.
+  [Nesting Depth]
+- **STR-005 (MEDIUM):** Break the 16 functions over 50 SLOC into cohesive sub-operations; the four
+  >100-SLOC ones ride on the STR-002 module split. [Function Length]
+- **STR-006 (MEDIUM):** Collapse the recurring `extractor/settings/backoff_coordinator/`
+  `semaphore/progress_callback` quintet into a `DownloadDependencies` object (or reuse the existing
+  `DownloadContext`). [Control Flow Patterns -- parameters]
+- **STR-008 (MEDIUM):** De-duplicate the four monitor/drain readline closures into a single
+  `read_stream_with_shutdown` helper. [Cognitive Load]
+- **STR-007 (LOW):** Consolidate the 10 multi-return functions to single-exit where it aids
+  readability (`_retry_429_with_backoff` is the priority). [Control Flow Patterns -- returns]
 
 ## Doc Updates Needed
 
-(None — no doc/spec deviation identified in this phase.)
+_None. The structural-quality findings above are code-shape issues in `src/`; no authoring, API, or
+configuration documentation deviates from the implementation in a way this phase covers. (Prior-phase
+doc gaps remain tracked under their original finding IDs.)

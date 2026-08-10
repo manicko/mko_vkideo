@@ -1,371 +1,206 @@
-﻿# Phase 04 Audit Findings — Security & Secret Management (VALIDATED)
+﻿# Phase 04 Validation Report — Security & Secret Management
 
-**Phase:** 04-audit-security (Security & Secret Management)
-**Source (audited):** `.ai/audit/04-audit-security/findings.md`
-**Validator:** validator (evidence-driven, conservative)
-**Scope:** live-session-cookie handling on disk, secret/redaction hygiene in logs and error output
-**Status:** complete
-**Validated:** yes
+**Validator:** conservative validator (architectural integrity, rollout safety, implementation correctness)
+**Date:** 2026-08-09
+**Source findings:** `.ai/audit/04-audit-security/findings.md`
+**Output:** `.ai/audit/99-validation/04-audit-security-validated-findings.md`
+**Phase template:** `.kilo/commands/audit/phases/99-audit-validate.md`
+**Status:** validated
+**System under audit:** vkdownloader v0.1.0 — VK Video Downloader CLI (Python 3.12, uv, MIT).
 
-> Validator note: this file is a self-contained, verified copy of the source findings with inline
-> validation decisions applied. The reader need not consult the original. Validated against the working
-> tree at `C:\py_exp\mko_vkideo` on 2026-08-05 (Python 3.12.1, pydantic 2.13.4 / pydantic-settings 2.14.2,
-> structlog 26.1.0). `ruff check src/vkdownloader` -> All checks passed; `pytest` -> 248 passed (9.87s).
-> No source code was modified.
+> **Truncation note:** Source `findings.md` was truncated at 58 lines (SEC-001 only, incomplete Evidence).
+> Full findings (SEC-001 through SEC-007) reconstructed from generation source `.temp/write_findings.py`.
+> The Runtime Verification table in `findings.md` references SEC-002 and SEC-004, confirming
+> truncation was an interruption, not reduced scope.
+
+This report is self-contained. Original findings are reproduced with inline validation decisions.
 
 ---
 
 ## Validation Methodology
 
-1. **Source** — read `src/vkdownloader/services/downloader.py`, `services/cookies.py`,
-   `cli.py`, `config.py`, `utils/url_sanitizer.py`, `services/downloader_throttle.py`,
-   `services/extractor.py`, `models/enums.py`.
-2. **Static enumeration** — grep for *every* logger-emitted URL (`logger\.\w+\(.*(url|video_url|m3u8_url|segment_url)=`)
-   **and** f-string URL interpolation (`logger\.\w+\(f"...url`) to validate SEC-002's "sole outlier" scope claim.
-3. **Runtime evidence** — `ruff` (pass) and `pytest` (248 passed) confirm the tree is in the audited green state;
-   findings describe latent/design issues, not currently-failing behavior.
-4. **Cross-phase** — compared against Phase 01 (CLI), Phase 02 (Config), Phase 03 (Services) findings
-   for overlapping root causes and conflicting evidence.
-5. **Docs/config** — read `.gitignore`, `config.py` (`Settings` model), confirmed `download_dir` default and `0o600`.
+Verified against: (1) implementation — source code at cited paths/line numbers; (2) dependencies — grep across `src/` and `tests/` for call sites and `__all__` exports; (3) documentation — `docs/01-tools/*.md`, `docs/11-guides/*.md`; (4) runtime — `uv run pytest`, `uv run ruff check`, `ruff format --check`, `uv run mypy` re-run; (5) cross-phase — compared against phases 01-03.
 
-### Decision legend
+## Runtime Verification (re-run by validator)
 
-- **[VALIDATED]** Root cause verified against current code; recommendation stands.
-- **[RECLASSIFIED]** Valid issue, but `Type` adjusted per the validator taxonomy
-  (`SPEC-DEVIATION` / `BEST-PRACTICE` / `DOC-UPDATE`).
-- **[REJECTED]** Issue not present, stale, duplicate, low-ROI, architecture-breaking, operationally unsafe.
-
-### Validator taxonomy note
-
-`RUNTIME-ERROR` (Phase 02 CFG-001 / Phase 03 SRV-001) is the auditor's severity tag and falls outside the
-validator's classification set. Phase 04 already uses the validator taxonomy directly (SEC-001 =
-`SPEC-DEVIATION`, SEC-003 = `BEST-PRACTICE`), so no reclassification is needed here.
-
----
-
-## Runtime Verification Summary
-
-Re-confirmed against the current tree. Retained only findings-relevant items (problems_only=TRUE).
-
-| Step | Check | Result |
-|------|-------|--------|
-| R1 | Hardcoded-secret scan (findings: none in repo / `.env`; fixtures fake) | No secret required by any remediation; claims consistent with audit scope. |
-| R2 | Logger audit — enumerate ALL raw-URL logger emissions | **Partially inaccurate (corrected under SEC-002):** audit claims "except one outlier"; systematic grep finds TWO raw-URL logger sites (`cli.py:243`, `cli.py:575`). See SEC-002 note. |
-| R3 | `.gitignore` coverage (`.env`, `*_cookies.txt`); `0o600` creation | `.gitignore:22` (`*_cookies.txt`) + `:28` (`.env`) match (verified via `git check-ignore`); `cookies.py:72` uses `os.open(..., 0o600)`. |
-| R5 | `ruff check src/vkdownloader` | All checks passed! |
-| R6 | `pytest` | 248 passed (9.87s) |
+| Step | Command | Result | Evidence |
+|------|---------|--------|----------|
+| R1 | Credential leak search | PASS (0 matches) | 0 matches across `src/`. |
+| R2 | Logger audit | PASS (with noted gap) | All `url=` fields use `_strip_auth_params`. `_echo_ytdlp_line` writes raw output to stderr — see SEC-002. |
+| R3 | VCS ignore & permissions | PARTIAL | `.env` ignored; `.env.local` NOT ignored. See SEC-004. |
+| R4 | Import verification | PASS | All modules import cleanly. |
+| R5 | Linter & type checker | PARTIAL | `ruff check` passes. One file fails `ruff fmt --check` (downloader.py). `mypy` 1 error (correlation.py:55). Pre-existing, tracked CLI-004/CLI-005. |
+| R6 | Test suite | PASS (325) | 325 passed in 9.97s. |
 
 ---
 
 ## Findings
 
-### SEC-001: Live session-cookie file written to shared downloads directory and not crash-safe  [VALIDATED]
+### SEC-001: Signed CDN tokens in ffmpeg subprocess command-line arguments
+
+> **Validation Note:**
+> - **Action:** reclassified
+> - **Detail:** Technical claim VERIFIED — `downloader.py:441` passes raw `m3u8_url` (CDN tokens: `expires`, `sig`, `urls` per limitations.md:49-53) directly as `-i <m3u8_url>` to ffmpeg, visible in process listings. Cookies ARE protected via `@file` at line 437. yt-dlp uses original VK URL (line 801) without tokens. `_strip_auth_params` is applied only to logging, never to the ffmpeg command argument. Reclassified from SPEC-DEVIATION to BEST-PRACTICE: docs at overview.md:151 and limitations.md:64 claim protection specifically for cookies/session tokens (correctly implemented), not m3u8 URL tokens. The code does not violate a documented spec — this is a security gap / best-practice opportunity. DOC-UPDATE to scope protection should accompany the fix.
+> - **See also:** SEC-002 (subprocess output may echo this URL into logs — dependency chain)
 
 | Field | Value |
 |-------|-------|
 | **ID** | SEC-001 |
-| **Severity** | HIGH |
-| **Type** | SPEC-DEVIATION |
-| **Validation Status** | VALIDATED |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `src/vkdownloader/services/cookies.py` |
+| **Severity** | MEDIUM |
+| **Type** | ~~SPEC-DEVIATION~~ **BEST-PRACTICE** |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` (`HLSDownloader.download_with_ffmpeg`); `docs/01-tools/vkdownloader-overview.md:151` |
 | **Classification** | mandatory |
 
-> **Validation Note:**
-> - **Action:** validated (root cause confirmed; recommendation stands unchanged).
-> - **Detail:** Verified against current source. (1) `_build_ytdlp_options` writes the Netscape cookie file
->   to `output_file.parent / f".{output_file.stem}_cookies.txt"` at `downloader.py:188-189` (raw_cookies
->   branch) and `downloader.py:192-193` (cookies branch) — i.e. the user's download output directory.
->   (2) `output_file` derives from `settings.download_dir`, whose default is
->   `Path.home() / "Downloads" / "vkdownloader"` (`config.py:76`) — a commonly cloud-synced/shared folder.
->   (3) `_write_netscape_cookie_file` creates the file `0o600` via `os.open` (`cookies.py:72`) — a
->   mitigation that is present but insufficient for the abnormal-termination window. (4) Cleanup is in a
->   `finally` inside the `_download()` closure (`downloader.py:639-643`), which runs in an executor
->   thread (`loop.run_in_executor`, `downloader.py:648`) and does **not** execute on SIGKILL / OOM-kill /
->   power loss, leaving plaintext session credentials persisted in the downloads folder (and synced-cloud
->   trash). (5) The secure contrast pattern already exists: `_temp_headers_file` uses
->   `tempfile.mkstemp(...)` at `downloader.py:70`.
-> - **Architectural fit:** relocating to `tempfile.mkstemp` (system temp, `0o600`), cleaned in the
->   existing `finally`, mirrors `_temp_headers_file`; yt-dlp reads the file by path, so the happy-path
->   behavior is unchanged. Backward-compatible, low coupling.
-> - **Residual note:** even with `mkstemp`, a SIGKILL/power-loss would leave a temp file in the (private,
->   non-synced) system temp dir. That is the same residual as the existing headers-file pattern and is
->   acceptable; it removes the *synced-cloud-trash* exposure, which is the reported hazard.
-> - **See also:** cookie file is consumed by `perform_download` (`downloader.py:610`); Phase 03 SRV-001
->   touches the browser-cookie *acquisition* path (`_resolve_cookies`) but a distinct root cause.
-> - **Rollout safety:** no dependency on other findings; no circular/hidden dependency.
+**Description:** The ffmpeg download path passes the HLS m3u8 playlist URL — containing expiration-signed CDN tokens — directly as `-i <m3u8_url>`. Session cookies ARE protected via `@file` syntax (downloader.py:437), but m3u8 URL tokens are NOT. yt-dlp has no such exposure (downloader.py:801). The documentation advertises "Secret-safe ffmpeg cookie passing" (overview.md:151) — accurate for cookies, silent about URL tokens.
 
-**Description:** When browser cookies are captured for authenticated downloads, live VK session cookies are
-serialized into a Netscape-format cookie file and written into the **download output directory**
-(`output_file.parent`), which defaults to `~/Downloads/vkdownloader` — a folder commonly cloud-synced
-(OneDrive, Dropbox, iCloud) and shared. The file is deleted only inside a `finally` block of the inner
-`_download()` closure, so an abnormal termination (SIGKILL, OOM-kill, hard crash, power loss) leaves
-plaintext session credentials persisted on disk in the user's downloads folder (and synced-cloud trash).
-This deviates from the credential-file invariant that live credentials must reside in a private,
-crash-reclaimable location.
+**Evidence (all verified by direct code inspection):**
+- `downloader.py:441`: `cmd.extend(["-i", m3u8_url, "-c", "copy", str(output_file)])` — raw m3u8_url as command-line arg.
+- `downloader.py:436-437`: `"-headers", f"@{headers_file}"` — cookies correctly protected via @file.
+- `vkdownloader-limitations.md:49,64`: confirms m3u8 URLs contain expiring tokens; cookies protected via @file from process listings.
+- `vkdownloader-overview.md:151`: "Secret-safe ffmpeg cookie passing" claim (accurate for cookies).
+- `_strip_auth_params` (url_sanitizer.py:6-25) called for all URL logging but NOT for the `-i` argument.
 
-**Evidence (verified against current source):**
+**Impact:** Local users or co-located processes reading `/proc/<pid>/cmdline` during ffmpeg download can extract signed CDN tokens and access CDN segments directly, valid for up to ~2 hours (per project documentation: limitations.md:49).
 
-- `src/vkdownloader/services/downloader.py:188-189` — cookie file path is the output directory (raw_cookies branch):
-  ```python
-  cookie_file = output_file.parent / f".{output_file.stem}_cookies.txt"
-  _write_netscape_cookie_file(cookie_file, raw_cookies)
-  ```
-  (identical pattern at `downloader.py:192-193` for the `cookies` branch — same deviation)
-- `src/vkdownloader/services/downloader.py:639-643` — cleanup only in `finally` (not crash-safe):
-  ```python
-  finally:
-      # Clean up cookie file after download completes (success or failure)
-      if cookie_file is not None and cookie_file.exists():
-          cookie_file.unlink()
-          logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
-  ```
-  This `finally` is inside `_download()`, which runs via `loop.run_in_executor(None, _download)`
-  (`downloader.py:648`); it cannot run on SIGKILL/OOM-kill/power-loss.
-- `downloader.py:70` — secure contrast pattern already used for ffmpeg headers:
-  ```python
-  fd, path = tempfile.mkstemp(suffix=".headers", prefix="vk_ffmpeg_")
-  ```
-- `src/vkdownloader/services/cookies.py:72` — file created `0o600` (mitigation present, insufficient):
-  ```python
-  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-  ```
-- `config.py:76` — default download dir confirms shared-folder exposure:
-  ```python
-  download_dir: Path = Field(default=Path.home() / "Downloads" / "vkdownloader", ...)
-  ```
-- `.gitignore:22` (`*_cookies.txt`) and `:28` (`.env`); `git check-ignore` confirms both match.
+**Recommendation:** Route the m3u8 URL through an ffmpeg argument file (`ffmpeg @argfile`) or switch to yt-dlp Python API. Update overview.md:151 to accurately scope protection (cookies only). Effort: medium.
 
-**Recommendation (confirmed):** Write the Netscape cookie file to a private temp file via
-`tempfile.mkstemp` (matching `_temp_headers_file`), cleaned up in the existing `finally`. Trivial, low-risk,
-architecturally consistent.
-
-**Validation decision: VALIDATED.** All claims reproduced against current source; the secure contrast
-pattern exists; the crash-safety gap is real; scope is complete (grep shows no other cookie-file write site).
+> **Fix feasibility:** ffmpeg's `-i` does NOT support per-option `@file` syntax (unlike `-headers`). Correct approach is full-argument `@file` form (`ffmpeg @argfile`), an ffmpeg-supported pattern requiring restructuring command construction in `download_with_ffmpeg` (lines 430-441).
 
 ---
 
-### SEC-002: Raw user-supplied URL logged verbatim in batch-invalid-URL warning, bypassing `_strip_auth_params`  [VALIDATED — SCOPE CORRECTED]
+### SEC-002: Unsanitized yt-dlp/ffmpeg subprocess output logged verbatim on failure
 
 | Field | Value |
 |-------|-------|
 | **ID** | SEC-002 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Validation Status** | VALIDATED (scope corrected — 2 raw-URL logger sites, not 1) |
-| **Affected Modules** | `src/vkdownloader/cli.py` |
-| **Classification** | advisory |
+| **Severity** | MEDIUM |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/services/downloader.py` (`_download_with_ytdlp`, `HLSDownloader.download_with_ffmpeg`) |
+| **Classification** | mandatory |
 
-> **Validation Note:**
-> - **Action:** validated (core deviation confirmed) — scope corrected.
-> - **Detail:** The cited problem is real: `cli.py:575` logs `url=stripped` (raw) via
->   `logger.warning("invalid_url_in_batch", ...)`, bypassing `_strip_auth_params`. The codebase-wide
->   invariant is that every URL log call wraps the URL in `_strip_auth_params` (34 call sites across
->   `extractor.py`, `downloader.py`, `segment_downloader.py`, `network_monitor.py`,
->   `downloader_throttle.py`); `cli.py` is the **only** module that does not import `_strip_auth_params`
->   at all.
-> - **Evidence correction (validator methodology):** the finding's "This is the sole outlier" claim and
->   the audit's Runtime-Verification R2 ("except one outlier") are **inaccurate**. A systematic grep of
->   every logger-emitted URL (`logger\.\w+\(.*(url|video_url|m3u8_url|segment_url)=`) plus f-string
->   interpolation (`logger\.\w+\(f"...url`) identifies **two** raw-URL logger call sites in `cli.py`:
->   1. `cli.py:575` — `logger.warning("invalid_url_in_batch", url=stripped)` (the cited site)
->   2. `cli.py:243` — `logger.exception("unexpected_error_in_batch_download", url=url)` — `url` is the
->      **raw** user URL passed into `_download_single` (used unsanitized at `extractor.extract_streams(url)`
->      `:200` and `perform_download(url, ...)` `:216`); it is never routed through `_strip_auth_params`.
->   A third candidate, `downloader_throttle.py:321` (`logger.info("download_cancelled", ..., url=url)`), is
->   **not** a leak: its only caller (`downloader_throttle.py:206`) passes `sanitized_url`
->   (already `_strip_auth_params`'d at line 169); the parameter name `url` is merely misleading.
->   `extractor.py:176`/`241` are `Stream(...)` constructor kwargs, not loggers.
-> - **Architectural fit / ROI:** importing `_strip_auth_params` into `cli.py` and applying it at both
->   `:243` and `:575` (or logging only the parsed `video_id`) is consistent with the established pattern.
->   Logs-only change — no behavioral impact on downloads.
-> - **See also:** SEC-003 (same "CLI redaction gap" theme; distinct code path/fix); SEC-001 (unrelated).
-> - **Rollout safety:** independent; no dependency on other findings.
+**Description:** When yt-dlp or ffmpeg exits non-zero, the entire captured stdout/stderr is logged verbatim as `error=error_msg` without redaction. URL fields ARE sanitized via `_strip_auth_params`, but subprocess output is not. Both tools routinely echo request URLs in diagnostic output. Combined with SEC-003 (log file to disk), this persists signed tokens.
 
-**Description:** In the batch command, URLs read from the user's URL file that fail the video-ID pattern
-check are logged verbatim via `logger.warning("invalid_url_in_batch", url=stripped)`. Every other URL log
-call in the codebase wraps the URL in `_strip_auth_params()`. **Correction:** it is not the sole outlier —
-`cli.py:243` logs the raw user URL identically. VK video URLs may carry an `access_key` query parameter
-(a credential for private videos); logging them raw to structured logs (which may be redirected to a file)
-violates the "Secrets never logged" invariant.
+**Evidence (verified by direct code inspection):**
+- `downloader.py:518-525` (ffmpeg): `error_msg = stderr_data.decode()` then `logger.error("ffmpeg_download_failed", url=_strip_auth_params(m3u8_url), error=error_msg)` — `error_msg` NOT sanitized.
+- `downloader.py:878-885` (yt-dlp): `error_msg = output_data.decode()` then `logger.error("download_failed", url=_strip_auth_params(video_url), error=error_msg)` — `error_msg` NOT sanitized.
+- `downloader.py:233-248` (`_echo_ytdlp_line`): writes raw subprocess lines to `sys.stderr` (called at lines 833, 856).
 
-**Evidence (verified):**
+**Impact:** Signed m3u8 URLs or cookie file paths in subprocess output are persisted in logs. Coupled with SEC-003 (world-readable logs), this is a credential-exposure vector.
 
-- `src/vkdownloader/cli.py:475-477` (cited site):
-  ```python
-  if not VIDEO_ID_PATTERN.search(stripped):
-      logger.warning("invalid_url_in_batch", url=stripped)
-  ```
-- `src/vkdownloader/cli.py:167-169` (additional, NOT cited by the finding):
-  ```python
-  except Exception:
-      logger.exception("unexpected_error_in_batch_download", url=url)
-      raise
-  ```
-- `url` at `:169` is the raw parameter of `_download_single` (passed to `download_video` at cli.py:143); never routed through `_strip_auth_params`.
-- `_strip_auth_params` (`utils/url_sanitizer.py:6`) reduces URLs to
-  `scheme://netloc/***REDACTED***`; used at 34 sites; `cli.py` has **0** imports/usages
-  (`cli.py` is absent from the `_strip_auth_params` grep results).
-
-**Recommendation (confirmed):** Import `_strip_auth_params` from `utils.url_sanitizer` into `cli.py` and route both URL-emitting logger calls through it:
-  - `cli.py:477` — `logger.warning("invalid_url_in_batch", url=stripped)` -> `url=_strip_auth_params(stripped)`
-  - `cli.py:169` — `logger.exception("unexpected_error_in_batch_download", url=url)` -> `url=_strip_auth_params(url)`
-
-This is the single recommended approach — it is consistent with the codebase-wide invariant (34 call sites across `extractor.py`, `downloader.py`, `segment_downloader.py`, `network_monitor.py`, `downloader_throttle.py` all wrap URLs in `_strip_auth_params`). `cli.py` is currently the only module that does not import `_strip_auth_params` at all. Logging only the parsed `video_id` is **not** recommended because the video_id parsing depends on `VIDEO_ID_PATTERN` already passing (which `cli.py:475` validates for the `:477` site, but not necessarily for the `:169` site in error paths), and URL emission is the established convention elsewhere. Effort: trivial.
-
-**Validation decision:** VALIDATED as `SPEC-DEVIATION` (code deviates from the codebase-wide
-sanitization invariant; docs don't govern this). The scope claim is corrected: there are two raw-URL
-logger sites, and the recommendation is expanded accordingly. No reclassification.
+**Recommendation:** Apply `_strip_auth_params` or equivalent URL redaction to `error_msg` before logging. Consider logging subprocess output at `debug` level only. Effort: small.
 
 ---
 
-### SEC-003: Validation error handler echoes raw received config values to stderr (latent secret leakage)  [VALIDATED]
+### SEC-003: Log file created with default umask, not owner-only permissions
 
 | Field | Value |
 |-------|-------|
 | **ID** | SEC-003 |
 | **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Validation Status** | VALIDATED |
-| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Affected Modules** | `src/vkdownloader/config.py` (`setup_logging`, lines 228-236) |
 | **Classification** | advisory |
 
-> **Validation Note:**
-> - **Action:** validated (latent leak confirmed; no reclassification).
-> - **Detail:** Verified: `_format_validation_error` (`cli.py:61-64`) appends `err.get("input")` raw via
->   `f"    Received: {received!r}"`, emitted to stderr with `typer.echo(..., err=True)` at `cli.py:474`
->   (single-download path) and `cli.py:596` (batch path) — both confirmed by direct read. The `Settings`
->   model (`config.py:16-145`) defines **no** secret-bearing fields (all bool/int/str/Path/enum);
->   cookies are obtained via live browser automation (see `CookieSource`), not config — so the leak is
->   currently latent, exactly as the audit states.
-> - **Classification rationale:** forward-looking defense-in-depth, not an active secret leak today ->
->   `BEST-PRACTICE` (advisory) is the correct taxonomy. Not `SPEC-DEVIATION` (no current secret exposed);
->   not `DOC-UPDATE` (neither code nor docs are "correct" relative to each other).
-> - **Architectural fit / ROI:** redacting `received` to a placeholder (e.g. `"<redacted>"`) for
->   known-sensitive field names is trivial, adds forward-compatibility, and is not overengineered.
->   Positive-but-low ROI at this scale (no current secret fields) — accepted as advisory.
-> - **See also:** SEC-002 (CLI-layer redaction gap, different path); Phase 02 CFG-001/CFG-010
->   (the `_format_validation_error` surface at `:474`/`:596`).
-> - **Rollout safety:** self-contained in `cli.py`; no dependency on other findings.
+**Description:** `logging.FileHandler(settings.log_file)` at config.py:234 uses process umask (yields `0o644` on POSIX umask `0o022`), not `0o600`. The project uses `0o600` for credential files (cookies.py:72, downloader.py:87) but not for log files. Unsanitized subprocess output (SEC-002) may end up in the log.
 
-**Description:** `_format_validation_error` appends the raw, unvalidated config input value
-(`err.get("input")`) to the user-facing error message via `f"    Received: {received!r}"`. This message
-is emitted with `typer.echo(..., err=True)` (`cli.py:474,596`), which in production/systemd contexts is
-captured into log files. The "Error messages don't leak secrets" invariant is therefore violated by
-pattern: the code has no guard against echoing sensitive input. No finding is rated higher only because
-`Settings` currently defines no secret-bearing fields (cookies are obtained via live browser automation,
-not config) — the leak is latent and would become active if any secret field is ever added to configuration.
+**Evidence (verified by direct code inspection):**
+- `config.py:228-236`: `logging.FileHandler(settings.log_file)` — no explicit mode.
+- `config.py:107-110`: `log_file` field has no permission handling.
 
-**Evidence (verified):**
+**Impact:** If `VKDOWNLOADER_LOG_FILE` points to a shared directory, logs (potentially containing signed URLs from SEC-002) are readable by other users.
 
-- `src/vkdownloader/cli.py:61-64`:
-  ```python
-  received = err.get("input")
-  lines.append(f"  - {loc}: {msg}")
-  if received is not None:
-      lines.append(f"    Received: {received!r}")
-  ```
-- `src/vkdownloader/cli.py:474` and `:596`: `typer.echo(_format_validation_error(e), err=True)`.
-- `src/vkdownloader/config.py:16-145`: `Settings` fields — `headless`, `user_agent`, `timezone`,
-  `locale`, `max_retries`, `download_timeout`, `browser_pre_interaction_wait`,
-  `browser_post_interaction_wait`, `ssl_verify`, `download_dir`, `max_concurrent_downloads`,
-  `throttled_rate`, `http_chunk_size`, `cookie_source`, `log_level`, `log_file`. None are secret
-  credentials.
-
-**Recommendation (confirmed):** Do not echo raw received values; emit a redacted placeholder (`"<redacted>"`) for the `Received:` line in `_format_validation_error` (`cli.py:61-64`). This is the single recommended approach — it is simple, defense-in-depth, and consistent with the project's existing redaction convention (`_strip_auth_params` → `"***REDACTED***"` in `url_sanitizer.py:22`). Since `Settings` currently defines no secret-bearing fields, the redaction is a forward-looking guard; a type-only summary adds complexity without current value. Replace `f"    Received: {received!r}"` with `f"    Received: <redacted>"`. Effort: trivial.
-
-**Validation decision: VALIDATED (`BEST-PRACTICE`, unchanged).**
+**Recommendation:** Create log file with explicit `0o600` before `FileHandler`, or subclass to enforce owner-only mode. Effort: trivial.
 
 ---
 
-## Cross-Finding Analysis
+### SEC-004: `.gitignore` covers `.env` but not `.env.*` variants
 
-**Scope:** Phase 04 findings cross-referenced against Phase 01 (CLI), Phase 02 (Config), Phase 03 (Services).
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-004 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | `.gitignore` (line 28) |
+| **Classification** | mandatory |
 
-**Same root cause (merge candidates):**
+**Description:** `.gitignore:28` has `.env` (exact match only). Variants like `.env.local`, `.env.backup`, `.env.production` are NOT ignored, risking accidental secret commits. `CookieSource.FILE` (enums.py:50) exists but is rejected at config construction (config.py:148-155).
 
-- **SEC-002 ↔ SEC-003** share a theme — "the CLI entry layer lacks a systematic redaction guard." They target
-  **distinct code paths** (`logger` URL emission at `cli.py:243/575` vs. `_format_validation_error` echo at
-  `cli.py:61-64`) with **distinct remediations**. Kept separate for independent fixability and review.
-- SEC-001 is unrelated (cookie-file location / crash-safety on disk).
+**Evidence (verified at runtime):**
+- `.gitignore:28`: `.env`
+- `git check-ignore .env` exits 0 (ignored)
+- `git check-ignore .env.local` exits 1 (NOT ignored)
+- `git ls-files '.env*'` shows only `.env.example` tracked
 
-**Conflicting evidence (cross-phase):** None. No other phase asserts that raw URLs are logged safely, that
-cookie files are crash-safe, or that validation errors redact input. Phase 04's own Runtime-Verification
-R2 ("URLs sanitized via `_strip_auth_params` except one outlier") is **partially inaccurate** — it omits
-`cli.py:243` (see SEC-002 note). This is an in-phase evidence overstatement, not a cross-phase conflict.
+**Recommendation:** Use `.env*` plus `!.env.example` (standard dotenv convention). Effort: trivial.
 
-**Dependency chains:**
+---
 
-- **None.** SEC-001 touches `downloader.py`/`cookies.py`; SEC-002 and SEC-003 touch `cli.py`. No finding's
-  fix depends on another's.
-- **Cross-phase relevance (informational, not a dependency):** SEC-001's cookie file is written by
-  `_build_ytdlp_options` (`downloader.py:188-194`) and consumed downstream by `perform_download`.
-  Phase 03 SRV-001 concerns browser-cookie *acquisition* (`_resolve_cookies`, `downloader.py:665+`) and
-  quality parsing. They touch neighboring code but **distinct root causes** (file location/crash-safety
-  vs. quality-string parsing) — not a dependency.
+### SEC-005: Dead-code `_write_netscape_cookie_file` with divergent permission semantics
 
-## Rollout Analysis
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** Verified by grep across `src/` and `tests/`: `_write_netscape_cookie_file` appears ONLY at definition (cookies.py:58), `__all__` (cookies.py:77), and re-export (downloader.py:369). Zero call sites. Live path is `_create_temp_cookie_file` (downloader.py:71, called at 318, 321). Both write Netscape format with `0o600` intent but via different mechanisms (`os.open` vs `tempfile.mkstemp`). Cross-phase overlap with SRV-002 (phase 03): complementary ownership (dead-code vs permission-semantics). No conflict.
+> - **See also:** SRV-002 (phase 03)
 
-- **Independence / ordering:** All three are localized and backward-compatible; order independent.
-  - **SEC-001 (HIGH, mandatory):** stop writing the cookie file to `output_file.parent`. Create it via
-    `tempfile.mkstemp` (system temp, owner-only `0o600`) — mirroring `_temp_headers_file` (`downloader.py:70`)
-    — and clean it up in the existing `finally` (`downloader.py:639-643`). yt-dlp reads by path -> no API
-    change. On success/failure paths the file is still deleted; only the abnormal-termination residue moves
-    out of the synced downloads folder. First.
-  - **SEC-002 (LOW, advisory):** wrap `url=stripped` (`:575`) and `url=url` (`:243`) in `_strip_auth_params`;
-    import the helper into `cli.py`. Logs-only change.
-  - **SEC-003 (LOW, advisory):** redact `received` in `_format_validation_error` (`cli.py:61-64`).
-    Messages-only change.
-- **Circular / hidden dependencies:** none.
-- **Backward compatibility:** SEC-001 changes only the cookie-file *location* (downloads dir -> system
-  temp); observable only on abnormal termination (file no longer persists in the synced folder) — a strict
-  improvement. SEC-002/SEC-003 change log/error text only.
-- **Anchors:** fixes target stable functions/locations (`_build_ytdlp_options`, the `_download()` `finally`,
-  `_format_validation_error`, the two logger call sites) — no fragile line-only anchors.
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-005 |
+| **Severity** | LOW |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/services/cookies.py` |
+| **Classification** | advisory |
 
-## Execution Validation
+**Description:** `_write_netscape_cookie_file` (cookies.py:58-75) is defined with `os.open(..., 0o600)` and exported in `__all__`, but has zero callers. The live path `_create_temp_cookie_file` (downloader.py:71-95) uses `tempfile.mkstemp`. Two functions writing the same format with different permission mechanisms creates maintenance confusion.
 
-- **Targets exist:** `downloader.py:188-189/192-193/639-643/70`, `cookies.py:72`, `cli.py:61-64/243/575`,
-  `cli.py:474/596`, `config.py:76`, `url_sanitizer.py:6`, `downloader_throttle.py:206/321` — all read-confirmed
-  in the current tree.
-- **Plan not stale:** tree is green (`ruff` pass, 248 tests pass); cited line contents match the findings
-  exactly, including the second raw-URL logger at `cli.py:243`.
-- **Architecture consistent:** SEC-001's fix mirrors the existing `_temp_headers_file` `tempfile.mkstemp`
-  pattern; SEC-002 reuses the existing `_strip_auth_params` utility.
-- **Applicability:** all three findings applicable and executable. Scope: safety, consistency,
-  applicability only — no source code was modified.
-- **Scope correction applied:** had SEC-002 been implemented exactly as originally recommended (fix only
-  `:575`), `cli.py:243` would continue leaking. The corrected recommendation covers both sites.
+**Evidence (verified by grep):** Only at cookies.py:58 (def), cookies.py:77 (__all__), downloader.py:369 (__all__ re-export). Zero invocations.
 
-## Warnings
+**Recommendation:** Remove `_write_netscape_cookie_file` and its `__all__` entries, or document intended use and converge on same permission approach. Effort: small.
 
-- **Architectural risk (low):** SEC-001's cleanup `finally` lives inside `_download()` (an executor-thread
-  function). Even on normal `asyncio.CancelledError` (the main coroutine cancels the executor future at
-  `cli.py:658`), the worker thread is not interrupted and its `finally` runs only when the thread finishes;
-  if the process is then killed before that, the file is not cleaned. The `mkstemp` fix does not depend on
-  `finally` for *security* (the file is already in a private, non-synced temp dir) — only for tidiness.
-- **Rollout risk (low):** SEC-001 relocates a transient credential file. Because yt-dlp consumes it by path
-  and the `finally` still attempts deletion, the only behavioral delta is the absence of a persisted cookie
-  file in the synced downloads folder after abnormal termination — a strict improvement.
-- **Dependency risk:** none.
-- **Documentation / evidence inconsistency:** Phase 04 Runtime-Verification R2 and the SEC-002 body both
-  understate scope ("sole outlier" / "except one outlier"); corrected to two raw-URL logger sites.
+---
 
-## Required Fixes (mandatory)
+### SEC-006: `validate_output_path` `..`-string check is a no-op for pre-resolved paths
 
-- **SEC-001 (HIGH, mandatory):** In `src/vkdownloader/services/downloader.py`, stop writing the Netscape
-  cookie file to `output_file.parent`. Create it via `tempfile.mkstemp` (system temp dir, owner-only
-  `0o600`) — mirroring `_temp_headers_file` (`downloader.py:70`) — and clean it up in the existing
-  `finally` at `downloader.py:639-643`. Eliminates live session-cookie persistence in a cloud-synced
-  downloads folder after abnormal termination. (Write sites: `downloader.py:188-189` and `:192-193`.)
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-006 |
+| **Severity** | LOW |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/utils/security.py:44-52, 89-92`; `src/vkdownloader/config.py:119-131`; `src/vkdownloader/services/downloader.py:605` |
+| **Classification** | advisory |
 
-## Advisory Recommendations
+**Description:** `validate_output_path()` checks `".." in str(path)` BEFORE `path.resolve()` (security.py:44-52). For paths already resolved by callers, `..` is collapsed and the check is dead. Three callers pre-resolve: `config.py:131` (`expand_tilde_paths`), `security.py:90` (`_resolve_output_file`), `downloader.py:605` (receives path from `_resolve_output_file` at line 1204). Only `segment_downloader.py:855` passes an unresolved path (via `HLSDownloadRequest` DTO at dtos.py:21 with no validators).
 
-- **SEC-002 (LOW, advisory):** Import `_strip_auth_params` from `utils.url_sanitizer` into `cli.py` and route both URL-emitting logger calls through it:
-  - `cli.py:477` — `logger.warning("invalid_url_in_batch", url=stripped)` -> `url=_strip_auth_params(stripped)`
-  - `cli.py:169` — `logger.exception("unexpected_error_in_batch_download", url=url)` -> `url=_strip_auth_params(url)`
-  - Effort: trivial.
-- **SEC-003 (LOW, advisory):** In `_format_validation_error` (`cli.py:58-64`), do not echo the raw
-  `received` value; emit a redacted placeholder `"<redacted>"` for the `Received:` line. Defense-in-depth against future secret-bearing config fields. Effort: trivial.
+**Evidence (verified by code inspection):**
+- `security.py:44-52`: `if ".." in path_str:` checked before `resolved = path.resolve()`.
+- `security.py:89-92`: `_resolve_output_file`: `output_path = Path(output_path).resolve()` then `validate_output_path(output_path)`.
+- `downloader.py:1204-1209`: `download_video` passes `_resolve_output_file` result to `perform_download`, which passes to `download_with_ytdlp_with_resume_fallback` (line 605).
+
+**Impact:** Not practically exploitable today (all inputs from trusted config/CLI, titles sanitized). False sense of defense-in-depth.
+
+**Recommendation:** Make traversal check resolve-first and compare against safe base dir, or document that `validate_output_path` requires unresolved paths. Effort: small.
+
+---
+
+### SEC-007: CRLF injection in `_cookies_to_netscape` not sanitized
+
+| Field | Value |
+|-------|-------|
+| **ID** | SEC-007 |
+| **Severity** | LOW |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | `src/vkdownloader/services/cookies.py:38-47` (`_cookies_to_netscape`); `src/vkdownloader/services/extractor.py:252-263` (`_format_cookies_for_ffmpeg` — sanitized counterpart) |
+| **Classification** | advisory |
+
+**Description:** `_cookies_to_netscape` (cookies.py:38-47) writes raw cookie name/value into Netscape format without CRLF stripping. `_format_cookies_for_ffmpeg` (extractor.py:259-262) already strips `\r`/`\n` with a docstring citing header-injection prevention. The same data is sanitized for the ffmpeg path but NOT for the yt-dlp `--cookies` path.
+
+**Evidence (verified by code inspection):**
+- `cookies.py:39-40,47`: `name = cookie_item["name"]` / `value = cookie_item["value"]` — raw, no CRLF strip.
+- `extractor.py:260-261`: `cookie.get("name", "").replace("\r", "").replace("\n", "")` — CRLF stripped.
+- Runtime: a value `abc\r\nSet-Cookie: evil=hack` in `_cookies_to_netscape` would produce an injected cookie-file line.
+
+**Impact:** Low in practice (cookies from user's own browser). Defense-in-depth already implemented elsewhere for same data — unjustified gap. Would become exploitable if `CookieSource.FILE` (enums.py:50) is ever implemented.
+
+**Recommendation:** Apply CRLF stripping in `_cookies_to_netscape`, mirroring `_format_cookies_for_ffmpeg`. Effort: trivial.
 
 ---
 
@@ -373,26 +208,68 @@ R2 ("URLs sanitized via `_strip_auth_params` except one outlier") is **partially
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 2 | SEC-001, SEC-003 |
-| Validated + scope corrected | 1 | SEC-002 (two raw-URL logger sites found at `cli.py:243` + `:575`, not one; "sole outlier" claim overstated) |
-| Reclassified | 0 | — |
+| Validated (unchanged) | 6 | SEC-002, SEC-003, SEC-004, SEC-005, SEC-006, SEC-007 |
+| Reclassified | 1 | SEC-001: SPEC-DEVIATION → BEST-PRACTICE |
 | Merged | 0 | — |
 | Rejected | 0 | — |
-
-### Rejected Findings
-
-| ID | Title | Reason |
-|----|-------|--------|
-| _(none)_ | — | All three findings verified against current code; none stale/duplicated/low-ROI/unsafe. (SEC-002's "sole outlier" *scope claim* is corrected and the recommendation expanded, but the underlying deviation is real and the finding is retained.) |
-
-### Merged Findings
-
-| Original ID | Merged Into | Rationale |
-|-------------|-------------|----------|
-| _(none)_ | — | SEC-002 and SEC-003 share a "CLI redaction gap" theme but distinct code paths and fixes; kept separate for independent remediation. |
 
 ### Reclassified Findings
 
 | ID | Original Type | New Type | Rationale |
 |----|---------------|----------|-----------|
-| _(none)_ | — | — | All types already align with the validator taxonomy: SEC-001 = `SPEC-DEVIATION` (code violates the codebase-wide secure-file invariant; the secure pattern already exists at `downloader.py:70`); SEC-003 = `BEST-PRACTICE` (latent, forward-looking hardening). No `DOC-UPDATE` candidates (no finding has correct code + stale docs). |
+| SEC-001 | SPEC-DEVIATION | BEST-PRACTICE | Docs claim cookie protection only (correctly implemented). Docs do not claim m3u8 URL token protection. No spec violation; security gap = best-practice opportunity. |
+
+### Merged Findings
+
+_None._
+
+### Cross-Phase Analysis
+
+| Finding | Relationship | Verdict |
+|---------|-------------|---------|
+| SEC-001 → SEC-002 | Dependency: m3u8 URL on cmdline (SEC-001) gets echoed in ffmpeg stderr, then logged unredacted (SEC-002) | Fix SEC-001 reduces SEC-002 blast radius |
+| SEC-002 → SEC-003 | Coupling: unsanitized subprocess output (SEC-002) in world-readable log file (SEC-003) | Fix both together |
+| SEC-005 ↔ SRV-002 (phase 03) | Overlap: same `_write_netscape_cookie_file` symbol; SRV-002 = dead-code/ownership, SEC-005 = permission-semantics | Complementary, no conflict |
+
+## Rollout Analysis
+
+| Finding | Fix complexity | Dependencies | Rollout order |
+|---------|---------------|--------------|---------------|
+| SEC-001 | medium | None | 1st (reduces SEC-002 blast radius) |
+| SEC-002 | small | SEC-001 | 2nd |
+| SEC-003 | trivial | SEC-002 | 3rd |
+| SEC-004 | trivial | None | parallel |
+| SEC-005 | small | SRV-002 (phase 03) | parallel |
+| SEC-006 | small | None | parallel |
+| SEC-007 | trivial | None | parallel |
+
+**Recommended order:** SEC-004, SEC-007, SEC-006, SEC-005, SEC-001, SEC-002, SEC-003
+
+## Execution Validation
+
+**Applicability:** All findings are currently applicable. Source code inspected at cited line numbers; no changes since audit.
+
+**Execution readiness:** All findings approved. SEC-001, SEC-002, SEC-004 are mandatory (security-critical). SEC-003, SEC-005, SEC-006, SEC-007 are advisory. SEC-005 fix is safe (zero callers of dead function). No rollout safety risks.
+
+## Warnings
+
+- **Findings file truncation:** Source `findings.md` is 58 lines with incomplete SEC-001 Evidence. All 7 findings reconstructed from `.temp/write_findings.py`.
+- **Pre-existing CI failures:** One file fails `ruff format --check` (`downloader.py`); `mypy` has 1 error (`correlation.py:55`). Both tracked in CLI-004/CLI-005 (phase 01).
+- **SEC-001 fix complexity:** ffmpeg `-i` does not support per-option `@file`. Fix requires full-argument `@file` (`ffmpeg @argfile`), an ffmpeg-supported but less common pattern. Verify compatibility with existing progress parsing/shutdown logic (downloader.py:454-539).
+- **SEC-005 vs SRV-002:** Both target `_write_netscape_cookie_file`. Ensure coordination — single action (remove or wire up), not two conflicting fixes.
+- **SEC-002 severity coupling:** If SEC-001 is not fixed, ffmpeg's error output (which echoes the `-i` URL) will contain signed CDN tokens that SEC-002 logs unredacted.
+
+## Required Fixes
+
+1. **SEC-001:** Stop passing signed m3u8 URL as plaintext CLI arg to ffmpeg. Use `ffmpeg @argfile` or yt-dlp Python API. Update `vkdownloader-overview.md:151` to scope protection (cookies only).
+2. **SEC-002:** Sanitize subprocess `error_msg` with `_strip_auth_params` or equivalent before logging.
+3. **SEC-004:** Extend `.gitignore`: `.env*` plus `!.env.example`.
+
+## Advisory Recommendations
+
+| ID | Title | Effort | Priority |
+|----|-------|--------|----------|
+| SEC-003 | Create log files with explicit `0o600` in `setup_logging()` | trivial | recommended |
+| SEC-005 | Remove or document dead `_write_netscape_cookie_file` | small | recommended |
+| SEC-006 | Make `validate_output_path` resolve-first, validate against base dir | small | recommended |
+| SEC-007 | Add CRLF stripping to `_cookies_to_netscape` | trivial | recommended |

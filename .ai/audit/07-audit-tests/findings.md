@@ -1,143 +1,160 @@
-﻿# Phase 07 Audit Findings — Test Quality
+# Phase 07 Audit Finding -- Test Quality
 
-**Executor:** auditor
+**Executor:** auditor (Senior architecture auditor)
 **Template:** .ai/audit/templates/audit-findings.md
+**Phase template:** .kilo/commands/audit/phases/07-audit-tests.md
 **Status:** complete
 **Validated:** no
+**Problems-only:** yes
 
 ---
 
-## Runtime Verification
+## Runtime Verification (mandatory)
 
-- **R1 — Full suite:** `uv run pytest tests/` — **248 passed**, 0 failed, ~10s (stable across 4 sequential runs: 10.05s, 9.60s, 9.87s, 9.78s). No flakes, no order dependence.
-- **R2 — Failures:** None (no failures to classify as production-bug vs test-bug).
-- **R3 — Tautologies:** See TST-001/TST-003/TST-005 below.
-- **No coverage tool configured** (pytest-cov absent from `pyproject.toml` deps); coverage gaps in TST-006 were identified by static reading of tests vs source.
-- **Note:** `pytest-randomly` is not installed, so test-order shuffling was unavailable; only repeated sequential runs were used for isolation/determinism checks.
+| Step | Command | Result | Evidence |
+|------|---------|--------|----------|
+| R1 -- Full test suite | python -m pytest | PASS -- 325 passed, 12.75s | 325 passed in 12.75s (run 1); 325 passed in 14.55s (run 2). No failures, no skips. |
+| R2 -- Analyze failures | N/A (0 failures) | PASS -- no failures to analyze | 325/325 passed; no tracebacks. |
+| R3 -- Detect tautological/no-op tests | ruff check tests/ + manual review | PARTIAL -- 2 problems | Ruff F841 at test_correlation.py:28. test_cli.py:155 under-asserts. See TST-001, TST-002. |
+| R4 -- Verify test isolation | order probes | PASS -- no order dependence | Forward+reverse order: 135 passed each. No shared state leaks. |
+| R5 -- Coverage gap analysis | code-path review (no coverage tool) | PARTIAL -- 2 gaps | No pytest-cov configured. See TST-004, TST-005. |
 
 ---
 
 ## Findings
 
-### TST-001: `TestYtdlpOptions` tests never invoke `_build_ytdlp_options` — they assert hand-written dict literals (tautological)
+### TST-001: Unused variable full with misleading docstring
 
 | Field | Value |
+|-------|-------|
 | **ID** | TST-001 |
-| **Severity** | HIGH |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `tests/test_hls_downloader.py` (`TestYtdlpOptions`, lines 403–437) |
-| **Classification** | mandatory |
-
-**Description:** Three tests — `test_ytdlp_options_includes_throttled_rate`, `test_ytdlp_options_includes_http_chunk_size`, `test_ytdlp_options_custom_values` — build a `ydl_opts = {...}` dict inline from `Settings` values and then assert the dict equals the values they just read out of it. They never call the production `_build_ytdlp_options`. That helper is only actually exercised by `TestYtDlpShutdownHook` (lines 1957, 1984, 2007). A regression in `_build_ytdlp_options` — wrong yt-dlp key name, dropped `cookiefile`/`http_headers`, or wrong `nocheckcertificate` mapping — would escape all three `TestYtdlpOptions` tests.
-
-**Evidence:** Grep for `_build_ytdlp_options` in `tests/test_hls_downloader.py` returns the import (line 18) and references only inside `TestYtDlpShutdownHook`. `TestYtdlpOptions` methods instead construct `ydl_opts = {"throttledratelimit": test_settings.throttled_rate, "http_chunk_size": ...}` (lines 405, 415, 429) and assert `ydl_opts["throttledratelimit"] == 10000` — i.e. `10000 == 10000`, which cannot fail regardless of production code.
-
-**Recommendation:** Replace the inline dict assertions with a real call to `_build_ytdlp_options(...)` and assert on the returned dict's `throttledratelimit`, `http_chunk_size`, `cookiefile`, `http_headers`, and `nocheckcertificate` keys. Effort: small.
-
----
-
-### TST-002: Intended test `test_download_segment_main_sequential_dispatch` is missing — its body was appended to the preceding test
-
-| Field | Value |
-| **ID** | TST-002 |
-| **Severity** | HIGH |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `tests/test_hls_downloader.py` (`TestDownloadSegmentRealExecution`, lines 1591–1648) |
-| **Classification** | mandatory |
-
-**Description:** A parallel-dispatch test exists at line 1649 (`test_download_segment_main_parallel_dispatch`), but directly before it, `test_download_segment_parallel_fails_fast_on_non_retryable` (line 1591) ends with assertions at lines 1619–1620. Immediately after, an orphaned docstring string (line 1621) and then the entire body intended for `test_download_segment_main_sequential_dispatch` follow — but the `async def test_download_segment_main_sequential_dispatch(...)` definition line was dropped. As a result pytest collects no such test (confirmed: absent from the 248-test run), and the sequential-dispatch behavior runs only incidentally inside a test named for parallel fail-fast, with a stray no-op string literal.
-
-**Evidence:** Lines 1619–1647:
-```python
-        assert result is False
-        assert mock_session.get.call_count == 1
-        """Test _download_segment dispatches to sequential mode when max_concurrent=1."""
-        segment_url = "https://example.com/segment.ts"
-        ...
-            result = await _download_segment(
-                ...
-                max_concurrent_downloads=1,
-            )
-        assert result is True
-        assert output_path.read_bytes() == b"main segment content"
-```
-`grep "def test_download_segment_main_sequential_dispatch"` → no match. Collection lists `..._fails_fast_on_non_retryable` then `..._main_parallel_dispatch` with nothing between.
-
-**Recommendation:** Restore the dropped `async def test_download_segment_main_sequential_dispatch(self, test_settings, tmp_path) -> None:` definition so the sequential dispatch path has its own named test, and delete the orphaned docstring literal at line 1621. Effort: trivial.
-
----
-
-### TST-003: `test_parallel_download_uses_gather` mocks `asyncio.gather` so download tasks never execute (tests the mock, not the logic)
-
-| Field | Value |
-| **ID** | TST-003 |
-| **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `tests/test_hls_downloader.py` (`TestParallelSegmentsDownload::test_parallel_download_uses_gather`, lines 494–535) |
-| **Classification** | advisory |
-
-**Description:** The test patches `asyncio.gather` with an `async def mock_gather` that returns `[True] * len(tasks)` without awaiting the task coroutines. The tasks (created via `asyncio.create_task` in `_create_segment_download_tasks`, `segment_downloader.py:676`) therefore never run. This is amplified by the fact that `_download_segment` is mocked with `return_value=True` — a plain `bool`, not a coroutine. The real `_download_segment_concurrent` (`segment_downloader.py:598`) does `result = await _download_segment(...)`, which would raise `TypeError: object bool can't be used in 'await' expression` if the task body ever executed. The only assertion is `assert gather_called` — so the test cannot detect defects in the parallel download path (semaphore dispatch, task creation, gather wiring). Pending tasks that are scheduled but never awaited also risk "Task was destroyed but it is pending" warnings at teardown.
-
-**Evidence:** Lines 519–525 patch `_download_segment` (`return_value=True`) and `asyncio.gather` (`side_effect=mock_gather`); line 535 asserts only `gather_called`. Grep confirms `_download_segment` is mocked as a sync `return_value`, not an `AsyncMock`. The real `_download_segment_concurrent` path is never executed under this test.
-
-**Recommendation:** Either make `_download_segment` an `AsyncMock` and let `asyncio.gather` run the real tasks (then assert on `download_count` and the segment output), or drop the gather mock and assert on the end-to-end outcome (merged output file / segment count). Effort: small.
-
----
-
-### TST-004: `_download_with_ytdlp` tests patch `asyncio.get_event_loop` but production calls `get_running_loop` (dead executor mock)
-
-| Field | Value |
-| **ID** | TST-004 |
 | **Severity** | LOW |
 | **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `tests/test_hls_downloader.py` (`test_cookies_passed_to_ytdlp_creates_cookie_file` line 615; `test_download_with_ytdlp_logs_download_start` line 1046) |
+| **Affected Modules** | tests/test_correlation.py:26-33 |
 | **Classification** | advisory |
 
-**Description:** Both tests patch `vkdownloader.services.downloader.asyncio.get_event_loop` and install a custom `run_in_executor` on the mock's `return_value`. Production code (`downloader.py:645`) calls `asyncio.get_running_loop()`, which the patch does not affect — so the real event loop and its real `run_in_executor` are used and the intended executor mock is dead code. The tests pass only because `yt_dlp.YoutubeDL` is fully mocked, masking the mismatch and leaving the executor wiring untested.
+**Description:** test_generate_correlation_id_truncates_uuid assigns full = uuid.uuid4().hex at line 28 but never uses it. Docstring claims to verify the generated ID is a prefix of a uuid4 hex, but no such assertion exists. Test only checks len(cid) == 8 and int(cid, 16).
 
-**Evidence:** `src/vkdownloader/services/downloader.py:645`: `loop = asyncio.get_running_loop()`. Tests patch `asyncio.get_event_loop` (e.g. line 615: `patch("vkdownloader.services.downloader.asyncio.get_event_loop")`).
+**Evidence:**
+- tests/test_correlation.py:28: full assigned, never used (Ruff F841)
+- Ruff: F841 Local variable full is assigned to but never used at tests/test_correlation.py:28:5
 
-**Recommendation:** Patch `asyncio.get_running_loop` (or the loop's `run_in_executor`) instead of `get_event_loop`, so the executor wiring is genuinely covered rather than papered over by the yt-dlp mock. Effort: small.
+**Impact:** False sense of coverage for truncation-to-prefix relationship. If implementation returned random 8-char hex instead of uuid4 prefix, test would still pass.
+
+**Recommendation:** Either add assert full.startswith(cid) or remove unused variable and update docstring. Effort: trivial.
 
 ---
 
-### TST-005: Four `@pytest.mark.asyncio` tests perform no `await` (misleading async marking)
+### TST-002: test_batch_statistics_summary under-asserts error reasons
 
 | Field | Value |
+|-------|-------|
+| **ID** | TST-002 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | tests/test_cli.py:155-203 |
+| **Classification** | advisory |
+
+**Description:** Docstring says summary includes failed URLs with error reasons. Test sets up: first URL returns MagicMock with streams=[] (empty->QualityNotAvailableError), second raises VideoNotFoundError. But assertions at lines 198-203 only check section headers and exit code, NOT error reason text.
+
+**Evidence:**
+- tests/test_cli.py:155: docstring claims error reasons are verified
+- tests/test_cli.py:198-203: asserts only section headers (Download Summary, Successful, Failed) -- no assert on error text
+
+**Impact:** False sense of coverage for batch error display. Regression stripping error messages would not be caught.
+
+**Recommendation:** Add assertions verifying specific error reason text appears in output. Effort: small.
+
+---
+
+### TST-003: 15 missing type annotations on inner test helper functions
+
+| Field | Value |
+|-------|-------|
+| **ID** | TST-003 |
+| **Severity** | LOW |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | tests/test_downloader_throttle.py (10 sites); tests/test_hls_downloader.py (5 sites) |
+| **Classification** | advisory |
+
+**Description:** Project configures mypy strict=true, disallow_untyped_defs=true (pyproject.toml:75-78). Running mypy tests/ produces 15 no-untyped-def errors on inner helper functions used as side_effect callbacks.
+
+**Evidence:** 15 mypy errors at test_downloader_throttle.py:59,100,167,207,247,287,351,458,566,582 and test_hls_downloader.py:1752,1858,1988,2026,2031. All no-untyped-def. Example: def get_side_effect(*args, **kwargs): and async def mock_wait_for(coro, timeout):.
+
+**Impact:** If mypy tests/ is added to CI, build fails. Reduces IDE/static-analysis quality for test maintenance.
+
+**Recommendation:** Add type annotations to all 15 inner helper functions. Effort: small.
+
+---
+
+### TST-004: _create_temp_cookie_file lacks direct unit tests for security-sensitive behavior
+
+| Field | Value |
+|-------|-------|
+| **ID** | TST-004 |
+| **Severity** | MEDIUM |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | src/vkdownloader/services/downloader.py:71-95 |
+| **Classification** | advisory |
+
+**Description:** _create_temp_cookie_file writes live VK session cookies to a temp file via tempfile.mkstemp (0o600 perms). Only indirect test at test_hls_downloader.py:896 verifies file creation and cleanup but NOT: (1) file permissions are 0o600, (2) file content matches Netscape format, (3) error handling on os.write failure, (4) temp dir location vs download output dir.
+
+**Evidence:**
+- src/vkdownloader/services/downloader.py:71-95: uses tempfile.mkstemp and os.write
+- Called at lines 318, 321 in _resolve_cookies
+- tests/test_hls_downloader.py:896-935: indirect test only checks --cookies flag and file cleanup
+- grep for _create_temp_cookie_file across tests/ > 0 direct references
+
+**Impact:** Cookie credential file security guarantees (permissions, content, location) are not enforced by tests. Bug writing insecure perms or to synced directory would go undetected.
+
+**Recommendation:** Add dedicated unit tests covering permissions, content, location, and write-error cleanup path. Effort: medium.
+
+---
+
+### TST-005: Dead code _write_netscape_cookie_file with divergent security implementation
+
+| Field | Value |
+|-------|-------|
 | **ID** | TST-005 |
 | **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `tests/test_extractor.py` (lines 127, 172, 185, 204) |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | src/vkdownloader/services/cookies.py:58-74; src/vkdownloader/services/downloader.py:71-95 |
 | **Classification** | advisory |
 
-**Description:** `test_format_cookies_for_ffmpeg`, `test_format_cookies_for_ffmpeg_all_cookies_included`, `test_cookies_to_netscape_preserves_domain`, and `test_cookies_to_netscape_backward_compatible` are declared `async def` and decorated `@pytest.mark.asyncio`, but their bodies call only synchronous methods (`_format_cookies_for_ffmpeg`, `_cookies_to_netscape`) and never `await`. The async marking is misleading (implies an async code path is being tested) and adds unnecessary event-loop setup per test.
+**Description:** services/cookies.py:58 defines _write_netscape_cookie_file using os.open with 0o600 perms, exported in __all__ at line 77. But it is NEVER called anywhere in src/ or tests/ -- zero call sites. The actual production cookie-file writer is _create_temp_cookie_file in downloader.py:71, which uses a completely different mechanism (tempfile.mkstemp). Two divergent implementations of cookie file creation, neither directly tested.
 
-**Evidence:** Grep shows `@pytest.mark.asyncio` immediately before each of those four definitions; the function bodies contain no `await` keyword.
+**Evidence:**
+- src/vkdownloader/services/cookies.py:58-74: definition using os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+- src/vkdownloader/services/cookies.py:77: __all__ includes _write_netscape_cookie_file
+- grep for _write_netscape_cookie_file across src/ and tests/ > only definition and __all__; zero call sites
+- src/vkdownloader/services/downloader.py:71-95: canonical _create_temp_cookie_file using tempfile.mkstemp
 
-**Recommendation:** Drop `async`/`@pytest.mark.asyncio` on these four tests so the signature honestly reflects that they exercise synchronous methods. Effort: trivial.
+**Impact:** Maintenance confusion. Developer might fix a bug in the dead function while actual code uses _create_temp_cookie_file. Divergent permission mechanisms create security ambiguity.
+
+**Recommendation:** Either remove _write_netscape_cookie_file and its __all__ entry, or document its purpose and add tests. Effort: trivial (remove) or small (document + test).
 
 ---
 
-### TST-006: Critical orchestration/config paths have no test coverage
+### TST-006: Fragile generator-expression hack for CancelledError simulation
 
 | Field | Value |
+|-------|-------|
 | **ID** | TST-006 |
-| **Severity** | MEDIUM |
+| **Severity** | LOW |
 | **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/services/downloader.py`, `segment_downloader.py`, `downloader_throttle.py`, `ffmpeg_utils.py`, `signal_handlers.py` |
+| **Affected Modules** | tests/test_hls_downloader.py:2260-2261 |
 | **Classification** | advisory |
 
-**Description:** Several critical paths are either untested or only exercised through tests that mock the unit itself away. Notable gaps (no direct test, only mocked/indirect coverage):
-- `_run_download_session` (`segment_downloader.py:690`) — aiohttp `ClientSession`/`TCPConnector` + `DownloadPolicy` wiring; invoked only via `download_hls_with_resume` tests that mock the internals.
-- `_create_connector` (`segment_downloader.py:470`) — the `ssl_verify` branch (builds a `TCPConnector` with a `CERT_NONE` SSL context) and the non-verified branch; never asserted.
-- `download_with_ytdlp_with_resume_fallback` (`downloader.py:413`) + `_attempt_segment_resume` (`downloader.py:494`) — the yt-dlp→segment-resume retry/fallback decision tree (partial-file detection, fresh-token acquisition, segment resume) is untested.
-- `_parse_quality_to_enum` (`downloader.py:104`) — `QualityEnum` literal / numeric / `Q`-prefix parsing not unit-tested.
-- `cleanup_signal_handlers` (`signal_handlers.py:57`) — never tested (only `setup_signal_handlers` is).
-- `_temp_headers_file` exception/cleanup path (`downloader.py:57`) and `_await_first_and_cancel_others` cancellation path (`downloader.py:79`) — untested.
+**Description:** Test test_ytdlp_cancelled_on_shutdown_returns_none simulates subprocess stdout readline raising CancelledError using an opaque one-liner lambda with generator-expression hack: (_ for _ in ()).throw(asyncio.CancelledError()). mock_stdout_line is initialized as empty list [], so the else branch (pop) is dead code within the test.
 
-**Evidence:** `grep -rn "_create_connector\|download_with_ytdlp_with_resume_fallback\|_attempt_segment_resume\|_parse_quality_to_enum\|cleanup_signal_handlers" tests/` returns no assertion-level references to these symbols (only incidental real usage inside `download_hls_with_resume` tests). No test asserts SSL-context construction, fallback switching, or quality-enum parsing.
+**Evidence:**
+- tests/test_hls_downloader.py:2260: mock_stdout_line: list[bytes] = []
+- tests/test_hls_downloader.py:2261: lambda uses (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stdout_line else mock_stdout_line.pop(0)
+- not mock_stdout_line is always True (empty list), so pop(0) branch never executes
 
-**Recommendation (prioritized):** (1) add unit tests for `_parse_quality_to_enum` (trivial, high value); (2) test `_create_connector` SSL on/off branching; (3) a single `download_with_ytdlp_with_resume_fallback` fallback scenario (yt-dlp returns `None` with partial file → segment resume runs); (4) `cleanup_signal_handlers` reset behavior. Effort: medium.
+**Impact:** Future maintainers cannot easily understand or modify this test. Non-idiomatic pattern that may behave differently across Python versions.
+
+**Recommendation:** Replace lambda with a named function: async def mock_readline(): raise asyncio.CancelledError(). Effort: trivial.
 
 ---
 
@@ -146,22 +163,15 @@
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 0 |
-| HIGH | 2 |
-| MEDIUM | 2 |
-| LOW | 2 |
-
-## Mandatory Fixes
-
-- **TST-001:** Replace tautological `TestYtdlpOptions` tests with real calls to `_build_ytdlp_options`.
-- **TST-002:** Restore the dropped `test_download_segment_main_sequential_dispatch` definition; remove the orphaned docstring literal at `test_hls_downloader.py:1621`.
+| HIGH | 0 |
+| MEDIUM | 1 |
+| LOW | 5 |
 
 ## Advisory Recommendations
 
-- **TST-003:** Stop mocking `asyncio.gather`; run real tasks with an `AsyncMock`-based `_download_segment` and assert on outcome.
-- **TST-004:** Patch `asyncio.get_running_loop` (not `get_event_loop`) in the `_download_with_ytdlp` tests.
-- **TST-005:** Remove misleading `async`/`@pytest.mark.asyncio` from the four synchronous extractor tests.
-- **TST-006:** Add the prioritized coverage gaps above (quality parsing, SSL connector, yt-dlp fallback, signal cleanup).
-
-## Doc Updates Needed
-
-(none)
+- TST-001 (LOW): Remove unused full variable in test_correlation.py:28 or add the missing prefix assertion. Effort: trivial.
+- TST-002 (LOW): Add error-reason assertions to test_batch_statistics_summary (test_cli.py:155). Effort: small.
+- TST-003 (LOW): Add type annotations to 15 inner test helper functions. Effort: small.
+- TST-004 (MEDIUM): Add dedicated unit tests for _create_temp_cookie_file (downloader.py:71) covering permissions, content, location, write-error cleanup. Effort: medium.
+- TST-005 (LOW): Investigate and either remove or document _write_netscape_cookie_file (cookies.py:58). Effort: trivial or small.
+- TST-006 (LOW): Replace generator-expression lambda in test_hls_downloader.py:2261 with readable named function. Effort: trivial.

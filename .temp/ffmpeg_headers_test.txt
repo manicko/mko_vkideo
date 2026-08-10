@@ -1,0 +1,2 @@
+User-Agent: TestAgent
+Cookie: secret_cookie_value

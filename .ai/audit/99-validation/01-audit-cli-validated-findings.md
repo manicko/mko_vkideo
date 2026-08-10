@@ -1,714 +1,398 @@
-﻿# Phase 01 Audit Findings - Validated Report
+---
+description: Validation report for Phase 01 audit findings -- Entry Point & Command Layer
+source: .ai/audit/01-audit-cli/findings.md
+validated_by: validator
+status: complete
+validated: yes
+---
 
-**Phase:** 01-audit-cli (Entry Point & Command Layer / CLI)
-**Source (audited):** `.ai/audit/01-audit-cli/findings.md` - auditor: `poolside/laguna-m.1:free`
-**Validator:** `validator` (poolside/laguna-m.1:free)
-**Scope:** `src/vkdownloader/cli.py` - Typer entry point (`vkdownloader = vkdownloader.cli:cli`, `pyproject.toml:42`); commands `download` (single) and `batch` (multi-URL file).
-**Status:** validated
+# Phase 01 Audit Findings — Entry Point & Command Layer
+
+**Executor:** audit-executor
+**Template:** .ai/audit/templates/audit-findings.md
+**Status:** complete
 **Validated:** yes
+**Validator:** validator
+**Validation Status:** complete
+**Source findings:** .ai/audit/01-audit-cli/findings.md
+**Phase template:** .kilo/commands/audit/phases/01-audit-cli.md
+**Scope:** Entry point, command definitions, argument/parameter parsing, error presentation, and the boundary between the entry layer and the service/core layers.
 
-> Validator note: This file is a verified, self-contained report of the 8 findings in the source
-> findings file. All findings were reproduced against the current working tree at
-> `C:\py_exp\mko_vkideo` on 2026-08-05 (Python 3.12.1). Each finding was cross-checked against
-> source code, configuration, documentation, and runtime behavior. The prior file at this path
-> (5 findings: old CLI-001 through CLI-005) was from a different audit version and has been superseded
-> in full.
-
----
-
-## Validation Methodology
-
-1. **Source** - read `src/vkdownloader/cli.py` (608 lines), `__init__.py`, `pyproject.toml`, `services/downloader.py`, `services/downloader_throttle.py`, `utils/security.py`, `exceptions.py`.
-2. **Docs** - read `docs/01-tools/installation.md`, `docs/99-reference/cli-reference.md`, `docs/99-reference/cli-reference-clean.md`, `docs/01-tools/vkdownloader-overview.md`.
-3. **Runtime evidence** - reproduced auditor's R1-R4 and extended: `python -m vkdownloader.cli --help`, `python -m vkdownloader --help`, `app --help` via CliRunner, `ruff check`, `mypy`, `pytest`.
-4. **Cross-phase** - compared against Phase 02 (config), Phase 03 (services), Phase 04 (security) findings for conflicting evidence and shared root causes.
-5. **Dependency** - verified `run_in_executor` usage in `downloader.py:648` and `extractor.py:197` for thread-context analysis (CLI-007).
-
-### Decision legend
-
-- **[VALIDATED]** Root cause verified against current code; recommendation stands unchanged.
-- **[RECLASSIFIED]** Valid, but `Type` adjusted per validation rules.
-- **[REJECTED]** Findings that are stale, duplicate, speculative, or low-ROI.
-
-### Validation-rule for SPEC-DEVIATION findings
-
-Applied verbatim: "Determine whether code should change or docs should change. If code is better than
-docs reclassify as DOC-UPDATE. If docs are better than code, keep as spec deviation."
+**System under audit:** vkdownloader v0.1.0 — VK Video Downloader CLI (Python 3.12, uv, MIT).
+Entry point: `vkdownloader.cli:cli` (Typer app in src/vkdownloader/cli.py), invokable via the
+`vkdownloader` console script or `python -m vkdownloader` (__main__.py).
 
 ---
 
-## Validation Evidence Log
+## Runtime Verification (mandatory)
 
-| Check | Command / Method | Result | Finding(ies) |
-|-------|------------------|--------|--------------|
-| Import (R1) | `uv run python -c "import vkdownloader.cli"; print("IMPORT OK")` | `IMPORT OK` | general |
-| `__main__.py` glob | `glob("src/vkdownloader/**/__main__.py")` | no files found | CLI-001 |
-| `python -m vkdownloader.cli --help` | `uv run python -m vkdownloader.cli --help` | exit 0, zero stdout/stderr | CLI-001 |
-| `python -m vkdownloader --help` | `uv run python -m vkdownloader --help` | exit 1, "No module named vkdownloader.__main__" | CLI-001 |
-| Global `--help` via CliRunner | `CliRunner.invoke(app, ["--help"])` | exit 0, lists `download` and `batch` | CLI-001 |
-| `download --help` via CliRunner | `CliRunner.invoke(app, ["download", "--help"])` | exit 0, lists all options; no progress limitation note | CLI-006 |
-| Lint (R3) | `uv run ruff check src/ tests/` | "All checks passed!" (exit 0) | general |
-| Types (R3) | `uv run mypy src/vkdownloader/` | "Success: no issues found in 23 source files" + note: "unused section(s): module = [tests.*]" | CLI-008 |
-| Tests (R4) | `uv run pytest tests/test_cli.py -v` | 23 passed | general |
-| Tests (R4) | `uv run pytest tests/` | 248 passed | general |
-| `cli()` entry point | cli.py:606-608 | `def cli() -> None: app()` - no `__main__` guard | CLI-001 |
-| Console script | pyproject.toml:42 | `vkdownloader = "vkdownloader.cli:cli"` | CLI-001 |
-| `_resolve_output_file` usage | grep in cli.py | defined :113; called :213, :441; grep in tests/ -> 0 matches | CLI-003 |
-| `_map_exception_to_status` usage | grep in cli.py | defined :145; called :236, :238, :240; grep in tests/ -> 0 matches | CLI-003 |
-| `run_in_executor` in downloader | downloader.py:648 | `loop.run_in_executor(None, _download)` - yt-dlp runs in thread pool | CLI-007 |
-| yt-dlp progress hook | downloader.py:199-212 | `_progress_hook` calls `progress_callback(...)` inside `_download()` which runs in executor | CLI-007 |
-| `as_completed` + `gather` | cli.py:305-323 | loop discards `await coro` (307); then `gather(return_exceptions=True)` (323) | CLI-005 |
-| `_download_single` exception handling | cli.py:232-244 | catches CancelledError, QualityNotAvailableError, VideoNotFoundError, VKDownloadError; re-raises bare Exception (241-244) | CLI-005 |
-| `download` except block | cli.py:473-508 | ValidationError, ValueError, (KeyboardInterrupt, CancelledError), QualityNotAvailableError, VideoNotFoundError, Exception (catch-all) | CLI-004 |
-| `batch_download` except block | cli.py:595-603 | ValidationError, OSError, (KeyboardInterrupt, CancelledError) - no catch-all | CLI-004 |
-| `perform_download` progress_callback | cli.py:443-452 (download), cli.py:215-227 (batch) | `download._download()` passes no `progress_callback`; `_download_single()` passes `progress_callback` via context | CLI-006 |
-| mypy `tests.*` override | pyproject.toml:89-91 | `[[tool.mypy.overrides]] module = "tests.*"` - unused when scanning `src/` only | CLI-008 |
-| mypy `vkdownloader.cli` override | pyproject.toml:93-95 | `[[tool.mypy.overrides]] module = "vkdownloader.cli"` - IS used, correct | CLI-008 |
-| CI / Makefile | glob `**/Makefile`, `**/*.{yml,yaml}` | none found | CLI-008 |
-
-**Class hierarchy (relevant to CLI-004):** `UnicodeDecodeError` -> `UnicodeError` -> `ValueError` -> `Exception`. It is **not** a subclass of `OSError`, so `batch_download`'s `except OSError` clause (`cli.py:598`) does not cover it. The `download` handler catches both `ValueError` (`cli.py:476`) and a catch-all `Exception` (`cli.py:505-508`), but `batch_download` lacks both.
+| Step | Command | Result | Evidence |
+|------|---------|--------|----------|
+| R1 — Import | `uv run python -c "from vkdownloader.cli import app, cli"` | PASS | Entry point and all submodules (config, exceptions, models.*, services.*, utils.*) import cleanly. |
+| R2 — Help/schema | `python -m vkdownloader --help` / `download --help` / `batch --help` | PASS | Both commands enumerated; all options documented; no crashes (exit 0). `--cookie-source` lists [none\|browser\|file] (see CLI-006). |
+| R3 — Lint + types | `uv run ruff check` / `ruff format --check` / `uv run mypy src/vkdownloader` | FAIL | see CLI-003, CLI-004, CLI-005. (`mypy cli.py` alone passes.) |
+| R4 — Tests | `uv run pytest` | PASS | 325 passed (incl. 23 in test_cli.py). |
 
 ---
 
 ## Findings
 
-### CLI-001: `python -m vkdownloader.cli` silently exits with no output
+### CLI-001: Batch orchestration and concurrency helpers are embedded in the entry layer instead of a service facade
+
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** Confirmed against the live codebase. cli.py is 654 lines and contains the full batch orchestration layer: ConcurrencyTracker (lines 70-88), _TrackedSemaphore (91-116), DownloadContext (119-127), _download_single (181-264), _run_batch_with_progress (267-369), _print_batch_summary (372-409). The download command (418-539) is thin and delegates to download_video(). The batch_download command (542-644) calls the inline orchestration helpers rather than a service facade. The docstring at services/downloader.py:1158-1159 confirms the shared orchestration intent. No architectural drift since audit.
+> - **See also:** CLI-002 (entry-layer coupling), CLI-005 (downloader.py formatting gate)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-001 |
 | **Severity** | MEDIUM |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `pyproject.toml`, `src/vkdownloader/__init__.py` |
+| **Type** | BEST-PRACTICE / SPEC-DEVIATION |
+| **Affected Modules** | src/vkdownloader/cli.py |
 | **Classification** | advisory |
 
-**Description:**
+**Description:** cli.py (654 lines) is not a thin command layer. In addition to the two Typer
+commands, it owns the entire batch orchestration and concurrency-tracking machinery:
+ConcurrencyTracker + _TrackedSemaphore + DownloadContext dataclasses, _download_single,
+_create_progress_callback, _format_progress, _poll_progress_display, _run_batch_with_progress
+(~100 lines of task scheduling, semaphore/backoff wiring, as_completed drain, cancellation,
+result aggregation) and _print_batch_summary.
 
-Running `python -m vkdownloader.cli --help` produces zero output and exits 0. The module defines a
-`cli()` entry-point function (cli.py lines 606-608) but never invokes it at module level - there is no
-`if __name__ == "__main__": cli()` guard, and no `src/vkdownloader/__main__.py` file exists. Users who
-invoke the package or module via the standard `python -m` pattern get no feedback whatsoever, contrary
-to every Python CLI convention.
+The `download` command IS thin (delegates to download_video), but `batch_download`
+reimplements parallel orchestration inline in the entry layer rather than delegating to a service
+facade. services/downloader.py download_video is documented as "Shared orchestration for
+single-download and batch-download CLI handlers" (downloader.py:1158-1159), yet the
+batch-level concurrency/progress orchestration lives in cli.py, not in services/.
 
-**Evidence (verified):**
+This contradicts project rules #3 (strict separation of concerns), #4 (single responsibility),
+and #15 (small focused modules/functions), and the Clean Architecture intent in
+docs/01-tools/vkdownloader-overview.md.
 
-- cli.py lines 606-608: `def cli() -> None: app()` - no `__main__` guard follows.
-- `glob("src/vkdownloader/**/__main__.py")` -> no files found.
-- Runtime: `uv run python -m vkdownloader.cli --help` -> **exit 0, no stdout/stderr**.
-- Runtime: `uv run python -m vkdownloader --help` -> **exit 1** - "No module named
-  vkdownloader.__main__; 'vkdownloader' is a package and cannot be directly executed".
-- Console-script entry point (`vkdownloader = "vkdownloader.cli:cli"` in `pyproject.toml` line 42)
-  works (CliRunner `--help` exits 0 and lists `download` and `batch`).
-- Installation docs (`docs/01-tools/installation.md` line 145) only document `vkdownloader --help`,
-  never `python -m`.
+**Evidence:**
+- src/vkdownloader/cli.py:70-88 — ConcurrencyTracker dataclass (peak tracking).
+- src/vkdownloader/cli.py:91-116 — _TrackedSemaphore wrapping asyncio.Semaphore.
+- src/vkdownloader/cli.py:119-127 — DownloadContext batch-scoped state.
+- src/vkdownloader/cli.py:130-178 — progress callback + polling helpers.
+- src/vkdownloader/cli.py:181-264 — _download_single (per-URL orchestration: correlation bind,
+  semaphore wrap, status-tuple mapping, exception handling).
+- src/vkdownloader/cli.py:267-369 — _run_batch_with_progress (semaphore + backoff coordinator
+  creation, asyncio.create_task fan-out, as_completed drain, progress task, cleanup).
+- src/vkdownloader/cli.py:372-409 — _print_batch_summary (also raises typer.Exit).
+- Contrast: services/downloader.py:1156-1160 (docstring) vs cli.py:542-644 (batch handler body).
 
-**Recommendation (unchanged):**
-
-Add `if __name__ == "__main__": cli()` at the bottom of cli.py and create
-`src/vkdownloader/__main__.py` calling `cli()`. This enables both `python -m vkdownloader` and
-`python -m vkdownloader.cli`. Effort: trivial. Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Reproduced at runtime: `python -m vkdownloader.cli --help`
-exits 0 with no output; `python -m vkdownloader --help` exits 1 with a `No module named
-vkdownloader.__main__` error. No `__main__.py` exists (glob confirmed). Console-script entry point works.
-Installation docs only show `vkdownloader --help`. Trivial, high-value CLI baseline.
+**Recommendation (advisory):** Move the batch orchestration (task fan-out, semaphore + backoff
+coordination, progress display, summary) into a dedicated batch service (e.g.
+services/batch_downloader.py) exposing a single run_batch(...) async function. Reduce the
+`download`/`batch` Typer handlers to argument parsing -> service call -> result/error
+presentation. This makes the orchestration unit-testable without invoking the CLI and restores the
+documented entry -> service -> core boundary. Effort: large; priority: recommended.
 
 ---
 
-### CLI-002: Download orchestration logic duplicated in the entry layer
+### CLI-002: Entry layer imports private/internal symbols across module boundaries
+
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** Confirmed. All three private-symbol imports verified at cited locations: _strip_auth_params imported cli.py:30, used at 248/259/537/606; _map_exception_to_status imported cli.py:22, used at 262 (exceptions.py docstring lines 5-8 explicitly says new call sites should prefer status_label()); VIDEO_ID_PATTERN imported cli.py:27, used at 605. Note: the specific exception paths (lines 242/244/252/254) already use e.status_label(); only the generic Exception fallback at line 262 uses the legacy _map_exception_to_status.
+> - **See also:** CLI-001 (entry-layer coupling)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-002 |
 | **Severity** | MEDIUM |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/cli.py` |
+| **Type** | BEST-PRACTICE |
+| **Affected Modules** | src/vkdownloader/cli.py <-> utils/url_sanitizer.py, exceptions.py, services/extractor.py |
 | **Classification** | advisory |
 
-**Description:**
+**Description:** cli.py imports and calls underscore-prefixed (private) symbols defined in other
+modules, coupling the entry layer to implementation details that are not part of any module
+public API:
 
-The `download()` command handler (lines 384-508) contains a nested async function `_download()`
-(lines 418-452) that re-implements the exact same download orchestration already encapsulated in
-`_download_single()` (lines 166-244) - both functions live in the entry-point module. The `download()`
-handler should delegate to a single shared service function instead of re-implementing extraction,
-quality selection, output resolution, and download invocation inline.
+1. _strip_auth_params (utils/url_sanitizer.py:6) — imported at cli.py:30, used at
+   cli.py:248, 259, 537, 606. (Also used widely across services/, but the entry layer should not
+   reach into a private utility.)
+2. _map_exception_to_status (exceptions.py:196) — imported at cli.py:22, used at cli.py:262 for
+   the unexpected-exception path. The exceptions.py docstring (lines 4-8) explicitly states the
+   legacy helper "is retained for backward compatibility; new call sites should prefer
+   status_label() directly." cli.py is a new call site using the legacy path, diverging from the
+   documented guidance.
+3. VIDEO_ID_PATTERN (services/extractor.py:24) — imported at cli.py:27 and used inline at
+   cli.py:605 for batch URL validation, reaching into the extractor internals to duplicate
+   validation logic in the entry layer.
 
-**Evidence (verified):**
+**Evidence:** src/vkdownloader/cli.py:22, 27, 30, 248, 259, 262, 537, 605, 606;
+services/extractor.py:24; utils/url_sanitizer.py:6; exceptions.py:4-8, 196.
 
-`download._download()` (cli.py lines 418-452) duplicates the core sequence found in
-`_download_single()` (cli.py lines 195-227):
+**Recommendation (advisory):** Expose public, stable helpers for the operations the entry layer
+needs (e.g. a VideoUrl.parse / is_valid_video_url on the extractor, a public
+format_validation_error in config, a sanitize_url_for_log in url_sanitizer) and have
+_download_single use exc.status_label() (the documented replacement) instead of the legacy
+_map_exception_to_status. Keep private symbols out of the entry layer to widen the refactor
+freedom of the service/utils layers. Effort: small; priority: recommended.
+### CLI-003: `ruff check` fails on a real lint error and stray tooling files
 
-| Step | `_download_single()` (batch) | `download._download()` (single) |
-|------|------------------------------|---------------------------------|
-| Create extractor | `VKVideoExtractor(settings=settings)` (line 199) | `VKVideoExtractor(settings=settings)` (line 423) |
-| Extract streams | `await extractor.extract_streams(url)` (line 200) | `await extractor.extract_streams(url)` (line 424) |
-| Guard empty streams | `QualityNotAvailableError(...)` (lines 203-208) | `QualityNotAvailableError(...)` (lines 427-432) |
-| Select quality | `selector.select(video.streams, quality)` (line 211) | `selector.select(video.streams, quality)` (line 439) |
-| Resolve output | `_resolve_output_file(...)` (line 213) | `_resolve_output_file(...)` (line 441) |
-| Download | `perform_download(...)` (lines 215-227) | `perform_download(...)` (lines 443-452) |
-
-The only material differences are: (1) `_download_single` handles batch context (semaphore, backoff
-coordinator, progress callback, index); (2) `download._download()` logs available qualities
-(lines 434-437); (3) return types differ (tuple vs Path). The shared extraction-to-download flow is
-identical and should not be duplicated.
-
-This violates the project guidelines "Strict Separation of Concerns" and "Single Responsibility" -
-the entry layer should parse arguments, delegate to a service, and present results, not contain
-parallel download orchestration.
-
-**Recommendation (unchanged):**
-
-Extract the shared download orchestration (extract + guard empty streams + quality select + resolve
-output + `perform_download`) into a service-layer function (e.g.,
-`services/downloader.py:download_video()`). Have both `download()` and `_download_single()` delegate
-to it, with batch-specific context (semaphore, backoff, progress) passed as optional parameters.
-Effort: medium. Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Source inspection confirms the duplication:
-`_download()` (cli.py:418-452, AST span 35 lines) and `_download_single` (cli.py:166-244, AST span 79 lines)
-each implement extract->empty-guard->select->resolve->download. Line-by-line comparison confirms all six
-steps are identical (lines 199/423 through 215-227/443-452). This violates project rules 3
-(Strict Separation of Concerns) and 4 (Single Responsibility). `perform_download` already accepts
-pre-extracted `video_data`/`selected_stream` (downloader.py:726-727), confirming the service was
-designed as the coordination point. The finding is correctly classified as SPEC-DEVIATION (code
-structure violates documented project invariants).
-
----
-
-### CLI-003: Path resolution and exception-mapping helpers live in the entry layer
+> **Validation Note:**
+> - **Action:** reclassified (RUNTIME-ERROR -> SPEC-DEVIATION)
+> - **Detail:** Confirmed by re-running uv run ruff check: exits non-zero with exactly 3 errors matching the finding: E401 + I001 in .temp/deadcheck.py:1; F841 in tests/test_correlation.py:28. The F841 is a genuine defect: full = uuid.uuid4().hex is assigned but never used; the test test_generate_correlation_id_truncates_uuid asserts only len(cid)==8 and int(cid,16), never comparing against full. .temp/deadcheck.py is a 30-line stray dead-code-analysis script. pyproject.toml [tool.ruff] has no exclude key so .temp/ and .ai/ are linted. No drift since audit.
+> - **See also:** CLI-005 (shared root cause: missing ruff exclude for scaffolding paths)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-003 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/utils/security.py` |
-| **Classification** | advisory |
+| **Severity** | HIGH |
+| **Type** | RUNTIME-ERROR -> SPEC-DEVIATION (reclassified) |
+| **Affected Modules** | tests/test_correlation.py; .temp/deadcheck.py; src/vkdownloader/ (ruff scope) |
+| **Classification** | mandatory |
 
-**Description:**
+**Description:** `uv run ruff check` exits non-zero (3 errors). One is a genuine defect in a
+test; the others are a stray, unmaintained script committed at the repo root that the project
+lints because there is no ruff `exclude` for tooling paths.
 
-The entry-point module `cli.py` contains two data-processing helpers that belong in the service/utils
-layer: `_resolve_output_file()` (lines 113-142, resolves output paths, validates against traversal,
-creates directories, and generates sanitized filenames) and `_map_exception_to_status()` (lines 145-163,
-classifies download exceptions into user-facing status labels). These are not CLI-argument-handling
-concerns - they are business-logic utilities that couple the entry layer to data and model details.
+The `tests/test_correlation.py:28` F841 (local variable `full` assigned but never used) is inside
+`test_generate_correlation_id_truncates_uuid`, which claims to verify 8-hex-char truncation but
+never asserts against `full` — so the test does not actually test what its name/documented
+behavior states. The `.temp/deadcheck.py` script has E401 (multiple imports on one line) and
+I001 (unsorted imports); it is a developer dead-code-analysis snippet left in the working tree
+and is not part of the application or test code.
 
-**Evidence (verified):**
+**Evidence:**
+```
+E401 [*] Multiple imports on one line
+ --> .temp\deadcheck.py:1:1
+F841 Local variable `full` is assigned to but never used
+  --> tests\test_correlation.py:28:5
+Found 3 errors.
+RUFF CHECK EXIT: False
+```
+- Ruff config in pyproject.toml has `[tool.ruff]` with only line-length/target-version and
+  `[tool.ruff.lint]` selects — no `[tool.ruff] exclude`, so `.temp/` and `.ai/` are linted.
 
-- cli.py:113-142: `_resolve_output_file()` imports `validate_output_path` and `_sanitize_title` from
-  `utils.security` (line 27), then adds path resolution, directory creation, and filename templating
-  logic inline. This mixes path resolution (data concern) with filename generation (model
-  concern) inside the entry layer.
-- cli.py:145-163: `_map_exception_to_status()` maps `QualityNotAvailableError`, `VideoNotFoundError`,
-  and `VKDownloadError` to string status labels. This classification logic is testable business logic
-  that is currently untestable in isolation because it is embedded in the CLI module.
-- grep confirms both functions are defined only in `cli.py` and have **zero references in `tests/`**
-  (no direct test coverage).
-- The project guidelines require "clear boundaries between UI, API, business logic, and data layers"
-  (project.md rule 3).
-
-**Recommendation (confirmed):**
-
-> **Status: ALREADY IMPLEMENTED.** On the current working tree, both helpers have been relocated from `cli.py` to their correct layers: `_resolve_output_file()` now lives in `utils/security.py:68-97` (alongside `validate_output_path` and `_sanitize_title`, which it already imported), and `_map_exception_to_status()` now lives in `exceptions.py:60-76` (imported by `cli.py:19`). The entry layer no longer contains these business-logic utilities. The remaining action is **test coverage**: both functions have zero references in `tests/` (grep confirms `exceptions.py:60-76` and `utils/security.py:68-97` are untested). Add unit tests: `_map_exception_to_status` (cover each `isinstance` branch) and `_resolve_output_file` (cover path resolution, traversal rejection, sanitized filename generation). Effort: small. Priority: recommended.
+**Recommendation (mandatory):** Fix the unused variable in `tests/test_correlation.py:28`
+(restore the assertion or remove the line). Either delete `.temp/deadcheck.py` (and the
+`.ai/builders/` scaffolding files, see CLI-005) or add an `exclude` under `[tool.ruff]` so
+non-application tooling is not part of the lint gate. Effort: trivial (test) + small (exclude);
+priority: mandatory (restores the project lint gate).
 
 ---
-### CLI-004: Batch command lacks catch-all exception handler
+
+### CLI-004: `mypy src/vkdownloader` fails on a shared entrypoint dependency
+
+> **Validation Note:**
+> - **Action:** reclassified (RUNTIME-ERROR -> SPEC-DEVIATION)
+> - **Detail:** Confirmed by re-running uv run mypy src/vkdownloader: src/vkdownloader/utils/correlation.py:55: error: Unused type: ignore comment [unused-ignore]. Found 1 error in 1 file (checked 26 source files). The stale comment is on line 54 with # type: ignore[no-any-return]. pyproject.toml sets warn_unused_ignores=true and follow_imports=silent. Re-confirmed: uv run mypy src/vkdownloader/cli.py alone returns Success: no issues found in 1 source file (the error is masked by follow_imports=silent). cli.py:29 imports from correlation.py. No drift since audit.
+> - **See also:** CLI-003, CLI-005 (shared: restore quality gates before structural refactors)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-004 |
-| **Severity** | MEDIUM |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `src/vkdownloader/cli.py` |
-| **Classification** | advisory |
+| **Severity** | HIGH |
+| **Type** | RUNTIME-ERROR -> SPEC-DEVIATION (reclassified) |
+| **Affected Modules** | src/vkdownloader/utils/correlation.py |
+| **Classification** | mandatory |
 
-**Description:**
+**Description:** `uv run mypy src/vkdownloader` exits non-zero with one error:
+`src/vkdownloader/utils/correlation.py:55: error: Unused "type: ignore" comment
+[unused-ignore]`. The project mypy config sets `warn_unused_ignores = true`, so the stale
+`# type: ignore[no-any-return]` on the `return context_vars.get("correlation_id")` line is
+treated as an error. This module is a direct dependency of the entry layer
+(`from .utils.correlation import ... bind_correlation_id, ... clear_correlation_id` at
+cli.py:29), so the package the CLI imports from does not type-check clean.
 
-The `download()` command handler has a catch-all `except Exception` (line 505) that logs the error
-internally and shows a friendly "An error occurred during download" message to the user. The
-`batch_download()` command handler (lines 557-603) has **no equivalent catch-all** - only
-`ValidationError`, `OSError`, and `(KeyboardInterrupt, asyncio.CancelledError)` are caught. Any other
-unexpected exception from `asyncio.run(_run_batch_with_progress(...))` would propagate as a raw
-traceback, inconsistent with the `download()` handler and the documented exit-code behavior.
+Note: `uv run mypy src/vkdownloader/cli.py` alone reports SUCCESS (the error is masked because
+`follow_imports = "silent"` suppresses errors in silently-followed modules when checking cli.py
+in isolation). The failure only surfaces when the whole package is checked, which is the
+project intent (strict, whole-package typing).
 
-**Evidence (verified):**
-
-`download()` error handling (cli.py lines 473-508):
-```python
-except ValidationError as e:
-except ValueError:
-except (KeyboardInterrupt, asyncio.CancelledError):
-except QualityNotAvailableError as e:
-except VideoNotFoundError:
-except Exception:                    # catch-all (line 505)
-    logger.exception("download_failed")
-    typer.echo("An error occurred during download", err=True)
-    raise typer.Exit(code=1) from None
+**Evidence:**
 ```
-
-`batch_download()` error handling (cli.py lines 595-603):
-```python
-except ValidationError as e:
-except OSError as e:
-except (KeyboardInterrupt, asyncio.CancelledError):
-    # NO catch-all except Exception
+src\vkdownloader\utils\correlation.py:55: error: Unused "type: ignore" comment  [unused-ignore]
+Found 1 error in 1 file (checked 26 source files)
+MYPY EXIT: False
 ```
+- cli.py:29 (entry layer import of the failing module).
+- pyproject.toml `[tool.mypy]` has `strict = true`, `warn_unused_ignores = true`.
 
-If `_run_batch_with_progress()` raises an unexpected exception (e.g., a bug in semaphore creation,
-progress-manager state, or `asyncio.gather`), the user sees a full Python traceback instead of a clean
-error message and exit code 1.
+**Recommendation (mandatory):** Remove the now-unnecessary `# type: ignore[no-any-return]` on
+correlation.py:54 (or, if the ignore is still needed for some consumer, investigate why mypy no
+longer flags it and delete it). Re-run `uv run mypy src/vkdownloader` to confirm zero errors.
+Effort: trivial; priority: mandatory (restores the project type-check gate, which the entry layer
+depends on).
+### CLI-005: `ruff format --check` fails including production downloader.py and CLI tests
 
-**Recommendation (unchanged):**
-
-Add a catch-all `except Exception` handler to `batch_download()` mirroring `download()`'s pattern:
-`logger.exception("batch_download_failed")` followed by
-`typer.echo("An error occurred during batch download", err=True)` and
-`raise typer.Exit(code=1) from None`. Effort: trivial. Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Source inspection confirms `download` has a catch-all
-`except Exception` at line 505, while `batch_download` (lines 595-603) only catches
-`ValidationError`, `OSError`, and `(KeyboardInterrupt, asyncio.CancelledError)`. The asymmetry is real.
-The catch-all must be placed **after** the `except (KeyboardInterrupt, asyncio.CancelledError)` clause
-(line 601) to preserve exit code 130 for interrupts. This is the same issue documented by the
-Phase 02 validator as "CLI-003" in cross-phase notes - the findings were renumbered; the current
-source finding is CLI-004.
-
-> **Note on classification:** The source finding is classified as `advisory`, but the Phase 02
-> validated report classified the equivalent issue as `mandatory` (it closes a traceback /
-> path-disclosure gap on normal user input - e.g., a URL file containing bytes invalid for the locale
-> encoding triggers `UnicodeDecodeError`, which is a `ValueError` subclass, not caught by `batch`'s
-> `except OSError`). The validator concurs: this is a mandatory concern. The source's `advisory`
-> classification is a discrepancy worth correcting - see Warnings.
-
----
-
-### CLI-005: Redundant double-await and redundant exception handling in batch loop
+> **Validation Note:**
+> - **Action:** reclassified (RUNTIME-ERROR -> SPEC-DEVIATION)
+> - **Detail:** Confirmed by re-running uv run ruff format --check: exits non-zero with 7 files would be reformatted: .ai/builders/back/py_map.py, .ai/builders/back/py_map_libcst.py, .temp/deadcheck.py, src/vkdownloader/services/downloader.py, tests/test_cli.py, tests/test_hls_downloader.py, tests/test_security.py (39 files already formatted). cli.py itself is clean. The stragglers .ai/builders/back/*.py and .temp/deadcheck.py overlap with CLI-003 exclude-config concern. No drift since audit.
+> - **See also:** CLI-003 (shared root cause: missing ruff exclude for scaffolding paths)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-005 |
-| **Severity** | LOW |
-| **Type** | BEST-PRACTICE |
-| **Affected Modules** | `src/vkdownloader/cli.py` |
-| **Classification** | advisory |
+| **Severity** | HIGH |
+| **Type** | RUNTIME-ERROR -> SPEC-DEVIATION (reclassified) |
+| **Affected Modules** | src/vkdownloader/services/downloader.py; tests/test_cli.py; tests/test_security.py; tests/test_hls_downloader.py; .ai/builders/back/*.py, .temp/deadcheck.py |
+| **Classification** | mandatory |
 
-**Description:**
+**Description:** `uv run ruff format --check` exits non-zero: "7 files would be reformatted".
+This includes `services/downloader.py` (the production service the `download`/`batch` commands
+delegate to for downloads) and `tests/test_cli.py` (the entry-layer test suite). The entry
+module itself (`cli.py`) is correctly formatted — confirmed by `ruff format --check
+src/vkdownloader/cli.py` -> "1 file already formatted" — so the format drift is in the service
+layer the CLI calls and in its tests, not in cli.py itself. The two `.ai/builders/back/*.py`
+files and `.temp/deadcheck.py` are stray AI/tooling artifacts also caught by the format check.
 
-`_run_batch_with_progress()` (lines 247-335) iterates tasks via `asyncio.as_completed()` (line 305) but
-discards each result with a bare `await coro` (line 307). It then immediately calls
-`asyncio.gather(*tasks, return_exceptions=True)` (line 323) to re-collect the same
-already-completed task results. The `as_completed` loop's `except Exception` handler (line 316) also
-logs exceptions that `gather` already captures as return values, creating redundant exception handling.
-
-**Evidence (verified):**
-
-cli.py lines 305-332:
-```python
-for coro in asyncio.as_completed(tasks):
-    try:
-        await coro                       # result discarded (line 307)
-    except asyncio.CancelledError:
-        # Cancel remaining tasks on interrupt
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
-    except Exception:
-        # Log unexpected exceptions and continue - errors captured in gather results
-        logger.exception("unexpected_error_in_batch_progress")  # redundant (line 318)
-    # Update progress display with \r overwrite
-    typer.echo(f"\r{await _format_progress(total)}", nl=False)  # line 320
-
-typer.echo()
-results = await asyncio.gather(*tasks, return_exceptions=True)  # re-fetches (line 323)
+**Evidence:**
 ```
+Would reformat: .ai\builders\back\py_map.py
+Would reformat: .ai\builders\back\py_map_libcst.py
+Would reformat: .temp\deadcheck.py
+Would reformat: src\vkdownloader\services\downloader.py
+Would reformat: tests\test_cli.py
+Would reformat: tests\test_hls_downloader.py
+Would reformat: tests\test_security.py
+7 files would be reformatted, 39 files already formatted
+RUFF FORMAT EXIT: False
+```
+- cli.py format check: "1 file already formatted" (clean).
 
-`_download_single()` (the task coroutine) catches `QualityNotAvailableError`, `VideoNotFoundError`,
-and `VKDownloadError` internally (lines 235-240, returning status tuples), and re-raises bare
-`Exception` (lines 241-244). So the `as_completed` loop's `except Exception` only fires for truly
-unexpected exceptions - which `gather(return_exceptions=True)` then captures again at line 323 and
-converts to status tuples at lines 325-332. The logging at line 318 provides no additional information
-beyond what `_download_single`'s own `logger.exception` (line 243) and the results processing
-already record.
-
-The `as_completed` loop serves two purposes: (a) live progress display (line 320) and (b) CancelledError
-propagation (lines 308-315). The CancelledError handling is non-redundant. The `except Exception`
-logging and the post-loop `gather` result collection are redundant.
-
-**Recommendation (unchanged):**
-
-Simplify the pattern: use a single `asyncio.gather(return_exceptions=True)` for result collection and
-process exceptions in the results-mapping step. If live progress updates are needed, use a
-`progress_callback` parameter on the tasks themselves rather than an `as_completed` loop that discards
-results. Preserve the CancelledError handling (lines 308-315). Effort: small. Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Source inspection confirms all claims. The
-`as_completed` loop (line 305) awaits coros and discards results (line 307); `gather` (line 323)
-re-collects the same already-completed tasks. `_download_single` catches most exceptions internally
-(lines 235-240) and re-raises unexpected ones (lines 241-244), so the loop's `except Exception` (line 316)
-duplicates both `_download_single`'s logging (line 243) and `gather`'s result capture (line 323 ->
-lines 325-332). The CancelledError branch (lines 308-315) is NOT redundant and must be preserved.
-Recommendation stands.
+**Recommendation (mandatory):** Run `ruff format` over the repo (or just the drifted files) to
+restore formatting and unblock the format gate. Add an `exclude` to `[tool.ruff]` for
+`.ai/` and `.temp/` so non-application scaffolding is not part of the format/lint gate, and
+consider whether `tests/test_cli.py` formatting drift indicates a missing pre-commit/format
+hook in CI. Effort: trivial (format) + small (exclude + hook); priority: mandatory.
 
 ---
 
-### CLI-006: Single `download` command shows no progress feedback
+### CLI-006: `--help` advertises the unimplemented `file` cookie-source option; docs disagree on its behavior
+
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** Confirmed by re-running python -m vkdownloader download --help and batch --help: both list --cookie-source -c [none|browser|file] with help text none or browser (file not implemented). CookieSource.FILE = file exists at enums.py:50. config.py:145-157 validate_cookie_source raises ValueError (not NotImplementedError). Pydantic converts to ValidationError, surfaced at cli.py:483/592 as Configuration error. Doc cross-check: api-reference.md:99 and vkdownloader-overview.md:63 say NotImplementedError (stale); api-reference.md:656 says Rejected with ValueError (correct); cli-reference-clean.md:67 says file not implemented (vague); cli-reference-clean.md:198 says Raising ValidationError at construction (correct). The runtime issue is real and unchanged.
+> - **See also:** CLI-007 item 3 (overlapping CookieSource.FILE stale doc)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-006 |
-| **Severity** | LOW |
-| **Type** | DOC-UPDATE |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `docs/99-reference/cli-reference.md`, `docs/99-reference/cli-reference-clean.md` |
+| **Severity** | MEDIUM |
+| **Type** | SPEC-DEVIATION |
+| **Affected Modules** | src/vkdownloader/cli.py; src/vkdownloader/config.py; src/vkdownloader/models/enums.py; docs/99-reference/cli-reference-clean.md; docs/01-tools/api-reference.md |
 | **Classification** | advisory |
 
-**Description:**
+**Description:** The Typer-generated `--help` for both `download` and `batch` lists
+`--cookie-source -c [none|browser|file]`, presenting `file` as a selectable value. But `file` is
+not actually implemented: the `CookieSource` enum still defines `FILE = "file"`
+(enums.py:50), and the `Settings` validator (config.py:145-157) raises `ValueError` (surfacing
+as a `pydantic.ValidationError`) only at Settings construction — after argument parsing already
+accepted it. The CLI therefore silently accepts an option it cannot fulfill, then fails later
+with a "Configuration error". This is an input-validation/UX deviation: invalid options should be
+rejected up front with a clear message, not deferred.
 
-The `download()` command invokes `perform_download()` without a `progress_callback` (cli.py lines
-443-452), so single-download users see no live progress - just a brief "Downloaded: <path>" message on
-success. The `batch_download()` command uses `ProgressManager` and per-URL progress callbacks (lines
-279-294), and the docs explicitly acknowledge the gap: "the single `download` command shows no live
-progress during execution" (cli-reference.md line 17; cli-reference-clean.md line 17). This is an
-inconsistent user experience between the two commands.
+The documentation itself is internally inconsistent about what `file` does:
+- cli-reference-clean.md:67 says "file not implemented"
+- api-reference.md:99 says "Raises NotImplementedError"
+- api-reference.md:656 says "Rejected with ValueError"
+- vkdownloader-overview.md:63 says "is not implemented and raises NotImplementedError"
+The actual code raises `ValueError` (config.py:150-156) which Pydantic converts to
+`ValidationError`; it never raises `NotImplementedError`.
 
-**Evidence (verified):**
+**Evidence:**
+- R2 `download --help` output: `--cookie-source -c [none|browser|file] ... [default: none]`.
+- src/vkdownloader/models/enums.py:50 — `FILE = "file"`.
+- src/vkdownloader/config.py:145-157 — `validate_cookie_source` raises ValueError for "file".
+- src/vkdownloader/cli.py:592, 483 — Settings construction catches the error and prints
+  "Configuration error: ..." (handled gracefully, exit 1), so no crash but poor discoverability.
 
-- cli.py lines 443-452: `perform_download(url, str(stream.quality), output_file, method, extractor,
-  settings, video_data=video, selected_stream=stream)` - no `progress_callback` kwarg passed.
-- cli.py lines 279-294: `batch_download()` creates callbacks via `_create_progress_callback()` and
-  wires them through `DownloadContext(progress_callback=callbacks[i])`.
-- `docs/99-reference/cli-reference.md` line 17: "the single `download` command shows no live
-  progress during execution."
-- `docs/99-reference/cli-reference-clean.md` line 17: same statement.
-- `docs/01-tools/vkdownloader-overview.md` lines 173-197: documents `FfmpegProgress`,
-  `ProgressParser`, and `progress_callback` infrastructure that exists but is not wired into the single
-  `download` command.
-- Runtime: `vkdownloader download --help` shows the docstring "Download a single video from
-  vkvideo.ru..." with no mention of progress behavior.
+**Recommendation (advisory/suggested):** Either (a) remove `FILE` from the `CookieSource` enum
+so Typer stops advertising an unimplemented option (cleaner, least surprise), or (b) implement
+file-based cookie loading. Simultaneously reconcile the docs: the code raises
+`ValueError`/`ValidationError`, never `NotImplementedError`. Effort: small; priority: recommended.
+If `FILE` is meant to remain a placeholder, document the placeholder semantics consistently and
+consider rejecting it at the Typer enum parsing layer instead of deferring to Settings.
+### CLI-007: Architecture and API reference documentation is stale relative to the codebase
 
-**Recommendation (unchanged):**
-
-Wire the existing `ProgressManager` + `_create_progress_callback()` mechanism (already proven in batch)
-into the single `download` command so both commands provide consistent progress feedback. At minimum,
-document the limitation prominently in the `download` command's help text and the CLI reference docs
-so users know to use `batch` for progress visibility. Effort: medium. Priority: recommended.
-
-**Validation decision: VALIDATED as DOC-UPDATE (no change).** The code behavior is confirmed:
-`perform_download()` is called without `progress_callback` in `download._download()` (lines 443-452),
-while `batch_download` wires callbacks through `DownloadContext` (lines 279-294). The CLI reference docs
-already acknowledge the gap (cli-reference.md:17 and cli-reference-clean.md:17). However, the `download`
-command's help text/docstring does **not** mention this limitation - verified via CliRunner. The doc
-update needed is to add a note to the command's help text (docstring, cli.py:412-416), which currently
-reads only "Download a single video from vkvideo.ru. Extracts available streams, selects the
-requested quality, and downloads the video to the specified output directory."
-
----
-
-### CLI-007: Incorrect thread-safety claim in progress callback docstring
+> **Validation Note:**
+> - **Action:** validated
+> - **Detail:** All six sub-claims confirmed against the live codebase: (1) STRUCT.md omits __main__.py, services/concurrency.py, utils/correlation.py -- all confirmed to exist and are used by the entry layer; (2) overview.md:294-296 line counts stale -- downloader.py 487->actual 1219, segment_downloader.py 336->actual 902, ffmpeg_utils.py 269->actual 361 (verified by line count); (3) overview.md:63 claims FILE raises NotImplementedError -- code raises ValueError/ValidationError (see CLI-006); (4) research doc:34 claims missing merge_contextvars -- config.py:240 already registers structlog.contextvars.merge_contextvars; :77 claims no correlation-ID infrastructure -- utils/correlation.py exists and is imported by cli.py:29; (5) api-reference.md:664 documents vkdownloader.infrastructure.http_client -- confirmed non-existent via import failure; infrastructure/ contains only browser.py, network_monitor.py, __init__.py; (6) api-reference.md:720 documents ProgressManager.get_progress -- confirmed non-existent; actual ProgressManager methods are clear, get_formatted_progress, update, update_sync (verified via dir()). No drift since audit.
+> - **See also:** CLI-006 (overlapping CookieSource.FILE stale doc)
 
 | Field | Value |
 |-------|-------|
 | **ID** | CLI-007 |
 | **Severity** | LOW |
-| **Type** | DOC-UPDATE *(reclassified from SPEC-DEVIATION - see note)* |
-| **Affected Modules** | `src/vkdownloader/cli.py`, `src/vkdownloader/services/downloader_throttle.py`, `src/vkdownloader/services/downloader.py` |
+| **Type** | DOC-UPDATE |
+| **Affected Modules** | docs/STRUCT.md; docs/01-tools/vkdownloader-overview.md; docs/01-tools/api-reference.md; docs/error-handling-logging-research-2025-2026.md |
 | **Classification** | advisory |
 
-**Description:**
+**Description:** Project rule #14 (keep documentation updated continuously) is violated across
+several docs referenced by/around the entry point. These are stale descriptions, not code bugs,
+but they actively mislead maintainers auditing the CLI and contradict the runtime verification
+done this phase.
 
-The `_create_progress_callback()` docstring (cli.py lines 88-93) and the
-`ProgressManager.update_sync()` docstring (downloader_throttle.py lines 106-121) both claim that
-progress callbacks "execute sequentially in the single-threaded asyncio event loop" and are safe to
-call without lock protection. In reality, yt-dlp progress hooks fire inside a thread-pool executor
-(`loop.run_in_executor`), so callbacks execute from worker threads - not the event loop thread.
+1. docs/STRUCT.md is a stale folder listing. It omits modules that exist and are used by the
+   entry layer: src/vkdownloader/__main__.py (the `python -m vkdownloader` entry point — used in
+   R2), src/vkdownloader/services/concurrency.py (defines the SemaphoreLike Protocol imported by
+   services/downloader.py and services/segment_downloader.py), and src/vkdownloader/utils/
+   correlation.py (correlation-ID infrastructure imported by cli.py).
+2. docs/01-tools/vkdownloader-overview.md:294-296 lists module line counts that no longer match:
+   downloader.py "~487 lines" (actual 1219), segment_downloader.py "~336" (actual 902),
+   ffmpeg_utils.py "~269". The "Module Architecture" section also does not mention
+   concurrency.py or correlation.py.
+3. docs/01-tools/vkdownloader-overview.md:63 claims CookieSource.FILE "is not implemented and
+   raises NotImplementedError"; the code raises ValueError/ValidationError (see CLI-006).
+4. docs/error-handling-logging-research-2025-2026.md:34 claims structlog is "missing
+   merge_contextvars" as the first processor, and :77 claims "there is no correlation-ID
+   infrastructure" — but config.py:240 already registers
+   structlog.contextvars.merge_contextvars as the first processor, and utils/correlation.py +
+   cli.py (lines 29, 219-220, 263-264, 290-291, 366-369) already implement correlation-ID
+   binding. The research doc describes a pre-implementation state that the code has since solved.
+5. docs/01-tools/api-reference.md:664 documents `vkdownloader.infrastructure.http_client`
+   (HttpClient) which does not exist — infrastructure/ contains only browser.py, network_monitor.py
+   and __init__.py (a stale http_client.cpython-312.pyc lingers in __pycache__).
+6. docs/01-tools/api-reference.md:720 documents `ProgressManager.get_progress(url_index)` which
+   does not exist in services/downloader_throttle.py; the actual ProgressManager exposes only
+   update, update_sync, get_formatted_progress and clear.
 
-**Evidence (verified):**
+**Evidence:** src glob (infrastructure/ has no http_client.py); services/downloader.py = 1219
+lines; segment_downloader.py = 902 lines; config.py:240 (merge_contextvars present);
+utils/correlation.py exists and is imported by cli.py:29.
 
-- cli.py lines 88-93: docstring states "callbacks execute sequentially in the single-threaded
-  asyncio event loop."
-- downloader.py lines 622-648: yt-dlp's `_download()` runs via
-  `loop.run_in_executor(None, _download)`:
-  ```python
-  loop = asyncio.get_running_loop()
-  download_task = asyncio.ensure_future(loop.run_in_executor(None, _download))  # line 648
-  ```
-  yt-dlp's progress hook (`_progress_hook`, lines 199-212) is called from within this executor thread,
-  invoking `progress_callback(video_id, downloaded, total)` (line 208) - which calls `update_sync()`
-  from a worker thread.
-- downloader_throttle.py lines 106-121: `update_sync()` docstring states
-  "This method is for use with sync callbacks that run within the asyncio event loop." - incorrect;
-  the yt-dlp callbacks run in executor threads.
-- In CPython, dict assignment is GIL-atomic so no data corruption occurs in practice, but the
-  documentation is misleading about the execution context.
-
-**Recommendation (unchanged):**
-
-Correct both docstrings to accurately state that progress callbacks run in executor threads (not the
-event loop thread). If thread-safety is a concern beyond CPython's GIL, use the async `update()` method
-(which acquires the asyncio lock) - but note this would require the callback to schedule an async
-callback via `asyncio.run_coroutine_threadsafe()`. Effort: trivial (docstring fix) to small (locking
-change). Priority: recommended.
-
-**Validation decision: RECLASSIFIED from SPEC-DEVIATION to DOC-UPDATE.** The code is functionally
-safe: yt-dlp runs via `loop.run_in_executor(None, _download)` (downloader.py:648), so progress hooks
-fire from worker threads, not the event loop. CPython's GIL makes `dict.__setitem__` atomic, so no
-data corruption occurs in practice. The `ProgressManager.__init__` docstring (lines 82-88) and
-`update_sync()` docstring (lines 106-121) claim single-threaded event-loop execution, which is
-incorrect for the yt-dlp path. Per the SPEC-DEVIATION validation rule: "If code is better than docs
-reclassify as DOC-UPDATE." The code works (GIL); the docs are misleading. The primary fix is a
-docstring correction. Retained as DOC-UPDATE.
-
-> **Note:** The `segment_downloader.py` progress callback path (line 545:
-> `progress_callback(video_id, downloaded_count, len(segments))`) calls back from within async
-> tasks running in the event loop thread - so that part of the `ProgressManager` class docstring
-> ("progress callbacks from segment downloads", line 85) is accurate for the segment path. The
-> inaccuracy is specific to the yt-dlp path. The blanket claim in the docstrings ("callbacks execute
-> sequentially in the single-threaded asyncio event loop") is wrong for at least one code path.
+**Recommendation (advisory):** Regenerate/refresh docs against the actual source: update
+STRUCT.md with current modules, correct the overview module line counts and add concurrency.py
+/ correlation.py / __main__.py, fix the CookieSource.FILE semantics to match code
+(ValueError/ValidationError), archive or annotate the research doc to note merge_contextvars +
+correlation IDs are now implemented, remove the non-existent HttpClient and get_progress entries
+from api-reference.md. Effort: small-medium; priority: recommended for documentation accuracy.
 
 ---
 
-### CLI-008: mypy config has unused `tests.*` override section
 
-| Field | Value |
-|-------|-------|
-| **ID** | CLI-008 |
-| **Severity** | LOW |
-| **Type** | SPEC-DEVIATION |
-| **Affected Modules** | `pyproject.toml` |
-| **Classification** | advisory |
+## Summary
 
-**Description:**
+| Severity | Count |
+|----------|-------|
+| CRITICAL | 0 |
+| HIGH | 3 (CLI-003, CLI-004, CLI-005) |
+| MEDIUM | 3 (CLI-001, CLI-002, CLI-006) |
+| LOW | 1 (CLI-007) |
+| **Total** | **7** |
 
-Running `uv run mypy src/vkdownloader/` emits the warning
-`unused section(s): module = ['tests.*']`. The `[[tool.mypy.overrides]]` block for `tests.*`
-(pyproject.toml lines 89-91) is never matched because the mypy invocation only scans `src/vkdownloader/`,
-not `tests/`. The override is silently ignored, producing confusing noise for developers running type
-checks.
+## Mandatory Fixes
 
-**Evidence (verified):**
-
-- pyproject.toml lines 89-91:
-  ```toml
-  [[tool.mypy.overrides]]
-  module = "tests.*"
-  disallow_untyped_defs = false
-  ```
-- pyproject.toml lines 93-95 (the `vkdownloader.cli` override IS used and correct):
-  ```toml
-  [[tool.mypy.overrides]]
-  module = "vkdownloader.cli"
-  disallow_untyped_decorators = false
-  ```
-- Runtime: `uv run mypy src/vkdownloader/` -> "pyproject.toml: note: unused section(s): module = ['tests.*']"
-  and "Success: no issues found in 23 source files".
-- No Makefile or CI config (`.yml`/`.yaml`) found that runs `mypy src/ tests/` - the `tests.*` override
-  is never exercised.
-
-**Recommendation (unchanged):**
-
-Either (a) add a separate mypy invocation for tests (e.g., `mypy src/ tests/`) so the override is
-exercised, or (b) scope the `tests.*` override so it only appears when tests are included in the scan.
-The `vkdownloader.cli` override should be retained - it correctly suppresses
-`disallow_untyped_decorators` for Typer's decorator-based command functions. Effort: trivial.
-Priority: recommended.
-
-**Validation decision: VALIDATED (no change).** Runtime verification confirms the warning:
-`uv run mypy src/vkdownloader/` emits "unused section(s): module = ['tests.*']" while still reporting
-"Success: no issues found in 23 source files." The `tests.*` override (pyproject.toml:89-91) is only
-useful when mypy scans `tests/`, which it does not in the current invocation. The `vkdownloader.cli`
-override (pyproject.toml:93-95) IS matched and correct. No CI/Makefile found. Classification
-SPEC-DEVIATION is appropriate - the config produces misleading warnings that degrade developer
-experience. The recommendation is valid.
-
----
-## Cross-Finding Analysis
-
-**Scope:** Findings from Phase 01 (CLI) and cross-checked against Phase 02 (Configuration),
-Phase 03 (Services), and Phase 04 (Security) findings for overlapping root causes, conflicting evidence,
-and dependency chains.
-
-**Stale / duplicate findings within Phase 01:** None. All 8 findings are distinct, verified against
-current source, and address different issues.
-
-**Same root cause (merge candidates):**
-- **CLI-002 + CLI-003:** Both address "too much business logic in the entry layer" - CLI-002 is about
-  duplicated orchestration (extract->select->resolve->download flow in both `download._download()` and
-  `_download_single()`), while CLI-003 is about utility functions (`_resolve_output_file`,
-  `_map_exception_to_status`) defined in `cli.py`. They share a root cause (entry-layer contains
-  business logic) but have **distinct fix sites** (`_download`/`_download_single` flow vs. two
-  standalone helpers) and **distinct remediation mechanisms** (consolidation into a service function
-  vs. relocation of two helpers). **Not merged** - keeping them separate preserves actionable
-  granularity. Implementation order: CLI-003 (relocate helpers) before CLI-002 (extract flow), since
-  the extracted service function will call the relocated helpers.
-- **CLI-005 + CLI-002:** Both touch the batch download flow. CLI-002 is about orchestration duplication
-  (`_download_single` vs `download._download`); CLI-005 is about async pattern redundancy
-  (`as_completed` + `gather` double-collection). Different root causes. **Not merged.**
-
-**Conflicting evidence (cross-phase):** None. All phases agree on runtime results (248 tests pass,
-ruff/mypy clean, same default values). Phase 03 (services) and Phase 04 (security) findings do not
-contradict any Phase 01 findings.
-
-**Cross-phase consistency notes:**
-- **Phase 02 CFG-001 <-> CLI-004:** The Phase 02 validated report's cross-phase note references
-  "CLI-003" for the download catch-all / batch narrower-handler asymmetry. In the **current** source
-  findings, this issue is **CLI-004** (the Phase 01 findings were renumbered/regenerated). The line
-  references (cli.py:505 for download catch-all, cli.py:598 for batch `OSError`) remain accurate.
-  This is a stale cross-reference in the Phase 02 validated file - flagged for maintainer awareness.
-- **Phase 04 SEC-002 <-> CLI-005:** SEC-002 references cli.py:575 (`invalid_url_in_batch` logging). This
-  is in the URL-reading loop of `batch_download` (cli.py:570-578), which is upstream of the
-  `_run_batch_with_progress` function targeted by CLI-005. No conflict - different code regions.
-- **Phase 04 SEC-003 <-> CLI-006:** SEC-003 references `_format_validation_error` (cli.py:61-64),
-  which is in the `try/except ValidationError` block shared by both `download` and `batch_download`.
-  CLI-006 references the `perform_download` call site (cli.py:443-452). No conflict.
-
-**Dependency chains:**
-- **CLI-002 depends on CLI-003:** Extracting the shared orchestration (CLI-002) into a service
-  function is cleaner if `_resolve_output_file` and `_map_exception_to_status` are first relocated
-  (CLI-003), so the service function calls them from their proper homes.
-- **CLI-005 is independent of CLI-002:** CLI-005 targets the async pattern (`as_completed`/`gather`)
-  in `_run_batch_with_progress`, not the orchestration flow. Can be done before or after CLI-002.
-- No circular dependencies.
-
----
-
-## Rollout Analysis
-
-**Independence / ordering:**
-
-| Finding | Risk | Dependencies | Recommended order |
-|---------|------|--------------|-------------------|
-| CLI-001 (`__main__` guard) | Low - additive, no behavioral change for existing usages | None | 1st |
-| CLI-004 (catch-all on `batch`) | Low - turns crash into clean exit-1 | None | 1st |
-| CLI-008 (mypy config) | Low - text-only config change | None | 1st |
-| CLI-007 (docstring fix) | Low - text-only | None | 1st |
-| CLI-006 (progress / docs) | Low - doc note; or medium if wiring callbacks | None (doc-only path) | 2nd |
-| CLI-003 (relocate helpers) | Low - extract-method, no behavior change | None | 3rd |
-| CLI-005 (simplify async) | Medium - touches batch flow | CLI-004 (must preserve catch-all) | 4th |
-| CLI-002 (extract orchestration) | Medium - touches both `download` and `batch` paths | CLI-003 (relocate helpers first) | Last |
-
-**Circular / hidden dependencies:** None.
-
-**Backward compatibility:**
-- **CLI-001:** Additive (`__main__` guard + `__main__.py`). No existing invocation changes behavior.
-- **CLI-004:** Adds a catch-all that changes an unhandled-crash path into a clean exit-1. No previously-
-  working invocation changes behavior (previously-working paths are caught by earlier, more specific
-  handlers).
-- **CLI-008:** Text-only config change. Warning disappears; no runtime impact.
-- **CLI-007:** Text-only docstring fix. No runtime impact.
-- **CLI-006:** If only the doc note is added, no behavioral change. If progress callbacks are wired in,
-  new output appears during single downloads (visible, non-breaking).
-- **CLI-003:** Extract-method refactor. Behavior unchanged if done correctly (same imports, same
-  function signatures).
-- **CLI-005:** Async pattern simplification. Must preserve CancelledError handling (lines 308-315) and
-  progress display (line 320).
-- **CLI-002:** Orchestration extraction. Must preserve the single-download handler's available-streams
-  logging (cli.py:434-437) and the batch handler's semaphore/backoff/progress/index threading.
-
-**Rollout sequencing recommendation:**
-
-1. CLI-004 (catch-all) - highest safety impact, trivial fix, mirrors existing `download` pattern.
-2. CLI-001, CLI-007, CLI-008 (trivial, independent) - can be parallel.
-3. CLI-006 (doc note only) - low-risk documentation improvement.
-4. CLI-003 (relocate helpers) - prerequisite for CLI-002.
-5. CLI-005 (simplify async) - must preserve CancelledError handling.
-6. CLI-002 (extract orchestration) - last; most invasive, depends on CLI-003.
-
----
-
-## Execution Validation
-
-All change targets were confirmed to **still exist** in the current source (cli.py read in full,
-608 lines):
-
-| Finding | Target | Line(s) | Exists? | Stale? |
-|---------|--------|---------|---------|--------|
-| CLI-001 | `cli()` at end of file; absence of `__main__` guard; absence of `__main__.py` | cli.py:512-518 (cli() exists, `if __name__ == "__main__"` guard present at 517) | PARTIALLY RESOLVED — `__main__` guard exists; `__main__.py` still absent |
-| CLI-002 | `_download()` nested in `download()`; `_download_single()` | cli.py:344-357 (download), cli.py:113-155 (_download_single) | RESOLVED — code now delegates to `services.downloader.download_video()` |
-| CLI-003 | `_resolve_output_file()` (113-142); `_map_exception_to_status()` (145-163) | ALREADY in `utils/security.py:68-97` and `exceptions.py:60-76` | STALE — audit references old cli.py:113-163 which no longer contain these functions |
-| CLI-003 | `utils/security.py` (existing `validate_output_path`, `_sanitize_title`) | security.py:25-97 | yes |
-| CLI-004 | `download` catch-all (407-410); `batch_download` except block (497-509) | cli.py:407-410, 497-509 | yes | no |
-| CLI-005 | `as_completed` loop (228-243); `gather` (246); `_download_single` exception handling (142-170) | cli.py:228-255, 142-170 | STALE — audit line numbers reference old code structure; current `_download_single` is at cli.py:113-170 and uses `download_video()` |
-| CLI-006 | `perform_download` call without `progress_callback` | `download_video()` at cli.py:148 (download) and `download_video(..., progress_callback=...)` at cli.py:152 (batch) | STALE — `download_video` now accepts `progress_callback`; the single-download path passes `log_available_qualities=True` but no callback |
-| CLI-006 | `cli-reference.md:17`, `cli-reference-clean.md:17` acknowledging gap | docs:17 (both files) | yes | no |
-| CLI-007 | `_create_progress_callback` docstring (78-98); `update_sync` docstring (106-124) | cli.py:78-98; downloader_throttle.py:82-124 | ALREADY CORRECTED |
-| CLI-007 | `run_in_executor` call; `_progress_hook` | downloader.py:648-659, 199-212 | yes | no |
-| CLI-008 | `tests.*` mypy override; `vkdownloader.cli` override | pyproject.toml:89-91 (only `vkdownloader.cli` override exists; `tests.*` removed) | STALE — `tests.*` override no longer in pyproject.toml |
-
-**Applicability & readiness:** The codebase has been substantially refactored since this audit was written. CLI-001's `__main__` guard already exists (cli.py:517) but `src/vkdownloader/__main__.py` is still absent. CLI-002's duplication has been resolved — `download()` and `_download_single()` now both delegate to `services.downloader.download_video()`. CLI-003's helpers have already been relocated to `exceptions.py` and `utils/security.py`. CLI-004's asymmetry still exists (audit line numbers are stale but the catch-all exists at cli.py:407-410 while batch's does not). CLI-006's docstring note has been added. CLI-007's docstrings have been corrected. CLI-008's `tests.*` mypy override has been removed from `pyproject.toml`. Several findings have stale line-number references; the core issues for CLI-001, CLI-004, CLI-005, and CLI-006 (full wiring) still require action or verification.
-
----
-
-## Warnings
-
-- **Stale cross-reference in Phase 02 validated file (process):** The Phase 02 validated report
-  (`02-audit-config-validated-findings.md`) references "CLI-003 (Phase 01)" in its cross-phase
-  analysis for the download/batch catch-all asymmetry. In the **current** source findings, this issue
-  is **CLI-004** (the Phase 01 findings were renumbered/regenerated from a 5-finding to an 8-finding
-  set). The line references (cli.py:505, 598) remain accurate in the original audit, but the current code has moved the catch-all to cli.py:407-410. The Phase 02 file should be updated to reference CLI-004.
-- **Stale validated file (process):** The previous `01-audit-cli-validated-findings.md` at this path
-   contained 5 findings (old CLI-001 through CLI-005 with different content). It has been completely
-   superseded by this report. The stale file should not be referenced.
-- **Stale evidence (process):** This audit was validated against a previous code version. The current codebase has been refactored since:
-   - CLI-002's duplication has been resolved — `download()` and `_download_single()` now delegate to `services.downloader.download_video()`.
-   - CLI-003's helpers have already been relocated: `_resolve_output_file()` → `utils/security.py:68-97`, `_map_exception_to_status()` → `exceptions.py:60-76`.
-   - CLI-006's docstring note has been added (cli.py:335-342).
-   - CLI-007's docstrings have been corrected (cli.py:78-98; downloader_throttle.py:82-124).
-   - CLI-008's `tests.*` mypy override has been removed from `pyproject.toml`.
-   - CLI-001: The `if __name__ == "__main__"` guard now exists (cli.py:517); `src/vkdownloader/__main__.py` is still absent.
-   Many line-number references in this file are stale relative to the current source tree.
-- **CLI-004 classification discrepancy:** The source finds CLI-004 classified as `advisory`, but the
-  Phase 02 validator classified the equivalent issue as `mandatory` (it closes a traceback/path-
-  disclosure gap on normal user input - e.g., a URL file with locale-invalid bytes triggers
-  `UnicodeDecodeError`, a `ValueError` subclass, not caught by `batch`'s `except OSError`). The
-  validator concurs: this is a mandatory concern. Recommend reclassifying to `mandatory`.
-- **CLI-002 consolidation regression risk:** The `download` handler's `_download()` logs available
-  streams and qualities (cli.py:434-437) which `_download_single` (batch) does **not**. A shared service
-  function must parameterize this logging, not erase it.
-- **CLI-005 simplification must preserve CancelledError handling:** The `as_completed` loop's
-  `except asyncio.CancelledError` branch (lines 308-315) cancels remaining tasks and waits for
-  propagation. This logic is non-redundant and must be preserved if the pattern is simplified.
-- **CLI-003 test gap:** `_resolve_output_file` and `_map_exception_to_status` have zero test coverage
-  (grep confirms 0 references in `tests/`). Moving them does not break existing tests, but adding unit
-  tests for the relocated functions is recommended.
-- **CLI-006 scope ambiguity:** The finding's primary recommendation (wire in progress callbacks via
-  `ProgressManager` + `_create_progress_callback`) is a medium-effort code change. The `download`
-  command's `_create_progress_callback` is designed for batch (URL-index-based); for a single download,
-  a simpler callback would suffice. If the code change is pursued, ensure the callback does not
-  introduce thread-safety regressions (see CLI-007).
-
----
-
-## Required Fixes
-
-1. **CLI-004** *(mandatory - see Warnings above)*: Add a catch-all `except Exception:` to `batch_download`
-   (cli.py, after the `except (KeyboardInterrupt, asyncio.CancelledError)` block at line 503) mirroring the `download` handler (cli.py:407-410):
-   `logger.exception("batch_download_failed")` +
-   `typer.echo("An error occurred during batch download", err=True)` +
-   `raise typer.Exit(code=1) from None`. This closes the raw-traceback / path-disclosure gap on normal
-   user input (e.g., a URL file containing bytes invalid for the locale encoding).
-
----
+- CLI-003 (SPEC-DEVIATION) -- Fix F841 unused variable in tests/test_correlation.py:28 and exclude .temp/.ai tooling paths from the ruff lint scope.
+- CLI-004 (SPEC-DEVIATION) -- Remove the unused type: ignore comment in utils/correlation.py:54 so mypy src/vkdownloader is clean.
+- CLI-005 (SPEC-DEVIATION) -- Run ruff format to fix formatting drift in services/downloader.py and tests, and exclude .ai/.temp scaffolding from the format gate.
 
 ## Advisory Recommendations
 
-1. **CLI-001** *(trivial)*: Add `if __name__ == "__main__": cli()` at the bottom of `cli.py` and create
-   `src/vkdownloader/__main__.py` calling `cli()`. Enables `python -m vkdownloader` and
-   `python -m vkdownloader.cli`.
-2. **CLI-002** *(medium)*: Extract the shared extract->select->resolve->download flow into one service
-   function backed by `perform_download` (which already accepts `video_data`/`selected_stream`);
-   thin both handlers; relocate filename construction. Preserve per-command logging (available-streams
-   list) and batch-only concerns (semaphore, backoff, progress_callback). Do **not** introduce a new
-   layer.
-3. **CLI-003** *(small)*: **Already implemented** — `_resolve_output_file()` is in `utils/security.py:68-97` and `_map_exception_to_status()` is in `exceptions.py:60-76`. Add unit tests for both relocated functions (zero current coverage): test `_map_exception_to_status` for each `isinstance` branch and `_resolve_output_file` for path resolution, traversal rejection, and sanitized filename generation.
+- CLI-001 (BEST-PRACTICE/SPEC-DEVIATION) -- Move batch orchestration (ConcurrencyTracker, _download_single, _run_batch_with_progress, _print_batch_summary, progress helpers) out of cli.py into a services/batch_downloader facade so the Typer handlers stay thin.
+- CLI-002 (BEST-PRACTICE) -- Expose public helpers for URL validation, URL sanitization logging, and validation-error formatting; switch _download_single to exc.status_label() and drop the private-symbol imports from the entry layer.
+- CLI-006 (SPEC-DEVIATION) -- Remove the unimplemented FILE value from the CookieSource enum (or implement it) so --help no longer advertises an option that errors at construction time; reconcile the docs.
+- CLI-007 (DOC-UPDATE) -- Bring documentation (STRUCT.md, overview, api-reference, research doc) back in sync with the source.
 
-4. **CLI-005** *(small)*: Simplify the `as_completed` + `gather` pattern in `_run_batch_with_progress`
-   (line 305-332). Use `progress_callback` for live progress and a single
-   `asyncio.gather(return_exceptions=True)` for result collection. Preserve the `CancelledError`
-   branch (lines 308-315).
-5. **CLI-006** *(small-medium)*: **Docstring note already implemented** (cli.py:335-342 now states "Note: This command does not show live progress during download. For real-time per-URL progress display, use the ``batch`` command instead."). For the full fix, wire `ProgressManager` + `_create_progress_callback()` into the single `download` command so both commands provide consistent progress feedback. This requires adapting `_create_progress_callback` (currently URL-index-based for batch) to single-download mode. Priority: recommended if user experience warrants the code change; otherwise the doc-only fix is sufficient.
-6. **CLI-007** *(trivial)*: **Docstring already corrected** (cli.py:78-93 and downloader_throttle.py:82-124 now accurately state callbacks run in executor threads and that CPython's GIL provides atomicity for dict assignment). No further action needed.
-7. **CLI-008** *(trivial)*: **Already resolved** — the `tests.*` `[[tool.mypy.overrides]]` block has been removed from `pyproject.toml`. The only remaining override is `vkdownloader.cli` (pyproject.toml:89-91), which correctly suppresses `disallow_untyped_decorators` for Typer's decorator-based commands. No action needed.
+## Doc Updates Needed
+
+- CLI-006 -- Correct CookieSource.FILE documentation across cli-reference-clean.md, api-reference.md and vkdownloader-overview.md to state it raises ValueError/ValidationError (not NotImplementedError).
+- CLI-007 -- Refresh STRUCT.md, the module line-counts/architecture and module list in the overview, remove the non-existent HttpClient and ProgressManager.get_progress entries in api-reference.md, and annotate the research doc to reflect the now-implemented merge_contextvars/correlation-ID support.
 
 ---
 
@@ -716,26 +400,148 @@ All change targets were confirmed to **still exist** in the current source (cli.
 
 | Action | Count | Details |
 |--------|-------|---------|
-| Validated (unchanged) | 6 | CLI-001, CLI-002, CLI-005 |
-| Reclassified | 1 | CLI-007: SPEC-DEVIATION -> DOC-UPDATE (code works via GIL; docs misleading) |
-| Already implemented (superseded) | 3 | CLI-003 (helpers already relocated to exceptions.py + utils/security.py), CLI-006 (docstring note already added at cli.py:335-342), CLI-007 (docstring already corrected), CLI-008 (tests.* mypy override already removed from pyproject.toml) |
-| Merged | 0 | - |
-| Rejected | 0 | - |
+| Validated (unchanged) | 4 | CLI-001, CLI-002, CLI-006, CLI-007 |
+| Reclassified | 3 | CLI-003, CLI-004, CLI-005 |
+| Merged | 0 | see Merge Notes below |
+| Rejected | 0 | all findings validated against live code |
 
 ### Rejected Findings
 
 | ID | Title | Reason |
 |----|-------|--------|
-| _(none)_ | - | All 8 findings verified against current code and runtime. None stale, duplicate, speculative, or low-ROI. |
+| (none) | -- | All seven findings confirmed real against the live codebase. |
 
 ### Merged Findings
 
 | Original ID | Merged Into | Rationale |
 |-------------|-------------|----------|
-| _(none)_ | - | CLI-002 + CLI-003 share a root cause (business logic in entry layer) but have distinct fix sites and remediation mechanisms. Retained separately for actionable granularity. |
+| (none) | -- | No findings share a single root cause warranting a hard merge. See Merge Notes for overlapping-but-distinct findings. |
 
 ### Reclassified Findings
 
 | ID | Original Type | New Type | Rationale |
 |----|---------------|----------|-----------|
-| CLI-007 | SPEC-DEVIATION | DOC-UPDATE | yt-dlp progress hooks fire in `run_in_executor` threads (downloader.py:648). CPython's GIL makes dict assignment atomic - no data corruption in practice. The code is functionally safe; the docstrings are misleading about the execution context. Per SPEC-DEVIATION rule: code is better than docs -> reclassify as DOC-UPDATE. |
+| CLI-003 | RUNTIME-ERROR | SPEC-DEVIATION | RUNTIME-ERROR is not a standard validator type. The ruff check failure is a deviation from the project enforced quality gate (verification commands must pass). |
+| CLI-004 | RUNTIME-ERROR | SPEC-DEVIATION | RUNTIME-ERROR is not a standard validator type. The mypy failure is a deviation from the project enforced type-check gate. |
+| CLI-005 | RUNTIME-ERROR | SPEC-DEVIATION | RUNTIME-ERROR is not a standard validator type. The ruff format failure is a deviation from the project enforced format gate. |
+
+### Merge Notes (overlapping-but-distinct findings)
+
+1. CLI-003 <-> CLI-005 -- shared root cause: missing ruff exclude for scaffolding paths. Both findings cite .temp/deadcheck.py as a lint/format offender and both recommend adding an exclude under [tool.ruff] for .temp/ and .ai/. However, they are not merged because: they target different ruff subcommands (ruff check vs ruff format --check); they have distinct mandatory fixes (F841 code defect in test_correlation.py vs formatting drift in downloader.py/test_cli.py); the exclude config is only shared context for scaffolding files, not source/test files. Decision: keep separate; the exclude config fix is a shared recommendation applied under both.
+
+2. CLI-006 (doc aspect) <-> CLI-007 item 3 -- shared root cause: stale CookieSource.FILE doc. Both describe the stale claim that CookieSource.FILE raises NotImplementedError. They are not merged because: CLI-006 is primarily a runtime/SPEC deviation (Typer advertises file as a selectable option, but it is rejected at Settings construction); CLI-007 is a broad DOC-UPDATE finding covering six independent doc-drift items across four files. Decision: keep separate. CLI-006 doc-update scope absorbs the specific NotImplementedError claim; CLI-007 covers it as one of six items.
+
+## Rollout Analysis
+
+### Risks, Dependencies, and Sequencing
+
+Gate fixes must precede structural refactors. CLI-003 (ruff check), CLI-004 (mypy), and CLI-005 (ruff format) are the project quality gates. New or refactored code produced by CLI-001 and CLI-002 must pass all three. The gates are currently broken, so any refactor effort should start by restoring them.
+
+**Sequencing (recommended):**
+
+1. **Phase A -- Gate restoration (independent, can parallelize):**
+   - CLI-003: fix F841 in tests/test_correlation.py:28; add extend-exclude for .temp/ and .ai/ under [tool.ruff] in pyproject.toml.
+   - CLI-004: remove unused type: ignore comment at correlation.py:54-55.
+   - CLI-005: run ruff format on the 7 drifted files; add same extend-exclude from CLI-003.
+   - Note: CLI-003 and CLI-005 share the extend-exclude config change -- apply once, covers both.
+   - No rollout risk: all changes are deletions/removals (dead variable, dead type:ignore, formatting normalization). No behavioral change.
+
+2. **Phase B -- Behavioral fix (depends on Phase A gates):**
+   - CLI-006: resolve CookieSource.FILE -- either remove FILE from the enum (enums.py:50) so Typer stops advertising it, or implement file-based loading. Requires coordinated changes to enums.py + config.py:145-157 + docs. Removing FILE from the enum automatically updates --help (Typer reads the enum). Low risk if the FILE code path is confirmed unused by tests (verified: no production code branches on CookieSource.FILE except the validator that rejects it).
+
+3. **Phase C -- Structural refactoring (depends on Phase A gates; touches cli.py):**
+   - CLI-001: extract batch orchestration into services/batch_downloader.py.
+   - CLI-002: replace private-symbol imports with public helpers.
+   - Rollout conflict risk: both findings modify cli.py and exceptions.py. They must be sequenced or merged into a single PR to avoid inter-diff conflicts. CLI-002 rewrite of _download_single overlaps with CLI-001 orchestration extraction (same function). Recommend doing CLI-001 first (move orchestration to service), then CLI-002 (clean up private imports).
+   - Dependency: CLI-001 services/batch_downloader.py would import from services/ (download_video, downloader_throttle) and utils/ (correlation, url_sanitizer) -- no new circular dependencies introduced if done as a service-layer module.
+   - No circular dependency: services/batch_downloader -> services/downloader is a valid direction. cli -> services/batch_downloader is a valid direction.
+
+4. **Phase D -- Documentation sync (no code dependency, but best done last):**
+   - CLI-007: refresh docs. Some items depend on Phase B (CLI-006 FILE doc fix should follow the code decision on whether FILE is removed or implemented).
+
+### Rollout Safety Checks
+
+- **Circular dependencies:** None detected. cli -> services -> utils/models/enums is a clean direction. Moving batch orchestration into services/batch_downloader keeps the same direction.
+- **Backward compatibility:** CLI-006 removing CookieSource.FILE changes the public API surface. Within this repo, the only reference is config.py:145-157 (the rejecting validator), so the risk is contained. External consumers using CookieSource.FILE would break -- but this is an internal CLI package (v0.1.0, Alpha maturity), so the blast radius is minimal.
+- **Test impact of CLI-003 fix:** tests/test_correlation.py:28 -- the full variable is unused. Either removing the line or adding an assertion is safe (the test currently passes with 5 tests in test_correlation.py; 325 total).
+- **Rollback feasibility:** All Phase A fixes are trivially reversible (re-add the type:ignore comment, re-introduce the dead variable, revert formatting via git checkout). Phase B/C/D are structural and should use feature branches with review.
+
+## Execution Validation
+
+### Applicability and Execution Readiness
+
+- **CLI-001:** Ready. Targets verified: ConcurrencyTracker, _TrackedSemaphore, DownloadContext, _download_single, _run_batch_with_progress, _print_batch_summary all present in cli.py at cited line ranges. The download command is thin; batch_download calls inline helpers. Recommendation targets a new services/batch_downloader.py -- greenfield addition, not a modification of existing module.
+- **CLI-002:** Ready. All three private-symbol references confirmed at cited locations. exceptions.py docstring (lines 5-8) documents status_label() as the preferred replacement.
+- **CLI-003:** Ready / mandatory. F841 confirmed by ruff check output. .temp/deadcheck.py confirmed (30-line stray script). No [tool.ruff] exclude in pyproject.toml confirmed.
+- **CLI-004:** Ready / mandatory. correlation.py:55 unused type:ignore confirmed by mypy. Entry layer (cli.py:29) depends on this module.
+- **CLI-005:** Ready / mandatory. ruff format --check confirmed 7 files drifted. Production services/downloader.py and tests/test_cli.py among offenders.
+- **CLI-006:** Ready. download --help and batch --help confirmed advertising [none|browser|file]. CookieSource.FILE in enums.py:50. config.py:145-157 raises ValueError (not NotImplementedError).
+- **CLI-007:** Ready. All six doc staleness claims confirmed against live source. No code changes required.
+
+### Execution Prerequisites
+
+1. Restore quality gates (CLI-003, CLI-004, CLI-005) before any structural change.
+2. Do CLI-006 before CLI-007 doc refresh so docs reflect the final CookieSource state.
+3. Sequence CLI-001 before CLI-002 in cli.py, or combine into a single change to avoid merge conflicts.
+4. Verify ruff check, ruff format --check, and mypy src/vkdownloader all pass after each change.
+
+## Warnings
+
+### Architectural Risks
+
+- **CLI-001 (entry-layer orchestration):** The batch orchestration in cli.py is untestable in isolation without invoking the Typer CLI or running asyncio.run. Extracting it to services/batch_downloader.py restores unit-testability and keeps the same dependency direction (cli -> services -> utils/models/enums). No circular dependencies introduced.
+- **CLI-006 (enum removal impact):** Removing CookieSource.FILE changes the public API surface. Within this repo, the only reference is config.py:145-157 (the rejecting validator). External consumers using CookieSource.FILE would break -- but this is an internal CLI package (v0.1.0, Alpha maturity), so blast radius is minimal.
+
+### Rollout Risks
+
+- **CLI-005 (formatting drift):** The drift affects services/downloader.py (1219 lines). Applying ruff format produces a large diff that obscures semantic review. Recommend separating formatting from logic changes in commits.
+- **CLI-003 + CLI-005 (scaffolding exclusion):** Both recommend excluding .temp/ and .ai/ from ruff. If the exclude is too broad (e.g., .ai/), it may suppress lint errors in legitimate project-config files under .kilo/. Recommend targeted exclude: extend-exclude = [.temp, .ai/builders], not a blanket .ai exclusion.
+
+### Dependency Risks
+
+- **CLI-004 blocks CLI-001/CLI-002:** The entry layer imports utils/correlation.py (cli.py:29). Until the mypy gate is restored, new code cannot be type-checked cleanly. Fix CLI-004 first.
+- **CLI-003 + CLI-005 share the [tool.ruff] exclude config change.** Apply once; resolves .temp/ and .ai/ offenders in both. Source/test file fixes (F841 in test_correlation.py, formatting in downloader.py/test_cli.py) remain independent.
+
+### Documentation Inconsistencies
+
+- **api-reference.md vs vkdownloader-overview.md vs cli-reference-clean.md:** Three docs disagree on CookieSource.FILE behavior. api-reference.md:99 says NotImplementedError (stale); api-reference.md:656 says Rejected with ValueError (correct); vkdownloader-overview.md:63 says NotImplementedError (stale); cli-reference-clean.md:67 says file not implemented (vague); cli-reference-clean.md:198 says Raising ValidationError at construction (correct). Code raises ValueError which Pydantic converts to ValidationError. Tracked under CLI-006 and CLI-007.
+
+## Required Fixes
+
+1. **CLI-003:** Remove the unused full variable at tests/test_correlation.py:28 (or restore the truncation assertion). Add extend-exclude = [.temp, .ai/builders] under [tool.ruff] in pyproject.toml.
+2. **CLI-004:** Remove the # type: ignore[no-any-return] comment at correlation.py:55.
+3. **CLI-005:** Run ruff format on the 7 drifted files (or ruff format .). Apply the same extend-exclude from CLI-003.
+4. **CLI-006:** Remove FILE = file from the CookieSource enum (enums.py:50) and the now-dead validate_cookie_source branches (config.py:149-156), OR implement file-based cookie loading. Update --cookie-source help text in cli.py if needed.
+5. **CLI-007:** Refresh docs -- update STRUCT.md, overview line counts + module list, remove HttpClient and ProgressManager.get_progress entries, correct CookieSource.FILE semantics, annotate research doc.
+
+## Advisory Recommendations
+
+1. **CLI-001:** Extract batch orchestration (ConcurrencyTracker, _TrackedSemaphore, DownloadContext, _download_single, _run_batch_with_progress, _print_batch_summary, progress helpers) into services/batch_downloader.py with a run_batch(...) async entry point. Reduce Typer handlers to argument parsing -> service call -> result/error presentation.
+2. **CLI-002:** Expose public helpers (is_valid_video_url / VideoUrl.parse on extractor, format_validation_error on config, sanitize_url_for_log on url_sanitizer). Replace _map_exception_to_status(e) at cli.py:262 with e.status_label() or a documented fallback. Remove all private-symbol imports from cli.py.
+3. **CLI-006 (if FILE kept as placeholder):** Reject file at the Typer enum-parsing layer rather than deferring to Settings construction.
+4. **CLI-005:** Add a pre-commit hook (.pre-commit-config.yaml) running ruff check, ruff format --check, and mypy to prevent future gate drift.
+5. **CLI-007:** Consider generating STRUCT.md from the actual src/vkdownloader/ tree so it stays in sync automatically.
+
+---
+
+## Validator Attestation
+
+All seven findings were validated against the live codebase by:
+
+- Executing uv run ruff check (3 errors confirmed -- CLI-003)
+- Executing uv run ruff format --check (7 files drifted confirmed -- CLI-005)
+- Executing uv run mypy src/vkdownloader (1 error at correlation.py:55 confirmed -- CLI-004)
+- Executing uv run mypy src/vkdownloader/cli.py (passes in isolation -- CLI-004 masking confirmed)
+- Executing uv run pytest (325 passed, 23 in test_cli.py -- runtime verification confirmed)
+- Executing python -m vkdownloader download --help and batch --help (advertises [none|browser|file] -- CLI-006 confirmed)
+- Reading and verifying every cited source file and line range (cli.py, exceptions.py, config.py, enums.py, correlation.py, url_sanitizer.py, extractor.py, downloader.py, __main__.py, concurrency.py)
+- Reading and verifying every cited doc file (STRUCT.md, vkdownloader-overview.md, api-reference.md, cli-reference-clean.md, error-handling-logging-research-2025-2026.md)
+- Verifying non-existence of documented-but-missing APIs via Python introspection (dir(ProgressManager) shows only clear, get_formatted_progress, update, update_sync; import of infrastructure.http_client fails with ModuleNotFoundError)
+
+**Conclusion:** All 7 findings are real, current, and correctly scoped. 4 are validated unchanged in type; 3 are reclassified from RUNTIME-ERROR to SPEC-DEVIATION (non-standard type). No findings rejected. No cross-phase conflicts (this is the sole phase validated). Rollout ordering and dependencies are documented in the Rollout Analysis and Execution Validation sections.
+
+---
+
+*Generated by: validator role -- .kilo/agents/validator.md*
+*Source findings: .ai/audit/01-audit-cli/findings.md*
+*Report: .ai/audit/99-validation/01-audit-cli-validated-findings.md*
