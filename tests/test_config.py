@@ -1,11 +1,17 @@
 """Tests for configuration module."""
 
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from vkdownloader.config import Settings, warn_unknown_env_vars
+from vkdownloader.config import (
+    Settings,
+    format_validation_error,
+    setup_logging,
+    warn_unknown_env_vars,
+)
 from vkdownloader.models.enums import CookieSource, LogLevel
 
 
@@ -77,7 +83,7 @@ def test_cookie_source_default() -> None:
 
 
 def test_cookie_source_validation() -> None:
-    """Test cookie_source accepts BROWSER and NONE, rejects FILE."""
+    """Test cookie_source accepts BROWSER and NONE only."""
     # Test BROWSER mode
     settings = Settings(cookie_source=CookieSource.BROWSER)
     assert settings.cookie_source == CookieSource.BROWSER
@@ -92,16 +98,6 @@ def test_cookie_source_validation() -> None:
 
     settings = Settings(cookie_source="none")
     assert settings.cookie_source == CookieSource.NONE
-
-    # Test FILE mode raises ValidationError
-    with pytest.raises(ValidationError) as exc_info:
-        Settings(cookie_source=CookieSource.FILE)
-    assert "CookieSource.FILE is not implemented" in str(exc_info.value)
-
-    # Test string "file" also raises ValidationError
-    with pytest.raises(ValidationError) as exc_info:
-        Settings(cookie_source="file")
-    assert "CookieSource.FILE is not implemented" in str(exc_info.value)
 
 
 def test_cookie_source_from_env() -> None:
@@ -228,3 +224,133 @@ class TestWarnUnknownEnvVars:
         error_str = str(exc_info.value)
         assert "not_a_number" not in error_str
         assert "max_retries" in error_str
+
+
+class TestDownloadDirEmptyString:
+    """Tests for empty-string download_dir handling (CFG-002)."""
+
+    def test_download_dir_empty_string_uses_default(self) -> None:
+        """Settings(download_dir='') should use the default, not crash."""
+        settings = Settings(download_dir="")
+        expected_default = Settings.model_fields["download_dir"].default
+        # Should be the default path, resolved to absolute
+        assert settings.download_dir == expected_default.expanduser().resolve()
+
+    def test_download_dir_empty_string_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VKDOWNLOADER_DOWNLOAD_DIR='' should use default (via env var)."""
+        # Clear any existing VKDOWNLOADER_ vars that might interfere
+        original = dict(os.environ)
+        try:
+            for key in list(os.environ):
+                if key.startswith("VKDOWNLOADER_"):
+                    monkeypatch.delenv(key, raising=False)
+            monkeypatch.setenv("VKDOWNLOADER_DOWNLOAD_DIR", "")
+            settings = Settings()
+            expected_default = Settings.model_fields["download_dir"].default
+            assert settings.download_dir == expected_default.expanduser().resolve()
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
+
+    def test_log_file_empty_string_still_uses_none(self) -> None:
+        """Settings(log_file='') should still produce None (unchanged behavior)."""
+        settings = Settings(log_file="")
+        assert settings.log_file is None
+
+
+class TestEnvFileTypoDetection:
+    """Tests for .env file typo detection in warn_unknown_env_vars (CFG-001)."""
+
+    def test_detects_env_file_typo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """warn_unknown_env_vars should detect typos in .env file."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAXRETRIES=9\n")
+
+        original_cwd = Path.cwd()
+        try:
+            monkeypatch.chdir(tmp_path)
+            result = warn_unknown_env_vars(env_file)
+            assert "VKDOWNLOADER_MAXRETRIES" in result
+        finally:
+            os.chdir(str(original_cwd))
+
+    def test_env_file_valid_var_not_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """warn_unknown_env_vars should not flag valid .env variables."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAX_RETRIES=5\n")
+
+        original_cwd = Path.cwd()
+        try:
+            monkeypatch.chdir(tmp_path)
+            result = warn_unknown_env_vars(env_file)
+            assert result == []
+        finally:
+            os.chdir(str(original_cwd))
+
+    def test_env_file_missing_returns_empty(self, tmp_path: Path) -> None:
+        """warn_unknown_env_vars should return empty list when .env doesn't exist."""
+        result = warn_unknown_env_vars(tmp_path / "nonexistent.env")
+        assert result == []
+
+
+class TestFormatValidationError:
+    """Tests for format_validation_error (CFG-001 UX improvement)."""
+
+    def test_extra_forbidden_suggests_did_you_mean(self) -> None:
+        """format_validation_error should suggest 'did you mean' for extra_forbidden errors."""
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(maxretries="9")  # typo: missing underscore
+        formatted = format_validation_error(exc_info.value)
+        assert "Configuration error" in formatted
+        assert "maxretries" in formatted
+        # Should suggest the correct field name
+        assert "Did you mean" in formatted or "Valid fields" in formatted
+
+    def test_unknown_key_error_message(self) -> None:
+        """format_validation_error should include loc and msg for unknown keys."""
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(unknown_key="test_value")
+        formatted = format_validation_error(exc_info.value)
+        assert "unknown_key" in formatted
+        assert "Extra inputs are not permitted" in formatted
+        assert "Received: <redacted>" in formatted
+        assert "Fix the offending value(s)" in formatted
+
+
+class TestSetupLogging:
+    """Tests for setup_logging log file permissions (SEC-003)."""
+
+    def test_log_file_created_with_owner_only_permissions(self, tmp_path: Path) -> None:
+        """SEC-003: log file should be created with 0o600 permissions."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+
+        setup_logging(settings)
+
+        # File should exist with owner-only permissions
+        assert log_file.exists()
+        import os
+        import sys
+
+        if sys.platform != "win32":
+            mode = os.stat(log_file).st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+
+    def test_existing_log_file_permissions_updated(self, tmp_path: Path) -> None:
+        """SEC-003: existing log file should have permissions corrected to 0o600."""
+        import os
+        import sys
+
+        log_file = tmp_path / "existing.log"
+        log_file.write_text("old content")
+        # Set insecure permissions
+        os.chmod(log_file, 0o644)
+
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+        setup_logging(settings)
+
+        if sys.platform != "win32":
+            mode = os.stat(log_file).st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"

@@ -1,1 +1,0 @@
-python .ai/builders/back/py_map.py   

@@ -1,5 +1,6 @@
 """Browser infrastructure for VK Video Downloader."""
 
+import asyncio
 from pathlib import Path
 
 from playwright.async_api import Browser, Page, Playwright, async_playwright
@@ -9,6 +10,10 @@ from ..config import Settings
 from ..exceptions import ExtractionError
 
 logger = get_logger(__name__)
+
+# Timeout for browser/playwright cleanup (INT-004).
+# Prevents indefinite hang during teardown.
+_BROWSER_CLOSE_TIMEOUT = 10.0
 
 
 class BrowserManager:
@@ -51,19 +56,40 @@ class BrowserManager:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Close browser and stop Playwright.
+        """Close browser and stop Playwright with timeout safeguards (INT-004).
 
-        Guarantees ``playwright.stop()`` runs even if ``browser.close()``
-        raises, preventing orphaned Playwright driver subprocesses.
+        Wraps ``browser.close()`` and ``playwright.stop()`` in
+        ``asyncio.wait_for`` with a ~10s timeout and checks the shared
+        ``shutdown_event`` before each step. The ``finally`` guarantee
+        that ``playwright.stop()`` runs even if ``browser.close()`` raises
+        or times out is preserved.
         """
         logger.info("closing_browser")
+        # Lazy import to avoid circular dependency:
+        # browser.py -> services.__init__ -> downloader -> extractor -> browser
+        from ..services.downloader_throttle import get_shutdown_event
+
+        shutdown_event = get_shutdown_event()
 
         try:
-            if self.browser:
-                await self.browser.close()
+            if self.browser and not shutdown_event.is_set():
+                try:
+                    await asyncio.wait_for(self.browser.close(), timeout=_BROWSER_CLOSE_TIMEOUT)
+                except TimeoutError:
+                    logger.warning(
+                        "browser_close_timeout",
+                        pid=getattr(self.browser, "pid", None),
+                        timeout=_BROWSER_CLOSE_TIMEOUT,
+                    )
         finally:
             if self.playwright:
-                await self.playwright.stop()
+                try:
+                    await asyncio.wait_for(self.playwright.stop(), timeout=_BROWSER_CLOSE_TIMEOUT)
+                except TimeoutError:
+                    logger.warning(
+                        "playwright_stop_timeout",
+                        timeout=_BROWSER_CLOSE_TIMEOUT,
+                    )
 
     async def create_stealth_page(self) -> Page:
         """

@@ -23,18 +23,21 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 |---------|--------|----------------|
 | VKVideoExtractor | `services/extractor.py` | Extracts stream URLs from VK video URLs using yt-dlp or browser automation |
 | QualitySelector | `services/quality.py` | Selects appropriate stream based on quality preference |
-| HLSDownloader | `services/downloader.py` | Downloads HLS streams via ffmpeg integration |
-| DownloaderThrottle | `services/downloader_throttle.py` | Rate limiting with AWS Full Jitter exponential backoff for 429/5xx errors |
+| HLSDownloader | `services/downloader.py` | Downloads HLS streams via ffmpeg integration (real-time progress tracking) |
+| YtDlpDownloader | `services/ytdlp_downloader.py` | yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback |
+| URLBackoffCoordinator | `services/downloader_throttle.py` | Coordinates backoff across batch URLs for 429/5xx errors (AWS Full Jitter) |
+| ProgressManager | `services/downloader_throttle.py` | Thread-safe progress state for concurrent batch downloads |
 | SegmentDownloader | `services/segment_downloader.py` | Segment-level download orchestration with resume support |
 
 ### Download Functions
 
 | Function | Module | Responsibility |
 |----------|--------|----------------|
-| `perform_download()` | `services/downloader.py` | Main orchestration: quality selection + download method routing |
+| `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, ffmpeg, auto); quality is pre-selected by caller |
+| `download_video()` | `services/downloader.py` | Extract-select-download pipeline: extraction, quality selection, perform_download dispatch |
 | `download_hls_with_resume()` | `services/segment_downloader.py` | Segment-level download with token refresh and anti-detection throttling |
-| `download_with_ffmpeg()` | `services/downloader.py` | Direct ffmpeg download with real-time progress tracking |
-| `download_with_ytdlp_with_resume_fallback()` | `services/downloader.py` | yt-dlp download with segment fallback on failure |
+| `HLSDownloader.download_with_ffmpeg()` | `services/downloader.py` | Instance method: direct ffmpeg download with real-time progress tracking |
+| `download_with_ytdlp_with_resume_fallback()` | `services/ytdlp_downloader.py` | yt-dlp download with segment fallback on failure (SRV-006: includes inter-retry backoff) |
 
 ### Infrastructure
 
@@ -60,7 +63,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `QualityEnum` | `models/enums.py` | Quality options (240, 360, 480, 720, 1080, 1440, 2160, best, worst) |
 | `StreamFormat` | `models/enums.py` | Stream format types (HLS, DASH, MP4) |
 | `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
-| `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` is not implemented and raises `NotImplementedError`) |
+| `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` was removed as unimplemented) |
 | `LogLevel` | `models/enums.py` | Logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 
 ### Exceptions
@@ -76,10 +79,11 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 ### Security Utilities
 
 | Function | Module | Responsibility |
-|----------|--------|---------------|
+|----------|--------|----------------|
 | `validate_output_path()` | `utils/security.py` | Prevents path traversal attacks |
 | `_sanitize_title()` | `utils/security.py` | Sanitizes titles for filesystem safety |
 | `_strip_auth_params()` | `utils/url_sanitizer.py` | Strips tokens from URLs in logs |
+| `sanitize_url_for_log()` | `utils/url_sanitizer.py` | Public alias for `_strip_auth_params` (used by CLI entry layer) |
 
 ## Architecture Flow
 
@@ -104,11 +108,11 @@ User Request
 │  Routing (AUTO)   │
 └────────┬────────┘
          │
-         ├── YTDLP ──► download_with_ytdlp_with_resume_fallback()
-         │              (fallback to segment on partial failure)
-         │
-         └── FFMPEG ──► download_with_ffmpeg() + extract_streams_with_cookies()
-                        (with segment fallback on failure)
+          ├── YTDLP ──► download_with_ytdlp_with_resume_fallback()
+          │              (fallback to segment on partial failure)
+          │
+          └── FFMPEG ──► HLSDownloader.download_with_ffmpeg() + extract_streams_with_cookies()
+                         (with segment fallback on failure)
 ```
 
 ## Configuration
@@ -148,13 +152,14 @@ Both commands support:
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
 - Title sanitization for filesystem safety via `_sanitize_title()`
-- **Secret-safe ffmpeg cookie passing**: VK session cookies (including `remixsid`) are written to a temporary headers file and passed to ffmpeg via the `@file` syntax instead of command-line `-headers` arguments. This prevents session tokens from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is removed automatically after the download completes.
+- **Secret-safe ffmpeg argument passing**: VK session cookies (including `remixsid`) and signed m3u8 CDN URLs (including `expires`, `sig`, `urls` tokens) are passed to ffmpeg via a temporary argument file (`ffmpeg @argfile`) instead of command-line arguments. This prevents session tokens and CDN URL signatures from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is created with owner-only `0o600` permissions and is removed automatically after the download completes.
+- **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (with `0o600` permissions) and passed to ffmpeg via the `cookies` protocol option appended to the m3u8 URL. User-Agent and Referer headers are passed as a plain string in the argument file. This avoids the non-functional ffmpeg `-headers @file` syntax.
 
 ## Rate Limiting & Throttling
 
 ### AWS Full Jitter Backoff
 
-The `DownloaderThrottle` module implements rate limiting for VK's anti-bot protection:
+The `URLBackoffCoordinator` and `ProgressManager` in `downloader_throttle.py` implement rate limiting for VK's anti-bot protection:
 
 - **Exponential backoff**: Uses AWS Full Jitter algorithm (random(0, base_delay * 2^attempt))
 - **Base delay**: 1 second for 429 responses, 0.05 seconds for 5xx errors
@@ -253,7 +258,7 @@ Where:
 - X/Y: Downloaded segments / Total segments for that video
 ```
 
-The progress updates in-place using `\r` overwrite for a clean single-line display. Each URL's `_download_single()` task updates progress via a shared `_progress_state` dictionary using `_create_progress_callback()`.
+The progress updates in-place using `\r` overwrite for a clean single-line display. Each URL's `_download_single()` task (in `services/batch_downloader.py`) updates progress via a shared `ProgressManager` instance using `_create_progress_callback()`.
 
 ### Work Stealing Behavior
 
@@ -291,9 +296,13 @@ The downloader module has been refactored into focused components per project ru
 
 ```
 services/
-├── downloader.py        (~487 lines)  - Orchestration, ffmpeg integration
-├── segment_downloader.py (~336 lines) - Segment download, playlist fetching, merging
-└── ffmpeg_utils.py      (~269 lines)  - FFmpeg commands, progress parsing, process management
+├── downloader.py          (~582 lines)  - Orchestration (perform_download, download_video), ffmpeg integration (HLSDownloader)
+├── ytdlp_downloader.py    (~722 lines)  - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
+├── segment_downloader.py  (~901 lines) - Segment download, playlist fetching, merging
+├── ffmpeg_utils.py        (~360 lines) - FFmpeg commands, progress parsing, process management
+└── downloader_throttle.py - Rate limiting, progress management, backoff coordination
 ```
+
+The `downloader.py` module was split (SRV-001) into a focused orchestration layer (~582 lines, down from ~1,218) and `ytdlp_downloader.py` (~722 lines). The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
 
 All modules export their public APIs through `downloader.py` for backward compatibility.

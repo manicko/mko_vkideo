@@ -1,6 +1,6 @@
 """Tests for URL sanitization utilities."""
 
-from vkdownloader.utils.url_sanitizer import _strip_auth_params
+from vkdownloader.utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log
 
 
 class TestStripAuthParams:
@@ -72,3 +72,47 @@ class TestStripAuthParams:
         result = _strip_auth_params(url)
 
         assert result == "***REDACTED***"
+
+
+class TestSanitizeTextForLog:
+    """Tests for sanitize_text_for_log function (SEC-002 subprocess output redaction)."""
+
+    def test_redacts_url_in_text(self) -> None:
+        """Test that URLs in text are redacted to scheme://host only."""
+        text = "Error: cannot fetch https://cdn.example.com/seg.m3u8?token=abc123&sig=def456"
+        result = sanitize_text_for_log(text)
+
+        assert "abc123" not in result
+        assert "def456" not in result
+        assert "cdn.example.com" in result
+        assert "https://cdn.example.com" in result
+
+    def test_redacts_multiple_urls_in_text(self) -> None:
+        """Test that multiple URLs in text are all redacted."""
+        text = "From https://a.example.com/x?tok=aaa to https://b.example.com/y?tok=bbb"
+        result = sanitize_text_for_log(text)
+
+        assert "aaa" not in result
+        assert "bbb" not in result
+        assert "a.example.com" in result
+        assert "b.example.com" in result
+
+    def test_preserves_text_without_urls(self) -> None:
+        """Test that text without URLs is unchanged."""
+        text = "Simple error message with no URLs here"
+        result = sanitize_text_for_log(text)
+
+        assert result == text
+
+    def test_redacts_url_in_yt_dlp_output(self) -> None:
+        """Test URL redaction in typical yt-dlp error output format."""
+        text = (
+            "[download] https://vkvideo.ru/video-123_456 "
+            "[warning] error: failed to fetch https://cdn.vkhost.com/stream.m3u8?sig=xyz"
+        )
+        result = sanitize_text_for_log(text)
+
+        assert "sig=xyz" not in result
+        assert "stream.m3u8?sig=xyz" not in result
+        assert "vkvideo.ru" in result  # Host preserved for debugging
+        assert "cdn.vkhost.com" in result  # Host preserved for debugging

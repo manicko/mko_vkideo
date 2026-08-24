@@ -51,6 +51,7 @@ packages = ["src/vkdownloader"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = [".temp", ".ai/builders"]
 
 [tool.ruff.lint]
 select = [

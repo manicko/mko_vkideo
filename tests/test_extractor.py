@@ -1,10 +1,10 @@
 """Tests for VKVideoExtractor service."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from pydantic import ValidationError
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
@@ -123,6 +123,42 @@ class TestExtractionErrors:
 
             ydl_opts = mock_ydl_class.call_args[0][0]
             assert ydl_opts["nocheckcertificate"] is True
+
+    @pytest.mark.asyncio
+    async def test_extract_with_ytdlp_propagates_settings_to_ydl_opts(self) -> None:
+        """INT-003: Settings fields are propagated to yt-dlp ydl_opts."""
+        settings = Settings(max_retries=5, download_timeout=600, throttled_rate=50000)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+            mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = {"title": "Test", "formats": []}
+
+            await extractor._extract_with_ytdlp(url, "12345_67890")
+
+            ydl_opts = mock_ydl_class.call_args[0][0]
+            assert ydl_opts["socket_timeout"] == 600
+            assert ydl_opts["retries"] == 5
+            assert ydl_opts["fragment_retries"] == 5
+            assert ydl_opts["throttled_rate"] == 50000
+
+    @pytest.mark.asyncio
+    async def test_extract_with_ytdlp_timeout_raises_extraction_error(self) -> None:
+        """INT-003: asyncio.wait_for timeout raises ExtractionError."""
+        settings = Settings(download_timeout=30)
+        extractor = VKVideoExtractor(settings=settings)
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        # Mock asyncio.wait_for to raise TimeoutError, simulating a hang
+        # in the yt-dlp extraction thread.
+        async def fake_wait_for(coro: object, timeout: float | None) -> tuple[list[Any], None]:
+            raise TimeoutError("simulated timeout")
+
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
+            with patch("asyncio.get_running_loop"):
+                with pytest.raises(ExtractionError, match="timed out"):
+                    await extractor._extract_with_ytdlp(url, "12345_67890")
 
     def test_format_cookies_for_ffmpeg(self) -> None:
         """Test _format_cookies_for_ffmpeg correctly formats cookies for ffmpeg header."""
@@ -280,14 +316,6 @@ class TestExtractionErrors:
             assert len(streams) == 1
             assert cookies == "forced_cookies"  # Cookies returned when forced
             assert raw is not None
-
-    @pytest.mark.asyncio
-    async def test_extract_streams_with_cookies_file_mode_raises_validation_error(self) -> None:
-        """Test that Settings rejects CookieSource.FILE at construction (not implemented)."""
-        # Creating Settings with FILE cookie_source raises ValidationError
-        with pytest.raises(ValidationError) as exc_info:
-            Settings(cookie_source=CookieSource.FILE)
-        assert "CookieSource.FILE is not implemented" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_extract_streams_with_cookies_invalid_url(self) -> None:

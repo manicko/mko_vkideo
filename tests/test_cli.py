@@ -33,7 +33,9 @@ class TestDownloadCommand:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -201,6 +203,10 @@ class TestBatchCommand:
         assert "Peak concurrency:" in result.output
         assert "Successful:" in result.output
         assert "Failed:" in result.output
+        # TST-002: Assert error reasons appear in Failed URLs section
+        assert "Failed URLs:" in result.output
+        assert "video_not_found" in result.output
+        assert "video-2_2" in result.output
 
     def test_batch_all_success_exits_zero(self, tmp_path: Path) -> None:
         """Check that batch exits with code 0 when all downloads succeed."""
@@ -213,7 +219,9 @@ class TestBatchCommand:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")]))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -255,7 +263,9 @@ class TestBatchCommand:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")]))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -303,7 +313,9 @@ class TestQualityOptionValidation:
             patch("vkdownloader.services.downloader.perform_download"),
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -352,7 +364,9 @@ class TestQualityOptionValidation:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -403,7 +417,9 @@ class TestMethodOptionValidation:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -444,7 +460,9 @@ class TestSslVerifyOption:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -492,7 +510,9 @@ class TestSslVerifyOption:
             patch("vkdownloader.services.downloader.perform_download") as mock_download,
         ):
             mock_extractor = MagicMock()
-            mock_extractor.extract_streams = AsyncMock(return_value=MagicMock(id="12345_67890", streams=mock_streams))
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
             mock_extractor_cls.return_value = mock_extractor
 
             mock_selector = MagicMock()
@@ -528,19 +548,19 @@ class TestSslVerifyOption:
 class TestConfigurationErrors:
     """Tests for graceful handling of Settings validation errors."""
 
-    def test_download_file_cookie_source_no_traceback(self, tmp_path: Path) -> None:
-        """Verify --cookie-source file produces clean error, not raw traceback (CLI-001)."""
+    def test_download_file_cookie_source_rejected_at_parsing(self) -> None:
+        """Verify --cookie-source file is rejected at Typer parsing (not deferred to Settings)."""
         result = runner.invoke(
             app,
             ["download", "https://vkvideo.ru/video-12345_67890", "--cookie-source", "file"],
         )
 
-        assert result.exit_code == 1
-        assert "Configuration error" in result.output
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "file" in result.output.lower()
         assert "Traceback" not in result.output
 
-    def test_batch_file_cookie_source_no_traceback(self, tmp_path: Path) -> None:
-        """Verify --cookie-source file in batch produces clean error, not raw traceback."""
+    def test_batch_file_cookie_source_rejected_at_parsing(self, tmp_path: Path) -> None:
+        """Verify --cookie-source file is rejected at Typer parsing for batch command."""
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
 
@@ -549,8 +569,8 @@ class TestConfigurationErrors:
             ["batch", str(urls_file), "--cookie-source", "file"],
         )
 
-        assert result.exit_code == 1
-        assert "Configuration error" in result.output
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "file" in result.output.lower()
         assert "Traceback" not in result.output
 
     def test_batch_unreadable_url_file_error(self, tmp_path: Path) -> None:

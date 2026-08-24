@@ -1,5 +1,7 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
+from collections.abc import Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,7 +58,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -97,7 +99,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -164,7 +166,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -204,7 +206,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -244,7 +246,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -284,7 +286,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -348,7 +350,7 @@ class TestRetry429WithBackoff:
 
         call_count = 0
 
-        def get_side_effect(*args, **kwargs):
+        def get_side_effect(*args: object, **kwargs: object) -> AsyncMock:
             nonlocal call_count
             call_count += 1
             mock_context = AsyncMock()
@@ -424,6 +426,59 @@ class TestRetry429WithBackoff:
         assert call_kwargs["segment_index"] == 3
         assert "url" in call_kwargs
 
+    @pytest.mark.asyncio
+    async def test_programming_error_not_swallowed_as_transient(self) -> None:
+        """INT-006: TypeError (programming error) is NOT caught as transient failure."""
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=TypeError("unexpected type"))
+
+        with patch(
+            "vkdownloader.services.downloader_throttle._strip_auth_params",
+            return_value="https://example.com/segment.ts",
+        ):
+            with pytest.raises(TypeError, match="unexpected type"):
+                await _retry_429_with_backoff(
+                    mock_session,
+                    "https://example.com/segment.ts",
+                    {"User-Agent": "test"},
+                    segment_index=0,
+                )
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_handled_as_transient(self) -> None:
+        """INT-006: asyncio.TimeoutError is caught as a transient failure (not programming error)."""
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=TimeoutError("socket timeout"))
+
+        with (
+            patch(
+                "vkdownloader.services.downloader_throttle._strip_auth_params",
+                return_value="https://example.com/segment.ts",
+            ),
+            patch("vkdownloader.services.downloader_throttle.get_shutdown_event") as mock_se,
+            patch(
+                "vkdownloader.services.downloader_throttle._wait_with_shutdown",
+                new_callable=AsyncMock,
+            ) as mock_wait,
+        ):
+            mock_se.return_value.is_set.return_value = False
+            mock_wait.return_value = False  # Don't trigger shutdown
+
+            with patch(
+                "vkdownloader.services.downloader_throttle.random.uniform", return_value=0.0
+            ):
+                result = await _retry_429_with_backoff(
+                    mock_session,
+                    "https://example.com/segment.ts",
+                    {"User-Agent": "test"},
+                    segment_index=0,
+                    max_retries=2,
+                )
+
+        assert result is None, "TimeoutError should return None (transient), not raise"
+
 
 class TestURLBackoffCoordinator:
     """Tests for URLBackoffCoordinator class."""
@@ -455,7 +510,7 @@ class TestURLBackoffCoordinator:
         mock_event = MagicMock()
         mock_event.is_set.return_value = True
 
-        async def mock_wait_for(coro, timeout):
+        async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
             # Simulate shutdown triggered - wait_for returns successfully
             return None
 
@@ -563,7 +618,7 @@ class TestWaitWithShutdown:
         """Test returns False when delay completes without shutdown."""
         mock_event = MagicMock()
 
-        async def mock_wait_for(coro, timeout):
+        async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
             # Simulate timeout (no shutdown)
             raise TimeoutError()
 
@@ -579,7 +634,7 @@ class TestWaitWithShutdown:
         """Test returns True when shutdown is triggered."""
         mock_event = MagicMock()
 
-        async def mock_wait_for(coro, timeout):
+        async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
             # Simulate shutdown triggered - return immediately
             return None
 
@@ -653,13 +708,13 @@ class TestProgressManager:
 
     @pytest.mark.asyncio
     async def test_get_formatted_progress_defaults_to_zero(self) -> None:
-        """Test that get_formatted_progress returns 0/0 for unset URLs."""
+        """Test that get_formatted_progress returns 0B for unset URLs."""
         manager = ProgressManager()
         result = await manager.get_formatted_progress(3)
 
-        assert "video_0: 0/0" in result
-        assert "video_1: 0/0" in result
-        assert "video_2: 0/0" in result
+        assert "video_0: 0B" in result
+        assert "video_1: 0B" in result
+        assert "video_2: 0B" in result
 
     @pytest.mark.asyncio
     async def test_clear_removes_all_progress(self) -> None:
@@ -669,7 +724,7 @@ class TestProgressManager:
         await manager.clear()
 
         result = await manager.get_formatted_progress(1)
-        assert "video_0: 0/0" in result
+        assert "video_0: 0B" in result
 
     @pytest.mark.asyncio
     async def test_overwrites_existing_progress(self) -> None:
@@ -681,3 +736,14 @@ class TestProgressManager:
         result = await manager.get_formatted_progress(1)
         assert "video_0: 75/100" in result
         assert "25" not in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_total_shows_bytes_not_ratio(self) -> None:
+        """Test that total=0 (unknown total) shows bytes with B suffix."""
+        manager = ProgressManager()
+        # Simulate ffmpeg progress: downloaded=12345, total=0 (unknown)
+        await manager.update(0, 12345, 0)
+
+        result = await manager.get_formatted_progress(1)
+        assert "video_0: 12.1KB" in result
+        assert "100" not in result  # Should NOT show 100% (the SRV-003 bug)

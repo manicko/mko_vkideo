@@ -1,5 +1,6 @@
 """Tests for browser infrastructure: BrowserManager and NetworkMonitor."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,6 +96,47 @@ class TestBrowserManager:
 
             # playwright.stop() should be called during cleanup
             mock_instance.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_browser_manager_context_exit_handles_close_timeout(
+        self, test_settings: Settings
+    ) -> None:
+        """INT-004: browser.close() timeout is caught and logged, playwright.stop() still runs."""
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+
+        # Make browser.close() hang by sleeping longer than the timeout
+        async def hanging_close() -> None:
+            await asyncio.sleep(100)
+
+        mock_browser.close = hanging_close
+        mock_playwright = AsyncMock()
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        await manager.__aexit__(None, None, None)
+
+        # playwright.stop() must still run despite browser.close() timing out
+        mock_playwright.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_browser_manager_context_exit_handles_playwright_stop_timeout(
+        self, test_settings: Settings
+    ) -> None:
+        """INT-004: playwright.stop() timeout is caught and logged."""
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+        manager.browser = mock_browser
+        mock_playwright = AsyncMock()
+
+        async def hanging_stop() -> None:
+            await asyncio.sleep(100)
+
+        mock_playwright.stop = hanging_stop
+
+        # Should not raise; timeout is caught and logged as warning
+        await manager.__aexit__(None, None, None)
+        mock_browser.close.assert_called_once()
 
 
 class TestNetworkMonitor:

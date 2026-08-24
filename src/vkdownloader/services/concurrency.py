@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class SemaphoreLike(Protocol):
@@ -12,5 +12,5 @@ class SemaphoreLike(Protocol):
     ``__aenter__``/``__aexit__``.
     """
 
-    async def __aenter__(self) -> Any: ...
+    async def __aenter__(self) -> SemaphoreLike: ...
     async def __aexit__(self, *args: object) -> None: ...

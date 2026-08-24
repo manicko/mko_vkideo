@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import random
 import ssl
 from collections.abc import Callable
@@ -16,7 +17,6 @@ import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
-from ..models.enums import CookieSource
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
@@ -46,6 +46,7 @@ class SegmentTask:
     idx: int
     segment_url: str
     segments_dir: Path
+    total_segments: int = 1
 
 
 @dataclass
@@ -66,6 +67,9 @@ class DownloadPolicy:
     is_shared_semaphore: bool = False
     m3u8_url: str = ""
     segments_dir: Path = Path()
+    # DF-003: Added to enable per-segment progress reporting from
+    # _download_segment_concurrent instead of only at merge time.
+    progress_callback: Callable[[str, int, int], None] | None = None
 
 
 logger = get_logger(__name__)
@@ -164,8 +168,15 @@ async def _download_segment_sequential(
         download_timeout=download_timeout,
     )
     if content is not None and len(content) > 0:
-        with open(output_path, "wb") as f:
-            f.write(content)
+        # DF-010: Write to temp file then os.replace for atomicity
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(content)
+            os.replace(temp_path, output_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
         return True
     return False
 
@@ -222,8 +233,15 @@ async def _run_parallel_download_with_backoff(
             if len(content) == 0:
                 logger.warning("empty_segment_content", segment_url=_strip_auth_params(segment_url))
                 return None
-            with open(output_path, "wb") as f:
-                f.write(content)
+            # DF-010: Write to temp file then os.replace for atomicity
+            temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+            try:
+                with open(temp_path, "wb") as f:
+                    f.write(content)
+                os.replace(temp_path, output_path)
+            except Exception:
+                temp_path.unlink(missing_ok=True)
+                raise
             return True
 
         logger.warning("segment_download_failed", status=response.status)
@@ -414,14 +432,11 @@ async def _refresh_token_and_retry(
 
     Returns tuple of (new_url, cookies) on success, None if refresh failed.
     """
-    if settings.cookie_source != CookieSource.BROWSER:
-        logger.warning(
-            "token_refresh_failed_cookie_source",
-            cookie_source=str(settings.cookie_source),
-            reason="Cannot refresh token without browser access",
-        )
-        return None
-
+    # DF-006: Removed the `cookie_source != BROWSER` guard. The
+    # `force_browser=True` parameter already bypasses the CookieSource
+    # check inside extract_streams_with_cookies, matching the pattern in
+    # _attempt_segment_resume (downloader.py). Token refresh was
+    # impossible with the default CookieSource.NONE configuration.
     streams, new_cookies, _raw_cookies = await extractor.extract_streams_with_cookies(
         video_url, force_browser=True
     )
@@ -685,6 +700,16 @@ async def _download_segment_concurrent(
             download_timeout=policy.download_timeout,
         )
 
+        # DF-003: Report per-segment progress so users see incremental
+        # progress during segment downloads, not just once at merge time.
+        if policy.progress_callback is not None:
+            video_id = (
+                policy.video_url.split("_")[-1] if "_" in policy.video_url else policy.video_url
+            )
+            # Count segments downloaded so far (including existing) + result
+            downloaded = len(list(task.segments_dir.glob("*.ts")))
+            policy.progress_callback(video_id, downloaded, task.total_segments)
+
         if result and not policy.is_shared_semaphore and policy.max_concurrent_downloads == 1:
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
@@ -727,6 +752,7 @@ def _create_segment_download_tasks(
                         idx=i,
                         segment_url=seg,
                         segments_dir=policy.segments_dir,
+                        total_segments=len(segments),
                     ),
                     policy,
                 )
@@ -803,6 +829,7 @@ async def _run_download_session(
             is_shared_semaphore=is_shared,
             m3u8_url=m3u8_url,
             segments_dir=segments_dir,
+            progress_callback=progress_callback,  # DF-003: enable per-segment progress
         )
 
         tasks = _create_segment_download_tasks(segments, policy)
@@ -882,8 +909,6 @@ async def download_hls_with_resume(
             success = True
             return result
         return None
-    except Exception:
-        raise
     finally:
         if not success:
             _log_preserve_segments(segments_dir)

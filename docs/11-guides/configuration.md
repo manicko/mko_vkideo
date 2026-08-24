@@ -33,7 +33,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Segment-level concurrency limit shared across all batch URLs (1-16); 1 enables anti-detection delay |
 | `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 10000 | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s). |
 | `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 10485760 | HTTP chunk size in bytes for segment downloads |
-| `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none, browser (file is not implemented) |
+| `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none or browser |
 | `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
 | `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
 
@@ -63,7 +63,6 @@ Controls how cookies are acquired for authenticated video downloads:
 
 - **`none`** (default) — No browser launch, fastest downloads for public videos only
 - **`browser`** — Launch browser to extract real cookies for authenticated content
-- **`file`** — Not implemented; selecting it raises `ValidationError` at construction. Use `none` or `browser` instead.
 
 **Download Method Behavior:**
 | Method | cookie_source=NONE | cookie_source=BROWSER |
@@ -106,10 +105,12 @@ VKDOWNLOADER_LOG_LEVEL=INFO
 
 Controls retry behavior for failed segment and network requests during both single and batch downloads.
 
-- **CLI Flag:** `--max-retries` / `-r`
+- **CLI Flag:** `--max-retries` / `-r` (batch command only)
 - **Environment Variable:** `VKDOWNLOADER_MAX_RETRIES`
 - **Default:** `3` (range: 1-10)
-- **Description:** Maximum retry attempts for failed segment and network requests (mapped to both yt-dlp `retries`/`fragment_retries` and the segment downloader policy). Applies to single downloads as well as batch downloads. When a download fails (e.g., due to 403/410 errors), the system will automatically retry up to this number of attempts before marking the download as failed.
+- **Description:** Maximum retry attempts for failed segment and network requests (mapped to both yt-dlp `retries`/`fragment_retries` and the segment downloader policy). When a download fails (e.g., due to 403/404 errors), the system will automatically retry up to this number of attempts before marking the download as failed.
+
+> **Note:** The `--max-retries` CLI flag is only available on the `batch` command. For single downloads, configure retries via the `VKDOWNLOADER_MAX_RETRIES` environment variable.
 
 **Example:**
 ```env
@@ -170,7 +171,10 @@ Output directory for downloaded videos. Paths are validated to prevent path trav
 
 ## Environment Variable Caveats
 
-The `Settings` model uses Pydantic Settings' `extra='forbid'` which rejects unknown kwargs passed to the model constructor. However, this does **not** apply to environment variables — a misspelled `VKDOWNLOADER_*` variable is silently dropped and the default value is used.
+| Source | Typos behavior | Detection |
+|--------|---------------|-----------|
+| `.env` file | Unknown `VKDOWNLOADER_*` keys are **rejected** at construction with a `ValidationError` (due to `extra='forbid'`) | `warn_unknown_env_vars()` scans the `.env` file *before* construction to catch typos early and log a warning |
+| OS environment (`os.environ`) | Unknown `VKDOWNLOADER_*` keys are **silently ignored** (the default value is used) | `warn_unknown_env_vars()` detects and warns about these before construction |
 
-To help catch typos, the CLI emits a warning log for any environment variable matching the `VKDOWNLOADER_` prefix that is not a recognized setting. If you see a warning like `unknown_env_var_ignored`, verify the variable name against the settings reference table above.
+The CLI calls `warn_unknown_env_vars()` before each `Settings()` construction, so typos in either the `.env` file or OS environment produce a clear warning log with the valid variable names. A `.env` file typo still causes a hard failure (ValidationError), so fix the typo and try again.
 

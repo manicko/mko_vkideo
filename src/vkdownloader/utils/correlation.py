@@ -52,4 +52,4 @@ def get_correlation_id() -> str | None:
         bound in the current context.
     """
     context_vars = structlog.contextvars.get_contextvars()
-    return context_vars.get("correlation_id")  # type: ignore[no-any-return]
+    return context_vars.get("correlation_id")

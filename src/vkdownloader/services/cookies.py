@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from playwright.async_api import Cookie
+
+
+def _sanitize_cookie_value(value: str) -> str:
+    """Strip CR/LF characters from cookie values to prevent CRLF injection.
+
+    Mirrors the sanitization already applied in
+    :func:`vkdownloader.services.extractor._format_cookies_for_ffmpeg`.
+    Cookie values containing ``\\r`` or ``\\n`` can inject additional lines
+    into the Netscape cookie file, which downstream tools (yt-dlp) parse line
+    by line.
+    """
+    return value.replace("\r", "").replace("\n", "")
 
 
 def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
@@ -36,10 +46,10 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
     # Handle Cookie objects list (dict-like TypedDict)
     if isinstance(cookies_input, list):
         for cookie_item in cookies_input:
-            name = cookie_item["name"]
-            value = cookie_item["value"]
-            domain = cookie_item.get("domain", ".vkvideo.ru")
-            path = cookie_item.get("path", "/")
+            name = _sanitize_cookie_value(cookie_item["name"])
+            value = _sanitize_cookie_value(cookie_item["value"])
+            domain = _sanitize_cookie_value(cookie_item.get("domain", ".vkvideo.ru"))
+            path = _sanitize_cookie_value(cookie_item.get("path", "/"))
             secure = "TRUE" if cookie_item.get("secure", False) else "FALSE"
             expires = int(cookie_item.get("expires", 0))
 
@@ -51,27 +61,10 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
     for cookie_part in cookies_input.split("; "):
         if "=" in cookie_part:
             name, value = cookie_part.split("=", 1)
+            name = _sanitize_cookie_value(name)
+            value = _sanitize_cookie_value(value)
             lines.append(f".vkvideo.ru\tTRUE\t/\tFALSE\t0\t{name}\t{value}")
     return "\n".join(lines)
 
 
-def _write_netscape_cookie_file(path: Path, cookies_input: str | list[Cookie]) -> None:
-    """Write cookies to a Netscape cookie file with owner-only permissions.
-
-    The file is created with mode 0o600 via ``os.open`` so that live session
-    credentials are never written world-readable on disk (the default umask on
-    Unix would otherwise yield 0644). ``os.open`` honors the mode on Unix; on
-    Windows the mode is a no-op but the call is harmless, so the helper stays
-    cross-platform safe. yt-dlp reads the file by path, which is unchanged.
-
-    Args:
-        path: Destination cookie file path.
-        cookies_input: Either a cookies string or a list of Playwright Cookie objects.
-    """
-    content = _cookies_to_netscape(cookies_input)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(content)
-
-
-__all__ = ["_cookies_to_netscape", "_write_netscape_cookie_file"]
+__all__ = ["_cookies_to_netscape", "_sanitize_cookie_value"]

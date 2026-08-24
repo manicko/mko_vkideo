@@ -20,6 +20,26 @@ _DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].defau
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+
+def _format_bytes(num_bytes: int) -> str:
+    """Format a byte count into a human-readable string with SI prefix.
+
+    Args:
+        num_bytes: Number of bytes.
+
+    Returns:
+        String like "25B", "1.5KB", "45.2MB", "2.1GB".
+    """
+    if num_bytes < 1024:
+        return f"{num_bytes}B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f}KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f}MB"
+    else:
+        return f"{num_bytes / (1024 * 1024 * 1024):.1f}GB"
+
+
 # ContextVar for shutdown event - provides loop-safe event per asyncio context
 _shutdown_event_ctx: contextvars.ContextVar[asyncio.Event] = contextvars.ContextVar(
     "shutdown_event"
@@ -131,13 +151,27 @@ class ProgressManager:
             url_count: Total number of URLs in the batch.
 
         Returns:
-            Formatted string like "video_0: 25/100, video_1: 45/150".
+            Formatted string like "video_0: 25B/100B, video_1: 45/100".
+            Units are detected heuristically: values exceeding 1024 are
+            treated as byte counts and formatted with SI prefixes (B/KB/MB/etc.);
+            smaller totals are treated as segment counts and displayed
+            numerically. When total is 0 (unknown), only downloaded bytes are shown.
         """
         async with self._lock:
-            progress_lines = [
-                f"video_{i}: {self._state.get(i, (0, 0))[0]}/{self._state.get(i, (0, 0))[1]}"
-                for i in range(url_count)
-            ]
+            progress_lines = []
+            for i in range(url_count):
+                downloaded, total = self._state.get(i, (0, 0))
+                if total <= 0:
+                    # Unknown total: byte-based progress (yt-dlp/ffmpeg streams in)
+                    progress_lines.append(f"video_{i}: {_format_bytes(downloaded)}")
+                elif total > 1024:
+                    # Byte-based progress (yt-dlp/ffmpeg)
+                    progress_lines.append(
+                        f"video_{i}: {_format_bytes(downloaded)}/{_format_bytes(total)}"
+                    )
+                else:
+                    # Segment-count-based progress
+                    progress_lines.append(f"video_{i}: {downloaded}/{total} segments")
             return ", ".join(progress_lines)
 
     async def clear(self) -> None:
@@ -226,7 +260,13 @@ async def _retry_429_with_backoff(
                 "segment_download_cancelled", segment_index=segment_index, url=sanitized_url
             )
             raise
-        except Exception as e:
+        # INT-006: Narrow exception handling to network-level errors only.
+        # Previously caught broad ``Exception``, which swallowed programming
+        # errors (TypeError, AttributeError, etc.) and treated them as
+        # transient download failures. ``aiohttp.ClientError`` does not cover
+        # all asyncio-level errors (e.g. ``TimeoutError`` in some aiohttp
+        # versions), so both are listed explicitly.
+        except (aiohttp.ClientError, TimeoutError) as e:
             logger.error(
                 "segment_download_error",
                 error=str(e),

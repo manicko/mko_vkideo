@@ -1,1 +1,0 @@
-npx ts-node .ai/builders/front/ts_map.ts 

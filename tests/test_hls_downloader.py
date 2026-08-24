@@ -1,6 +1,7 @@
 """Tests for HLSDownloader service with ffmpeg integration."""
 
 import asyncio
+from os import PathLike
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,20 +13,27 @@ from vkdownloader.exceptions import QualityNotAvailableError
 from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.models.enums import CookieSource, QualityEnum, StreamFormat
 from vkdownloader.models.video import Stream
+from vkdownloader.services.cookies import _cookies_to_netscape, _sanitize_cookie_value
 from vkdownloader.services.downloader import (
     FfmpegProgress,
     HLSDownloader,
     _build_ytdlp_cli_command,
     _cleanup_segments,
-    _cookies_to_netscape,
+    _create_temp_cookie_file,
+    _format_argfile,
     _parse_m3u8_segments,
     _parse_quality_to_enum,
     _parse_ytdlp_progress,
     _resolve_cookies,
+    _temp_argfile,
     download_hls_with_resume,
 )
 from vkdownloader.services.downloader_throttle import get_shutdown_event
-from vkdownloader.services.ffmpeg_utils import _merge_segments_batched, check_ffmpeg_available
+from vkdownloader.services.ffmpeg_utils import (
+    _merge_segments_batched,
+    check_ffmpeg_available,
+    iter_process_lines,
+)
 from vkdownloader.services.quality import QualitySelector
 from vkdownloader.services.segment_downloader import (
     _download_segment,
@@ -110,6 +118,49 @@ class TestHLSDownloaderDownload:
             assert result is None
 
     @pytest.mark.asyncio
+    async def test_error_handling_ffmpeg_failure_sanitizes_url_in_error(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test ffmpeg failure error_msg is URL-sanitized (SEC-002)."""
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 1
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 1
+        mock_stderr = AsyncMock()
+        # ffmpeg echoes the m3u8 URL with CDN tokens in error output
+        error_text = (
+            b"Error opening 'https://cdn.example.com/stream.m3u8?sig=secret_token': Invalid data"
+        )
+        mock_stderr.readline = AsyncMock(side_effect=[error_text, b""])
+        mock_process.stderr = mock_stderr
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.downloader.logger") as mock_logger,
+        ):
+            result = await downloader.download_with_ffmpeg(
+                "https://example.com/video.m3u8", output_path, "720"
+            )
+
+            assert result is None
+            # The error log call should have sanitized URLs in the error field
+            error_calls = [
+                call
+                for call in mock_logger.error.call_args_list
+                if call.args[0] == "ffmpeg_download_failed"
+            ]
+            assert len(error_calls) == 1
+            error_value = error_calls[0].kwargs.get("error", "")
+            assert "sig=secret_token" not in error_value, "Token should not appear in logged error"
+            assert "cdn.example.com" in error_value, "Host should be preserved for debugging"
+
+    @pytest.mark.asyncio
     async def test_download_with_ffmpeg_with_progress_callback(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
@@ -181,13 +232,14 @@ class TestHLSDownloaderDownload:
             assert result == output_path
 
     @pytest.mark.asyncio
-    async def test_download_with_ffmpeg_uses_header_file_syntax(
+    async def test_download_with_ffmpeg_uses_argfile_syntax(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test download_with_ffmpeg uses @file syntax to avoid cookie exposure."""
+        """Test download_with_ffmpeg uses ffmpeg @argfile to hide m3u8 URL and cookies."""
         downloader = HLSDownloader(settings=test_settings)
         output_path = tmp_path / "video.mp4"
         cookies = "vk=secret123; session=xyz789"
+        m3u8_url = "https://example.com/video.m3u8?token=abc123"
 
         mock_process = AsyncMock()
 
@@ -211,25 +263,28 @@ class TestHLSDownloaderDownload:
             side_effect=mock_create_subprocess_exec,
         ):
             result = await downloader.download_with_ffmpeg(
-                "https://example.com/video.m3u8",
+                m3u8_url,
                 output_path,
                 "720",
                 cookies=cookies,
             )
 
         assert result == output_path
-        # Verify @file syntax is used (filename starts with ./ or /)
-        headers_idx = captured_args.index("-headers")
-        headers_arg = captured_args[headers_idx + 1]
-        assert headers_arg.startswith("@") or headers_arg.startswith("/"), (
-            f"Headers should use @file syntax, got: {headers_arg}"
-        )
-        # Verify actual cookies are NOT in the command arguments
+        # Verify ffmpeg is invoked with @argfile syntax
+        assert len(captured_args) == 2  # ["ffmpeg", "@/path/to/argfile.args"]
+        assert captured_args[0] == "ffmpeg"
+        assert captured_args[1].startswith("@")
+        argfile_path = Path(captured_args[1][1:])  # Strip the @ prefix
+        # The argfile should have been cleaned up by now
+        assert not argfile_path.exists(), "Argfile should be cleaned up after download"
+
+        # Verify cookies and m3u8 URL tokens do NOT appear in command-line args
         all_args_str = " ".join(captured_args)
         assert "secret123" not in all_args_str, (
             "Cookie value should not appear in process arguments"
         )
         assert "xyz789" not in all_args_str, "Session value should not appear in process arguments"
+        assert "abc123" not in all_args_str, "CDN token should not appear in process arguments"
 
 
 class TestDownloadHlsWithResume:
@@ -398,6 +453,348 @@ class TestCookiesToNetscape:
         # malformed entry should not appear
         assert "malformed\t" not in result
 
+    def test_strips_crlf_from_cookie_values(self) -> None:
+        """Test that CRLF characters are stripped from cookie values (SEC-007).
+
+        CRLF injection could create extra cookie lines in the Netscape file.
+        After stripping, injected content stays on the same line as the
+        cookie value and does not form a separate cookie entry.
+        """
+        cookies = "vk=abc\r\nSet-Cookie: evil=hack; session=xyz"
+        result = _cookies_to_netscape(cookies)
+
+        # Count non-empty, non-comment lines — should be exactly 2 (vk + session)
+        lines = result.split("\n")
+        cookie_lines = [line for line in lines if line.strip() and not line.startswith("#")]
+        assert len(cookie_lines) == 2, (
+            f"Expected 2 cookie lines, got {len(cookie_lines)}: {cookie_lines}"
+        )
+        # No extra newline should create a separate Set-Cookie line
+        for line in cookie_lines:
+            assert not line.startswith("Set-Cookie"), (
+                "CRLF injection created a separate cookie line"
+            )
+
+    def test_strips_crlf_from_cookie_objects(self) -> None:
+        """Test CRLF stripping for Playwright Cookie objects (SEC-007)."""
+        cookies = [
+            {"name": "vk", "value": "abc\r\nSet-Cookie: evil=hack", "domain": ".vkvideo.ru"},
+            {"name": "session", "value": "xyz", "domain": ".vkvideo.ru"},
+        ]
+        result = _cookies_to_netscape(cookies)
+
+        # Should have exactly 2 cookie lines, no injected line
+        lines = result.split("\n")
+        cookie_lines = [line for line in lines if line.strip() and not line.startswith("#")]
+        assert len(cookie_lines) == 2
+        for line in cookie_lines:
+            assert not line.startswith("Set-Cookie"), (
+                "CRLF injection created a separate cookie line"
+            )
+        # The value with stripped CRLF should contain the injected text as part of the value
+        assert "Set-Cookie" in cookie_lines[0]  # It's in the value, not on its own line
+        assert "abcSet-Cookie: evil=hack" in cookie_lines[0]  # CRLF removed, text preserved
+
+
+class TestCreateTempCookieFile:
+    """Direct unit tests for _create_temp_cookie_file (TST-004)."""
+
+    def test_writes_netscape_format_content(self) -> None:
+        """Test that the file contains valid Netscape HTTP Cookie File format."""
+        cookies = "vk=abc123; session=xyz789"
+        result = _create_temp_cookie_file(cookies)
+
+        try:
+            content = result.read_text()
+            assert "# Netscape HTTP Cookie File" in content
+            assert "# Generated by vkdownloader" in content
+            assert ".vkvideo.ru\tTRUE\t/\tFALSE\t0\tvk\tabc123" in content
+            assert ".vkvideo.ru\tTRUE\t/\tFALSE\t0\tsession\txyz789" in content
+        finally:
+            result.unlink(missing_ok=True)
+
+    def test_file_created_in_system_temp_dir(self) -> None:
+        """Test that the cookie file is created in the system temp directory,
+        not in the download output directory."""
+        import tempfile as _tempfile
+
+        temp_dir = _tempfile.gettempdir()
+        cookies = "vk=test"
+        result = _create_temp_cookie_file(cookies)
+
+        try:
+            assert str(result).startswith(temp_dir)
+            # Ensure file is NOT in a typical download output directory
+            assert result.parent == Path(temp_dir)
+        finally:
+            result.unlink(missing_ok=True)
+
+    @pytest.mark.skipif(
+        __import__("os").name == "nt",
+        reason="File permission assertions only apply on Unix",
+    )
+    def test_file_permissions_are_0600(self) -> None:
+        """Test that the temp cookie file is created with 0o600 permissions (DF-007)."""
+        import os
+
+        cookies = "vk=sensitive_session_token"
+        result = _create_temp_cookie_file(cookies)
+
+        try:
+            stat_info = os.stat(result)
+            # DF-007: permissions should be 0o600 (owner read/write only)
+            actual_mode = stat_info.st_mode & 0o777
+            assert actual_mode == 0o600, f"Expected 0o600 permissions, got 0o{actual_mode:o}"
+        finally:
+            result.unlink(missing_ok=True)
+
+    def test_cleanup_on_write_error(self) -> None:
+        """Test that temp file is cleaned up when os.write fails."""
+        import tempfile as _tempfile
+
+        cookies = "vk=abc"
+        original_mkstemp = _tempfile.mkstemp
+
+        # Track temp files created so we can assert cleanup
+        created_paths: list[Path] = []
+
+        def tracking_mkstemp(
+            suffix: str | None = "",
+            prefix: str | None = "",
+            dir: str | PathLike[str] | None = None,
+            text: bool = False,
+        ) -> tuple[int, str]:
+            fd, path = original_mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
+            created_paths.append(Path(path))
+            return fd, path
+
+        with (
+            patch("vkdownloader.services.ytdlp_downloader.tempfile.mkstemp", tracking_mkstemp),
+            patch(
+                "vkdownloader.services.ytdlp_downloader.os.write",
+                side_effect=OSError("simulated write failure"),
+            ),
+        ):
+            with pytest.raises(OSError):
+                _create_temp_cookie_file(cookies)
+
+        # Verify the temp file was cleaned up on write failure
+        assert len(created_paths) == 1
+        assert not created_paths[0].exists(), (
+            f"Temp file {created_paths[0]} should have been cleaned up on write failure"
+        )
+
+    def test_file_has_vc_prefix(self) -> None:
+        """Test that the temp file name contains the vk_cookies prefix."""
+        cookies = "vk=test"
+        result = _create_temp_cookie_file(cookies)
+
+        try:
+            assert result.name.startswith("vk_cookies_")
+            assert ".cookies.txt" in result.name
+        finally:
+            result.unlink(missing_ok=True)
+
+    def test_handles_empty_cookies(self) -> None:
+        """Test that empty cookies produces a valid file with header only."""
+        result = _create_temp_cookie_file("")
+
+        try:
+            content = result.read_text()
+            assert "# Netscape HTTP Cookie File" in content
+            assert "# Generated by vkdownloader" in content
+            # Should have only header lines, no cookie entries
+            lines = content.split("\n")
+            cookie_lines = [line for line in lines if line.strip() and not line.startswith("#")]
+            assert len(cookie_lines) == 0
+        finally:
+            result.unlink(missing_ok=True)
+
+
+class TestSanitizeCookieValue:
+    """Tests for _sanitize_cookie_value CRLF injection prevention (SEC-007)."""
+
+    def test_strips_crlf(self) -> None:
+        """Test that \\r\\n is stripped from values."""
+        assert _sanitize_cookie_value("abc\r\ndef") == "abcdef"
+
+    def test_strips_cr_only(self) -> None:
+        """Test that \\r alone is stripped."""
+        assert _sanitize_cookie_value("abc\rdef") == "abcdef"
+
+    def test_strips_lf_only(self) -> None:
+        """Test that \\n alone is stripped."""
+        assert _sanitize_cookie_value("abc\ndef") == "abcdef"
+
+    def test_preserves_clean_value(self) -> None:
+        """Test that values without CRLF are unchanged."""
+        assert _sanitize_cookie_value("normal_value_123") == "normal_value_123"
+
+    def test_handles_empty_string(self) -> None:
+        """Test that empty string is handled."""
+        assert _sanitize_cookie_value("") == ""
+
+
+class TestTempArgfile:
+    """Tests for _temp_argfile and _format_argfile (SEC-001)."""
+
+    def test_format_argfile_simple_args(self) -> None:
+        """Test _format_argfile produces correct content for simple args."""
+        args = ["-y", "-progress", "pipe:2", "-nostats"]
+        result = _format_argfile(args)
+
+        assert result == "-y\n-progress\npipe:2\n-nostats\n"
+
+    def test_format_argfile_quotes_args_with_spaces(self) -> None:
+        """Test _format_argfile quotes arguments containing spaces."""
+        args = ["-y", "arg with spaces", "-c"]
+        result = _format_argfile(args)
+
+        lines = result.strip().split("\n")
+        assert lines[1].startswith("'")  # shlex single-quotes args with spaces
+        assert " " in lines[1]
+
+    def test_format_argfile_preserves_urls(self) -> None:
+        """Test _format_argfile preserves URL content (quoted if needed)."""
+        args = ["-i", "https://cdn.example.com/stream.m3u8?sig=abc123"]
+        result = _format_argfile(args)
+
+        # The URL appears in the argfile content (not in cmdline)
+        assert "https://cdn.example.com/stream.m3u8?sig=abc123" in result
+
+    @pytest.mark.asyncio
+    async def test_temp_argfile_creates_and_cleans_up(self) -> None:
+        """Test _temp_argfile creates file and cleans up."""
+        import os
+        import sys
+
+        args = ["-y", "-i", "https://example.com/video.m3u8"]
+        async with _temp_argfile(args) as argfile:
+            assert argfile.exists()
+            content = argfile.read_text()
+            assert "https://example.com/video.m3u8" in content
+            # On POSIX, verify owner-only permissions (SEC-003/SEC-001)
+            if sys.platform != "win32":
+                mode = os.stat(argfile).st_mode & 0o777
+                assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+
+        # File should be cleaned up after context exit
+        assert not argfile.exists()
+
+
+class TestFfmpegCookiePassing:
+    """Tests for INT-001: ffmpeg cookie passing via `cookies` protocol option."""
+
+    @pytest.mark.asyncio
+    async def test_download_with_ffmpeg_uses_cookies_protocol_option(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """INT-001: cookies passed via `cookies=file:` in URL, not -headers @file."""
+        from vkdownloader.services.downloader import HLSDownloader
+
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = tmp_path / "video.mp4"
+        cookies = "vk=secret123; session=xyz789"
+        m3u8_url = "https://example.com/video.m3u8?token=abc123"
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
+
+        captured_args: list[str] = []
+        captured_argfile_content: list[str] = []
+
+        async def mock_create_subprocess_exec(*args: str, **kwargs: Any) -> AsyncMock:
+            captured_args.extend(args)
+            # Read argfile content immediately before it's cleaned up
+            argfile_path = args[1][1:]  # Strip @ prefix
+            captured_argfile_content.append(Path(argfile_path).read_text())
+            return mock_process
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            result = await downloader.download_with_ffmpeg(
+                m3u8_url,
+                output_path,
+                "720",
+                cookies=cookies,
+            )
+
+        assert result == output_path
+        # Command should be: ffmpeg @argfile
+        assert captured_args[0] == "ffmpeg"
+        argfile_content = captured_argfile_content[0]
+
+        # The URL in the argfile should contain cookies=file:... (INT-001 fix)
+        assert "cookies=file:" in argfile_content, (
+            "m3u8 URL should include cookies=file: protocol option"
+        )
+        # The headers should be a plain string (not @file)
+        assert "-headers" in argfile_content
+        lines = argfile_content.split("\n")
+        headers_idx = lines.index("-headers")
+        headers_value = lines[headers_idx + 1]
+        assert not headers_value.startswith("@"), (
+            "Headers should be a plain string, not @file reference (INT-001 fix)"
+        )
+        # Cookie value should NOT appear in headers (it's in the cookie file)
+        assert "secret123" not in headers_value
+
+    @pytest.mark.asyncio
+    async def test_download_with_ffmpeg_no_cookies_no_cookies_param(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """INT-001: when no cookies provided, cookies=file: is not added to URL."""
+        from vkdownloader.services.downloader import HLSDownloader
+
+        downloader = HLSDownloader(settings=test_settings)
+        output_path = tmp_path / "video.mp4"
+        m3u8_url = "https://example.com/video.m3u8?token=abc123"
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        mock_stderr.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = mock_stderr
+
+        captured_args: list[str] = []
+        captured_argfile_content: list[str] = []
+
+        async def mock_create_subprocess_exec(*args: str, **kwargs: Any) -> AsyncMock:
+            captured_args.extend(args)
+            argfile_path = args[1][1:]
+            captured_argfile_content.append(Path(argfile_path).read_text())
+            return mock_process
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            result = await downloader.download_with_ffmpeg(
+                m3u8_url,
+                output_path,
+                "720",
+                cookies=None,
+            )
+
+        assert result == output_path
+        argfile_content = captured_argfile_content[0]
+        assert "cookies=file:" not in argfile_content
+
 
 class TestYtdlpCliCommand:
     """Tests for yt-dlp CLI command builder."""
@@ -457,7 +854,9 @@ class TestYtdlpCliCommand:
         idx = cmd.index("--http-chunk-size")
         assert cmd[idx + 1] == "5242880"
 
-    def test_cli_command_no_certificates_when_ssl_verify_false(self, test_settings: Settings) -> None:
+    def test_cli_command_no_certificates_when_ssl_verify_false(
+        self, test_settings: Settings
+    ) -> None:
         """Test --no-check-certificates is added when ssl_verify is False."""
         settings = test_settings.model_copy(update={"ssl_verify": False})
         cmd, _ = _build_ytdlp_cli_command(
@@ -471,7 +870,9 @@ class TestYtdlpCliCommand:
 
         assert "--no-check-certificates" in cmd
 
-    def test_cli_command_no_certificates_absent_when_ssl_verify_true(self, test_settings: Settings) -> None:
+    def test_cli_command_no_certificates_absent_when_ssl_verify_true(
+        self, test_settings: Settings
+    ) -> None:
         """Test --no-check-certificates is absent when ssl_verify is True (default)."""
         cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
@@ -621,7 +1022,9 @@ class TestYtdlpCliCommand:
         idx = cmd.index("--cookies")
         assert cmd[idx + 1] == str(cookie_file)
 
-    def test_cli_command_creates_cookie_file_for_string_cookies(self, test_settings: Settings) -> None:
+    def test_cli_command_creates_cookie_file_for_string_cookies(
+        self, test_settings: Settings
+    ) -> None:
         """Test CLI command creates cookie file for string cookies."""
         cmd, cookie_file = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
@@ -666,7 +1069,7 @@ class TestYtdlpProgressParsing:
         result = _parse_ytdlp_progress(line)
         assert result is not None
         downloaded, total = result
-        assert total == int(1.50 * 1024 ** 3)
+        assert total == int(1.50 * 1024**3)
         assert downloaded == total // 2
 
     def test_parse_progress_gb(self) -> None:
@@ -707,7 +1110,7 @@ class TestYtdlpProgressParsing:
         result = _parse_ytdlp_progress(line)
         assert result is not None
         downloaded, total = result
-        assert total == int(4.93 * 1024 ** 3)
+        assert total == int(4.93 * 1024**3)
         assert downloaded == 0
 
     def test_parse_progress_eta_unknown_speed(self) -> None:
@@ -716,7 +1119,7 @@ class TestYtdlpProgressParsing:
         result = _parse_ytdlp_progress(line)
         assert result is not None
         downloaded, total = result
-        assert total == int(4.93 * 1024 ** 3)
+        assert total == int(4.93 * 1024**3)
         assert downloaded == 0
 
     def test_parse_progress_hh_mm_ss_eta(self) -> None:
@@ -725,7 +1128,7 @@ class TestYtdlpProgressParsing:
         result = _parse_ytdlp_progress(line)
         assert result is not None
         downloaded, total = result
-        assert total == int(1.50 * 1024 ** 3)
+        assert total == int(1.50 * 1024**3)
         assert downloaded == int(total * 30.0 / 100)
 
 
@@ -916,9 +1319,7 @@ class TestBrowserCookiesIntegration:
             captured_cmd.extend(cmd)
             return mock_process
 
-        with patch(
-            "asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec
-        ):
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
             await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
                 output_file,
@@ -1341,7 +1742,9 @@ class TestDownloadMethodLogging:
         mock_process.wait = AsyncMock(return_value=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            with patch("vkdownloader.services.downloader.logger.info", side_effect=capture_log):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.logger.info", side_effect=capture_log
+            ):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
                     output_file,
@@ -1413,6 +1816,77 @@ class TestDownloadMethodLogging:
         starting_logs = [m for m in log_messages if "starting_download" in m["message"]]
         assert len(starting_logs) >= 1, "Should log starting_download"
         assert starting_logs[0]["kwargs"].get("method") == "ffmpeg"
+
+    @pytest.mark.asyncio
+    async def test_perform_download_ffmpeg_progress_adapter_sends_unknown_total(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that the ffmpeg progress adapter passes total=0 (not 100%) for ffmpeg downloads (SRV-003)."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        output_file = tmp_path / "video_720p.mp4"
+
+        # Capture what progress_callback receives: (video_id, downloaded, total)
+        progress_calls: list[tuple[str, int, int]] = []
+
+        def progress_callback(video_id: str, downloaded: int, total: int) -> None:
+            progress_calls.append((video_id, downloaded, total))
+
+        mock_process = AsyncMock()
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+        mock_process.returncode = 0
+        mock_stderr = AsyncMock()
+        # FFmpeg emits total_size as cumulative bytes (not final total).
+        # The adapter should report total=0 to avoid false 100%.
+        progress_lines = [
+            b"out_time_ms=5000\n",
+            b"total_size=1024\n",
+            b"progress=continue\n",
+            b"out_time_ms=10000\n",
+            b"total_size=2048\n",
+            b"progress=continue\n",
+            b"",  # EOF
+        ]
+        mock_stderr.readline = AsyncMock(side_effect=progress_lines)
+        mock_process.stderr = mock_stderr
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=MagicMock(
+                streams=[MagicMock(url="https://example.com/video.m3u8", quality="720")]
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
+                return_value=(
+                    [MagicMock(url="https://example.com/video.m3u8", quality="720")],
+                    "cookies",
+                ),
+            ):
+                with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+                    result = await perform_download(
+                        "https://vkvideo.ru/video-12345_67890",
+                        "720",
+                        output_file,
+                        DownloadMethod.FFMPEG,
+                        settings=test_settings,
+                        progress_callback=progress_callback,
+                    )
+
+        assert result == output_file
+        assert len(progress_calls) >= 1, "Progress callback should have been called"
+
+        # SRV-003: total must be 0 (unknown), not equal to downloaded (which would show 100%)
+        for _video_id, downloaded, total in progress_calls:
+            assert total == 0, (
+                f"Expected total=0 (unknown total), got total={total} (would show 100%)"
+            )
+            assert downloaded > 0, f"Expected downloaded > 0, got {downloaded}"
 
     @pytest.mark.asyncio
     async def test_perform_download_ffmpeg_falls_back_to_segment_download(
@@ -1549,6 +2023,75 @@ class TestProgressParser:
         result = ProgressParser.parse_line("speed=1.2x")
 
         assert result == ("speed", "1.2x")
+
+
+class TestIterProcessLines:
+    """Tests for the shared iter_process_lines utility (STR-008)."""
+
+    @pytest.mark.asyncio
+    async def test_yields_lines_until_eof(self) -> None:
+        """Test that iter_process_lines yields all lines until empty (EOF)."""
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(side_effect=[b"line1\n", b"line2\n", b""])
+        shutdown_event = asyncio.Event()
+
+        result = [line async for line in iter_process_lines(mock_stream, shutdown_event)]
+        assert result == [b"line1\n", b"line2\n"]
+
+    @pytest.mark.asyncio
+    async def test_breaks_on_shutdown(self) -> None:
+        """Test that iteration stops when shutdown_event is set."""
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(side_effect=[b"line1\n", b"line2\n", b""])
+        shutdown_event = asyncio.Event()
+
+        # With shutdown already set, should break immediately without reading
+        shutdown_event.set()
+
+        result = [line async for line in iter_process_lines(mock_stream, shutdown_event)]
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_invokes_on_shutdown_callback(self) -> None:
+        """Test that on_shutdown callback is invoked when shutdown is detected."""
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        shutdown_event = asyncio.Event()
+        callback_called = []
+
+        async def on_shutdown() -> None:
+            callback_called.append(True)
+
+        shutdown_event.set()
+        result = [
+            line
+            async for line in iter_process_lines(
+                mock_stream, shutdown_event, on_shutdown=on_shutdown
+            )
+        ]
+
+        assert result == []
+        assert len(callback_called) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_callback_when_shutdown_not_set(self) -> None:
+        """Test that on_shutdown is not called when shutdown is never set."""
+        mock_stream = AsyncMock(spec=asyncio.StreamReader)
+        mock_stream.readline = AsyncMock(side_effect=[b"line1\n", b""])
+        shutdown_event = asyncio.Event()
+        callback_called = []
+
+        async def on_shutdown() -> None:
+            callback_called.append(True)
+
+        result = [
+            line
+            async for line in iter_process_lines(
+                mock_stream, shutdown_event, on_shutdown=on_shutdown
+            )
+        ]
+
+        assert result == [b"line1\n"]
+        assert callback_called == []
 
 
 class TestReadProgress:
@@ -1749,7 +2292,7 @@ class TestDownloadSegmentRealExecution:
             response.headers.get = MagicMock(return_value=None)
             return response
 
-        def mock_get(*args, **kwargs):
+        def mock_get(*args: object, **kwargs: object) -> MagicMock:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -1855,7 +2398,7 @@ class TestDownloadSegmentRealExecution:
             response.headers.get = MagicMock(return_value=None)
             return response
 
-        def mock_get(*args, **kwargs):
+        def mock_get(*args: object, **kwargs: object) -> MagicMock:
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
@@ -1985,7 +2528,7 @@ class TestMergeSegmentsBatchedRealExecution:
         mock_process.returncode = 0
         mock_process.pid = 12345
 
-        async def mock_communicate():
+        async def mock_communicate() -> tuple[bytes, bytes]:
             return b"", b""
 
         mock_process.communicate = mock_communicate
@@ -2023,12 +2566,12 @@ class TestMergeSegmentsBatchedRealExecution:
         mock_process.returncode = 0
         mock_process.pid = 12345
 
-        async def mock_communicate():
+        async def mock_communicate() -> tuple[bytes, bytes]:
             return b"", b""
 
         mock_process.communicate = mock_communicate
 
-        def track_batch(*cmd, **kwargs):
+        def track_batch(*cmd: str, **kwargs: object) -> MagicMock:
             nonlocal call_count
             call_count += 1
             return mock_process
@@ -2226,7 +2769,7 @@ class TestResolveCookies:
             def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
                 raise QualityNotAvailableError("best", ["720p"])
 
-        with patch("vkdownloader.services.downloader.QualitySelector", _FailingSelector):
+        with patch("vkdownloader.services.ytdlp_downloader.QualitySelector", _FailingSelector):
             with pytest.raises(QualityNotAvailableError):
                 await _resolve_cookies(
                     extractor,
@@ -2258,13 +2801,21 @@ class TestYtDlpSubprocessShutdown:
         mock_process.pid = 12345
         mock_process.stdout = AsyncMock()
         mock_stdout_line: list[bytes] = []
-        mock_process.stdout.readline = AsyncMock(side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError()) if not mock_stdout_line else mock_stdout_line.pop(0))
+
+        # TST-006: Use named function instead of fragile
+        # `(_ for _ in ()).throw(asyncio.CancelledError())` lambda hack
+        async def mock_readline() -> bytes:
+            if not mock_stdout_line:
+                raise asyncio.CancelledError()
+            return mock_stdout_line.pop(0)
+
+        mock_process.stdout.readline = mock_readline
         mock_process.wait = AsyncMock(return_value=0)
 
         # Patch cancel_subprocess to track it's called
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             with patch(
-                "vkdownloader.services.downloader.cancel_subprocess",
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_cancel:
@@ -2299,7 +2850,7 @@ class TestYtDlpSubprocessShutdown:
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             with patch(
-                "vkdownloader.services.downloader.cancel_subprocess",
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_cancel:
@@ -2326,9 +2877,7 @@ class TestYtDlpSubprocessShutdown:
         mock_process.returncode = 1
         mock_process.pid = 12345
         mock_process.stdout = AsyncMock()
-        mock_process.stdout.readline = AsyncMock(
-            side_effect=[b"ERROR: video not found\n", b""]
-        )
+        mock_process.stdout.readline = AsyncMock(side_effect=[b"ERROR: video not found\n", b""])
         mock_process.wait = AsyncMock(return_value=1)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -2356,9 +2905,7 @@ class TestYtDlpSubprocessShutdown:
         mock_process.returncode = 0
         mock_process.pid = 12345
         mock_process.stdout = AsyncMock()
-        mock_process.stdout.readline = AsyncMock(
-            side_effect=[progress_line, b""]
-        )
+        mock_process.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
         mock_process.wait = AsyncMock(return_value=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -2403,12 +2950,10 @@ class TestAttemptSegmentResumeQuality:
         )
 
         mock_extractor = MagicMock()
-        mock_extractor.extract_streams_with_cookies = AsyncMock(
-            return_value=([stream], None, None)
-        )
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
 
         with patch(
-            "vkdownloader.services.downloader.download_hls_with_resume",
+            "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
             new_callable=AsyncMock,
             return_value=output_file,
         ):
@@ -2456,13 +3001,18 @@ class TestFfmpegAvailabilityCheck:
 
 
 class TestSslVerifyFfmpegWarning:
-    """Tests for INT-005: ssl_verify warning when using ffmpeg method."""
+    """Tests for INT-005: ssl_verify warning removed for ffmpeg method.
+
+    The stale ``ssl_verify_ignored_for_ffmpeg`` warning was misleading —
+    ffmpeg DOES apply ``-tls_verify 0`` when ``settings.ssl_verify=False``.
+    The warning is removed; this test verifies it is no longer logged.
+    """
 
     @pytest.mark.asyncio
-    async def test_perform_download_ffmpeg_ssl_verify_warning(
+    async def test_perform_download_ffmpeg_no_stale_ssl_warning(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test perform_download warn when ssl_verify=False with ffmpeg method."""
+        """Test perform_download does NOT log ssl_verify_ignored_for_ffmpeg for ffmpeg method."""
         from vkdownloader.models.enums import DownloadMethod
         from vkdownloader.services.downloader import perform_download
 
@@ -2506,9 +3056,9 @@ class TestSslVerifyFfmpegWarning:
                             )
 
         assert result == output_file
-        # Verify ssl_verify warning was logged for ffmpeg method
+        # Verify ssl_verify warning was NOT logged (INT-005 fix)
         ssl_warnings = [m for m in log_messages if "ssl_verify_ignored_for_ffmpeg" in m["message"]]
-        assert len(ssl_warnings) >= 1
+        assert len(ssl_warnings) == 0, "Stale ssl_verify warning should not be logged"
 
 
 class TestParseQualityToEnum:
@@ -2539,3 +3089,111 @@ class TestParseQualityToEnum:
     def test_parse_empty_quality_defaults_to_best(self) -> None:
         """Test that empty quality string defaults to BEST."""
         assert _parse_quality_to_enum("") == QualityEnum.BEST
+
+
+class TestYtDlpRetryBackoff:
+    """Tests for SRV-006: backoff between yt-dlp retry attempts."""
+
+    @pytest.mark.asyncio
+    async def test_backoff_between_ytdlp_retries(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that a backoff delay occurs between yt-dlp retry attempts."""
+        from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
+
+        output_file = tmp_path / "video.mp4"
+        # Create a partial file so the retry loop doesn't exit early
+        output_file.write_text("partial")
+
+        mock_coord = AsyncMock()
+        mock_coord.wait_if_paused = AsyncMock(return_value=False)
+
+        call_count = {"n": 0}
+
+        async def mock_download_ytdlp(*args: Any, **kwargs: Any) -> Path | None:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return None  # First attempt fails
+            return output_file  # Second attempt succeeds
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            side_effect=mock_download_ytdlp,
+        ):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader._attempt_segment_resume",
+                return_value=None,  # Segment resume fails, so loop retries yt-dlp
+            ):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader._compute_backoff_delay",
+                    return_value=0.01,  # Short delay for tests
+                ) as mock_compute:
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader._wait_with_shutdown",
+                        AsyncMock(return_value=False),
+                    ) as mock_wait:
+                        result = await download_with_ytdlp_with_resume_fallback(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "https://cdn.example.com/video.m3u8",
+                            output_file,
+                            "720",
+                            None,
+                            test_settings,
+                            backoff_coordinator=mock_coord,
+                        )
+
+        assert result == output_file
+        assert call_count["n"] == 2, "Should have retried yt-dlp after first failure"
+        # Backoff should have been computed and waited between attempts
+        mock_compute.assert_called()
+        mock_wait.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_backoff_coordinator_consulted_on_retry(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that backoff_coordinator.wait_if_paused is called between retries."""
+        from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
+
+        output_file = tmp_path / "video.mp4"
+        output_file.write_text("partial")
+
+        mock_coord = AsyncMock()
+        mock_coord.wait_if_paused = AsyncMock(return_value=False)
+
+        call_count = {"n": 0}
+
+        async def mock_download_ytdlp(*args: Any, **kwargs: Any) -> Path | None:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return None
+            return output_file
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            side_effect=mock_download_ytdlp,
+        ):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader._attempt_segment_resume",
+                return_value=None,
+            ):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader._compute_backoff_delay",
+                    return_value=0.01,
+                ):
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader._wait_with_shutdown",
+                        AsyncMock(return_value=False),
+                    ):
+                        await download_with_ytdlp_with_resume_fallback(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "https://cdn.example.com/video.m3u8",
+                            output_file,
+                            "720",
+                            None,
+                            test_settings,
+                            backoff_coordinator=mock_coord,
+                        )
+
+        # Coordinator should have been consulted during the backoff
+        mock_coord.wait_if_paused.assert_called()

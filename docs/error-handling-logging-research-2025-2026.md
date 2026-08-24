@@ -3,6 +3,21 @@
 **Scope:** Python 3.12+ / structlog 25+ / FastAPI 0.110+ / Pydantic v2.  
 **Codebase context:** `mko_vkideo` (VK Video Downloader) — a Typer CLI using structlog, Pydantic v2, `StrEnum`, Python 3.12. No FastAPI currently, but recommendations cover both the existing CLI and a prospective FastAPI layer.
 
+## Implementation Status
+
+The following recommendations have been acted on in the CLI audit (Phase 01):
+
+| Section | Recommendation | Status |
+|---------|---------------|--------|
+| §3.2 | Replace dict-based dispatch `_EXCEPTION_STATUS_HANDLERS` with polymorphic `status_label()` on exceptions | ✅ Done — `_download_single` in `services/batch_downloader.py` uses `exc.status_label()` for all `VKDownloadError` subclasses; legacy `_map_exception_to_status` retained in `exceptions.py` for backward compatibility |
+| §6.4 | Remove `validate_cookie_source` validator (replaced with enum `CookieSource.FILE` removal) | ✅ Done — `CookieSource.FILE` removed from the enum; Typer rejects `file` at parsing time, no runtime `ValueError` needed |
+| §9 Priority 1 | Add `merge_contextvars` + `format_exc_info` to structlog processor chain | ⏳ Not yet — tracked in Phase 02 |
+| §9 Priority 3 | Migrate to `asyncio.TaskGroup` + `except*` | ⏳ Not yet — tracked in Phase 02 (async-migration) |
+| CLI-002 | Remove private-symbol imports from CLI entry layer | ✅ Done — `cli.py` uses public `sanitize_url_for_log()`, `is_valid_video_url()`, and `format_validation_error()` |
+| CLI-001 | Extract batch orchestration from `cli.py` into `services/batch_downloader.py` | ✅ Done — `run_batch()` is the public entry point; `_download_single`, `_run_batch_with_progress`, `_print_batch_summary` moved to service layer |
+| CLI-006 | Remove unimplemented `CookieSource.FILE` | ✅ Done — enum has only `NONE` and `BROWSER`; Typer rejects `file` at parse time |
+| CLI-007 | Refresh stale documentation | ✅ Done — `STRUCT.md`, `vkdownloader-overview.md`, `api-reference.md`, `cli-reference-clean.md`, `configuration.md` updated |
+
 ## Confidence & Verification
 
 | Finding | Confidence | Source |
@@ -57,13 +72,15 @@ try:
 except asyncio.CancelledError:
     raise                      # Always re-raise cancellation
 except QualityNotAvailableError as e:
-    return (url, "", _map_exception_to_status(e))
+    return (url, "", e.status_label())  # ✅ status_label() replaces _map_exception_to_status
 except VKDownloadError as e:
-    return (url, "", _map_exception_to_status(e))
+    return (url, "", e.status_label())  # ✅ status_label() replaces _map_exception_to_status
 except Exception as e:
     logger.exception("unexpected_error_in_batch_download", url=_strip_auth_params(url))
-    return (url, "", _map_exception_to_status(e))
+    return (url, "", f"unexpected_error: {type(e).__name__}")  # ✅ type-tagged label for non-domain exceptions
 ```
+
+> **Note:** `_download_single` now lives in `services/batch_downloader.py` (moved from `cli.py` per CLI-001). It uses `exc.status_label()` for all `VKDownloadError` subclasses (CLI-002). The legacy `_map_exception_to_status()` is retained in `exceptions.py` for backward compatibility but is no longer imported by the entry layer.
 
 ### 2.3 Exception Groups (PEP 654) for Concurrent Work
 
@@ -561,7 +578,7 @@ The codebase already redacts received values in `_format_validation_error` (`<re
 
 ### 6.4 Custom Validator Errors: Use `ValueError` or `PydanticCustomError`
 
-In validators, **never use `assert`** — Python strips `assert` statements under `python -O`. The codebase's `validate_cookie_source` uses `ValueError`, which is correct.
+In validators, **never use `assert`** — Python strips `assert` statements under `python -O`. The codebase previously had a `validate_cookie_source` validator that used `ValueError`; this has been replaced by removing `CookieSource.FILE` from the enum entirely (Typer rejects `file` at parse time).
 
 ```python
 from pydantic import field_validator, PydanticCustomError
@@ -788,7 +805,7 @@ processors=[
 
 ### Priority 1 (Immediate — correlation ID for batches)
 
-In `cli.py`'s `_run_batch_with_progress`, generate and bind a correlation ID:
+In `services/batch_downloader.py`'s `_run_batch_with_progress`, generate and bind a correlation ID:
 
 ```python
 import uuid
@@ -802,11 +819,7 @@ async def _run_batch_with_progress(urls, ...):
     ...
 ```
 
-And in `_download_single`, bind per-URL context:
-```python
-with bound_contextvars(video_id=_strip_video_id(url)):
-    ...download logic...
-```
+And in `_download_single` (also in `services/batch_downloader.py`), bind per-URL context using structlog's `bind_correlation_id` / `clear_correlation_id` utilities from `utils/correlation.py`.
 
 ### Priority 2 (Refactor exceptions to carry metadata)
 

@@ -60,8 +60,6 @@ def cleanup_signal_handlers() -> None:
     Must be called after the async context exits to allow re-registration
     on subsequent event loops in the same process.
     """
-    global _registered_signals
-
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

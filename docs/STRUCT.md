@@ -1,80 +1,50 @@
-Folder PATH listing for volume Windows10
-Volume serial number is D2F8-169C
-C:\PY_EXP\MKO_VKIDEO\SRC
-+---vkdownloader
-|   |   cli.py
-|   |   config.py
-|   |   exceptions.py
-|   |   stealth.min.js
-|   |   __init__.py
-|   |   
-|   +---infrastructure
-|   |   |   browser.py
-|   |   |   network_monitor.py
-|   |   |   __init__.py
-|   |   |   
-|   |   \---__pycache__
-|   |           adaptive_throttle.cpython-312.pyc
-|   |           browser.cpython-312.pyc
-|   |           http_client.cpython-312.pyc
-|   |           network_monitor.cpython-312.pyc
-|   |           __init__.cpython-312.pyc
-|   |           
-|   +---models
-|   |   |   dtos.py
-|   |   |   enums.py
-|   |   |   video.py
-|   |   |   __init__.py
-|   |   |   
-|   |   \---__pycache__
-|   |           dtos.cpython-312.pyc
-|   |           enums.cpython-312.pyc
-|   |           video.cpython-312.pyc
-|   |           __init__.cpython-312.pyc
-|   |           
-|   +---services
-|   |   |   cookies.py
-|   |   |   downloader.py
-|   |   |   downloader_throttle.py
-|   |   |   extractor.py
-|   |   |   ffmpeg_utils.py
-|   |   |   quality.py
-|   |   |   segment_downloader.py
-|   |   |   signal_handlers.py
-|   |   |   __init__.py
-|   |   |   
-|   |   \---__pycache__
-|   |           cookies.cpython-312.pyc
-|   |           downloader.cpython-312.pyc
-|   |           downloader_throttle.cpython-312.pyc
-|   |           extractor.cpython-312.pyc
-|   |           ffmpeg_utils.cpython-312.pyc
-|   |           quality.cpython-312.pyc
-|   |           segment_downloader.cpython-312.pyc
-|   |           signal_handlers.cpython-312.pyc
-|   |           __init__.cpython-312.pyc
-|   |           
-|   +---utils
-|   |   |   security.py
-|   |   |   url_sanitizer.py
-|   |   |   __init__.py
-|   |   |   
-|   |   \---__pycache__
-|   |           security.cpython-312.pyc
-|   |           url_sanitizer.cpython-312.pyc
-|   |           __init__.cpython-312.pyc
-|   |           
-|   \---__pycache__
-|           cli.cpython-312.pyc
-|           config.cpython-312.pyc
-|           exceptions.cpython-312.pyc
-|           __init__.cpython-312.pyc
-|           
-\---vkdownloader.egg-info
-        dependency_links.txt
-        entry_points.txt
-        PKG-INFO
-        requires.txt
-        SOURCES.txt
-        top_level.txt
-        
+# Project Structure
+
+Source layout of the `vkdownloader` package. Build artifacts (`__pycache__`,
+`.pyc`, `.egg-info`) are excluded — they are generated at runtime and should
+not be used as the source of truth for the project structure.
+
+```
+src/
+└── vkdownloader/
+    ├── __init__.py
+    ├── __main__.py              # `python -m vkdownloader` entry point
+    ├── cli.py                   # Typer CLI commands (thin entry layer)
+    ├── config.py                # Settings model, logging, env validation
+    ├── exceptions.py            # Domain exceptions + legacy status mapping
+    ├── stealth.min.js           # Anti-bot browser evasion stub
+    ├── infrastructure/
+    │   ├── __init__.py
+    │   ├── browser.py           # Playwright-based browser cookie extraction
+    │   └── network_monitor.py   # Download rate watchdog
+    ├── models/
+    │   ├── __init__.py
+    │   ├── dtos.py              # Data transfer objects (Stream, StreamInfo)
+    │   ├── enums.py             # StrEnum constants (Quality, Method, CookieSource, etc.)
+    │   └── video.py             # Video metadata dataclass
+    ├── services/
+    │   ├── __init__.py
+    │   ├── batch_downloader.py  # Batch orchestration (ConcurrencyTracker, _TrackedSemaphore, run_batch)
+    │   ├── concurrency.py       # Concurrency primitives (re-export / compatibility)
+    │   ├── cookies.py           # Browser cookie acquisition and Netscape formatting
+    │   ├── downloader.py        # Single-video download pipeline (download_video)
+    │   ├── downloader_throttle.py # Adaptive throttling (ProgressManager, URLBackoffCoordinator, get_shutdown_event)
+    │   ├── extractor.py         # Stream extraction (VKVideoExtractor, is_valid_video_url)
+    │   ├── ffmpeg_utils.py      # FFmpeg discovery and stream concatenation
+    │   ├── quality.py           # Quality selection (QualitySelector)
+    │   ├── segment_downloader.py # HTTP segment downloader with retries
+    │   └── signal_handlers.py   # SIGINT/SIGTERM handler registration
+    └── utils/
+        ├── __init__.py          # Exports sanitize_url_for_log, _strip_auth_params, validate_output_path
+        ├── correlation.py       # Correlation ID binding (structlog contextvars)
+        ├── security.py          # Security utilities (output path validation, title sanitization)
+        └── url_sanitizer.py     # URL redaction (_strip_auth_params, sanitize_url_for_log)
+```
+
+## Layering
+
+- **Entry layer**: `cli.py`, `__main__.py` — argument parsing, Settings construction, error presentation, exit codes. No business logic or private-symbol imports from service/utils layers.
+- **Service layer**: `services/` — streaming download orchestration, stream extraction, quality selection, throttling, batch coordination. Imports private symbols from `utils/` internally.
+- **Models layer**: `models/` — Pydantic/StrEnum definitions shared with services and entry layer.
+- **Utils layer**: `utils/` — low-level helpers (URL sanitization, correlation IDs, security validation).
+- **Infrastructure layer**: `infrastructure/` — Playwright browser automation, network monitoring.

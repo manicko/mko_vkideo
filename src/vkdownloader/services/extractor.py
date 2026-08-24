@@ -24,6 +24,18 @@ logger = get_logger(__name__)
 VIDEO_ID_PATTERN = re.compile(r"video-(-?\d+)_(\d+)")
 
 
+def is_valid_video_url(url: str) -> bool:
+    """Check if a URL matches the VK video URL pattern.
+
+    Args:
+        url: The URL to validate.
+
+    Returns:
+        True if the URL contains a valid VK video identifier, False otherwise.
+    """
+    return bool(VIDEO_ID_PATTERN.search(url))
+
+
 class VKVideoExtractor:
     """Extracts video stream information from VK video URLs using browser automation."""
 
@@ -136,12 +148,26 @@ class VKVideoExtractor:
         return streams, cookies, raw_cookies
 
     async def _extract_with_ytdlp(self, url: str, video_id: str) -> tuple[list[Stream], str | None]:
-        """Extract streams and title using yt-dlp (handles VK protections)."""
+        """Extract streams and title using yt-dlp (handles VK protections).
+
+        Propagates relevant :class:`Settings` fields (``socket_timeout``,
+        ``retries``, ``fragment_retries``, ``throttled_rate``) into the
+        yt-dlp options dict and wraps the blocking extraction in
+        ``asyncio.wait_for`` with ``settings.download_timeout`` so the
+        event loop is not blocked indefinitely (INT-003).
+        """
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "nocheckcertificate": not self.settings.ssl_verify,
+            # INT-003: propagate Settings to yt-dlp library-mode so it
+            # respects the same timeout/retry/throttle config as the
+            # subprocess CLI path (downloader.py _build_ytdlp_cli_command).
+            "socket_timeout": self.settings.download_timeout,
+            "retries": self.settings.max_retries,
+            "fragment_retries": self.settings.max_retries,
+            "throttled_rate": self.settings.throttled_rate,
         }
 
         def _sync_extract() -> tuple[list[Stream], str | None]:
@@ -193,9 +219,25 @@ class VKVideoExtractor:
 
             return found_streams, title
 
-        # Run in thread pool to avoid blocking
+        # Run in thread pool to avoid blocking, with a timeout (INT-003)
+        # so a hung yt-dlp extraction cannot block the event loop
+        # indefinitely.
         loop = asyncio.get_running_loop()
-        streams, title = await loop.run_in_executor(None, _sync_extract)
+        try:
+            streams, title = await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_extract),
+                timeout=self.settings.download_timeout,
+            )
+        except TimeoutError:
+            logger.error(
+                "ytdlp_extraction_timeout",
+                url=_strip_auth_params(url),
+                timeout=self.settings.download_timeout,
+            )
+            raise ExtractionError(
+                f"yt-dlp extraction timed out after {self.settings.download_timeout}s "
+                f"for {_strip_auth_params(url)}"
+            ) from None
 
         logger.debug("ytdlp_extraction_complete", count=len(streams))
         return streams, title

@@ -1,11 +1,12 @@
 """Configuration module for VK Video Downloader."""
 
+import difflib
 import logging
 import os
 from pathlib import Path
 
 import structlog
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings
 
 from vkdownloader.models.enums import CookieSource, LogLevel
@@ -16,10 +17,19 @@ logger: structlog.BoundLogger = structlog.get_logger(__name__)
 class Settings(BaseSettings):
     """Application settings with defaults and environment variable support.
 
-    Note: unknown VKDOWNLOADER_* environment variables are silently ignored due to
-    pydantic-settings v2 extra='forbid' limitation — it only applies to explicit
-    kwargs passed to the model constructor, not to environment variables.
-    Use :func:`warn_unknown_env_vars` to detect typos before construction.
+    Configuration sources are resolved in priority order:
+    1. Explicit keyword arguments to the constructor
+    2. ``VKDOWNLOADER_*`` environment variables (``os.environ``)
+    3. ``.env`` file in the current working directory
+    4. Field defaults
+
+    Note on unknown variables:
+    - **``.env`` typos:** Rejected at construction with ``extra='forbid'``
+      (a ValidationError). Use :func:`warn_unknown_env_vars` to detect them
+      *before* construction crashes.
+    - **OS environment typos:** Silently ignored by pydantic-settings
+      (the default value is used). :func:`warn_unknown_env_vars` detects
+      and warns about these.
 
     The .env file is resolved relative to the current working directory (CWD),
     not relative to the package installation location.
@@ -96,7 +106,7 @@ class Settings(BaseSettings):
     )
     cookie_source: CookieSource = Field(
         default=CookieSource.NONE,
-        description="Cookie acquisition strategy: none or browser (file not implemented)",
+        description="Cookie acquisition strategy: none or browser",
     )
 
     # Logging settings
@@ -109,9 +119,36 @@ class Settings(BaseSettings):
         description="Optional log file path",
     )
 
-    @field_validator("download_dir", "log_file", mode="before")
+    @field_validator("download_dir", mode="before")
+    @classmethod
+    def normalize_download_dir(cls, v: object) -> object:
+        """Map empty-string download_dir to the field default (use-default semantics).
+
+        An empty string typically arises when a user sets
+        ``VKDOWNLOADER_DOWNLOAD_DIR=""`` in ``.env`` intending "use the default."
+        Rather than crashing with an opaque ``path_type`` ValidationError, we
+        silently fall back to the default download directory.
+
+        This mirrors how ``log_file=""`` is handled (map to ``None`` for
+        optional path fields) and ensures consistent empty-string behavior
+        across all path-typed fields.
+        """
+        if v == "":
+            logger.debug("download_dir_empty_string_using_default")
+            return Settings.model_fields["download_dir"].default
+        return v
+
+    @field_validator("log_file", mode="before")
     @classmethod
     def empty_string_to_none(cls, v: object) -> object:
+        """Map empty-string log_file to None (no file logging).
+
+        An empty string (e.g. ``VKDOWNLOADER_LOG_FILE=""``) is coerced to
+        ``None`` so pydantic treats it as "no log file," consistent with the
+        default. This differs from ``download_dir`` (see ``normalize_download_dir``),
+        which falls back to the field default instead of ``None``. See CFG-002
+        for the rationale behind this asymmetry.
+        """
         if v == "":
             return None
         return v
@@ -122,9 +159,9 @@ class Settings(BaseSettings):
         """Expand ``~`` and resolve to an absolute path.
 
         ``None`` values are passed through unchanged (empty-string inputs
-        are handled separately by ``empty_string_to_none`` and are not
-        coerced to ``None`` here -- see CFG-001 for the related crash
-        behaviour when ``LOG_FILE`` is an empty string).
+        are handled separately by ``normalize_download_dir`` for download_dir
+        and ``empty_string_to_none`` for log_file, and are not coerced to
+        ``None`` here).
         """
         if v is None:
             return v
@@ -142,20 +179,6 @@ class Settings(BaseSettings):
             return v
         return LogLevel(v.upper())
 
-    @field_validator("cookie_source", mode="before")
-    @classmethod
-    def validate_cookie_source(cls, v: object) -> object:
-        """Reject CookieSource.FILE at model construction (not implemented)."""
-        if isinstance(v, CookieSource) and v == CookieSource.FILE:
-            raise ValueError(
-                "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead."
-            )
-        if isinstance(v, str) and v.lower() == "file":
-            raise ValueError(
-                "CookieSource.FILE is not implemented. Use 'none' or 'browser' instead."
-            )
-        return v
-
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -168,30 +191,117 @@ class Settings(BaseSettings):
 _ENV_VAR_PREFIX = "VKDOWNLOADER_"
 
 
+def format_validation_error(error: ValidationError) -> str:
+    """Format a Pydantic ValidationError into a concise, user-facing message.
+
+    For ``extra_forbidden`` errors, includes a "did you mean" suggestion
+    based on the closest valid field name, to help users diagnose typos
+    in ``VKDOWNLOADER_*`` variables.
+
+    Args:
+        error: The ValidationError to format.
+
+    Returns:
+        A human-readable string listing each field error with a hint to
+        check the .env file or environment variables.
+    """
+    lines = [
+        "Configuration error: one or more settings have invalid values.",
+        "Check your .env file or VKDOWNLOADER_* environment variables:",
+    ]
+    valid_field_names = sorted(Settings.model_fields.keys())
+    for err in error.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = err.get("msg", "validation failed")
+        error_type = err.get("type", "")
+        lines.append(f"  - {loc}: {msg}")
+
+        # For extra_forbidden errors, suggest the nearest valid field name
+        # to help users diagnose typos (e.g. VKDOWNLOADER_MAXRETRIES -> MAX_RETRIES)
+        if error_type == "extra_forbidden" and loc:
+            close = difflib.get_close_matches(loc, valid_field_names, n=1, cutoff=0.3)
+            if close:
+                env_var = f"{_ENV_VAR_PREFIX}{close[0].upper()}"
+                lines.append(f"    Did you mean: {env_var}? (check for typos)")
+            else:
+                lines.append(f"    Valid fields: {', '.join(valid_field_names)}")
+
+        lines.append("    Received: <redacted>")
+    lines.append("Fix the offending value(s) and try again.")
+    return "\n".join(lines)
+
+
 def _build_valid_env_vars() -> set[str]:
     """Build the set of valid VKDOWNLOADER_* environment variable names."""
     return {_ENV_VAR_PREFIX + name.upper() for name in Settings.model_fields}
 
 
-def warn_unknown_env_vars() -> list[str]:
-    """Warn about unknown VKDOWNLOADER_* environment variables.
+def _scan_env_file(env_path: Path = Path(".env")) -> dict[str, str]:
+    """Parse a ``.env`` file and return its key-value pairs.
 
-    pydantic-settings v2 with ``extra='forbid'`` only rejects unknown kwargs
-    passed to the model constructor, not unknown environment variables. A
-    misspelled ``VKDOWNLOADER_*`` variable is silently dropped and the default
-    value is used, which can cause confusing "my config isn't taking effect"
-    behavior.
+    Uses the same simple ``KEY=VALUE`` semantics as pydantic-settings.
+    Lines starting with ``#`` and blank lines are ignored. Surrounding
+    quotes on values are stripped.
 
-    This function scans ``os.environ`` for any ``VKDOWNLOADER_``-prefixed key
-    not present in the model's field names and emits a warning log for each.
+    Args:
+        env_path: Path to the .env file (default: ``.env`` in CWD).
 
     Returns:
-        List of unknown environment variable names found.
+        Dict mapping environment variable names to their raw string values.
+    """
+    env_vars: dict[str, str] = {}
+    if not env_path.exists():
+        return env_vars
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Strip surrounding quotes if present (single or double)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            env_vars[key] = value
+    return env_vars
+
+
+def warn_unknown_env_vars(env_file: Path = Path(".env")) -> list[str]:
+    """Warn about unknown VKDOWNLOADER_* environment variables.
+
+    Scans both the process environment (``os.environ``) and the resolved
+    ``.env`` file for any ``VKDOWNLOADER_``-prefixed key that does not
+    correspond to a recognized ``Settings`` field. This catches typos in
+    both configuration mechanisms.
+
+    - **OS environment typos:** Silently ignored by pydantic-settings
+      (the default value is used). This function detects and warns.
+    - **.env file typos:** Rejected by ``extra='forbid'`` at construction
+      with a ValidationError. This function provides early detection
+      *before* the crash, using the same typo guard as OS-env detection.
+
+    Args:
+        env_file: Path to the .env file to scan (default: ``.env`` in CWD).
+
+    Returns:
+        List of unknown environment variable names found in either
+        ``os.environ`` or the ``.env`` file.
     """
     valid_env_vars = _build_valid_env_vars()
-    unknown = [
+
+    # Scan OS environment
+    os_unknown = [
         key for key in os.environ if key.startswith(_ENV_VAR_PREFIX) and key not in valid_env_vars
     ]
+
+    # Scan .env file for typos (detects .env typos before they crash construction)
+    file_env = _scan_env_file(env_file)
+    file_unknown = [
+        key for key in file_env if key.startswith(_ENV_VAR_PREFIX) and key not in valid_env_vars
+    ]
+
+    unknown = os_unknown + file_unknown
     for key in unknown:
         logger.warning(
             "unknown_env_var_ignored",
@@ -224,6 +334,13 @@ def setup_logging(settings: Settings | None = None) -> None:
             raise OSError(
                 f"Failed to create log file parent directory '{log_path.parent}': {e}"
             ) from e
+        # SEC-003: Create log file with owner-only permissions (0o600) before
+        # FileHandler opens it, so subprocess output sanitized for SEC-002
+        # is not readable by other local users.
+        if not log_path.exists():
+            log_path.touch(mode=0o600)
+        else:
+            log_path.chmod(0o600)
 
     logging.basicConfig(
         format="%(message)s",

@@ -96,7 +96,6 @@ Extract streams using browser automation to capture cookies for ffmpeg authentic
 **Behavior:**
 - When `cookie_source=NONE` and `force_browser=False`: Returns streams without cookies via yt-dlp
 - When `cookie_source=BROWSER`: Launches browser, captures cookies from active session
-- When `cookie_source=FILE`: Raises `NotImplementedError` (not implemented)
 - When `force_browser=True`: Forces browser launch regardless of cookie_source setting
 
 **Raises:** `ValueError` if URL does not contain valid video identifier.
@@ -188,9 +187,11 @@ Initialize HLSDownloader with optional settings.
 |------|------|---------|-------------|
 | settings | Settings \| None | None | Application settings. Uses global settings if not provided. |
 
-#### `download_with_ffmpeg(m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None, progress_callback: Callable[[FfmpegProgress], None] | None = None) -> Path | None`
+#### `download_with_ffmpeg(m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None, raw_cookies: list[Cookie] | None = None, progress_callback: Callable[[FfmpegProgress], None] | None = None) -> Path | None`
 
 Download HLS stream to MP4 using ffmpeg.
+
+Cookies (if provided) are passed via ffmpeg's `cookies` protocol option using a temporary Netscape cookie file (created with `0o600` permissions), not via the `-headers @file` syntax (which is non-functional). All ffmpeg arguments (including the m3u8 URL with signed CDN tokens and the cookie file path) are passed via a temporary argument file (`ffmpeg @argfile`) to prevent exposure in process listings.
 
 **Parameters:**
 | Name | Type | Default | Description |
@@ -199,6 +200,7 @@ Download HLS stream to MP4 using ffmpeg.
 | output_file | Path | Required | Path where the output MP4 file will be saved. |
 | quality | str | "best" | Quality identifier for logging purposes. |
 | cookies | str \| None | None | Cookies string for authenticated downloads. |
+| raw_cookies | list[Cookie] \| None | None | Optional list of Playwright Cookie objects. |
 | progress_callback | Callable[[FfmpegProgress], None] \| None | None | Optional callback for real-time progress updates. |
 
 **Returns:** Path to downloaded MP4 file on success, None on failure.
@@ -217,6 +219,10 @@ result = await downloader.download_with_ffmpeg(
 ### DownloaderThrottle
 
 Location: `vkdownloader.services.downloader_throttle`
+
+> **Renamed:** This class was renamed to `URLBackoffCoordinator`. See the `URLBackoffCoordinator` section below for current API.
+
+**Deprecated name:** `DownloaderThrottle` (no longer exists in this module)
 
 Rate limiting utilities with AWS Full Jitter exponential backoff for handling VK's anti-bot protection.
 
@@ -436,10 +442,13 @@ request = HLSDownloadRequest(
     output_file=Path("output.mp4"),
     quality="720",
     cookies="session=abc123",
+    progress_callback=None,
+)
+result = await download_hls_with_resume(
+    request,
     settings=settings,
     extractor=extractor,
 )
-result = await download_hls_with_resume(request)
 ```
 
 **Features:**
@@ -448,7 +457,7 @@ result = await download_hls_with_resume(request)
 - Playlist signature validation: stores SHA-256 hash of segment URLs in `.signature` file; stale segments from a previous playlist are automatically cleared on resume
 - Refreshes expired m3u8 tokens via browser automation (when cookie_source=BROWSER)
 - Applies anti-detection delay in sequential mode (max_concurrent_downloads=1)
-- Cleans up partial downloads on failure
+- Preserves partial segments on failure for segment-level resume; cleans up only on successful merge
 
 ---
 
@@ -466,6 +475,10 @@ async def _download_segment(
     headers: dict[str, str],
     max_concurrent_downloads: int = 1,
     segment_index: int = 0,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+    video_url: str | None = None,
+    max_retries: int = 3,
+    download_timeout: int = 300,
 ) -> bool:
     ...
 ```
@@ -477,20 +490,24 @@ async def _download_segment(
 | segment_url | str | Required | URL of the segment to download. |
 | output_path | Path | Required | Path to save the downloaded segment. |
 | headers | dict[str, str] | Required | Request headers to use. |
-| max_concurrent_downloads | int | 1 | Maximum concurrent downloads; when 1, uses retry with backoff. |
+| max_concurrent_downloads | int | 1 | Maximum concurrent downloads; when 1, uses sequential retry with backoff. |
 | segment_index | int | 0 | Index of the segment being downloaded (for logging). |
+| backoff_coordinator | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
+| video_url | str \| None | None | Original video URL for coordinator keying (required if coordinator provided). |
+| max_retries | int | 3 | Maximum retry attempts for rate-limited (429/5xx) responses. |
+| download_timeout | int | 300 | Total timeout for HTTP request in seconds. |
 
 **Returns:** True on success, False on failure.
 
 **Behavior:**
 - When `max_concurrent_downloads=1`: Uses `_retry_429_with_backoff` for rate-limited downloads
-- When `max_concurrent_downloads>1`: Uses direct download without retry backoff
+- When `max_concurrent_downloads>1`: Uses `_run_parallel_download_with_backoff` which implements full AWS Full Jitter backoff via the shared `URLBackoffCoordinator` (same backoff as sequential mode, plus coordinator pause for batched rate limit coordination)
 
 ---
 
 ### download_with_ytdlp_with_resume_fallback
 
-Location: `vkdownloader.services.downloader`
+Location: `vkdownloader.services.ytdlp_downloader`
 
 Download using yt-dlp with automatic segment-based resume fallback on failure.
 
@@ -500,6 +517,8 @@ Download using yt-dlp with automatic segment-based resume fallback on failure.
 3. Segment download resumes from existing segment files on disk
 
 **Note:** Token refresh during resume always forces browser launch, regardless of `cookie_source` setting.
+
+**Backoff (SRV-006):** Between yt-dlp retry attempts, a jittered backoff delay is computed via `_compute_backoff_delay` and applied via `_wait_with_shutdown`. If a `backoff_coordinator` (URLBackoffCoordinator) is provided, its `wait_if_paused` method is also consulted before each retry.
 
 ---
 
@@ -653,25 +672,10 @@ Cookie acquisition strategy for video downloads. Controls whether browser is lau
 |-------|-------------|
 | `NONE` | "none" — No browser launch, fastest for public videos only (default) |
 | `BROWSER` | "browser" — Launch browser to extract real cookies for authenticated content |
-| `FILE` | "file" — **Rejected with ValueError**. Not implemented; use `none` or `browser` instead |
 
 ---
 
 ## Infrastructure
-
-### HttpClient
-
-Location: `vkdownloader.infrastructure.http_client`
-
-Async context manager for HTTP requests with browser-like headers and retry logic.
-
-**Methods:**
-| Method | Description |
-|--------|-------------|
-| `get(url: str) -> str` | Perform GET request with retry logic |
-| `download_file(url: str, output_path: Path, progress_callback: Callable?) -> None` | Download file with progress tracking |
-
----
 
 ### BrowserManager
 
@@ -717,7 +721,6 @@ Thread-safe progress state manager for concurrent batch downloads. Encapsulates 
 | `update(url_index, downloaded, total)` | Thread-safe progress state update |
 | `get_formatted_progress(url_count)` | Returns formatted string for all URLs |
 | `clear()` | Clear progress state for new batch |
-| `get_progress(url_index)` | Get progress tuple for specific URL |
 
 ---
 
@@ -854,7 +857,7 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
 | `throttled_rate` | `10000` | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s). |
 | `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
-| `cookie_source` | `NONE` | Cookie acquisition strategy: none, browser (file is not implemented) |
+| cookie_source | `NONE` | Cookie acquisition strategy: none or browser |
 | `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | `log_file` | `None` | Optional log file path for file output |
 

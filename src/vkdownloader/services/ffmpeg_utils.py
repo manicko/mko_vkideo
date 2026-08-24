@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +14,43 @@ logger = get_logger(__name__)
 
 # Module-level cache: PATH lookup happens only once per process lifetime
 _ffmpeg_available: bool | None = None
+
+
+async def iter_process_lines(
+    stream: asyncio.StreamReader,
+    shutdown_event: asyncio.Event,
+    *,
+    on_shutdown: Callable[[], Awaitable[None]] | None = None,
+) -> AsyncIterator[bytes]:
+    """Yield lines from a subprocess stream, respecting a shutdown event.
+
+    This consolidates the repeated ``readline`` loop pattern used across
+    yt-dlp stdout draining, ffmpeg stderr draining, and progress monitoring
+    into a single utility (STR-008).
+
+    The loop terminates when:
+    - ``shutdown_event`` is set (an optional ``on_shutdown`` callback can
+      cancel the subprocess so ``readline`` unblocks), or
+    - the stream is exhausted (``readline`` returns an empty bytes object).
+
+    Args:
+        stream: A subprocess ``StreamReader`` to read lines from.
+        shutdown_event: asyncio Event that signals cancellation.
+        on_shutdown: Optional async callback invoked when shutdown is
+            detected, e.g. to cancel the underlying subprocess.
+
+    Yields:
+        Raw ``bytes`` lines from the stream (including trailing newline).
+    """
+    while True:
+        if shutdown_event.is_set():
+            if on_shutdown is not None:
+                await on_shutdown()
+            break
+        line = await stream.readline()
+        if not line:
+            break
+        yield line
 
 
 def check_ffmpeg_available() -> bool:
@@ -94,21 +131,25 @@ class ProgressParser:
 async def read_progress(
     stderr: asyncio.StreamReader,
     stderr_collector: list[bytes] | None = None,
+    *,
+    shutdown_event: asyncio.Event | None = None,
+    on_shutdown: Callable[[], Awaitable[None]] | None = None,
 ) -> AsyncIterator[FfmpegProgress]:
     """Read ffmpeg progress output in real-time.
 
     Args:
         stderr: StreamReader from ffmpeg process stderr.
         stderr_collector: Optional list to collect raw stderr lines for error handling.
+        shutdown_event: Optional asyncio Event; if set, the loop breaks early.
+        on_shutdown: Optional async callback invoked when shutdown is detected.
 
     Yields:
         FfmpegProgress objects as they are parsed.
     """
     progress = FfmpegProgress()
-    while True:
-        line = await stderr.readline()
-        if not line:
-            break
+    async for line in iter_process_lines(
+        stderr, shutdown_event or asyncio.Event(), on_shutdown=on_shutdown
+    ):
         if stderr_collector is not None:
             stderr_collector.append(line)
         parsed = ProgressParser.parse_line(line.decode())

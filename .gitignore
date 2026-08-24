@@ -26,6 +26,13 @@ wheels/
 
 # Environment configuration
 .env
+.env.local
+.env.*.local
+!.env.example
 
 # Temp backup files
 old_downloader_tmp.txt
+
+# Audit tooling scripts and outputs (not part of application codebase)
+.temp/
+.ai/builders/

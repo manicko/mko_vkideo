@@ -1,6 +1,6 @@
 """Tests for correlation ID utilities."""
 
-import uuid
+from unittest.mock import MagicMock, patch
 
 from vkdownloader.utils.correlation import (
     bind_correlation_id,
@@ -25,12 +25,16 @@ def test_generate_correlation_id_uniqueness() -> None:
 
 def test_generate_correlation_id_truncates_uuid() -> None:
     """Test that generate_correlation_id truncates uuid4 to 8 hex chars."""
-    full = uuid.uuid4().hex
-    # Ensure the generated ID is a prefix of some uuid4 hex
-    cid = generate_correlation_id()
+    fixed_hex = "abcdef0123456789abcdef0123456789"
+    mock_uuid = MagicMock()
+    mock_uuid.hex = fixed_hex
+
+    with patch("vkdownloader.utils.correlation.uuid.uuid4", return_value=mock_uuid):
+        cid = generate_correlation_id()
+
+    assert cid == fixed_hex[:8]
     assert len(cid) == 8
-    # Verify it's a valid hex string
-    int(cid, 16)
+    int(cid, 16)  # Verify it's a valid hex string
 
 
 def test_bind_and_clear_correlation_id() -> None:
