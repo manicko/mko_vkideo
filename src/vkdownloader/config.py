@@ -93,10 +93,10 @@ class Settings(BaseSettings):
         description="Maximum concurrent downloads",
     )
     throttled_rate: int = Field(
-        default=10000,
-        ge=1000,
+        default=100000,
+        ge=50000,
         le=1000000,
-        description="Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s).",
+        description="Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s).",
     )
     http_chunk_size: int = Field(
         default=0,
