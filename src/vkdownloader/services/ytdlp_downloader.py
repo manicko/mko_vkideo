@@ -263,13 +263,19 @@ def _build_ytdlp_cli_command(
         str(settings.max_concurrent_downloads),
         "--throttled-rate",
         str(settings.throttled_rate),
-        "--http-chunk-size",
-        str(settings.http_chunk_size),
         "--user-agent",
         user_agent,
         "--referer",
         "https://vkvideo.ru/",
     ]
+
+    # --http-chunk-size forces range-request-based downloading of HLS segments.
+    # When enabled (> 0), it can cause silent data corruption on CDNs that do not
+    # properly support HTTP Range headers, producing files with corrupted segments
+    # ("broken chunks in the middle"). Disabled by default (0) for reliability.
+    # Only include when explicitly enabled by the user.
+    if settings.http_chunk_size > 0:
+        cmd.extend(["--http-chunk-size", str(settings.http_chunk_size)])
 
     if not settings.ssl_verify:
         cmd.append("--no-check-certificates")

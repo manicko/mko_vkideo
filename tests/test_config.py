@@ -133,8 +133,8 @@ def test_throttled_rate_validation(test_settings: Settings) -> None:
 
 
 def test_http_chunk_size_default(test_settings: Settings) -> None:
-    """Test http_chunk_size default value is 10485760."""
-    assert test_settings.http_chunk_size == 10485760
+    """Test http_chunk_size default value is 0 (disabled for reliable HLS)."""
+    assert test_settings.http_chunk_size == 0
 
 
 def test_http_chunk_size_validation(test_settings: Settings) -> None:
@@ -145,8 +145,9 @@ def test_http_chunk_size_validation(test_settings: Settings) -> None:
     test_settings = Settings(http_chunk_size=104857600)
     assert test_settings.http_chunk_size == 104857600
 
-    with pytest.raises(ValidationError):
-        Settings(http_chunk_size=1048575)  # Below minimum
+    # 0 is valid (disabled)
+    test_settings = Settings(http_chunk_size=0)
+    assert test_settings.http_chunk_size == 0
 
     with pytest.raises(ValidationError):
         Settings(http_chunk_size=104857601)  # Above maximum

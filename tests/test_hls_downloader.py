@@ -814,8 +814,15 @@ class TestYtdlpCliCommand:
         idx = cmd.index("--throttled-rate")
         assert cmd[idx + 1] == str(test_settings.throttled_rate)
 
-    def test_cli_command_includes_http_chunk_size(self, test_settings: Settings) -> None:
-        """Test CLI command includes --http-chunk-size from settings."""
+    def test_cli_command_excludes_http_chunk_size_by_default(
+        self, test_settings: Settings
+    ) -> None:
+        """Test CLI command does NOT include --http-chunk-size by default.
+
+        The --http-chunk-size flag forces range-request-based downloading of HLS
+        segments, which can cause silent data corruption on CDNs that do not
+        properly support HTTP Range headers. Disabled by default (http_chunk_size=0).
+        """
         cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
@@ -825,9 +832,23 @@ class TestYtdlpCliCommand:
             raw_cookies=None,
         )
 
+        assert "--http-chunk-size" not in cmd
+
+    def test_cli_command_includes_http_chunk_size_when_enabled(self) -> None:
+        """Test CLI command includes --http-chunk-size when explicitly set > 0."""
+        custom_settings = Settings(http_chunk_size=10485760)
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=custom_settings.user_agent,
+            settings=custom_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
         assert "--http-chunk-size" in cmd
         idx = cmd.index("--http-chunk-size")
-        assert cmd[idx + 1] == str(test_settings.http_chunk_size)
+        assert cmd[idx + 1] == "10485760"
 
     def test_cli_command_custom_values(self) -> None:
         """Test CLI command accepts custom settings values."""

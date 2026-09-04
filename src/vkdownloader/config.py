@@ -99,10 +99,14 @@ class Settings(BaseSettings):
         description="Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s).",
     )
     http_chunk_size: int = Field(
-        default=10485760,
-        ge=1048576,
+        default=0,
+        ge=0,
         le=104857600,
-        description="HTTP chunk size in bytes for segment downloads",
+        description="HTTP chunk size in bytes for yt-dlp range-request downloads. "
+        "Set to 0 (default) to disable --http-chunk-size for reliable HLS segment "
+        "downloads. When non-zero, yt-dlp downloads each segment in fixed-size "
+        "range requests, which can cause data corruption on CDNs that do not "
+        "properly support HTTP Range headers. Advanced users only.",
     )
     cookie_source: CookieSource = Field(
         default=CookieSource.NONE,

@@ -856,7 +856,7 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
 | `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
 | `throttled_rate` | `10000` | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 10000 (10KB/s). |
-| `http_chunk_size` | `10485760` | HTTP chunk size for segment downloads |
+| `http_chunk_size` | `0` | HTTP chunk size in bytes for yt-dlp range-request downloads. 0 disables for reliable HLS segment downloads; non-zero is advanced |
 | cookie_source | `NONE` | Cookie acquisition strategy: none or browser |
 | `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | `log_file` | `None` | Optional log file path for file output |
