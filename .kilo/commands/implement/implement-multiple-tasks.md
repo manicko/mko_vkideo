@@ -32,14 +32,15 @@ Follow the process below step by step
 
 - `AGENTS.md`
 - `docs/SPEC.md`
+- `README.md`
 
 Summarize into `{MAIN_CONTEXT}`
 
 
 ## 3. Prepare Execution Loop
 
-- Read execution order: `/.ai/tasks/todo/order.yaml` to understand the dependencies 
-- List task-files in `/.ai/tasks/todo/*`
+- Read execution order: `.ai/tasks/todo/order.yaml` to understand the dependencies 
+- List task-files in `.ai/tasks/todo/*`
 - Select up to `{MAX_TASKS}` files as `{TASKS_FILES_TO_IMPLEMENT}`, preserving execution order.
 
 
@@ -53,15 +54,15 @@ For each task file in `{TASKS_FILES_TO_IMPLEMENT}` one at a time:
 
 ## What To Do
 1. Read the task file {TASK_FILE_ABS_PATH}. Understand scope, affected files, acceptance criteria.
-2. Read `docs/99-reference/ast-editor.md` for proper tools usage. Always use replace_function  to avoid indentation errors.
+2. Read `docs/98-reference/ast-editor.md` for proper tools usage. Always use replace_function  to avoid indentation errors.
 2. Validate preconditions: semantic targets exist, depends_on tasks are done.
   If already implemented: rename to *_DONE.yaml, move to done/, return IMPLEMENTATION_COMPLETE.
 3. Implement: edit only required files.  
 4. If found a bug or any problem not relates to the task - don't solve, but create the new file with report to .ai/audit/00-bug_report/ХХ-report.md
 XX - free number.
 5. Validate:
-  - Python: uv run ruff check <files>, uv run mypy <files>, uv run pytest <paths>
-  - Frontend: npm run build, npm run lint, npm run test
+   - Python: uv run ruff check <files>, uv run mypy <files>, uv run basedpyright <files>, uv run pytest <paths>
+   - Frontend: npm run build, npm run lint, npm run test
   Fix only issues caused by your changes.
   -If tests conflict with architecture:
     -- update tests

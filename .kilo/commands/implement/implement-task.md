@@ -31,14 +31,14 @@ Execute validated semantic development tasks safely while:
 ## Step 1 — Study  Task Goals
 
 Take the first task-file by execution order from:
-- `/.ai/tasks/todo`
+- `.ai/tasks/todo`
 
 
 ## Step 2 — Preparation
 
 Before implementation study:
-- IMPORTANT: `/.ai/context/commands.md`
-- Semantic structure: `/.ai/structure/*`
+- IMPORTANT: `.ai/context/commands.md`
+- Semantic structure: `.ai/structure/*`
 - `AGENTS.md`
 - project architecture
 - existing module patterns
@@ -103,6 +103,7 @@ Run checks depending on what was changed:
 **Python files** (`*.py`):
 - Lint: `uv run ruff check <affected_files_or_dirs>`
 - Type check: `uv run mypy <affected_files_or_dirs>`
+- Type check (basedpyright): `uv run basedpyright <affected_files_or_dirs>`
 
 **TypeScript / React files** (`*.ts`, `*.tsx`):
 - Type check: `npm run build` (runs `tsc -b`) — from `frontend/` directory
@@ -124,14 +125,14 @@ Do not degrade architecture to satisfy outdated tests.
 
 ## Step 7 — Completion
 - Mark task file name as done (`*_DONE.yaml`)
-- Move file to `/.ai/tasks/done`
-- Ensure the file is no more presented in `/.ai/tasks/todo`
+- Move file to `.ai/tasks/done`
+- Ensure the file is no more presented in `.ai/tasks/todo`
 
 ---
 
 ## Step 8 — If unrelated problems are discovered
 
-1. Check `/.ai/audit/problems/`
+1. Check `.ai/audit/problems/`
 2. If matching problem exists extend/update existing problem description if needed
 3. If problem does NOT exist create a new detailed problem report
 
@@ -179,7 +180,7 @@ Task files are moved with PowerShell only: `Rename-Item`, `Move-Item`. Never `gi
 
 ## Step 9 — Commit Changes
 
-1. `git add -A` (or `git add <specific-files>`)
+1.  `git add <specific-files>`
 2. Check `git status --porcelain` — if empty, skip commit
 3. Determine commit type from task content: `feat` (new feature), `fix` (bug fix), `refactor` (restructure), `test` (tests only), `chore` (other)
 4. Determine scope from affected module (e.g. `auth`, `api`, `frontend`, `db`)
@@ -197,8 +198,8 @@ Result must include:
 - passing relevant lint/type checks
 - preserved architecture consistency
 - Mark task file name as done (`*_DONE.yaml`)
-- Ensure file task in `/.ai/tasks/done`
-- Ensure the file is no more presented in `/.ai/tasks/todo`
+- Ensure file task in `.ai/tasks/done`
+- Ensure the file is no more presented in `.ai/tasks/todo`
 - Git commit created (conventional commit format)
 
 Result must NOT include:

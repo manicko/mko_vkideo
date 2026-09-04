@@ -5,6 +5,8 @@ color: "#F59E0B"
 steps: 80
 
 permission:
+   agent_manager: deny
+   agent_manager_models: deny
    read:
     "*": allow
     "*.env": allow
@@ -15,7 +17,7 @@ permission:
    grep: allow
    glob: allow
    todoread: allow
-
+   task: allow
 
    edit:
      "*": deny

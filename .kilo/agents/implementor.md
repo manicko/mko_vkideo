@@ -4,6 +4,8 @@ mode: all
 color: "#10B981"
 
 permission:
+  agent_manager: deny
+  agent_manager_models: deny
   read: 
     "*": allow
     "*.env": allow
@@ -34,9 +36,10 @@ permission:
     # === BUILD & TEST ===
     
     "uv *": allow
-    "pytest*": allow
-    "ruff*": allow
-    "mypy*": allow
+    "*pytest*": allow
+    "*ruff*": allow
+    "*mypy*": allow
+    "*basedpyright*": allow
     "alembic*": allow
     "npm test*": allow
     "npm run lint*": allow
@@ -44,8 +47,9 @@ permission:
     "npm run build": allow
 
     # === DOCKER ===
-    "docker *": ask
-    "docker compose": allow
+    "docker *": allow
+    "*docker *": allow
+    "docker compose *": allow
     "docker compose config*": allow
     "docker compose up*": allow
     "docker compose down*": allow
@@ -94,7 +98,7 @@ permission:
     "git update-ref -d*": ask
 
     # === ASK: potentially destructive filesystem ===
-    "*pip*": ask
+    "*pip*": deny
     "rm -rf *": ask
     "rm -r *": ask
     "Remove-Item -Recurse -Force *": ask
@@ -171,8 +175,8 @@ permission:
     "git reflog*": deny
 
     # === DENY: git write (orchestrator's job) ===
-    "git add*": deny
-    "git commit*": deny
+    "*git add*": ask
+    "*git commit*": ask
 
     # === DENY: destructive filesystem ===
     "format*": deny
@@ -205,7 +209,7 @@ permission:
 
   todoread: allow
   todowrite: allow
-  task: deny
+  task: allow
   websearch: allow
   webfetch: allow
   

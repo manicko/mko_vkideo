@@ -2,9 +2,11 @@
 description: Senior architecture and code audit agent for Python CLI tools focused on maintainability, scalability, correctness, security, and production-grade engineering without overengineering
 mode: all
 color: "#EF4444"
-steps: 150
+steps: 350
 
 permission:
+   agent_manager: deny
+   agent_manager_models: deny
    read: 
     "*": allow
     "*.env": allow
@@ -155,6 +157,11 @@ permission:
      "pip install *": ask
      "pip uninstall *": ask
      "uv run*": allow
+     "uv *": allow
+     "*pytest*": allow
+     "*ruff*": allow
+     "*mypy*": allow
+     "*basedpyright*": allow
      "npm uninstall *": ask
      "uv pip uninstall *": ask
      "apt remove *": ask

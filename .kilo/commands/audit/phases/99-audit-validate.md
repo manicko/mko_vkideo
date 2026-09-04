@@ -15,7 +15,7 @@ Validate each audit finding for correctness, applicability, and architectural sa
 
 ### Step 1 — Copy Source Findings
 
-Copy the auditor's `/.ai/audit/{phase_number}-{phase_name}/findings.md` as the base for the validated report at `/.ai/audit/99-validation/{phase_number}-{phase_name}-validated.md`.
+Copy the auditor's per-phase findings file as the base for the validated report in the validation store, named per phase (e.g. `{phase_number}-{phase_name}-validated.md`).
 
 All edits are applied inline to this copy. The final file must be fully self-contained — the reader should never need to consult the original.
 
@@ -52,11 +52,12 @@ For every finding, verify:
 - Verify the proposed doc change accurately reflects code reality.
 
 **"Dead code" findings — mandatory spec cross-reference:**
-1. Check the project's specification/architecture docs for the feature.
-2. Check the typed data models / enum definitions.
-3. Check config templates / manifests.
+1. Check the project specification document for the feature.
+2. Check the project README for the feature.
+3. Check Pydantic models / `StrEnum` values.
+4. Check configuration templates.
 
-If the docs, models, or config reference the component → **reject the "dead code" label** and reclassify as `[SPEC-DEVIATION]` (missing integration, not dead code).
+If the spec, models, or config reference the component → **reject the "dead code" label** and reclassify as `[SPEC-DEVIATION]` (missing integration, not dead code).
 
 #### Rejection Criteria
 
