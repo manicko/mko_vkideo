@@ -15,6 +15,7 @@ permission:
 
   grep: allow
   glob: allow
+
   edit:
     "*": allow
     "*.env": allow
@@ -24,15 +25,21 @@ permission:
     
   bash:
     "*": allow
+    "git*": ask
 
-    # === READ-ONLY GIT ===
+    # === READ-ONLY GIT === 
+    "git*ls-files*" : allow 
+    "git*status*": allow
+    "git*diff*": allow
+    "git*log*": allow
+    "git*show*": allow
 
-    "*git *": ask
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git show*": allow
-
+    # === COMMIT GIT ===       
+    "git*add*": allow
+    "git*commit*": allow
+    "git*stash*": ask
+    
+    
     # === BUILD & TEST ===
     
     "uv *": allow
@@ -47,7 +54,6 @@ permission:
     "npm run build": allow
 
     # === DOCKER ===
-    "docker *": allow
     "*docker *": allow
     "docker compose *": allow
     "docker compose config*": allow
@@ -75,30 +81,29 @@ permission:
     "kubectl top*": allow
 
     # === DB: verification ===
-    "psql*": allow
+    "psql*": ask
     "redis-cli*": allow
 
     # === UTILITIES ===
     "curl*": allow
 
     # === ASK: potentially destructive git ===
-    "*git*reset *": ask
-    "*git*checkout *": ask
-    "git clean *": ask
-    "git stash *": ask
-    "git rebase *": ask
-    "git push *": ask
-    "git commit --amend*": ask
-    "git cherry-pick *": ask
-    "git branch*": ask
-    "git merge*": ask
-    "git restore*": ask
+    "git*reset *": ask
+    "git*checkout *": ask
+    "git*clean *": ask
+    "git*rebase *": ask
+    "git*push *": ask
+    "git*commit*--amend*": ask
+    "git*cherry-pick *": ask
+    "git*branch*": ask
+    "git*merge*": ask
+    "git*restore*": ask
     "git tag -d*": ask
     "gc --prune=now*": ask
     "git update-ref -d*": ask
 
     # === ASK: potentially destructive filesystem ===
-    "*pip*": deny
+    "pip*": ask
     "rm -rf *": ask
     "rm -r *": ask
     "Remove-Item -Recurse -Force *": ask
@@ -112,16 +117,18 @@ permission:
     "chown -R *": ask
 
     # === ASK: potentially destructive Docker ===
-    "docker compose down --volumes*": ask
-    "docker compose down -v*": ask
-    "docker volume rm*": ask
-    "docker volume prune*": ask
-    "docker system prune -a*": ask
-    "docker rm -f*": ask
-    "docker rmi -f*": ask
-    "docker image prune -a*": ask
-    "docker container prune*": ask
-    "docker network prune*": ask
+    "docker compose down*": allow
+    "docker compose down --volumes*": allow
+    "docker compose down -v*": allow
+    "docker volume rm*": allow
+    "docker volume prune*": allow
+    "docker system prune -a*": allow
+    "docker rm*": allow
+    "docker rm -f*": allow
+    "docker rmi -f*": allow
+    "docker image prune -a*": allow
+    "docker container prune*": allow
+    "docker network prune*": allow
 
     # === ASK: potentially destructive K8s ===
     "kubectl describe*": ask
@@ -154,10 +161,13 @@ permission:
     "systemctl disable *": ask
 
     # === ASK: potentially destructive packages ===
-    "pip uninstall *": ask
-    "npm uninstall *": ask
-    "uv pip uninstall *": ask
     "uv run *": allow
+    "pip*uninstall *": ask
+    "pip*install *": ask
+    "npm*uninstall *": ask
+    "npm*install *": ask
+    "uv pip uninstall *": ask
+    "uv pip install *": ask
 
     # === ASK: potentially destructive network ===
     "curl -X DELETE*": ask
@@ -165,18 +175,15 @@ permission:
     "curl -X POST*": ask
 
     # === DENY: irreversible git ===
-    "git reset --hard*": deny
-    "git clean -fd*": deny
-    "git clean -fdx*": deny
-    "git push --force*": deny
-    "git push --force-with-lease*": deny
-    "git filter-branch*": deny
-    "git filter-repo*": deny
-    "git reflog*": deny
+    "git*reset*--hard*": deny
+    "git*clean*-fd*": deny
+    "git*clean*-fdx*": deny
+    "git*push*--force*": deny
+    "git*push*--force-with-lease*": deny
+    "git*filter-branch*": deny
+    "git*filter-repo*": deny
+    "git*reflog*": deny
 
-    # === DENY: git write (orchestrator's job) ===
-    "*git add*": ask
-    "*git commit*": ask
 
     # === DENY: destructive filesystem ===
     "format*": deny

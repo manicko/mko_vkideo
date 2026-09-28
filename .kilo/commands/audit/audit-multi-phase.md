@@ -1,19 +1,14 @@
 ---
 name: audit-multi-phase
 description: Execute full multi-agent audit pipeline using orchestrator coordination, executor subagents, and validator subagents with retry logic
-agent: audit-orchestrator
 alwaysApply: false
-allowed-tools:
-  - read_file
-  - write_to_file
-  - list_files
-  - search_files
-  - new_task
 ---
 
 <objective>
 Execute the complete multi-agent audit pipeline: prepare context, execute all phases with executors, validate findings.
 Max allowed parallel subagents = 2
+Do not launch agents in background.
+If stop or break prefer resume old session not launching new agent.
 
 </objective>
 
@@ -75,7 +70,8 @@ Task(
        + "Write findings to: {OUTPUT_PATH}\n"
        + "Report template: {REPORT_TEMPLATE_PATH}\n"
        + "Base context: {BASE_CONTEXT}\n"
-       + "problems_only = TRUE\n",
+       + "problems_only = TRUE\n"
+       + "**Important: Never change any code files.**\n",
   agent="auditor",
   mode = "subagent",
   description="Execute audit phase {PHASE_NUMBER} - {PHASE_NAME}"
@@ -87,6 +83,9 @@ Check that `{OUTPUT_PATH}` exists and is not empty.
 If missing or empty: retry once, then escalate on second failure.
 
 ### 2.4 Launch Validator (skip for Phase 99)
+Launch the Validator **only** when Findings are **not trivial** ands relate to **significant code changes** or **architecture modifications**.
+
+In all other cases — skip.
 
 ```
 Task(
@@ -94,7 +93,8 @@ Task(
        + "Validate findings at: {OUTPUT_PATH}\n"
        + "Write validation report to: .ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md\n"
        + "Base context: {BASE_CONTEXT}\n"
-       + "problems_only = TRUE\n",
+       + "problems_only = TRUE\n"
+       + "**Important: Never change any code files.**\n",
   agent = "validator",
   mode = "subagent",
   description="Validate phase {PHASE_NUMBER} - {PHASE_NAME}",
