@@ -406,11 +406,13 @@ A separate command then rewrites non-actionable recommendations **in place**
 inside the validation store. It runs no phase, enforces no gate, and produces no
 new artifact. Nothing follows it.
 
-**There is no researcher stage, no documentation stage, no final-consistency stage,
-and no gate beyond the two above.** A stage described in a command and implemented
-by none — and the artifact such a stage would have produced — are defects of that
-command, filed under block (g). They are not described here as a pipeline that
-exists, and a stage name from a removed stage is not a stage of this phase.
+**Is there a researcher stage, a documentation stage or a final-consistency stage,
+and is there a gate beyond the two above? Neither is answered here: the run
+establishes the pipeline's stage inventory, and block (g) is the check that
+establishes it.** A stage described in a command and implemented by none — and the
+artifact such a stage would have produced — are defects of that command, filed
+under block (g). They are not described here as a pipeline that exists, and a stage
+name from a removed stage is not a stage of this phase.
 
 **Order within this phase.** R0 · R1 · R2 · R3 · R4 · blocks (a) through (i) in the
 order they are written · `## 6` and `## 7`, re-reading `## 6` before writing each

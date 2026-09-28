@@ -15,6 +15,11 @@ problems-only: true
 >
 > **Output mode:** `problems-only` — report only findings; do not narrate a clean
 > bill of health.
+>
+> **Binding rule 1 — severities are composed by this phase, never inherited.** No
+> severity carried by any preceding analysis, and no adjective attached to a
+> subject in any preceding document, is citable. **Record the evidence first, then
+> assign the severity** — composed here, against `## 9`.
 
 ## 1. Goal
 
@@ -68,7 +73,7 @@ Map the configuration surface before checking anything. **Use roles, not names.*
 
 | ID | Verification | Method | Evidence to capture |
 |---|---|---|---|
-| R1 | Declared-setting inventory and consumer trace | In one `uv run python -c` session, introspect the settings model and print every declared field with its type, default, declared range, enum membership and declared metadata (accepted prefix, unknown-key policy, error value-hiding). Then record every read of each field's attribute, by search over the source tree, and split the count by production source vs test source. | Per field: type, default, range, enum members. Per field: the read-site list with production/test counts, and any field with an empty list. |
+| R1 | Declared-setting inventory and consumer trace | In one `uv run python -c` session, introspect the settings model and print every declared field with its type, default, declared range, enum membership and declared metadata (accepted prefix, unknown-key policy, error value-hiding). Then record every read of each field's attribute, by search over the source tree, splitting the count by production source vs test source; both counts are taken **excluding every worktree directory** — whose stale copy of an earlier phase set would otherwise be searched by accident. | Per field: type, default, range, enum members. Per field: the read-site list with production/test counts, and any field with an empty list. |
 | R2 | Unknown-key handling and error value concealment | Create a temporary directory containing an environment file with one unrecognised prefixed key; construct the model with that directory as the working directory and capture the raised error and its rendered form. Repeat with the same key in the process environment only. Then construct from a Python caller with a non-text value for an enum-typed field and for a range-typed field, recording the exception type. | Exception class and error-type code for each of the four cases; the exact rendered line for each, stating whether the supplied value appears. |
 | R3 | Bound enforcement matrix | In one `uv run python -c` session, loop over every numerically bounded field and construct at floor−1, floor, ceiling, ceiling+1 and the declared default, recording accept or reject and the message. Separately assert each declared default lies inside its own range. | The accept/reject matrix, one row per field per value; the default-inside-range result. |
 | R4 | Declared range against the constants the consumer substitutes | For every bounded field, record every read site and the literal constants composed alongside the value, in the consumer's own unit. Where a value can be assembled without contacting an origin, assemble it at the range's floor by calling the same composition with a stubbed transport and print the assembled result. | Per field: declared range, the substituted literals, the assembled value at the floor, and any end of the range the consumer cannot express. |

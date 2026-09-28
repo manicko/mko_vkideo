@@ -56,9 +56,9 @@ problems-only: true
 > 6. **(e)3** "warning-only" is a finding **only** with the consequence observed in
 >    R4(iii). A probe that warns and a command that then fails cleanly is not that
 >    finding.
-> 7. **(f)3** what is decidable offline is that the two surfaces express
->    **different filters**. Which stream a delegated selector admits is the
->    third-party tool's behaviour (documented skip 3).
+> 7. **(f)3** record both surfaces' filter expressions verbatim and ask whether
+>    they differ; the run decides, not this file. Which stream a delegated
+>    selector admits is the third-party tool's behaviour (documented skip 3).
 > 8. **(g)6** acquire side only. Do not test release; that is `04`'s, and testing
 >    it produces the double filing the ruling exists to prevent.
 
@@ -150,13 +150,15 @@ Map the architecture before checking anything. **Use roles, not names.** Never r
 > **Platform note (mandatory — this phase touches termination and third-party binaries).** The
 > declared development platform is Windows. Signal and termination behaviour,
 > process-tree observation, and third-party binary availability all differ from a
-> Unix host. Three methods are platform-dependent: the termination escalation's
-> grace branch (R1(d)), the absence of any readable third-party process command
-> line (R3, R5), and everything about the automation browser binary (R7(a), R7(b)).
-> Each is handled below — by observation where observation is possible, or by a
-> documented skip with its justification. `problems-only` must not convert
-> "unverifiable" into "no finding". **This is an evidence-method note, not a filed
-> finding.**
+> Unix host. Six subjects are platform-dependent, and the six entries that
+> follow are their handling: the termination escalation's grace branch (R1(d));
+> the automation browser binary (R7(a), R7(b)); a flag the tool is handed;
+> redaction against a live child's output; a real muxer's behaviour under a
+> parent's termination; and the absence of any readable third-party process
+> command line (R3, R5). Each is handled below — by observation where
+> observation is possible, or by a documented skip with its justification.
+> `problems-only` must not convert "unverifiable" into "no finding". **This is an
+> evidence-method note, not a filed finding.**
 
 1. **The graceful branch of the termination escalation.** *Not executable on this platform: the standard library maps the graceful request and the forceful one to the same unconditional termination call, so no child can be made to ignore the first request and the grace branch cannot be entered.* The bound is verified statically as the only grace in the process, against the bounds the rest of the code is given (R1(e), R9). **This is a documented skip — never a pass and never a fail, and never a pre-filed finding.**
 2. **The automation browser binary.** *No browser binary is installed on this machine, so no launch, no navigation, no injected asset and no intercepted response can be observed.* **The skip is narrowed to that, and not broader:** the automation **driver starts** without a browser binary, so R7(a)'s driver identity, R7(b)'s verbatim launch-failure text and the acquire-side process tree are **executed, not skipped**. What is verified by stand-in and by capture: the launch argument list, the identity parameters, the injection guard and its silent branch, the resource bound to no release, the literal bound among configured ones, the discarded launch cause, and the driver's own process identity. Whether a real browser honours the automation-suppression flag is a property of the browser, out of scope by design.

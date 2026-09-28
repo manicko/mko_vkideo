@@ -33,9 +33,10 @@ problems-only: true
 > **Binding rule 3 — the headline question has two halves, and the silent one
 > never suppresses the other.** *Can another local process read the live session
 > while the download runs, and is it gone afterwards?* **The definitional half is
-> fully answerable offline** — the artefact exists, its effective access state is
-> measured, no other control exists in the tree, it is handed by path to a child,
-> and the residue after an uninterceptable end is enumerated. **The empirical half
+> fully answerable offline**, and what it must establish is three separate facts,
+> each produced by its own row: whether any control in the tree confines the
+> artefact, whether a child is handed it by path, and what an end the process
+> cannot intercept leaves behind. **The empirical half
 > requires a second local identity this platform does not provide, and is marked
 > UNVERIFIED.** The unavailability of the second half **must never suppress the
 > first half's finding**. A finding resting on the definitional half is
@@ -246,7 +247,7 @@ Each line names the phase that owns the facet. **Do not file a finding in this p
 - **Exit codes, TTY arbitration, the live display, progress rendering, renderer selection, stream discipline, and the rule that suppresses a child's output when a display is active** → `08`. **This phase owns one question inside that output: whether a secret appears in what `08` renders.** The rendering mechanics are never this phase's.
 - **A file's placement, naming, containment and write atomicity for every artefact that is not the credential; title-to-filename derivation; the segment directory's staleness signature; merge-stage amplification** → `07`.
 - **A documented claim** → the phase owning the code it describes: a **settings-model claim** → `02`; a **structural description** → `09`; a **command-line contract claim** → `08`. A document describing the audit pipeline itself → `99`. **This phase files no `DOC-UPDATE`.** Three claims are already known to contradict the code and each is `09`'s wording, not this phase's finding: the child-output transform's own docstring claims a protection it does not deliver; the mode-setting call's justifying comment reasons from a creation mask; the credential file's placement comment claims a risk reduction that holds on another platform only. **Each behaviour is filed here once, behaviourally; each wording is `09`'s.**
-- **Repository hygiene and ignore-file coverage** → `11`. The ignore pattern for credential files does not match the credential file the product creates; the file is nevertheless created outside the repository, so the pattern is decorative. **Recorded, not filed here.**
+- **Repository hygiene and ignore-file coverage** → `11`. **The question is `11`'s, and this phase asks it rather than answering it:** whether a repository-carried ignore rule names every path that can hold secret material, and whether any such rule's negation re-admits a real file. This phase records the credential artefact among the candidate paths and files nothing about the answer.
 - **Structural arrangement** — import graph, layer direction, cycles, facades, bootstrap order → `01`. **File-local craft** — typing, naming, module size, a literal duplicated within one file → `09`.
 - **Whether the test suite proves any of this, and the form its guards take** → `10`; this phase cites match counts and files nothing from them. **The one thing this phase does file about the suite is the guarantee:** a permission guarantee with no oracle that can fail on the declared platform is this phase's finding, because the guarantee is the subject. **A guard's *style* — an inline platform guard versus an explicit skip — is `10`'s.** **Whether a finding from this phase survives validation** → `99`.
 - **Licence posture, terms acknowledgement, notice mechanism** → not an audit subject; inadmissible under `problems-only` and expressly rejected. Do not file.

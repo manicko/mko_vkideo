@@ -76,7 +76,7 @@ this file is not an instruction, and no check is manufactured to fill one.*
 - The cookie file's own lifecycle, its permission mode and the platform reality of that mode → `06`.
 - Concurrency limits → `04`. Rate policy → `03`.
 - The declared response-size bound, the response arriving with no declared length, and the in-memory read bound that follows from it → `03`.
-- The partial file's **name** → `05`. The silence about residue → `08`.
+- The partial file's **name**, and a file the vector names still existing when the child opens it → `05`. The silence about residue → `08`.
 - The derivation's own documented claim → `09`. The ignore rules' coverage → `11`.
 
 ## 3. Prerequisites
