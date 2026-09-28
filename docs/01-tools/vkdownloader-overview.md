@@ -26,7 +26,8 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | HLSDownloader | `services/downloader.py` | Downloads HLS streams via ffmpeg integration (real-time progress tracking) |
 | YtDlpDownloader | `services/ytdlp_downloader.py` | yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback |
 | URLBackoffCoordinator | `services/downloader_throttle.py` | Coordinates backoff across batch URLs for 429/5xx errors (AWS Full Jitter) |
-| ProgressManager | `services/downloader_throttle.py` | Thread-safe progress state for concurrent batch downloads |
+| RichProgressReporter | `services/progress_display.py` | Multi-line rich progress display for concurrent batch downloads |
+| ProgressManager | `services/downloader_throttle.py` | Progress state manager retained for backward compatibility; no longer used by the batch path |
 | SegmentDownloader | `services/segment_downloader.py` | Segment-level download orchestration with resume support |
 
 ### Download Functions
@@ -81,7 +82,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | Function | Module | Responsibility |
 |----------|--------|----------------|
 | `validate_output_path()` | `utils/security.py` | Prevents path traversal attacks |
-| `_sanitize_title()` | `utils/security.py` | Sanitizes titles for filesystem safety |
+| `sanitize_title()` | `utils/security.py` | Sanitizes titles for filesystem safety |
 | `_strip_auth_params()` | `utils/url_sanitizer.py` | Strips tokens from URLs in logs |
 | `sanitize_url_for_log()` | `utils/url_sanitizer.py` | Public alias for `_strip_auth_params` (used by CLI entry layer) |
 
@@ -151,7 +152,7 @@ Both commands support:
 - Authentication token stripping from logged URLs
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
-- Title sanitization for filesystem safety via `_sanitize_title()`
+- Title sanitization for filesystem safety via `sanitize_title()`
 - **Secret-safe ffmpeg argument passing**: VK session cookies (including `remixsid`) and signed m3u8 CDN URLs (including `expires`, `sig`, `urls` tokens) are passed to ffmpeg via a temporary argument file (`ffmpeg @argfile`) instead of command-line arguments. This prevents session tokens and CDN URL signatures from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is created with owner-only `0o600` permissions and is removed automatically after the download completes.
 - **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (with `0o600` permissions) and passed to ffmpeg via the `cookies` protocol option appended to the m3u8 URL. User-Agent and Referer headers are passed as a plain string in the argument file. This avoids the non-functional ffmpeg `-headers @file` syntax.
 
@@ -159,7 +160,7 @@ Both commands support:
 
 ### AWS Full Jitter Backoff
 
-The `URLBackoffCoordinator` and `ProgressManager` in `downloader_throttle.py` implement rate limiting for VK's anti-bot protection:
+The `URLBackoffCoordinator` in `downloader_throttle.py` implements rate limiting for VK's anti-bot protection:
 
 - **Exponential backoff**: Uses AWS Full Jitter algorithm (random(0, base_delay * 2^attempt))
 - **Base delay**: 1 second for 429 responses, 0.05 seconds for 5xx errors
@@ -245,20 +246,39 @@ As segments complete on shorter videos, permits return to pool
 and are immediately reallocated to remaining URLs.
 ```
 
-### Per-URL Progress Tracking
+### Batch Progress Display
 
-Progress displays in a per-URL segment format showing download status for each video:
+The `RichProgressReporter` in `services/progress_display.py` renders one live progress line per currently active download. The display is a `rich` live multi-line view written to **stderr** and refreshed 10 times per second, so concurrent downloads no longer overwrite each other's output.
+
+Each line is labelled `video_{N}` while the video is still being extracted and `video_{N}: {sanitized_title}` once the title is known, and shows a status marker, the download bar, a percentage, the transfer speed and an ETA:
 
 ```
-Progress Format:
-video_1: 25/100, video_2: 45/150, video_3: 78/80
+$ vkdownloader batch urls.txt
+
+    video_2                        ━━━━╸━━╸━━━━━━━━   12%  1.8MB/s  0:00:31
+    video_0: Morning in the city   ━━━━━━━━━━╸━━━━━━━━  45%  2.4MB/s  0:00:18
+    video_1: Night walk            ━━╸╸╸╸╸╸╸╸╸╸╸╸╸━   8%     ?  -:--:--
+[✓] video_2: Sunset timelapse done ━━━━━━━━━━━━━━━━━━━ 100%  3.0MB/s  0:00:00
+
+2026-09-28T13:06:16.130710Z [warning  ] segment_retry_429              attempt=1 segment_index=17 status=429
+    video_0: Morning in the city   ━━━━━━━━━━━╸━━━━━━━━  48%  2.1MB/s  0:00:17
+[✓] video_0: Morning in the city done ━━━━━━━━━━━━━━━━━ 100%  2.2MB/s  0:00:00
+[✗] video_1: Night walk failed    ━━╸╸╸╸╸╸╸╸╸╸╸╸╸━   8%     ?  -:--:--
+```
 
 Where:
-- video_N: Sequential index of the video in the batch
-- X/Y: Downloaded segments / Total segments for that video
-```
+- `video_{N}`: sequential index of the video in the batch; the sanitized title is appended once known (truncated at 60 characters)
+- Column order: status marker, label, bar, percentage, transfer speed, ETA
+- A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` or `cancelled`, with the outcome word appended to the label
+- When the batch ends, the terminal is restored to normal output
 
-The progress updates in-place using `\r` overwrite for a clean single-line display. Each URL's `_download_single()` task (in `services/batch_downloader.py`) updates progress via a shared `ProgressManager` instance using `_create_progress_callback()`.
+ffmpeg downloads report an unknown total, so their bar pulses indeterminately and shows no percentage. Segment-count progress and yt-dlp byte progress both render a determinate bar with a percentage. The percentage column does not label its unit, and under `--method auto` the download method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side — a known, accepted limitation.
+
+yt-dlp's own native progress echo is suppressed while the display is active, so its lines cannot interleave with the bars. The same data still reaches the display through the progress callback, and the parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed`. structlog INFO, WARNING and ERROR lines render above the live display, which resumes below them. The log record format is unchanged — structlog's `ConsoleRenderer` is still the renderer — but while the display is open the re-pointed console stream is rich's `FileProxy`, which passes each line to `Console.print` and word-wraps it at the terminal width, so a log line longer than the terminal spans several rows. Log files are not affected: `VKDOWNLOADER_LOG_FILE` is written by a `logging.FileHandler` that is never re-pointed, so file output is byte-identical throughout.
+
+**Non-terminal output:** when stderr is not a TTY (piped, redirected, or CI) the live display is never started, so no escape codes reach the output. Progress falls back to structlog INFO events — `download_progress`, throttled to at most one per second per video, and `download_finished` — each carrying `video_index`, `video_label`, `downloaded`, `total` and, for the finished event, `status`. yt-dlp's echo stays on stderr in that case, as before.
+
+Each URL's `_download_single()` task (in `services/batch_downloader.py`) drives the shared reporter: `start_task()` opens the line, `update()` advances it from the download callbacks, `set_title()` relabels it once the title is extracted, and `finish_task()` renders the terminal status.
 
 ### Work Stealing Behavior
 

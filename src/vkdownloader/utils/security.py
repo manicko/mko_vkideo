@@ -12,7 +12,7 @@ from ..models.video import VideoWithStreams
 logger = get_logger(__name__)
 
 
-def _sanitize_title(title: str) -> str:
+def sanitize_title(title: str) -> str:
     """Sanitize title for filesystem safety.
 
     Replaces characters that are invalid on Windows/Unix filesystems with underscores,
@@ -102,7 +102,7 @@ def _resolve_output_file(
     validated_output = validate_output_path(output_path, warning=False)
     validated_output.mkdir(parents=True, exist_ok=True)
 
-    safe_title = _sanitize_title(video.title) if video.title else None
+    safe_title = sanitize_title(video.title) if video.title else None
     if safe_title:
         output_file = validated_output / f"{safe_title}_{video.id}.mp4"
     else:

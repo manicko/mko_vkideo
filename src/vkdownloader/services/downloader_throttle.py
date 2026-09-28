@@ -99,14 +99,23 @@ class ProgressManager:
     Encapsulates progress state and asyncio.Lock for safe concurrent access
     across multiple download tasks.
 
+    Deprecation note (spec T9 / risk R5): this class has no production callers
+    now that ``RichProgressReporter`` owns the batch-download progress display.
+    It is retained only for backward compatibility with external importers that
+    import ``ProgressManager`` directly from this module, and
+    ``tests/test_downloader_throttle.py`` still exercises it. Once that
+    deprecation window closes, it can be removed without replacement.
+
     Thread-safety notes:
         - The `_state` dict is accessed via async methods (update, clear, get_formatted_progress)
           with lock protection for thread-safe access across async tasks.
-        - For sync callbacks (e.g., yt-dlp progress hooks called from a thread-pool
-          executor), use `update_sync()` which relies on CPython's GIL to make
-          dict.__setitem__ atomic.
-        - The async lock protects the read path in get_formatted_progress, ensuring consistent
-          reads while callbacks may write concurrently from worker threads.
+        - Sync callbacks (the ``progress_callback(...)`` invocations in this
+          codebase) are delivered on the asyncio event loop thread, so
+          ``update_sync()`` performs a direct dict assignment without lock
+          protection.
+        - The async lock protects the read path in get_formatted_progress,
+          ensuring consistent reads while other async tasks may update between
+          awaits.
     """
 
     def __init__(self) -> None:
@@ -125,13 +134,12 @@ class ProgressManager:
             self._state[url_index] = (downloaded, total)
 
     def update_sync(self, url_index: int, downloaded: int, total: int) -> None:
-        """Update progress for a URL from sync callbacks in the same event loop.
+        """Update progress for a URL from sync callbacks on the event loop thread.
 
-        This method is for use with sync callbacks that may run outside the
-        asyncio event loop thread (e.g., yt-dlp progress hooks called from a
-        thread-pool executor via loop.run_in_executor). It performs direct
-        dict assignment without lock protection, relying on CPython's GIL
-        which makes dict.__setitem__ atomic.
+        This is a synchronous progress-callback update that performs a direct
+        dict assignment without lock protection. That is safe here because
+        progress callbacks in this codebase are delivered on the asyncio event
+        loop thread, not via ``loop.run_in_executor``.
 
         Args:
             url_index: Index of the URL in the batch for tracking.
@@ -139,8 +147,9 @@ class ProgressManager:
             total: Total bytes to download.
 
         Note:
-            For truly multi-threaded contexts beyond CPython's GIL guarantees, use
-            the async `update()` method instead, which acquires the asyncio lock.
+            If progress is ever updated from a thread pool or executor thread,
+            use the async ``update()`` method instead, which acquires the
+            asyncio lock.
         """
         self._state[url_index] = (downloaded, total)
 

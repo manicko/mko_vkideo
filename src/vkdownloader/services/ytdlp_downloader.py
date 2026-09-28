@@ -192,14 +192,29 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     return downloaded, total
 
 
-def _echo_ytdlp_line(line: str) -> None:
+def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
     """Echo a yt-dlp output line to the console.
 
     Progress lines (e.g. ``[download]  40.3% of 649.37MiB ...``) are
     rewritten in-place using carriage returns to restore the
     pre-migration behavior where yt-dlp used ``\\r`` for live progress
     updates.  Non-progress lines use newlines as-is.
+
+    When ``echo`` is ``False`` (batch mode), nothing is written to stderr
+    at all — progress data is emitted at DEBUG level instead and
+    non-progress lines are dropped silently, so yt-dlp output never
+    interleaves with the rich progress display.
     """
+    if not echo:
+        progress = _parse_ytdlp_progress(line)
+        if progress is not None:
+            downloaded, total = progress
+            logger.debug(
+                "ytdlp_progress_suppressed",
+                downloaded=downloaded,
+                total=total,
+            )
+        return
     if _parse_ytdlp_progress(line) is not None:
         text = line.rstrip("\n\r")
         width = shutil.get_terminal_size((80, 24)).columns
@@ -305,6 +320,7 @@ async def download_with_ytdlp_with_resume_fallback(
     backoff_coordinator: URLBackoffCoordinator | None = None,
     semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    echo: bool = True,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based fallback on failure.
 
@@ -327,6 +343,9 @@ async def download_with_ytdlp_with_resume_fallback(
             coordinating backoff during segment-resume fallback.
         semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
+        echo: When False, suppresses yt-dlp's native console echo (progress lines
+            are emitted at DEBUG level instead; non-progress lines are dropped).
+            Only governs yt-dlp output — has no effect on the ffmpeg or segment paths.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -339,7 +358,14 @@ async def download_with_ytdlp_with_resume_fallback(
 
     while retry_count <= settings.max_retries:
         result = await _download_with_ytdlp(
-            video_url, output_file, quality, settings, cookies, raw_cookies, progress_callback
+            video_url,
+            output_file,
+            quality,
+            settings,
+            cookies,
+            raw_cookies,
+            progress_callback,
+            echo=echo,
         )
 
         if result:
@@ -533,6 +559,8 @@ async def _download_with_ytdlp(
     cookies: str | None = None,
     raw_cookies: list[Cookie] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    *,
+    echo: bool = True,
 ) -> Path | None:
     """Download video using yt-dlp via subprocess.
 
@@ -551,6 +579,9 @@ async def _download_with_ytdlp(
         cookies: Optional cookies string for backward compatibility.
         raw_cookies: Optional raw Cookie objects for Netscape format.
         progress_callback: Optional callback for per-URL progress updates.
+        echo: When False, suppresses yt-dlp's native console echo (progress lines
+            are emitted at DEBUG level instead; non-progress lines are dropped).
+            Only governs yt-dlp output — has no effect on the ffmpeg or segment paths.
 
     Returns:
         Path to the output file on success, None on failure.
@@ -610,7 +641,7 @@ async def _download_with_ytdlp(
                 process.stdout, shutdown_event, on_shutdown=_on_shutdown
             ):
                 decoded = line.decode(errors="replace")
-                _echo_ytdlp_line(decoded)
+                _echo_ytdlp_line(decoded, echo=echo)
                 output_chunks.append(line)
                 progress = _parse_ytdlp_progress(decoded)
                 if progress is not None and progress_callback is not None:
@@ -624,7 +655,7 @@ async def _download_with_ytdlp(
                 process.stdout, shutdown_event, on_shutdown=_on_shutdown
             ):
                 decoded = line.decode(errors="replace")
-                _echo_ytdlp_line(decoded)
+                _echo_ytdlp_line(decoded, echo=echo)
                 output_chunks.append(line)
 
         if progress_callback:

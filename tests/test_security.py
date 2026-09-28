@@ -8,7 +8,7 @@ import pytest
 from vkdownloader.exceptions import DownloadError
 from vkdownloader.models.enums import StreamFormat
 from vkdownloader.models.video import Stream, VideoWithStreams
-from vkdownloader.utils.security import _resolve_output_file, _sanitize_title, validate_output_path
+from vkdownloader.utils.security import _resolve_output_file, sanitize_title, validate_output_path
 
 
 class TestValidateOutputPath:
@@ -108,12 +108,12 @@ class TestValidateOutputPathEdgeCases:
 
 
 class TestSanitizeTitle:
-    """Tests for _sanitize_title filesystem safety."""
+    """Tests for sanitize_title filesystem safety."""
 
     def test_strips_windows_illegal_characters(self) -> None:
         """Test that Windows-illegal characters are replaced with underscores."""
         raw = 'my:title/with*illegal?chars|and"quotes<>п'
-        result = _sanitize_title(raw)
+        result = sanitize_title(raw)
 
         for char in '/\\:*?"<>|':
             assert char not in result
@@ -122,28 +122,28 @@ class TestSanitizeTitle:
 
     def test_strips_leading_and_trailing_whitespace(self) -> None:
         """Test that surrounding whitespace is stripped."""
-        result = _sanitize_title("   spaced title   ")
+        result = sanitize_title("   spaced title   ")
         assert result == "spaced title"
 
     def test_preserves_internal_whitespace(self) -> None:
         """Test that internal whitespace is preserved (only strip, not collapse)."""
-        result = _sanitize_title("normal title")
+        result = sanitize_title("normal title")
         assert result == "normal title"
 
     def test_limits_length_to_100_characters(self) -> None:
         """Test that output is truncated to 100 characters."""
-        result = _sanitize_title("a" * 150)
+        result = sanitize_title("a" * 150)
         assert len(result) == 100
 
     def test_returns_empty_string_for_blank_input(self) -> None:
         """Test that blank/whitespace-only input yields an empty string."""
-        assert _sanitize_title("   ") == ""
-        assert _sanitize_title("") == ""
+        assert sanitize_title("   ") == ""
+        assert sanitize_title("") == ""
 
     def test_combines_all_sanitizations(self) -> None:
         """Test illegal chars, whitespace strip, and length limit together."""
         raw = "  title:with|illegal*chars?and/long-suffix-" + "x" * 200
-        result = _sanitize_title(raw)
+        result = sanitize_title(raw)
         for char in '/\\:*?"<>|':
             assert char not in result
         assert not result.startswith(" ")

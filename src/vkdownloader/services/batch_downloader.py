@@ -25,20 +25,15 @@ from ..exceptions import (
     VideoNotFoundError,
     VKDownloadError,
 )
-from ..models.enums import DownloadMethod, QualityEnum
+from ..models.enums import DownloadMethod, ProgressStatus, QualityEnum
 from ..services.downloader import download_video
-from ..services.downloader_throttle import (
-    ProgressManager,
-    URLBackoffCoordinator,
-)
+from ..services.downloader_throttle import URLBackoffCoordinator
+from ..services.progress_display import RichProgressReporter
 from ..services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from ..utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
-
-# Module-level progress manager for thread-safe per-URL progress tracking
-_progress_manager = ProgressManager()
 
 
 @dataclass
@@ -97,58 +92,28 @@ class DownloadContext:
     index: int
     shared_semaphore: asyncio.Semaphore | None = None
     backoff_coordinator: URLBackoffCoordinator | None = None
-    progress_callback: Callable[[str, int, int], None] | None = None
+    reporter: RichProgressReporter | None = None
     peak_tracker: ConcurrencyTracker | None = None
 
 
-def _create_progress_callback(url_index: int) -> Callable[[str, int, int], None]:
-    """Create fire-and-forget progress callback for a URL index.
+def _to_progress_status(status: str) -> ProgressStatus:
+    """Map a batch result status string to a :class:`ProgressStatus`.
+
+    ``progress_display`` uses ``ProgressStatus`` members for terminal
+    status markers; the batch layer produces status strings, so this
+    helper bridges the two representations.
 
     Args:
-        url_index: Index of the URL in the batch for tracking.
+        status: A status string returned by ``_download_single``.
 
     Returns:
-        Callback function that updates shared progress state.
-
-    Thread-safety:
-        Uses ``update_sync()`` which performs direct dict assignment without
-        lock protection. This is safe under CPython's GIL (dict.__setitem__
-        is atomic). Callbacks fire from yt-dlp's thread-pool executor
-        (loop.run_in_executor), not from the asyncio event loop thread. The
-        async lock in ``get_formatted_progress()`` protects the read path.
+        The corresponding ``ProgressStatus`` enum member.
     """
-
-    def callback(video_id: str, downloaded: int, total: int) -> None:
-        _progress_manager.update_sync(url_index, downloaded, total)
-
-    return callback
-
-
-async def _format_progress(url_count: int) -> str:
-    """Format progress state as per-URL segment format.
-
-    Args:
-        url_count: Total number of URLs in the batch.
-
-    Returns:
-        Formatted string like "video_0: 25/100, video_1: 45/150".
-    """
-    return await _progress_manager.get_formatted_progress(url_count)
-
-
-async def _poll_progress_display(total: int, refresh_interval: float = 1.0) -> None:
-    """Continuously refresh the progress display at a fixed interval.
-
-    Runs as a background task during batch downloads so the user sees
-    live progress updates rather than only when a download completes.
-
-    Args:
-        total: Total number of URLs in the batch.
-        refresh_interval: Seconds between display refreshes.
-    """
-    while True:
-        typer.echo(f"\r{await _format_progress(total)}", nl=False)
-        await asyncio.sleep(refresh_interval)
+    if status == ProgressStatus.SUCCESS.value:
+        return ProgressStatus.SUCCESS
+    if status == ProgressStatus.CANCELLED.value:
+        return ProgressStatus.CANCELLED
+    return ProgressStatus.FAILED
 
 
 async def _download_single(
@@ -178,8 +143,8 @@ async def _download_single(
     index = context.index if context else 0
     shared_semaphore = context.shared_semaphore if context else None
     backoff_coordinator = context.backoff_coordinator if context else None
-    progress_callback = context.progress_callback if context else None
     peak_tracker = context.peak_tracker if context else None
+    reporter = context.reporter if context else None
 
     # Wrap semaphore with concurrency tracker so peak is measured at the
     # actual point of concurrency limiting, not the configured maximum.
@@ -192,7 +157,40 @@ async def _download_single(
     correlation_id = generate_correlation_id()
     bind_correlation_id(correlation_id)
 
+    # Closures route progress/title data through the reporter when present.
+    # The reporter methods are themselves no-ops when disabled (non-TTY), so
+    # the ``if reporter is not None`` guard only handles the single-download
+    # path where no context (and therefore no reporter) exists.
+    def _on_progress(video_id: str, downloaded: int, total: int) -> None:
+        if reporter is not None:
+            reporter.update(index, downloaded, total)
+
+    def _on_title(sanitized_title: str) -> None:
+        if reporter is not None:
+            reporter.set_title(index, sanitized_title)
+
+    def _finish(status: ProgressStatus) -> None:
+        if reporter is not None:
+            reporter.finish_task(index, status)
+
+    echo: bool = True
+    progress_cb: Callable[[str, int, int], None] | None = None
+    title_cb: Callable[[str], None] | None = None
+
+    if reporter is not None:
+        # is_enabled only AFTER start() has been called (done in
+        # _run_batch_with_progress). Reading it before start() would reflect the
+        # pre-start stderr state instead of the resolved Console; echo suppression
+        # (R5/AC2) keeps yt-dlp's native console output silent when the rich
+        # display owns the terminal.
+        echo = not reporter.is_enabled
+        progress_cb = _on_progress
+        title_cb = _on_title
+
     try:
+        if reporter is not None:
+            reporter.start_task(index)
+
         result = await download_video(
             url,
             quality,
@@ -202,18 +200,25 @@ async def _download_single(
             max_retries_override=max_retries_override,
             backoff_coordinator=backoff_coordinator,
             semaphore=tracked_semaphore,
-            progress_callback=progress_callback,
+            progress_callback=progress_cb,
             output_index=index,
+            echo=echo,
+            title_callback=title_cb,
         )
         status = "success" if result else "failed"
+        _finish(_to_progress_status(status))
         return (url, str(result) if result else "", status)
 
     except asyncio.CancelledError:
-        # Re-raise CancelledError to allow batch cancellation
+        # Re-raise CancelledError to allow batch cancellation, but still
+        # mark the task as cancelled so the terminal shows a status line (R3).
+        _finish(ProgressStatus.CANCELLED)
         raise
     except QualityNotAvailableError as e:
+        _finish(ProgressStatus.FAILED)
         return (url, "", e.status_label())
     except VideoNotFoundError as e:
+        _finish(ProgressStatus.FAILED)
         return (url, "", e.status_label())
     except ExtractionError as e:
         logger.error(
@@ -222,8 +227,10 @@ async def _download_single(
             correlation_id=correlation_id,
             **e.log_context(),
         )
+        _finish(ProgressStatus.FAILED)
         return (url, "", e.status_label())
     except VKDownloadError as e:
+        _finish(ProgressStatus.FAILED)
         return (url, "", e.status_label())
     except Exception as e:
         # Log unexpected exceptions to surface bugs, then return as a status tuple.
@@ -236,6 +243,7 @@ async def _download_single(
             url=_strip_auth_params(url),
             correlation_id=correlation_id,
         )
+        _finish(ProgressStatus.FAILED)
         return (url, "", f"unexpected_error: {type(e).__name__}")
     finally:
         clear_correlation_id()
@@ -279,11 +287,11 @@ async def _run_batch_with_progress(
             batch_correlation_id=batch_correlation_id,
         )
 
-        # Clear progress state for this batch
-        await _progress_manager.clear()
-
-        # Create progress callbacks for each URL
-        callbacks = [_create_progress_callback(i) for i in range(len(urls))]
+        # One RichProgressReporter per batch run: it is constructed here, never
+        # as a module-level singleton, because a singleton would carry mutable
+        # state across batch invocations and its start()/stop() lifecycle must
+        # not be shared between runs.
+        reporter = RichProgressReporter()
 
         tasks = [
             asyncio.create_task(
@@ -298,22 +306,21 @@ async def _run_batch_with_progress(
                         index=i,
                         shared_semaphore=shared_semaphore,
                         backoff_coordinator=backoff_coordinator,
-                        progress_callback=callbacks[i],
+                        reporter=reporter,
                         peak_tracker=concurrency_tracker,
                     ),
                 )
             )
             for i, url in enumerate(urls)
         ]
-        total = len(urls)
-
-        # Initial progress display in per-URL format
-        typer.echo(f"\r{await _format_progress(total)}", nl=False)
-
-        # Background task for real-time progress display
-        progress_task = asyncio.create_task(_poll_progress_display(total))
 
         try:
+            # start() must run before the first await below: the tasks created
+            # above are scheduled with asyncio.create_task but do not run until
+            # the loop yields, and there is no await between task creation and
+            # here. start() is inside this try so the finally's stop() still
+            # runs if start() raises.
+            reporter.start()
             for coro in asyncio.as_completed(tasks):
                 try:
                     await coro
@@ -324,7 +331,6 @@ async def _run_batch_with_progress(
                     await asyncio.gather(*tasks, return_exceptions=True)
                     raise
 
-            typer.echo()
             results = await asyncio.gather(*tasks, return_exceptions=True)
             processed_results = [
                 r
@@ -336,11 +342,10 @@ async def _run_batch_with_progress(
             ]
             return processed_results, concurrency_tracker.peak
         finally:
-            progress_task.cancel()
-            try:
-                await progress_task
-            except asyncio.CancelledError:
-                pass
+            # stop() is placed in this finally so it also runs when the batch
+            # is cancelled (CancelledError), restoring the terminal to normal
+            # output per R3.
+            reporter.stop()
     finally:
         # Cleanup signal handlers to allow re-registration on subsequent loops
         cleanup_signal_handlers()

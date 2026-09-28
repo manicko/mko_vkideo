@@ -65,3 +65,17 @@ class ErrorCode(StrEnum):
     DOWNLOAD_ERROR = "download_error"
     PATH_TRAVERSAL = "path_traversal"
     UNEXPECTED_ERROR = "unexpected_error"
+
+
+class ProgressStatus(StrEnum):
+    """Download progress status for a single item."""
+
+    IN_PROGRESS = "in_progress"
+
+    SUCCESS = "success"
+
+    FAILED = "failed"
+
+    SKIPPED = "skipped"
+
+    CANCELLED = "cancelled"

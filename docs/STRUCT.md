@@ -31,6 +31,7 @@ src/
     │   ├── downloader_throttle.py # Adaptive throttling (ProgressManager, URLBackoffCoordinator, get_shutdown_event)
     │   ├── extractor.py         # Stream extraction (VKVideoExtractor, is_valid_video_url)
     │   ├── ffmpeg_utils.py      # FFmpeg discovery and stream concatenation
+    │   ├── progress_display.py   # RichProgressReporter (multi-line batch progress display)
     │   ├── quality.py           # Quality selection (QualitySelector)
     │   ├── segment_downloader.py # HTTP segment downloader with retries
     │   └── signal_handlers.py   # SIGINT/SIGTERM handler registration

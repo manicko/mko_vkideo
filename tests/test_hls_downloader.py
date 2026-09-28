@@ -814,9 +814,7 @@ class TestYtdlpCliCommand:
         idx = cmd.index("--throttled-rate")
         assert cmd[idx + 1] == str(test_settings.throttled_rate)
 
-    def test_cli_command_excludes_http_chunk_size_by_default(
-        self, test_settings: Settings
-    ) -> None:
+    def test_cli_command_excludes_http_chunk_size_by_default(self, test_settings: Settings) -> None:
         """Test CLI command does NOT include --http-chunk-size by default.
 
         The --http-chunk-size flag forces range-request-based downloading of HLS
@@ -2945,6 +2943,182 @@ class TestYtDlpSubprocessShutdown:
         assert "983.45KiB/s" in captured.err
         assert "06:43" in captured.err
 
+    @pytest.mark.asyncio
+    async def test_ytdlp_echo_false_suppresses_stderr_while_callback_fires(
+        self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that echo=False suppresses yt-dlp console output while progress_callback still fires."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
+        mock_process.wait = AsyncMock(return_value=0)
+
+        progress_calls: list[tuple[str, int, int]] = []
+
+        def progress_callback(video_id: str, downloaded: int, total: int) -> None:
+            progress_calls.append((video_id, downloaded, total))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    progress_callback=progress_callback,
+                    echo=False,
+                )
+
+        assert result == output_file
+        captured = capsys.readouterr()
+        assert "[download]" not in captured.err
+        assert "40.3%" not in captured.err
+        assert "649.37MiB" not in captured.err
+        assert "983.45KiB/s" not in captured.err
+        assert "06:43" not in captured.err
+        assert len(progress_calls) == 1
+        video_id, downloaded, total = progress_calls[0]
+        assert video_id == "67890"
+        expected_total = int(649.37 * 1024 * 1024)
+        assert total == expected_total
+        assert downloaded == int(expected_total * 40.3 / 100)
+
+    @pytest.mark.asyncio
+    async def test_ytdlp_echo_false_no_callback_stderr_empty(
+        self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that echo=False suppresses all yt-dlp stderr output when no progress callback."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+        other_line = b"ERROR: something went wrong\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=[progress_line, other_line, b""])
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    echo=False,
+                )
+
+        assert result == output_file
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    @pytest.mark.asyncio
+    async def test_ytdlp_echo_false_progress_emits_debug_log(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that echo=False on a progress line emits a single ytdlp_progress_suppressed debug event."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
+        mock_process.wait = AsyncMock(return_value=0)
+
+        debug_events: list[tuple[str, dict[str, Any]]] = []
+
+        def capture_debug(event: str, **kwargs: Any) -> None:
+            debug_events.append((event, kwargs))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.logger.debug",
+                side_effect=capture_debug,
+            ):
+                with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        echo=False,
+                    )
+
+        assert result == output_file
+        suppressed = [
+            (event, kwargs)
+            for event, kwargs in debug_events
+            if event == "ytdlp_progress_suppressed"
+        ]
+        assert len(suppressed) == 1, (
+            f"Expected exactly 1 ytdlp_progress_suppressed debug call, got {len(suppressed)}"
+        )
+        _, kwargs = suppressed[0]
+        expected_total = int(649.37 * 1024 * 1024)
+        assert kwargs["total"] == expected_total
+        assert kwargs["downloaded"] == int(expected_total * 40.3 / 100)
+
+    @pytest.mark.asyncio
+    async def test_ytdlp_echo_false_non_progress_line_no_output_no_log(
+        self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that echo=False on a non-progress line writes nothing and emits no debug log."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        non_progress_line = b"[download] Destination: /tmp/video.mp4\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=[non_progress_line, b""])
+        mock_process.wait = AsyncMock(return_value=0)
+
+        debug_events: list[tuple[str, dict[str, Any]]] = []
+
+        def capture_debug(event: str, **kwargs: Any) -> None:
+            debug_events.append((event, kwargs))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.logger.debug",
+                side_effect=capture_debug,
+            ):
+                with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        echo=False,
+                    )
+
+        assert result == output_file
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert len(debug_events) == 0, (
+            "No debug log events should be emitted for non-progress lines"
+        )
+
 
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""
@@ -3218,3 +3392,142 @@ class TestYtDlpRetryBackoff:
 
         # Coordinator should have been consulted during the backoff
         mock_coord.wait_if_paused.assert_called()
+
+
+class TestDownloadVideoTitleCallback:
+    """Tests for download_video title_callback propagation (R8/Q6/A5)."""
+
+    @pytest.mark.asyncio
+    async def test_title_callback_receives_sanitized_title(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that title_callback receives a sanitized title with special chars replaced."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.models.video import Stream, VideoWithStreams
+        from vkdownloader.services.downloader import download_video
+
+        captured: list[str] = []
+
+        def title_callback(title: str) -> None:
+            captured.append(title)
+
+        video = VideoWithStreams(
+            id="video-12345_67890",
+            title="My:Crazy/Title",
+            streams=[
+                Stream(
+                    url="https://example.com/v.m3u8",
+                    format=StreamFormat.HLS,
+                    quality="720",
+                )
+            ],
+        )
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=video,
+        ):
+            with patch(
+                "vkdownloader.services.downloader.perform_download",
+                return_value=tmp_path / "video.mp4",
+            ):
+                result = await download_video(
+                    "https://vkvideo.ru/video-12345_67890",
+                    QualityEnum.Q720,
+                    tmp_path,
+                    DownloadMethod.YTDLP,
+                    test_settings,
+                    title_callback=title_callback,
+                )
+
+        assert result == tmp_path / "video.mp4"
+        assert len(captured) == 1
+        assert captured[0] == "My_Crazy_Title"
+
+    @pytest.mark.asyncio
+    async def test_title_callback_not_called_when_title_none(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that title_callback is not invoked when video title is None."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.models.video import Stream, VideoWithStreams
+        from vkdownloader.services.downloader import download_video
+
+        captured: list[str] = []
+
+        def title_callback(title: str) -> None:
+            captured.append(title)
+
+        video = VideoWithStreams(
+            id="video-12345_67890",
+            title=None,
+            streams=[
+                Stream(
+                    url="https://example.com/v.m3u8",
+                    format=StreamFormat.HLS,
+                    quality="720",
+                )
+            ],
+        )
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=video,
+        ):
+            with patch(
+                "vkdownloader.services.downloader.perform_download",
+                return_value=tmp_path / "video.mp4",
+            ):
+                result = await download_video(
+                    "https://vkvideo.ru/video-12345_67890",
+                    QualityEnum.Q720,
+                    tmp_path,
+                    DownloadMethod.YTDLP,
+                    test_settings,
+                    title_callback=title_callback,
+                )
+
+        assert result == tmp_path / "video.mp4"
+        assert len(captured) == 0
+
+    @pytest.mark.asyncio
+    async def test_title_callback_optional_when_not_supplied(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Test that download_video works without title_callback and defaults echo=True."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.models.video import Stream, VideoWithStreams
+        from vkdownloader.services.downloader import download_video
+
+        video = VideoWithStreams(
+            id="video-12345_67890",
+            title="Some:Title",
+            streams=[
+                Stream(
+                    url="https://example.com/v.m3u8",
+                    format=StreamFormat.HLS,
+                    quality="720",
+                )
+            ],
+        )
+
+        with patch(
+            "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+            return_value=video,
+        ):
+            with patch(
+                "vkdownloader.services.downloader.perform_download",
+                return_value=tmp_path / "video.mp4",
+            ) as mock_perform:
+                result = await download_video(
+                    "https://vkvideo.ru/video-12345_67890",
+                    QualityEnum.Q720,
+                    tmp_path,
+                    DownloadMethod.YTDLP,
+                    test_settings,
+                )
+
+        assert result == tmp_path / "video.mp4"
+        assert mock_perform.call_count == 1
+        # Default echo=True should be forwarded to perform_download
+        assert mock_perform.call_args.kwargs["echo"] is True

@@ -14,7 +14,7 @@ related:
 
 **Package:** `vkdownloader` — VK Video Downloader for vkvideo.ru
 
-The CLI is built with [Typer](https://typer.tiangolo.com/). The `batch` command shows per-URL segment progress during concurrent downloads; the single `download` command shows no live progress during execution.
+The CLI is built with [Typer](https://typer.tiangolo.com/). The `batch` command shows a live multi-line progress display during concurrent downloads; the single `download` command shows no live progress during execution.
 
 ---
 
@@ -136,20 +136,27 @@ vkdownloader batch [OPTIONS] URLS_FILE
 1. Reads video URLs from the provided file (one URL per line)
 2. Skips empty lines and lines starting with `#`
 3. Validates each remaining URL against the VK video URL pattern; non-matching entries are skipped with a warning and counted as invalid
-4. Downloads each video concurrently with dynamic thread distribution (up to 4 parallel downloads)
+4. Downloads each video concurrently as `asyncio` tasks governed by a shared semaphore (up to 4 parallel downloads)
 5. Uses shared semaphore for segment-level concurrency control
-6. Shows per-URL segment progress during download
+6. Shows a live multi-line progress display during download, one line per active download, when the output stream is a terminal
 7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped
 
-**Progress Format:**
+**Progress Display:**
 
-Per-URL segment progress displays download status for each video:
+The display is a `rich` live multi-line view on stderr, refreshed 10 times per second, with one line per currently active download:
 
 ```
-video_0: 25/100, video_1: 45/150, video_2: 0/80
+    video_2                        ━━━━╸━━╸━━━━━━━━   12%  1.8MB/s  0:00:31
+    video_0: Morning in the city   ━━━━━━━━━━╸━━━━━━━━  45%  2.4MB/s  0:00:18
+[✓] video_0: Morning in the city done ━━━━━━━━━━━━━━━━ 100%  2.2MB/s  0:00:00
+[✗] video_1: Night walk failed    ━━╸╸╸╸╸╸╸╸╸╸╸╸╸━   8%     ?  -:--:--
 ```
 
-Each entry shows `video_{index}: {downloaded_segments}/{total_segments}` for real-time progress tracking.
+Each line is labelled `video_{N}` during extraction and `video_{N}: {sanitized_title}` once the title is known, with columns for the status marker, label, bar, percentage, transfer speed and ETA. A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` or `cancelled`, with the outcome word appended to the label. The terminal returns to normal output when the batch ends.
+
+yt-dlp's own native progress echo is suppressed while the display is active, so it cannot interleave with the bars.
+
+When the output stream is not a terminal (piped, redirected, or CI) the display is never started and no escape codes are written. Progress falls back to structlog INFO events `download_progress` (at most one per second per video) and `download_finished`, and yt-dlp's progress echo stays on stderr.
 
 **Exit codes:**
 

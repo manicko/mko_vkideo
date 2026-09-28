@@ -25,7 +25,7 @@ from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, DownloadMethod, QualityEnum
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
-from ..utils.security import _resolve_output_file
+from ..utils.security import _resolve_output_file, sanitize_title
 from ..utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log
 from .concurrency import SemaphoreLike
 from .cookies import _cookies_to_netscape  # noqa: F401 — backward-compat re-export
@@ -420,6 +420,8 @@ async def perform_download(
     progress_callback: Callable[[str, int, int], None] | None = None,
     video_data: VideoWithStreams | None = None,
     selected_stream: Stream | None = None,
+    *,
+    echo: bool = True,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -435,6 +437,10 @@ async def perform_download(
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
         video_data: Optional pre-extracted video data with streams. When provided, skips extraction.
         selected_stream: Optional pre-selected stream. When provided, used instead of streams[0].
+        echo: When False, suppresses yt-dlp's native console echo (progress
+            lines are emitted at DEBUG level instead; non-progress lines are
+            dropped). Only governs yt-dlp output — has no effect on the ffmpeg
+            or segment paths.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -502,6 +508,7 @@ async def perform_download(
                     backoff_coordinator=backoff_coordinator,
                     semaphore=semaphore,
                     progress_callback=progress_callback,
+                    echo=echo,
                 )
             case DownloadMethod.FFMPEG:
                 m3u8_url, cookies, raw_cookies = await _resolve_cookies(
@@ -571,6 +578,7 @@ async def perform_download(
                     backoff_coordinator=backoff_coordinator,
                     semaphore=semaphore,
                     progress_callback=progress_callback,
+                    echo=echo,
                 )
             case _:
                 logger.error(
@@ -594,6 +602,8 @@ async def download_video(
     semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     output_index: int = 0,
+    echo: bool = True,
+    title_callback: Callable[[str], None] | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -613,6 +623,14 @@ async def download_video(
         semaphore: Optional shared semaphore for concurrency control.
         progress_callback: Optional callback for per-URL segment progress.
         output_index: Index for fallback filename (0 for single, index for batch).
+        echo: When False, suppresses yt-dlp's native console echo (progress
+            lines are emitted at DEBUG level instead; non-progress lines are
+            dropped). Only governs yt-dlp output — has no effect on the ffmpeg
+            or segment paths.
+        title_callback: Optional callback invoked with the sanitized video
+            title immediately after stream extraction succeeds. Used by the
+            batch progress reporter for per-file labeling. If the video has no
+            title (None), the callback is not invoked.
 
     Returns:
         Path to the downloaded file on success, None on failure.
@@ -638,6 +656,9 @@ async def download_video(
     try:
         extractor = VKVideoExtractor(settings=settings)
         video = await extractor.extract_streams(url)
+
+        if title_callback is not None and video.title:
+            title_callback(sanitize_title(video.title))
 
         if not video.streams:
             raise QualityNotAvailableError(
@@ -669,6 +690,7 @@ async def download_video(
             progress_callback=progress_callback,
             video_data=video,
             selected_stream=stream,
+            echo=echo,
         )
     finally:
         # DF-002: Clear correlation context to prevent leakage between

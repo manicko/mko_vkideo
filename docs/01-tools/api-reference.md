@@ -384,6 +384,60 @@ async def _fetch_playlist_with_retry(
 
 ---
 
+### RichProgressReporter
+
+Location: `vkdownloader.services.progress_display`
+
+Multi-line `rich` progress display for concurrent batch downloads. Renders one self-overwriting progress line per active download on stderr; when the output stream is not a terminal it disables itself and emits throttled structlog INFO events instead, so piped and CI output contains no escape codes.
+
+```python
+from vkdownloader.models.enums import ProgressStatus
+from vkdownloader.services.progress_display import RichProgressReporter
+
+reporter = RichProgressReporter()
+reporter.start()
+try:
+    reporter.start_task(0)
+    reporter.set_title(0, "Morning in the city")
+    reporter.update(0, 45, 100)
+    reporter.finish_task(0, ProgressStatus.SUCCESS)
+finally:
+    reporter.stop()
+```
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `console` | rich.console.Console \| None | None | Console to render on. Built lazily as `Console(stderr=True)` in `start()` when omitted. |
+| `enabled` | bool \| None | None | Force the display on or off. When None, the display is enabled only if the console is a terminal. |
+| `refresh_per_second` | float | 10.0 | Live display refresh rate in Hz. Internal escape hatch only: it is not exposed through `Settings` or any CLI option, and changing it requires wiring it through configuration. |
+
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| `is_enabled` | bool (property) | Whether the rich live display is active for this reporter. |
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `start()` | Open the live display. Idempotent; a no-op when disabled. |
+| `stop()` | Close the live display and restore captured state. Safe without `start()` and idempotent. |
+| `start_task(index, title=None)` | Register a new progress line for `index`. |
+| `set_title(index, title)` | Rewrite the description of an existing line, e.g. from `video_0` to `video_0: {title}`. |
+| `update(index, downloaded, total)` | Advance the line. `total <= 0` means unknown size and keeps the bar indeterminate. |
+| `finish_task(index, status)` | Mark `index` terminal and render its status marker. |
+
+**Behavior:**
+- Labels are `video_{index}`, or `video_{index}: {title}` once a title is known (truncated at 60 characters)
+- Columns are status marker, label, bar, percentage, transfer speed and ETA
+- The percentage column is fed the raw `(downloaded, total)` pair from the download callback and does not label its unit, because the sources disagree: yt-dlp reports byte counts, ffmpeg reports byte counts with `total=0` since the size is unknown, and the HLS segment path reports segment counts. Under `--method auto` the method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side. This is a known, accepted limitation: rich's `DownloadColumn` would render segment counts as byte counts, which is more misleading than an unlabelled percentage
+- A finished task keeps its label and gains an outcome word, prefixed by a status marker taken from `ProgressStatus`: `SUCCESS` `[✓] done`, `FAILED` `[✗] failed`, `SKIPPED` `[⊘] skipped`, `CANCELLED` `[⊘] cancelled`
+- A successful task with a known total is completed to 100%; other terminal statuses leave the bar where it stopped
+- Root `StreamHandler` log streams are re-pointed onto the live display while it is open and restored on `stop()`, so log lines print above the display and it resumes below them. The log record format itself is unchanged — structlog's `ConsoleRenderer` is still the renderer — but the re-pointed console stream is rich's `FileProxy`, which splits writes on newlines and passes them to `Console.print`; that word-wraps at the terminal width, so a log line longer than the terminal is rendered across several rows while the display is open. Log files are unaffected: `setup_logging` attaches a `logging.FileHandler` for `VKDOWNLOADER_LOG_FILE` and the re-pointing skips `FileHandler` instances, so file output stays byte-identical
+- When disabled, `update()` emits a `download_progress` INFO event throttled to at most one per second per index, and `finish_task()` emits a single `download_finished` INFO event
+
+---
+
 ## Download Functions
 
 ### perform_download
@@ -416,9 +470,10 @@ result = await perform_download(
 | `settings` | Settings \| None | None | Optional settings instance. |
 | `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
 | `semaphore` | asyncio.Semaphore \| None | None | Shared semaphore for work-stealing concurrency in batch downloads. |
-| `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback for per-URL segment progress (video_id, downloaded, total). |
+| `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 | `video_data` | VideoWithStreams \| None | None | Optional pre-extracted video data with streams. When provided, skips extraction. |
 | `selected_stream` | Stream \| None | None | Optional pre-selected stream. When provided, used instead of streams[0]. |
+| `echo` | bool | True | Keyword-only. When False, suppresses yt-dlp's native console echo; parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed` and still reach `progress_callback`. Governs the yt-dlp path only — the ffmpeg and HLS segment paths are unaffected. |
 
 **Returns:** Path to downloaded file on success, None on failure.
 
@@ -538,7 +593,7 @@ Request model for HLS download with segment-level resume support.
 | `output_file` | Path | Output file path. |
 | `quality` | str | Quality string (default: "best"). |
 | `cookies` | str \| None | Cookies string for CDN authentication. |
-| `progress_callback` | Callable[[str, int, int], None] \| None | Callback for per-URL segment progress (video_id, downloaded, total). |
+| `progress_callback` | Callable[[str, int, int], None] \| None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 
 > **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.
 
@@ -709,6 +764,8 @@ Location: `vkdownloader.services.downloader_throttle`
 
 Thread-safe progress state manager for concurrent batch downloads. Encapsulates progress state and asyncio.Lock for safe concurrent access across multiple download tasks.
 
+> **Note:** This class is retained for backward compatibility. The batch progress display is no longer driven by `ProgressManager`; it is handled by `RichProgressReporter` in `services/progress_display.py`, and nothing in the batch path instantiates this class.
+
 **Attributes:**
 | Name | Type | Description |
 |------|------|-------------|
@@ -718,7 +775,8 @@ Thread-safe progress state manager for concurrent batch downloads. Encapsulates 
 **Methods:**
 | Method | Description |
 |--------|-------------|
-| `update(url_index, downloaded, total)` | Thread-safe progress state update |
+| `update(url_index, downloaded, total)` | Async progress state update under the lock |
+| `update_sync(url_index, downloaded, total)` | Synchronous progress-callback update delivered on the event loop thread; direct dict assignment without lock protection |
 | `get_formatted_progress(url_count)` | Returns formatted string for all URLs |
 | `clear()` | Clear progress state for new batch |
 
@@ -763,11 +821,16 @@ validated_path = validate_output_path(Path("./output/video.mp4"))
 
 ---
 
-### _sanitize_title
+### sanitize_title
 
 Location: `vkdownloader.utils.security`
 
 Sanitizes video titles for filesystem safety by removing invalid characters.
+
+```python
+def sanitize_title(title: str) -> str:
+    ...
+```
 
 **Parameters:**
 | Name | Type | Description |
