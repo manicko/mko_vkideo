@@ -20,7 +20,13 @@ import typer
 from pydantic import ValidationError
 from structlog import get_logger
 
-from .config import Settings, format_validation_error, setup_logging, warn_unknown_env_vars
+from .config import (
+    Settings,
+    _build_valid_env_vars,
+    format_validation_error,
+    setup_logging,
+    warn_unknown_env_vars,
+)
 from .exceptions import (
     InvalidVideoUrlError,
     QualityNotAvailableError,
@@ -95,7 +101,10 @@ def _run_command_preamble(
     Every command invocation performs the same preamble:
 
       1. detect unrecognised ``VKDOWNLOADER_*`` variables (via
-         ``warn_unknown_env_vars``);
+         ``warn_unknown_env_vars``); each detected variable is rendered once,
+         as plain text to stderr with ``typer.echo(..., err=True)``, naming
+         the offending variable and the set of valid variables, so the notice
+         reaches the operator exactly once and stays out of the logging path;
       2. construct ``Settings`` from the supplied overrides (via ``_build_settings``,
          which only forwards options the user actually typed);
       3. configure logging from the constructed Settings (via ``setup_logging``);
@@ -107,7 +116,16 @@ def _run_command_preamble(
     this module's global namespace so that string-path patches targeting
     ``vkdownloader.cli.warn_unknown_env_vars`` still take effect here.
     """
-    warn_unknown_env_vars()
+    unknown_vars = warn_unknown_env_vars()
+    if unknown_vars:
+        valid_vars = sorted(_build_valid_env_vars())
+        for var in unknown_vars:
+            typer.echo(
+                f"Ignored unknown environment variable '{var}'. "
+                f"Valid variables: {', '.join(valid_vars)}. "
+                f"Check for typos.",
+                err=True,
+            )
     settings = _build_settings(
         cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
     )

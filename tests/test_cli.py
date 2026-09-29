@@ -1895,3 +1895,83 @@ class TestPreambleCalledOncePerCommand:
 
         assert result.exit_code == 0
         assert mock_preamble.call_count == 1
+
+
+class TestPreSinkDiagnostic:
+    """Pre-sink diagnostics: env-var warnings and download_dir coercion are silent.
+
+    Verifies that the bootstrap warning for unknown VKDOWNLOADER_* variables
+    is rendered to stderr exactly once per command (not doubled by structured
+    logging), and that empty-string download_dir coercion no longer emits a
+    debug record.
+    """
+
+    _UNKNOWN_VAR = "VKDOWNLOADER_UNKNOWN_FOO"
+
+    def test_unknown_variable_rendered_once_on_stderr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unrecognised VKDOWNLOADER_* var is echoed to stderr exactly once per command."""
+        monkeypatch.setenv(self._UNKNOWN_VAR, "bogus")
+
+        # --- download command ---
+        result = runner.invoke(
+            app,
+            ["download", "https://example.com/invalid"],
+            catch_exceptions=False,
+        )
+
+        assert result.stderr.count(self._UNKNOWN_VAR) == 1
+        assert "unknown_env_var_ignored" not in result.stdout
+        assert "unknown_env_var_ignored" not in result.stderr
+
+        # --- batch command ---
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file)],
+            catch_exceptions=False,
+        )
+
+        assert result.stderr.count(self._UNKNOWN_VAR) == 1
+        assert "unknown_env_var_ignored" not in result.stdout
+        assert "unknown_env_var_ignored" not in result.stderr
+
+    def test_no_unknown_variable_warning_when_none_present(self, tmp_path: Path) -> None:
+        """Without any unknown vars, the warning text is absent from stderr."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file)],
+            catch_exceptions=False,
+        )
+
+        assert "Ignored unknown environment variable" not in result.stderr
+
+    def test_download_dir_debug_record_is_not_emitted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty-string download_dir is silently coerced; no debug record is emitted."""
+        log_path = tmp_path / "test.log"
+        monkeypatch.setenv("VKDOWNLOADER_DOWNLOAD_DIR", "")
+        monkeypatch.setenv("VKDOWNLOADER_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("VKDOWNLOADER_LOG_FILE", str(log_path))
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file)],
+            catch_exceptions=False,
+        )
+
+        assert "download_dir_empty_string_using_default" not in result.stdout
+        log_contents = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        assert "download_dir_empty_string_using_default" not in log_contents

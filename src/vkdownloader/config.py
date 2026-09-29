@@ -11,8 +11,6 @@ from pydantic_settings import BaseSettings
 
 from vkdownloader.models.enums import CookieSource, LogLevel
 
-logger: structlog.BoundLogger = structlog.get_logger(__name__)
-
 
 class Settings(BaseSettings):
     """Application settings with defaults and environment variable support.
@@ -142,7 +140,6 @@ class Settings(BaseSettings):
         across all path-typed fields.
         """
         if v == "":
-            logger.debug("download_dir_empty_string_using_default")
             return Settings.model_fields["download_dir"].default
         return v
 
@@ -310,13 +307,6 @@ def warn_unknown_env_vars(env_file: Path = Path(".env")) -> list[str]:
     ]
 
     unknown = os_unknown + file_unknown
-    for key in unknown:
-        logger.warning(
-            "unknown_env_var_ignored",
-            var=key,
-            valid_vars=sorted(valid_env_vars),
-            hint="Variable is not a recognized setting and will be ignored. Check for typos.",
-        )
     return unknown
 
 
