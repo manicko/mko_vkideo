@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import structlog.contextvars
+
 from vkdownloader.utils.correlation import (
     bind_correlation_id,
     clear_correlation_id,
@@ -58,3 +60,17 @@ def test_correlation_id_does_not_leak_after_clear() -> None:
 
     clear_correlation_id()
     assert get_correlation_id() is None  # Fully cleared
+
+
+def test_clear_preserves_unrelated_context_keys() -> None:
+    """Test that clearing the correlation ID leaves other context keys intact."""
+    cid = generate_correlation_id()
+    bind_correlation_id(cid)
+    structlog.contextvars.bind_contextvars(unrelated_key="survived")
+    assert get_correlation_id() == cid
+    assert structlog.contextvars.get_contextvars().get("unrelated_key") == "survived"
+
+    clear_correlation_id()
+
+    assert get_correlation_id() is None
+    assert structlog.contextvars.get_contextvars().get("unrelated_key") == "survived"

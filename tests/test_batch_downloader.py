@@ -608,3 +608,97 @@ class TestBatchCancellationReporting:
         assert exit_code == 0
         assert "Successful: 1" in success_output
         assert "Cancelled:" not in success_output
+
+
+class TestCorrelationInheritance:
+    """Verify correlation-ID scoping through the real batch orchestration.
+
+    ``download_video`` must inherit the identifier bound by its caller rather
+    than generating/clearing its own (DF-002), so a per-item id bound in
+    ``_download_single`` flows through and is cleared exactly once by
+    ``_download_single``'s finally.
+    """
+
+    @pytest.mark.asyncio
+    async def test_download_video_inherits_and_preserves_item_correlation_id(
+        self, tmp_path: Path
+    ) -> None:
+        """The identifier visible inside download_video equals the item id
+        bound by _download_single, and the same id is still bound after
+        download_video returns.
+
+        Probes structlog.contextvars.get_contextvars() at two observable
+        points — one inside the download and one after it back in
+        _download_single — rather than scraping rendered log text.
+        """
+        import structlog.contextvars
+
+        from vkdownloader.utils import correlation as _correlation
+
+        settings = _make_settings(tmp_path)
+        url = _batch_urls(1)[0]
+
+        bound_ids: list[str] = []
+        inside_context: list[str | None] = []
+        after_context: list[str | None] = []
+
+        def _track_bind(correlation_id: str) -> None:
+            bound_ids.append(correlation_id)
+            _correlation.bind_correlation_id(correlation_id)
+
+        def _track_clear() -> None:
+            after_context.append(structlog.contextvars.get_contextvars().get("correlation_id"))
+            _correlation.clear_correlation_id()
+
+        async def _probe_inside_download(*args: object, **kwargs: object) -> Path:
+            inside_context.append(structlog.contextvars.get_contextvars().get("correlation_id"))
+            return tmp_path / "ok.mp4"
+
+        with (
+            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
+            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch(
+                "vkdownloader.services.batch_downloader.bind_correlation_id",
+                side_effect=_track_bind,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.clear_correlation_id",
+                side_effect=_track_clear,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=_probe_inside_download,
+            ),
+        ):
+            results, _peak = await asyncio.wait_for(
+                _run_batch_with_progress(
+                    [url],
+                    QualityEnum.BEST,
+                    DownloadMethod.AUTO,
+                    settings,
+                    output=tmp_path,
+                ),
+                timeout=30,
+            )
+
+        # _run_batch_with_progress binds the run-level id first; _download_single
+        # binds the item-level id second. With one item, bound_ids[-1] is the
+        # item's identifier.
+        item_correlation_id = bound_ids[-1]
+
+        # Observable point 1 — inside download_video: the bound id equals the
+        # item's id, proving download_video inherited rather than regenerated.
+        assert inside_context[0] == item_correlation_id, (
+            f"download_video saw correlation_id={inside_context[0]!r}, "
+            f"expected item id {item_correlation_id!r}"
+        )
+
+        # Observable point 2 — after download_video returns, back in
+        # _download_single: the same id is still bound — download_video did
+        # not clear it. _download_single's finally then clears it.
+        assert after_context[0] == item_correlation_id, (
+            f"after download_video, correlation_id={after_context[0]!r}, "
+            f"expected still bound as {item_correlation_id!r}"
+        )
+
+        assert results[0][2] == "success"

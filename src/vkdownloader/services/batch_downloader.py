@@ -268,7 +268,6 @@ async def _download_single(
         logger.error(
             "extraction_error",
             url=_strip_auth_params(url),
-            correlation_id=correlation_id,
             **e.log_context(),
         )
         _finish(ProgressStatus.FAILED)
@@ -285,7 +284,6 @@ async def _download_single(
         logger.exception(
             "unexpected_error_in_batch_download",
             url=_strip_auth_params(url),
-            correlation_id=correlation_id,
         )
         _finish(ProgressStatus.FAILED)
         return (url, "", f"unexpected_error: {type(e).__name__}")
@@ -326,7 +324,6 @@ async def _run_batch_with_progress(
         logger.info(
             "batch_download_started",
             url_file_count=len(urls),
-            batch_correlation_id=batch_correlation_id,
         )
 
         # One RichProgressReporter per batch run: it is constructed here, never

@@ -647,57 +647,41 @@ async def download_video(
         QualityNotAvailableError: If no streams found or requested quality unavailable.
         VideoNotFoundError: If the video cannot be found or is unavailable.
     """
-    # DF-002: Bind a correlation ID so log entries in both single-download
-    # and batch-download paths include a correlation_id field.
-    from ..utils.correlation import (
-        bind_correlation_id,
-        clear_correlation_id,
-        generate_correlation_id,
-    )
+    extractor = VKVideoExtractor(settings=settings)
+    video = await extractor.extract_streams(url)
 
-    correlation_id = generate_correlation_id()
-    bind_correlation_id(correlation_id)
+    if title_callback is not None and video.title:
+        title_callback(sanitize_title(video.title))
 
-    try:
-        extractor = VKVideoExtractor(settings=settings)
-        video = await extractor.extract_streams(url)
-
-        if title_callback is not None and video.title:
-            title_callback(sanitize_title(video.title))
-
-        if not video.streams:
-            raise QualityNotAvailableError(
-                str(quality),
-                [],
-                "No streams found for this video; the video may be private or unavailable",
-            )
-
-        selector = QualitySelector()
-
-        if log_available_qualities:
-            available = selector.list_available_qualities(video.streams)
-            logger.info("available_streams", count=len(video.streams))
-            logger.info("available_qualities", qualities=available[:8])
-
-        stream = selector.select(video.streams, quality)
-
-        output_file = _resolve_output_file(video, output, settings, output_index)
-
-        return await perform_download(
-            url,
-            str(quality),  # DF-001: pass original QualityEnum, not degraded str(stream.quality)
-            output_file,
-            method,
-            extractor,
-            settings,
-            backoff_coordinator=backoff_coordinator,
-            semaphore=semaphore,
-            progress_callback=progress_callback,
-            video_data=video,
-            selected_stream=stream,
-            echo=echo,
+    if not video.streams:
+        raise QualityNotAvailableError(
+            str(quality),
+            [],
+            "No streams found for this video; the video may be private or unavailable",
         )
-    finally:
-        # DF-002: Clear correlation context to prevent leakage between
-        # single-download and subsequent batch-download operations.
-        clear_correlation_id()
+
+    selector = QualitySelector()
+
+    if log_available_qualities:
+        available = selector.list_available_qualities(video.streams)
+        logger.info("available_streams", count=len(video.streams))
+        logger.info("available_qualities", qualities=available[:8])
+
+    stream = selector.select(video.streams, quality)
+
+    output_file = _resolve_output_file(video, output, settings, output_index)
+
+    return await perform_download(
+        url,
+        str(quality),  # DF-001: pass original QualityEnum, not degraded str(stream.quality)
+        output_file,
+        method,
+        extractor,
+        settings,
+        backoff_coordinator=backoff_coordinator,
+        semaphore=semaphore,
+        progress_callback=progress_callback,
+        video_data=video,
+        selected_stream=stream,
+        echo=echo,
+    )

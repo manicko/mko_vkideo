@@ -36,12 +36,13 @@ def bind_correlation_id(correlation_id: str) -> None:
 
 
 def clear_correlation_id() -> None:
-    """Clear all context variables from the structlog context.
+    """Unbind the correlation ID from the structlog context.
 
-    Should be called in a ``finally`` block to prevent correlation-ID
-    leakage between operations.
+    Removes only the ``correlation_id`` key, preserving any other context
+    variables that may have been bound alongside it. Should be called in a
+    ``finally`` block to prevent correlation-ID leakage between operations.
     """
-    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.unbind_contextvars("correlation_id")
 
 
 def get_correlation_id() -> str | None:
