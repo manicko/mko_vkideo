@@ -102,7 +102,7 @@ Task(
 ```
 
 ### 2.5 Verify Validation Output
-Check that `.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated.md` exists.
+Check that `.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md` exists.
 If missing or empty: retry once, then escalate on second failure.
 
 </phase_loop>
@@ -130,5 +130,4 @@ By severity:
 
 - Max 2 retry per phase (3 total attempts maximum)
 - On second failure: escalate to user with structured failure report (phase number, error, missing outputs)
-- Rejected findings cleaned from file before merge
 </retry_rules>
