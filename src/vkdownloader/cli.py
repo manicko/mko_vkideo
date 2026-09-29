@@ -43,6 +43,45 @@ from .utils.url_sanitizer import sanitize_url_for_log
 
 logger = get_logger(__name__)
 
+# Tracks whether setup_logging has completed successfully for the current
+# invocation. Reset on every preamble call so the catch-all can avoid
+# emitting a log record through an unconfigured sink (ENT-002).
+_logging_configured: bool = False
+
+
+class _PreambleFailure(Exception):
+    """Raised when the shared preamble encounters an OSError.
+
+    Wraps OSErrors from env scanning or logging setup so both commands can
+    route them to a single renderer instead of their own catch-alls.
+    """
+
+
+_PREAMBLE_FAILURE_MESSAGE = (
+    "Logging configuration failed; cannot continue. "
+    "Check the --log-file option or VKDOWNLOADER_LOG_FILE environment variable."
+)
+
+
+def _render_preamble_failure(exc: BaseException) -> None:
+    """Render a preamble/bootstrap failure on stderr via the entry layer.
+
+    Reached by both ``download`` and ``batch`` for any OSError raised during
+    the shared preamble — currently from ``setup_logging`` when the log
+    directory cannot be created. The structured-log sink is not configured
+    in this state, so the message is emitted to stderr through
+    ``typer.echo`` and a log record is produced only when a sink can
+    actually receive it. The record carries only the error type name —
+    no traceback, no source path, no settings object.
+    """
+    typer.echo(_PREAMBLE_FAILURE_MESSAGE, err=True)
+    if _logging_configured:
+        cause = exc.__cause__
+        logger.error(
+            "preamble_failed",
+            error_type=type(cause if cause is not None else exc).__name__,
+        )
+
 
 def _log_env_file_path() -> None:
     """Log the resolved .env file path at debug level."""
@@ -112,26 +151,41 @@ def _run_command_preamble(
 
     The single ``Settings`` instance is returned so the calling command can pass
     the same object downstream, keeping logging configuration and the service
-    layer on one identity (A4).  ``warn_unknown_env_vars`` is resolved through
+    layer on one identity (A4).      ``warn_unknown_env_vars`` is resolved through
     this module's global namespace so that string-path patches targeting
     ``vkdownloader.cli.warn_unknown_env_vars`` still take effect here.
+
+    Any ``OSError`` raised during the preamble is wrapped in
+    ``_PreambleFailure`` so both commands delegate to
+    ``_render_preamble_failure`` — keeping the bootstrap-failure path
+    independent of the structured-log sink. After ``setup_logging``
+    returns, ``_logging_configured`` is set so the catch-all can avoid
+    emitting a log record through an unconfigured sink.
     """
-    unknown_vars = warn_unknown_env_vars()
-    if unknown_vars:
-        valid_vars = sorted(_build_valid_env_vars())
-        for var in unknown_vars:
-            typer.echo(
-                f"Ignored unknown environment variable '{var}'. "
-                f"Valid variables: {', '.join(valid_vars)}. "
-                f"Check for typos.",
-                err=True,
-            )
-    settings = _build_settings(
-        cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
-    )
-    setup_logging(settings)
-    _log_env_file_path()
-    return settings
+    global _logging_configured
+    _logging_configured = False
+    try:
+        unknown_vars = warn_unknown_env_vars()
+        if unknown_vars:
+            valid_vars = sorted(_build_valid_env_vars())
+            for var in unknown_vars:
+                typer.echo(
+                    f"Ignored unknown environment variable '{var}'. "
+                    f"Valid variables: {', '.join(valid_vars)}. "
+                    f"Check for typos.",
+                    err=True,
+                )
+        settings = _build_settings(
+            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+        )
+        setup_logging(settings)
+        _logging_configured = True
+        _log_env_file_path()
+        return settings
+    except OSError as exc:
+        raise _PreambleFailure(
+            "OSError during command preamble (env scan or logging setup)"
+        ) from exc
 
 
 app = typer.Typer(
@@ -258,10 +312,14 @@ def download(
     except VideoNotFoundError:
         typer.echo("Video not found. Verify the URL is correct and the video is public.", err=True)
         raise typer.Exit(code=1) from None
+    except _PreambleFailure as exc:
+        _render_preamble_failure(exc)
+        raise typer.Exit(code=1) from None
     except typer.Exit:
         raise
     except Exception:
-        logger.exception("download_failed", url=sanitize_url_for_log(url))
+        if _logging_configured:
+            logger.exception("download_failed", url=sanitize_url_for_log(url))
         typer.echo("An error occurred during download", err=True)
         raise typer.Exit(code=1) from None
 
@@ -356,6 +414,9 @@ def batch_download(
     except ValidationError as e:
         typer.echo(format_validation_error(e), err=True)
         raise typer.Exit(code=1) from None
+    except _PreambleFailure as exc:
+        _render_preamble_failure(exc)
+        raise typer.Exit(code=1) from None
     except OSError as e:
         typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
         raise typer.Exit(code=1) from None
@@ -365,11 +426,12 @@ def batch_download(
     except typer.Exit:
         raise
     except Exception:
-        logger.exception(
-            "batch_download_failed",
-            url_file=str(urls_file),
-            url_count=len(valid_urls),
-        )
+        if _logging_configured:
+            logger.exception(
+                "batch_download_failed",
+                url_file=str(urls_file),
+                url_count=len(valid_urls),
+            )
         typer.echo("An error occurred during batch download", err=True)
         raise typer.Exit(code=1) from None
 

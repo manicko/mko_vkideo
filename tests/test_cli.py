@@ -1975,3 +1975,94 @@ class TestPreSinkDiagnostic:
         assert "download_dir_empty_string_using_default" not in result.stdout
         log_contents = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         assert "download_dir_empty_string_using_default" not in log_contents
+
+
+class TestPreambleFailureRendering:
+    """ENT-002, ENT-003: preamble/bootstrap failure is rendered via a shared path.
+
+    Both commands must reach ``_render_preamble_failure`` and emit the same
+    single-line message on stderr — never a traceback, never an absolute
+    source path, and never the Settings object.
+    """
+
+    @staticmethod
+    def _force_logging_failure(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Point VKDOWNLOADER_LOG_FILE inside a regular file so mkdir fails."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        monkeypatch.setenv("VKDOWNLOADER_LOG_FILE", str(blocker / "app.log"))
+
+    @staticmethod
+    def _project_root() -> str:
+        """Return the repository root path to detect leaked source paths."""
+        return str(Path(__file__).resolve().parent.parent)
+
+    def _assert_clean_preamble_failure_output(self, result: object) -> None:
+        """Assert exit 1, single-line stderr message, no traceback/path/settings."""
+        assert result.exit_code == 1  # type: ignore[attr-defined]
+        stderr = result.stderr  # type: ignore[attr-defined]
+        assert "Logging configuration failed" in stderr
+        # Single line — only the trailing newline from typer.echo.
+        assert stderr.count("\n") == 1
+        combined = result.output  # type: ignore[attr-defined]
+        assert "Traceback" not in result.stdout  # type: ignore[attr-defined]
+        assert "Traceback" not in combined
+        assert self._project_root() not in combined
+        assert "Settings(" not in combined
+
+    def test_download_preamble_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """download: setup_logging OSError renders the shared stderr message."""
+        self._force_logging_failure(tmp_path, monkeypatch)
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890"],
+            catch_exceptions=False,
+        )
+        self._assert_clean_preamble_failure_output(result)
+
+    def test_batch_preamble_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """batch: setup_logging OSError renders the shared stderr message."""
+        self._force_logging_failure(tmp_path, monkeypatch)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file)],
+            catch_exceptions=False,
+        )
+        self._assert_clean_preamble_failure_output(result)
+
+    def test_download_and_batch_preamble_failure_render_same_message(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both commands emit the identical preamble-failure message on stderr."""
+        self._force_logging_failure(tmp_path, monkeypatch)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        download_result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890"],
+            catch_exceptions=False,
+        )
+        batch_result = runner.invoke(
+            app,
+            ["batch", str(urls_file)],
+            catch_exceptions=False,
+        )
+        assert download_result.exit_code == 1
+        assert batch_result.exit_code == 1
+        assert download_result.stderr == batch_result.stderr
