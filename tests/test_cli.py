@@ -11,6 +11,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+from vkdownloader import cli
 from vkdownloader.cli import app
 from vkdownloader.exceptions import (
     QualityNotAvailableError,
@@ -1822,3 +1823,75 @@ class TestEntryPointSourcePrecedence:
         setup_settings = mock_setup.call_args[0][0]
         download_settings = mock_dv.call_args.args[4]
         assert setup_settings is download_settings
+
+
+class TestCommandPreamble:
+    """VAL-105: tests for the shared _run_command_preamble helper."""
+
+    def test_preamble_performs_all_four_steps(self, tmp_path: Path) -> None:
+        """The preamble runs the env scan, builds Settings from .env, configures
+        logging with that same object, and reports the resolved env file.
+
+        The helper is called directly with a .env in tmp_path.  The four leaf
+        collaborators are patched so the test asserts the wiring (component
+        interaction) rather than implementation details.
+        """
+        (tmp_path / ".env").write_text("VKDOWNLOADER_MAX_RETRIES=5\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli.warn_unknown_env_vars") as mock_warn,
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.cli._log_env_file_path") as mock_log_env,
+        ):
+            settings = cli._run_command_preamble(
+                cookie_source=None, ssl_verify=None, max_retries=None
+            )
+
+        mock_warn.assert_called_once()
+        mock_log_env.assert_called_once()
+        mock_setup.assert_called_once()
+        assert mock_setup.call_args[0][0] is settings
+        assert settings.max_retries == 5
+
+
+class TestPreambleCalledOncePerCommand:
+    """VAL-105: both commands delegate to _run_command_preamble exactly once."""
+
+    def test_download_invokes_preamble_once(self, tmp_path: Path, sample_video_url: str) -> None:
+        """download calls _run_command_preamble exactly once."""
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.download_video", new_callable=AsyncMock) as mock_download,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+            mock_download.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        assert mock_preamble.call_count == 1
+
+    def test_batch_invokes_preamble_once(self, tmp_path: Path) -> None:
+        """batch calls _run_command_preamble exactly once."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+            mock_run_batch.return_value = 0
+
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        assert mock_preamble.call_count == 1

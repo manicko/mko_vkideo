@@ -84,6 +84,38 @@ def _build_settings(
     return Settings(**overrides)
 
 
+def _run_command_preamble(
+    *,
+    cookie_source: CookieSource | None,
+    ssl_verify: bool | None,
+    max_retries: int | None,
+) -> Settings:
+    """Run the shared four-step command bootstrap and return the constructed Settings.
+
+    Every command invocation performs the same preamble:
+
+      1. detect unrecognised ``VKDOWNLOADER_*`` variables (via
+         ``warn_unknown_env_vars``);
+      2. construct ``Settings`` from the supplied overrides (via ``_build_settings``,
+         which only forwards options the user actually typed);
+      3. configure logging from the constructed Settings (via ``setup_logging``);
+      4. report the resolved environment file (via ``_log_env_file_path``).
+
+    The single ``Settings`` instance is returned so the calling command can pass
+    the same object downstream, keeping logging configuration and the service
+    layer on one identity (A4).  ``warn_unknown_env_vars`` is resolved through
+    this module's global namespace so that string-path patches targeting
+    ``vkdownloader.cli.warn_unknown_env_vars`` still take effect here.
+    """
+    warn_unknown_env_vars()
+    settings = _build_settings(
+        cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+    )
+    setup_logging(settings)
+    _log_env_file_path()
+    return settings
+
+
 app = typer.Typer(
     name="vkdownloader",
     help="Download videos from vkvideo.ru with quality selection support",
@@ -158,17 +190,9 @@ def download(
         return result
 
     try:
-        # Detect misspelled VKDOWNLOADER_* env vars before construction
-        warn_unknown_env_vars()
-        # Construct Settings once via _build_settings: only supplied CLI options become
-        # constructor keywords, leaving VKDOWNLOADER_* and .env reachable for unsupplied
-        # fields (CFG-001, CFG-002).
-        settings = _build_settings(
+        settings = _run_command_preamble(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
-        setup_logging(settings)
-        # Log resolved .env path for debugging configuration issues
-        _log_env_file_path()
         result = asyncio.run(_download())
 
         if result:
@@ -274,17 +298,9 @@ def batch_download(
         valid_urls: list[str] = []
         skipped_count = 0
 
-        # Detect misspelled VKDOWNLOADER_* env vars before construction
-        warn_unknown_env_vars()
-        # Construct Settings once via _build_settings: only supplied CLI options become
-        # constructor keywords, leaving VKDOWNLOADER_* and .env reachable for unsupplied
-        # fields (CFG-001, CFG-002).
-        settings = _build_settings(
+        settings = _run_command_preamble(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
-        setup_logging(settings)
-        # Log resolved .env path for debugging configuration issues
-        _log_env_file_path()
 
         # Read and validate URLs from file
         for line in urls_file.read_text().splitlines():
