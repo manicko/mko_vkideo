@@ -458,3 +458,55 @@ class TestEnvironmentIsolation:
         assert "isolate_settings_source" in request.fixturenames
         assert Path.cwd().resolve() != _launch_dir(request)
         assert not (Path.cwd() / ".env").exists()
+
+
+class TestConditionalOverridesConstruction:
+    """CFG-002: _build_settings validates max_retries bounds (Route A construction path).
+
+    The bounds are derived from the field's own declared metadata, not hardcoded,
+    so the test documents the field as the single source of truth for the range.
+    """
+
+    def test_max_retries_bounds_derived_from_field_metadata(self) -> None:
+        """Floor and ceiling come from the field's declared constraints, not hardcoded."""
+        from annotated_types import Ge, Le
+
+        from vkdownloader.cli import _build_settings
+
+        field = Settings.model_fields["max_retries"]
+        floor = next(m.ge for m in field.metadata if isinstance(m, Ge))
+        ceiling = next(m.le for m in field.metadata if isinstance(m, Le))
+
+        # Below the floor → ValidationError naming max_retries
+        with pytest.raises(ValidationError) as exc_info:
+            _build_settings(
+                cookie_source=None,
+                ssl_verify=None,
+                max_retries=floor - 1,
+            )
+        assert "max_retries" in str(exc_info.value)
+
+        # Above the ceiling → ValidationError naming max_retries
+        with pytest.raises(ValidationError) as exc_info:
+            _build_settings(
+                cookie_source=None,
+                ssl_verify=None,
+                max_retries=ceiling + 1,
+            )
+        assert "max_retries" in str(exc_info.value)
+
+        # Floor is accepted and survives on the constructed object
+        settings = _build_settings(
+            cookie_source=None,
+            ssl_verify=None,
+            max_retries=floor,
+        )
+        assert settings.max_retries == floor
+
+        # Ceiling is accepted and survives
+        settings = _build_settings(
+            cookie_source=None,
+            ssl_verify=None,
+            max_retries=ceiling,
+        )
+        assert settings.max_retries == ceiling

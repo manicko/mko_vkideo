@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TypedDict
 
 import typer
 from pydantic import ValidationError
@@ -46,6 +47,43 @@ def _log_env_file_path() -> None:
         logger.debug(".env file not found; using environment variables or defaults only")
 
 
+class _SettingsOverrides(TypedDict, total=False):
+    """Constructor keywords for the options a user actually supplied.
+
+    A key is present only when the user typed the option. An unsupplied option
+    therefore occupies no configuration source, leaving VKDOWNLOADER_* variables
+    and the .env file reachable for that field (CFG-001).
+    """
+
+    cookie_source: CookieSource
+    ssl_verify: bool
+    max_retries: int
+
+
+def _build_settings(
+    *,
+    cookie_source: CookieSource | None,
+    ssl_verify: bool | None,
+    max_retries: int | None,
+) -> Settings:
+    """Construct the one Settings object a command invocation runs on.
+
+    Only options the user actually supplied become constructor keywords. Every
+    supplied value is validated by the model, so the declared bounds on
+    ``max_retries`` still apply (CFG-002). An option the user did not type is
+    left to the model's own documented precedence: constructor keyword,
+    VKDOWNLOADER_* variable, .env file, field default.
+    """
+    overrides: _SettingsOverrides = {}
+    if cookie_source is not None:
+        overrides["cookie_source"] = cookie_source
+    if ssl_verify is not None:
+        overrides["ssl_verify"] = ssl_verify
+    if max_retries is not None:
+        overrides["max_retries"] = max_retries
+    return Settings(**overrides)
+
+
 app = typer.Typer(
     name="vkdownloader",
     help="Download videos from vkvideo.ru with quality selection support",
@@ -68,16 +106,16 @@ def download(
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
-    cookie_source: CookieSource = typer.Option(
-        CookieSource.NONE,
+    cookie_source: CookieSource | None = typer.Option(
+        None,
         "--cookie-source",
         "-c",
-        help="Cookie source: none or browser",
+        help="Cookie source: none or browser (effective default: none; from VKDOWNLOADER_COOKIE_SOURCE or .env)",
     ),
-    ssl_verify: bool = typer.Option(
-        True,
+    ssl_verify: bool | None = typer.Option(
+        None,
         "--ssl-verify/--no-ssl-verify",
-        help="Verify SSL certificates for CDN connections",
+        help="Verify SSL certificates for CDN connections (effective default: true; from VKDOWNLOADER_SSL_VERIFY or .env)",
     ),
     max_retries: int | None = typer.Option(
         None,
@@ -105,7 +143,6 @@ def download(
                 output,
                 method,
                 settings,
-                max_retries_override=max_retries,
                 log_available_qualities=True,
             )
         finally:
@@ -123,8 +160,12 @@ def download(
     try:
         # Detect misspelled VKDOWNLOADER_* env vars before construction
         warn_unknown_env_vars()
-        # Create Settings once with environment-loaded values, merging CLI overrides
-        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+        # Construct Settings once via _build_settings: only supplied CLI options become
+        # constructor keywords, leaving VKDOWNLOADER_* and .env reachable for unsupplied
+        # fields (CFG-001, CFG-002).
+        settings = _build_settings(
+            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+        )
         setup_logging(settings)
         # Log resolved .env path for debugging configuration issues
         _log_env_file_path()
@@ -206,16 +247,16 @@ def batch_download(
         "-m",
         help="Download method: yt-dlp, ffmpeg, or auto",
     ),
-    cookie_source: CookieSource = typer.Option(
-        CookieSource.NONE,
+    cookie_source: CookieSource | None = typer.Option(
+        None,
         "--cookie-source",
         "-c",
-        help="Cookie source: none or browser",
+        help="Cookie source: none or browser (effective default: none; from VKDOWNLOADER_COOKIE_SOURCE or .env)",
     ),
-    ssl_verify: bool = typer.Option(
-        True,
+    ssl_verify: bool | None = typer.Option(
+        None,
         "--ssl-verify/--no-ssl-verify",
-        help="Verify SSL certificates for CDN connections",
+        help="Verify SSL certificates for CDN connections (effective default: true; from VKDOWNLOADER_SSL_VERIFY or .env)",
     ),
     max_retries: int | None = typer.Option(
         None,
@@ -235,8 +276,12 @@ def batch_download(
 
         # Detect misspelled VKDOWNLOADER_* env vars before construction
         warn_unknown_env_vars()
-        # Create Settings once with environment-loaded values, merging CLI overrides
-        settings = Settings(cookie_source=cookie_source, ssl_verify=ssl_verify)
+        # Construct Settings once via _build_settings: only supplied CLI options become
+        # constructor keywords, leaving VKDOWNLOADER_* and .env reachable for unsupplied
+        # fields (CFG-001, CFG-002).
+        settings = _build_settings(
+            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+        )
         setup_logging(settings)
         # Log resolved .env path for debugging configuration issues
         _log_env_file_path()
@@ -268,7 +313,6 @@ def batch_download(
                 quality,
                 method,
                 settings,
-                max_retries,
                 output,
                 skipped_count,
             )

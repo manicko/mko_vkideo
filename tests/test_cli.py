@@ -17,7 +17,7 @@ from vkdownloader.exceptions import (
     QualityParseError,
     VideoNotFoundError,
 )
-from vkdownloader.models.enums import ProgressStatus, QualityEnum
+from vkdownloader.models.enums import CookieSource, ProgressStatus, QualityEnum
 from vkdownloader.services import batch_downloader
 from vkdownloader.services.downloader import download_video as _real_download_video
 from vkdownloader.services.progress_display import RichProgressReporter
@@ -1464,3 +1464,361 @@ class TestExitCodeContract:
         observed.setdefault(result.exit_code, "download interrupted by KeyboardInterrupt")
 
         return observed
+
+
+class TestEntryPointSourcePrecedence:
+    """A1-A4: the .env file and CLI options both reach the Settings that runs.
+
+    These tests deliberately do **not** patch ``vkdownloader.cli.Settings`` — the
+    real model is constructed so the ``.env`` file and ``VKDOWNLOADER_*`` variables
+    are exercised end to end.  Deep consumers are patched instead of the service
+    boundary so the identity assertion (A4) observes the real chain rather than a
+    stub's copy.
+    """
+
+    # The .env written by A1/A2 — also used as a positive control via
+    # VKDOWNLOADER_THROTTLED_RATE, which this block does not touch.
+    _ENV_CONTENT = (
+        "VKDOWNLOADER_COOKIE_SOURCE=browser\n"
+        "VKDOWNLOADER_SSL_VERIFY=false\n"
+        "VKDOWNLOADER_MAX_RETRIES=5\n"
+        "VKDOWNLOADER_THROTTLED_RATE=200000\n"
+    )
+
+    @staticmethod
+    def _write_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Write the shared .env into tmp_path and chdir into it."""
+        (tmp_path / ".env").write_text(
+            TestEntryPointSourcePrecedence._ENV_CONTENT,
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+    # ---- A1: .env reaches all three fields + positive control -------------
+
+    def test_a1_env_reaches_fields_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A1 (download): .env values reach cookie_source, ssl_verify, max_retries."""
+        self._write_env(tmp_path, monkeypatch)
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/1080.m3u8",
+                quality="1080",
+                height=1080,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080"]
+            mock_selector.select.return_value = MagicMock(quality="1080")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_download.call_args.args[5]
+        assert settings_arg.cookie_source == CookieSource.BROWSER
+        assert settings_arg.ssl_verify is False
+        assert settings_arg.max_retries == 5
+        # Positive control — a field this block does not touch, proving the
+        # .env file actually reached the model.
+        assert settings_arg.throttled_rate == 200000
+
+    def test_a1_env_reaches_fields_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A1 (batch): .env values reach cookie_source, ssl_verify, max_retries."""
+        self._write_env(tmp_path, monkeypatch)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+            ) as mock_dv,
+            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
+            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch(
+                "vkdownloader.utils.security.validate_output_path",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_dv.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_dv.call_args.args[4]
+        assert settings_arg.cookie_source == CookieSource.BROWSER
+        assert settings_arg.ssl_verify is False
+        assert settings_arg.max_retries == 5
+        # Positive control.
+        assert settings_arg.throttled_rate == 200000
+
+    # ---- A2: options beat the .env ---------------------------------------
+
+    def test_a2_options_override_env_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A2 (download): CLI options win over .env values."""
+        self._write_env(tmp_path, monkeypatch)
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/1080.m3u8",
+                quality="1080",
+                height=1080,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080"]
+            mock_selector.select.return_value = MagicMock(quality="1080")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                [
+                    "download",
+                    sample_video_url,
+                    "--cookie-source",
+                    "none",
+                    "--ssl-verify",
+                    "--max-retries",
+                    "7",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_download.call_args.args[5]
+        # Options beat .env: .env says browser / false / 5
+        assert settings_arg.cookie_source == CookieSource.NONE
+        assert settings_arg.ssl_verify is True
+        assert settings_arg.max_retries == 7
+        # Positive control — still resolves from .env.
+        assert settings_arg.throttled_rate == 200000
+
+    def test_a2_options_override_env_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A2 (batch): CLI options win over .env values."""
+        self._write_env(tmp_path, monkeypatch)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+            ) as mock_dv,
+            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
+            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch(
+                "vkdownloader.utils.security.validate_output_path",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_dv.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                [
+                    "batch",
+                    str(urls_file),
+                    "--cookie-source",
+                    "none",
+                    "--ssl-verify",
+                    "--max-retries",
+                    "7",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_dv.call_args.args[4]
+        assert settings_arg.cookie_source == CookieSource.NONE
+        assert settings_arg.ssl_verify is True
+        assert settings_arg.max_retries == 7
+        assert settings_arg.throttled_rate == 200000
+
+    # ---- A3: bound enforced before the service ---------------------------
+
+    def test_a3_max_retries_bound_enforced_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A3 (download): --max-retries 0 and 11 are rejected before the service runs."""
+        monkeypatch.chdir(tmp_path)
+
+        for invalid_value in [0, 11]:
+            with patch(
+                "vkdownloader.services.downloader.perform_download",
+            ) as mock_download:
+                result = runner.invoke(
+                    app,
+                    ["download", sample_video_url, "--max-retries", str(invalid_value)],
+                )
+
+            assert result.exit_code == 1, f"max_retries={invalid_value} should fail"
+            assert "max_retries" in result.output
+            assert "Traceback" not in result.output
+            assert mock_download.call_count == 0
+
+    def test_a3_max_retries_bound_enforced_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A3 (batch): --max-retries 0 and 11 are rejected before the service runs."""
+        monkeypatch.chdir(tmp_path)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        for invalid_value in [0, 11]:
+            with patch(
+                "vkdownloader.services.batch_downloader.download_video",
+            ) as mock_dv:
+                result = runner.invoke(
+                    app,
+                    ["batch", str(urls_file), "--max-retries", str(invalid_value)],
+                )
+
+            assert result.exit_code == 1, f"max_retries={invalid_value} should fail"
+            assert "max_retries" in result.output
+            assert "Traceback" not in result.output
+            assert mock_dv.call_count == 0
+
+    # ---- A4: object identity across the preamble -------------------------
+
+    def test_a4_settings_object_identity_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A4 (download): setup_logging and perform_download share one Settings object."""
+        monkeypatch.chdir(tmp_path)
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/1080.m3u8",
+                quality="1080",
+                height=1080,
+            ),
+        ]
+
+        with (
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080"]
+            mock_selector.select.return_value = MagicMock(quality="1080")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url, "--max-retries", "5"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        setup_settings = mock_setup.call_args[0][0]
+        download_settings = mock_download.call_args.args[5]
+        assert setup_settings is download_settings
+
+    def test_a4_settings_object_identity_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A4 (batch): setup_logging and download_video share one Settings object."""
+        monkeypatch.chdir(tmp_path)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+            ) as mock_dv,
+            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
+            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch(
+                "vkdownloader.utils.security.validate_output_path",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_dv.return_value = tmp_path / "video.mp4"
+
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--max-retries", "5"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        setup_settings = mock_setup.call_args[0][0]
+        download_settings = mock_dv.call_args.args[4]
+        assert setup_settings is download_settings

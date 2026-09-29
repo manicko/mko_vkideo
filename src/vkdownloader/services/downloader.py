@@ -605,7 +605,6 @@ async def download_video(
     method: DownloadMethod,
     settings: Settings,
     *,
-    max_retries_override: int | None = None,
     log_available_qualities: bool = False,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     semaphore: SemaphoreLike | None = None,
@@ -626,7 +625,6 @@ async def download_video(
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings with environment-loaded values.
-        max_retries_override: Optional max_retries override from CLI.
         log_available_qualities: If True, log available stream qualities.
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
         semaphore: Optional per-video semaphore for concurrency control. This is a
@@ -649,9 +647,6 @@ async def download_video(
         QualityNotAvailableError: If no streams found or requested quality unavailable.
         VideoNotFoundError: If the video cannot be found or is unavailable.
     """
-    if max_retries_override is not None:
-        settings = settings.model_copy(update={"max_retries": max_retries_override})
-
     # DF-002: Bind a correlation ID so log entries in both single-download
     # and batch-download paths include a correlation_id field.
     from ..utils.correlation import (

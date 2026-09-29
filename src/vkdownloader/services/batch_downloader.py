@@ -162,7 +162,6 @@ async def _download_single(
     output: Path,
     method: DownloadMethod,
     settings: Settings,
-    max_retries_override: int | None = None,
     context: DownloadContext | None = None,
 ) -> tuple[str, str, str]:
     """Download a single video and return result tuple.
@@ -173,7 +172,6 @@ async def _download_single(
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings with environment-loaded values.
-        max_retries_override: Optional max_retries override from CLI.
         context: Optional context for batch download operations.
 
     Returns:
@@ -237,7 +235,6 @@ async def _download_single(
             output,
             method,
             settings,
-            max_retries_override=max_retries_override,
             backoff_coordinator=backoff_coordinator,
             semaphore=tracked_semaphore,
             progress_callback=progress_cb,
@@ -301,7 +298,6 @@ async def _run_batch_with_progress(
     quality: QualityEnum,
     method: DownloadMethod,
     settings: Settings,
-    max_retries: int | None,
     output: Path,
 ) -> tuple[list[tuple[str, str, str]], int]:
     """Run batch download with progress tracking.
@@ -311,7 +307,6 @@ async def _run_batch_with_progress(
         quality: Video quality selection for all downloads.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings.
-        max_retries: Maximum retry attempts for failed segment downloads.
         output: Output directory for downloaded videos.
 
     Returns:
@@ -348,7 +343,6 @@ async def _run_batch_with_progress(
                     output,
                     method,
                     settings,
-                    max_retries,
                     DownloadContext(
                         index=i,
                         shared_semaphore=shared_semaphore,
@@ -479,7 +473,6 @@ async def run_batch(
     quality: QualityEnum,
     method: DownloadMethod,
     settings: Settings,
-    max_retries: int | None,
     output: Path,
     skipped_count: int = 0,
 ) -> int:
@@ -494,7 +487,6 @@ async def run_batch(
         quality: Video quality selection for all downloads.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings.
-        max_retries: Maximum retry attempts for failed segment downloads.
         output: Output directory for downloaded videos.
         skipped_count: Number of invalid URLs skipped during validation.
 
@@ -504,6 +496,6 @@ async def run_batch(
         wins over failure — see :func:`_print_batch_summary`, which computes it.
     """
     results, peak_concurrent_videos = await _run_batch_with_progress(
-        urls, quality, method, settings, max_retries, output
+        urls, quality, method, settings, output
     )
     return _print_batch_summary(results, peak_concurrent_videos, skipped_count)
