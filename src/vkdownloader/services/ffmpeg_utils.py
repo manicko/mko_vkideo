@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from structlog import get_logger
 
+from ..exceptions import DownloadError
+from ..utils.formatting import format_bytes
+
 logger = get_logger(__name__)
 
 # Module-level cache: PATH lookup happens only once per process lifetime
 _ffmpeg_available: bool | None = None
+
+# Free space kept in reserve on top of the size arithmetic below. It covers
+# what the byte figures cannot see: the batch temp file that coexists with the
+# segments it was written from, filesystem block-allocation slack, and whatever
+# another process writes between the probe and the first output byte. 64 MiB is
+# negligible against a video download and large enough to absorb all three.
+_MERGE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
 
 
 async def iter_process_lines(
@@ -354,10 +364,98 @@ async def _perform_final_merge(
     return False
 
 
+def _required_merge_bytes(segment_paths: Iterable[Path]) -> int:
+    """Compute the free space the batched merge needs for ``segment_paths``.
+
+    Both merge stages write their output while their input is still on disk —
+    the final artefact is produced from the batch temp files before those are
+    unlinked — so the volume must hold the segments *and* a full copy of them
+    at the same time. The requirement is therefore twice the measured segment
+    bytes, plus a fixed safety margin.
+
+    A segment that has already disappeared contributes nothing: its absence is
+    a different precondition, reported with a precise message by the merge's
+    own existence check rather than by a byte count.
+
+    Args:
+        segment_paths: The segment files the merge is about to read.
+
+    Returns:
+        Free space, in bytes, the merge requires. Never negative.
+    """
+    segment_bytes = 0
+    for segment_path in segment_paths:
+        try:
+            segment_bytes += segment_path.stat().st_size
+        except OSError:
+            # An unstattable segment is counted as zero. Whether it blocks the
+            # merge is decided by the existence check that runs next, which
+            # names the file; a size probe must not pre-empt that verdict.
+            continue
+    return segment_bytes * 2 + _MERGE_SPACE_MARGIN_BYTES
+
+
+def _check_merge_space(segment_paths: Iterable[Path], segments_dir: Path) -> None:
+    """Fail before the merge starts when the volume cannot hold its own output.
+
+    The merge is the one download step that cannot be resumed — its input
+    segments are still needed — so running out of space halfway through turns a
+    large download into a failed one with no partial result, and the failure
+    surfaces as a raw filesystem error at an unknown point. Probing first turns
+    that into a single actionable message at a known point, before any ffmpeg
+    subprocess exists to have written anything.
+
+    Args:
+        segment_paths: The segment files the merge is about to read.
+        segments_dir: Directory holding the segments; the volume probed is the
+            one the merge writes into.
+
+    Raises:
+        DownloadError: If the volume holds less free space than the merge needs.
+    """
+    try:
+        free_bytes = shutil.disk_usage(segments_dir).free
+    except OSError as exc:
+        # An unreadable or unusual mount is not evidence of a full one, and a
+        # failed probe must not block downloads that would otherwise succeed.
+        # Log it and proceed; ffmpeg reports the failure if it is real.
+        logger.warning("merge_space_probe_failed", error=str(exc))
+        return
+
+    required_bytes = _required_merge_bytes(segment_paths)
+    if free_bytes >= required_bytes:
+        return
+
+    hint = (
+        "Free disk space, write the download to another output volume, or select a "
+        "lower quality so the video is smaller."
+    )
+    # structlog carries the structured fields for log aggregation; the
+    # exception carries the same facts for the user, because not every caller
+    # logs a caught exception (batch_downloader._download_single returns the
+    # status label alone). Emitting both means the message survives whichever
+    # layer handles the failure.
+    logger.error(
+        "merge_insufficient_disk_space",
+        required_bytes=required_bytes,
+        available_bytes=free_bytes,
+        hint=hint,
+    )
+    raise DownloadError(
+        f"Not enough free space to merge the video: {format_bytes(required_bytes)} "
+        f"required ({required_bytes} bytes) but only {format_bytes(free_bytes)} "
+        f"available ({free_bytes} bytes). {hint}"
+    )
+
+
 async def _merge_segments_batched(
     segments_dir: Path, output_file: Path, count: int, download_timeout: float = 300.0
 ) -> Path | None:
     """Merge segments in batches to avoid command line limits.
+
+    Probes the output volume's free space before the first ffmpeg subprocess is
+    spawned, and fails with an actionable message when the volume cannot hold
+    both the segments and the artefact they become.
 
     Args:
         segments_dir: Directory containing segment files.
@@ -367,9 +465,25 @@ async def _merge_segments_batched(
 
     Returns:
         Path to output file on success, None on failure.
+
+    Raises:
+        FileNotFoundError: If segment files are missing.
+        DownloadError: If the volume lacks the free space the merge requires.
+            A precondition failure like the missing-segment one above, not a
+            merge failure — which is why it raises rather than returning None.
+            It is deliberately not an ``OSError`` subclass: the yt-dlp resume
+            path wraps this call in ``except (ExtractionError, OSError)``
+            (ytdlp_downloader.py), which would swallow a FileNotFoundError
+            here, relabel it "failed_to_refresh_token" and return None, losing
+            the message.
     """
     batch_size = 100
     temp_files: list[Path] = []
+
+    _check_merge_space(
+        (segments_dir / f"{i:05d}.ts" for i in range(count)),
+        segments_dir,
+    )
 
     try:
         # Process in batches

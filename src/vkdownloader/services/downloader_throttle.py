@@ -10,6 +10,7 @@ import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
+from ..utils.formatting import format_bytes
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -19,25 +20,6 @@ _DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].defau
 
 # Status codes that should trigger retry
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-
-
-def _format_bytes(num_bytes: int) -> str:
-    """Format a byte count into a human-readable string with SI prefix.
-
-    Args:
-        num_bytes: Number of bytes.
-
-    Returns:
-        String like "25B", "1.5KB", "45.2MB", "2.1GB".
-    """
-    if num_bytes < 1024:
-        return f"{num_bytes}B"
-    elif num_bytes < 1024 * 1024:
-        return f"{num_bytes / 1024:.1f}KB"
-    elif num_bytes < 1024 * 1024 * 1024:
-        return f"{num_bytes / (1024 * 1024):.1f}MB"
-    else:
-        return f"{num_bytes / (1024 * 1024 * 1024):.1f}GB"
 
 
 # ContextVar for shutdown event - provides loop-safe event per asyncio context
@@ -172,11 +154,11 @@ class ProgressManager:
                 downloaded, total = self._state.get(i, (0, 0))
                 if total <= 0:
                     # Unknown total: byte-based progress (yt-dlp/ffmpeg streams in)
-                    progress_lines.append(f"video_{i}: {_format_bytes(downloaded)}")
+                    progress_lines.append(f"video_{i}: {format_bytes(downloaded)}")
                 elif total > 1024:
                     # Byte-based progress (yt-dlp/ffmpeg)
                     progress_lines.append(
-                        f"video_{i}: {_format_bytes(downloaded)}/{_format_bytes(total)}"
+                        f"video_{i}: {format_bytes(downloaded)}/{format_bytes(total)}"
                     )
                 else:
                     # Segment-count-based progress

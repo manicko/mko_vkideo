@@ -51,8 +51,8 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
             Playwright Cookie objects.
 
     Returns:
-        Path to the temporary cookie file (created with 0o600 permissions
-        via tempfile.mkstemp). The caller is responsible for cleanup.
+        Path to the temporary cookie file (mode 0o600, applied on POSIX; see
+        D-11). The caller is responsible for cleanup.
     """
     content = _cookies_to_netscape(cookies)
     fd, path = tempfile.mkstemp(suffix=".cookies.txt", prefix="vk_cookies_")
@@ -75,7 +75,10 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
     # DF-007: Explicitly set 0o600 permissions. tempfile.mkstemp creates
     # files subject to the process umask (typically 0o644 on Unix),
     # exposing live session cookies to other local users if the process
-    # crashes before cleanup.
+    # crashes before cleanup. 0o600 sets POSIX permission bits: on Windows
+    # os.chmod toggles only the read-only attribute, so the owner-only
+    # guarantee is not offered there (D-11) and the mode is requested for
+    # its POSIX effect only.
     os.chmod(path, 0o600)
     return Path(path)
 
@@ -318,7 +321,7 @@ async def download_with_ytdlp_with_resume_fallback(
     raw_cookies: list[Cookie] | None = None,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
-    semaphore: SemaphoreLike | None = None,
+    video_semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     echo: bool = True,
 ) -> Path | None:
@@ -341,7 +344,12 @@ async def download_with_ytdlp_with_resume_fallback(
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
             Used both for inter-retry backoff between yt-dlp attempts and for
             coordinating backoff during segment-resume fallback.
-        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
+        video_semaphore: The batch video permit the caller already holds (one permit per
+            video, acquired once in ``perform_download``). This is the batch-level
+            semaphore, **not** the segment-level one: the segment fan-out is deliberately
+            NOT gated by it and is bounded by a semaphore the segment layer owns. Re-
+            acquiring from this non-reentrant semaphore per segment would deadlock (D-01).
+            When ``None`` (single-download mode), no video-level permit is in effect.
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
         echo: When False, suppresses yt-dlp's native console echo (progress lines
             are emitted at DEBUG level instead; non-progress lines are dropped).
@@ -419,7 +427,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 extractor,
                 settings,
                 backoff_coordinator,
-                semaphore,
+                video_semaphore,
                 progress_callback,
             )
         ) is not None:
@@ -448,7 +456,7 @@ async def _attempt_segment_resume(
     extractor: VKVideoExtractor | None,
     settings: Settings,
     backoff_coordinator: URLBackoffCoordinator | None,
-    semaphore: SemaphoreLike | None,
+    video_semaphore: SemaphoreLike | None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
@@ -466,7 +474,9 @@ async def _attempt_segment_resume(
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
         backoff_coordinator: Optional shared URLBackoffCoordinator.
-        semaphore: Optional shared semaphore for concurrency control.
+        video_semaphore: The batch video permit the caller already holds (one permit per
+            video, acquired once in ``perform_download``). The segment fan-out is NOT
+            gated by it; the segment layer owns its own semaphore (D-01).
         progress_callback: Optional callback for per-URL segment progress.
 
     Returns:
@@ -532,7 +542,7 @@ async def _attempt_segment_resume(
                 settings=settings,
                 extractor=extractor,
                 backoff_coordinator=backoff_coordinator,
-                semaphore=semaphore,
+                video_semaphore=video_semaphore,
             )
     except (ExtractionError, OSError) as e:
         logger.warning(

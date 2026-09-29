@@ -92,9 +92,9 @@ def _semaphore_context(
 async def _temp_argfile(args: list[str]) -> AsyncIterator[Path]:
     """Async context manager for temporary ffmpeg argument file.
 
-    Writes all ffmpeg arguments to a temp file (created with 0o600) and
-    yields the path. The caller invokes ``ffmpeg @<argfile>`` so that
-    sensitive values (e.g. signed m3u8 URLs with CDN tokens) never appear
+    Writes all ffmpeg arguments to a temp file (mode 0o600, applied on POSIX;
+    see D-11) and yields the path. The caller invokes ``ffmpeg @<argfile>`` so
+    that sensitive values (e.g. signed m3u8 URLs with CDN tokens) never appear
     in the process command-line arguments — they are only visible inside
     the temp file, which is removed after use.
 
@@ -111,6 +111,11 @@ async def _temp_argfile(args: list[str]) -> AsyncIterator[Path]:
     fd, path = tempfile.mkstemp(suffix=".args", prefix="vk_ffmpeg_")
     try:
         os.close(fd)  # Close fd first; chmod needs a path on Windows
+        # SEC-001/SEC-003: request owner-only access before the arguments, which
+        # carry signed CDN tokens, are written to disk. 0o600 sets POSIX
+        # permission bits; on Windows os.chmod toggles only the read-only
+        # attribute, so the owner-only guarantee is not offered there (D-11) and
+        # the mode is requested for its POSIX effect only.
         os.chmod(path, 0o600)
         content = _format_argfile(args)
         Path(path).write_text(content)
@@ -433,7 +438,9 @@ async def perform_download(
         extractor: Optional VKVideoExtractor for token refresh.
         settings: Application settings.
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
-        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
+        semaphore: Optional per-video semaphore for concurrency control. This is a
+        single permit acquired once for the entire download (see D-01: the
+        segment layer does not re-acquire from it).
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
         video_data: Optional pre-extracted video data with streams. When provided, skips extraction.
         selected_stream: Optional pre-selected stream. When provided, used instead of streams[0].
@@ -486,8 +493,10 @@ async def perform_download(
 
         m3u8_url = str(streams[0].url)
 
-    # Acquire the shared semaphore (if provided) to bound concurrency across
-    # all download methods. When None (single-download mode), no limiting.
+    # Acquire the per-video semaphore (if provided) to bound concurrency across
+    # all download methods. This is one permit per video, acquired exactly once
+    # here; the segment layer does not re-acquire from it (see D-01).
+    # When None (single-download mode), no limiting.
     semaphore_context = _semaphore_context(semaphore)
 
     async with semaphore_context:
@@ -506,7 +515,7 @@ async def perform_download(
                     cookies=cookies,
                     raw_cookies=raw_cookies,
                     backoff_coordinator=backoff_coordinator,
-                    semaphore=semaphore,
+                    video_semaphore=semaphore,
                     progress_callback=progress_callback,
                     echo=echo,
                 )
@@ -554,7 +563,7 @@ async def perform_download(
                         settings=settings,
                         extractor=extractor,
                         backoff_coordinator=backoff_coordinator,
-                        semaphore=semaphore,
+                        video_semaphore=semaphore,
                     )
                 return result
             case DownloadMethod.AUTO:
@@ -576,7 +585,7 @@ async def perform_download(
                     cookies=cookies,
                     raw_cookies=raw_cookies,
                     backoff_coordinator=backoff_coordinator,
-                    semaphore=semaphore,
+                    video_semaphore=semaphore,
                     progress_callback=progress_callback,
                     echo=echo,
                 )
@@ -620,7 +629,8 @@ async def download_video(
         max_retries_override: Optional max_retries override from CLI.
         log_available_qualities: If True, log available stream qualities.
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
-        semaphore: Optional shared semaphore for concurrency control.
+        semaphore: Optional per-video semaphore for concurrency control. This is a
+            single permit acquired once for the entire video download (D-01).
         progress_callback: Optional callback for per-URL segment progress.
         output_index: Index for fallback filename (0 for single, index for batch).
         echo: When False, suppresses yt-dlp's native console echo (progress

@@ -61,7 +61,7 @@ https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 
 **Finding:** CDN segments require cookies from the browser session.
 
-**Workaround:** Extract cookies from active browser session and pass to ffmpeg. Cookies are written to a temporary Netscape cookie file (with `0o600` permissions) and supplied via ffmpeg's `cookies` protocol option; all ffmpeg arguments (including the m3u8 URL with CDN tokens and the cookie file path) are passed via `ffmpeg @argfile` syntax so neither session tokens nor URL signatures appear in process listings.
+**Workaround:** Extract cookies from active browser session and pass to ffmpeg. Cookies are written to a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there) and supplied via ffmpeg's `cookies` protocol option; all ffmpeg arguments (including the m3u8 URL with CDN tokens and the cookie file path) are passed via `ffmpeg @argfile` syntax so neither session tokens nor URL signatures appear in process listings.
 
 ## Download Methods Comparison
 
@@ -79,6 +79,19 @@ When `max_concurrent_downloads=1` (sequential mode), the downloader applies:
 - **Anti-detection delay**: 1.5s + random(0, 0.5s) between segment requests
 - **Retry backoff**: AWS Full Jitter on 429/5xx errors (1s base for 429, 0.05s for 5xx)
 - **Delay placement**: After semaphore release to avoid blocking concurrency mechanism
+
+### Segment Merge Disk Space
+
+The segment path merges in two stages, and each stage writes its output while its input is still on disk: the batch temp files are produced from the segments, then the final file is produced from those batch temp files, which are deleted only after the final write succeeds. Peak disk usage is therefore a **multiple** of the finished video, not a copy of it. Measured by sampling the working directory's total size throughout a real merge and recording the peak, amplification was **2.96×** — budget about **three times the video's size** in free space on the output volume.
+
+That factor is a measured approximation, not a hard guarantee. It depends on segment count, segment size and filesystem behaviour, and a different video can land either side of it.
+
+**Early failure:** before the first merge subprocess is spawned, the downloader measures the segments actually on disk and compares the requirement — the segment bytes twice, because the final artefact is written while the segments are still there, plus a 64 MiB safety margin — against the volume's free space. When the volume is short, the merge stops before anything is written and reports the bytes required, the bytes available, and what to do about it: free disk space, write to a different output volume, or select a lower quality. The downloaded segments are preserved, so the download can be resumed once there is room.
+
+Two limits of that check, stated plainly:
+
+- If the free-space figure cannot be read at all — an unusual or unreadable mount — the check logs it and lets the merge proceed. An unreadable volume is not evidence of a full one, and a failed probe must not block a download that would have succeeded.
+- A volume can still fill *after* the probe, because another process may consume the space and the probe cannot predict that. The merge is also the one download step that cannot be resumed, since its input segments are still needed. When this happens ffmpeg fails on its own write and the merge returns a failure with no partial output.
 
 ## What Works
 

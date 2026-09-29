@@ -1,21 +1,84 @@
 """Tests for CLI commands using typer.testing.CliRunner."""
 
 import asyncio
+import locale
+import re
 from io import StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 from vkdownloader.cli import app
-from vkdownloader.exceptions import QualityNotAvailableError, VideoNotFoundError
-from vkdownloader.models.enums import ProgressStatus
+from vkdownloader.exceptions import (
+    QualityNotAvailableError,
+    QualityParseError,
+    VideoNotFoundError,
+)
+from vkdownloader.models.enums import ProgressStatus, QualityEnum
 from vkdownloader.services import batch_downloader
 from vkdownloader.services.downloader import download_video as _real_download_video
 from vkdownloader.services.progress_display import RichProgressReporter
 
 runner = CliRunner()
+
+_REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-reference"
+_REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
+_COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
+_EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
+
+
+def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
+    """Extract the exit codes each command documents, keyed by command name."""
+    codes: dict[str, set[int]] = {}
+    command: str | None = None
+    in_exit_table = False
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        heading = _COMMAND_HEADING.match(line)
+        if heading is not None:
+            command = heading.group(1)
+            in_exit_table = False
+            continue
+        if line.strip() == "**Exit codes:**":
+            in_exit_table = True
+            continue
+        if not in_exit_table:
+            continue
+        row = _EXIT_CODE_ROW.match(line)
+        if row is not None:
+            assert command is not None, f"exit-code row outside a command section: {line}"
+            codes.setdefault(command, set()).add(int(row.group(1)))
+        elif line.strip() and not line.startswith("|"):
+            in_exit_table = False
+    return codes
+
+
+def _is_undecodable(payload: bytes, encoding: str) -> bool:
+    """Report whether ``payload`` cannot be decoded with ``encoding``."""
+    try:
+        payload.decode(encoding)
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _undecodable_byte() -> int:
+    """Return a byte that is invalid as UTF-8 and in the platform's default encoding.
+
+    ``Path.read_text()`` decodes with the platform's preferred encoding, which is
+    not UTF-8 on a default Windows install, so a payload built for UTF-8 alone
+    would be readable there. The byte is therefore required to be undecodable in
+    both, so the caller cannot silently stop exercising the failure it needs.
+    """
+    platform_encoding = locale.getpreferredencoding(False)
+    for candidate in range(0x80, 0x100):
+        if _is_undecodable(bytes([candidate]), "utf-8") and _is_undecodable(
+            bytes([candidate]), platform_encoding
+        ):
+            return candidate
+    raise AssertionError(f"no byte is undecodable as utf-8 and as {platform_encoding}")
 
 
 class TestDownloadCommand:
@@ -207,7 +270,7 @@ class TestBatchCommand:
         assert result.exit_code == 1
         assert "Download Summary:" in result.output
         assert "Total connections:" in result.output
-        assert "Peak concurrency:" in result.output
+        assert "Peak concurrent videos:" in result.output
         assert "Successful:" in result.output
         assert "Failed:" in result.output
         # TST-002: Assert error reasons appear in Failed URLs section
@@ -1173,3 +1236,231 @@ class TestCliHelp:
 
         assert result.exit_code == 0
         assert "download" in result.output or "vkdownloader" in result.output.lower()
+
+
+class TestBatchErrorHandler:
+    """D-03: the batch error handler must survive failures raised before URL parsing."""
+
+    def test_batch_non_utf8_url_file_reports_designed_error(self, tmp_path: Path) -> None:
+        """A URL file that is not valid UTF-8 must print the designed message and exit 1.
+
+        ``urls_file.read_text()`` raises ``UnicodeDecodeError``, which subclasses
+        ``ValueError`` rather than ``OSError``, so it reaches the generic handler
+        rather than the OSError arm. The handler reports ``len(valid_urls)``, so
+        this also pins that the read path is covered by the handler at all.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_bytes(
+            b"https://vkvideo.ru/video-12345_67890\n" + bytes([_undecodable_byte()]) + b"\n"
+        )
+
+        result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert "An error occurred during batch download" in result.output
+        assert "UnboundLocalError" not in result.output
+
+    def test_batch_non_utf8_env_file_reports_designed_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``.env`` that is not valid UTF-8 must print the designed message and exit 1.
+
+        ``Settings`` and ``warn_unknown_env_vars()`` both read ``.env`` from the
+        working directory before the URL file is touched, so a malformed ``.env``
+        raises above the binding the handler reports. Before the fix the handler
+        itself raised ``UnboundLocalError``: the designed message never printed,
+        the intended exit code never happened, and the process died with a raw
+        traceback. ``catch_exceptions=False`` makes that failure mode observable —
+        the exception propagates out of ``runner.invoke`` and errors the test.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+        (tmp_path / ".env").write_bytes(
+            b"VKDOWNLOADER_LOG_LEVEL=" + bytes([_undecodable_byte()]) + b"\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert "An error occurred during batch download" in result.output
+        assert "UnboundLocalError" not in result.output
+
+    def test_batch_failure_before_url_file_read_reports_designed_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A failure raised above the URL file read must not break the error handler.
+
+        ``warn_unknown_env_vars()`` runs before the URL file is read, so raising
+        from it reproduces the D-03 ``UnboundLocalError`` on the same path without
+        depending on file encodings.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with patch(
+            "vkdownloader.cli.warn_unknown_env_vars",
+            side_effect=RuntimeError("environment scan failed"),
+        ):
+            result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert "An error occurred during batch download" in result.output
+        assert "UnboundLocalError" not in result.output
+
+
+class TestQualityRecoveryHint:
+    """D-05 part 1: the recovery hint must name only values the parser accepts."""
+
+    def test_quality_recovery_hint_names_only_accepted_values(
+        self, tmp_path: Path, sample_video_url: str
+    ) -> None:
+        """Every value printed in "Use one of:" must be a valid ``QualityEnum`` value.
+
+        The ``except QualityParseError`` arm is unreachable through a normal CLI
+        invocation: ``--quality`` is typed ``QualityEnum``, so Click rejects an
+        unknown value at parse time and the command body never runs. The test
+        therefore forces the producer — ``_parse_quality_to_enum``, the only
+        function that raises ``QualityParseError`` — by patching it to raise, and
+        asserts on the message the CLI actually prints.
+        """
+        stream = MagicMock(url="https://example.com/preselected.m3u8", quality="best", height=None)
+        video = MagicMock(id="12345_67890", title=None, streams=[stream])
+
+        with (
+            patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+                new_callable=AsyncMock,
+                return_value=video,
+            ),
+            patch(
+                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
+                new_callable=AsyncMock,
+                return_value=([stream], None, None),
+            ),
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch(
+                "vkdownloader.services.ytdlp_downloader._parse_quality_to_enum",
+                side_effect=QualityParseError("720p"),
+            ) as mock_parse_quality,
+            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
+        ):
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["best"]
+            mock_selector.select.return_value = stream
+            mock_selector_cls.return_value = mock_selector
+
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url, "--cookie-source", "browser"],
+                catch_exceptions=False,
+            )
+
+        assert mock_parse_quality.call_count > 0, "the producer was never reached"
+        assert result.exit_code == 1
+        assert "Invalid quality value: 720p" in result.output
+
+        hint = result.output.split("Use one of: ", 1)[1].splitlines()[0].rstrip(".")
+        printed = {name.strip() for name in hint.split(",") if name.strip()}
+        accepted = {member.value for member in QualityEnum}
+
+        assert printed, "the recovery hint listed no values"
+        for name in sorted(printed):
+            assert name in accepted, f"recovery hint names '{name}', which the parser rejects"
+        assert printed == accepted, "the recovery hint does not list every accepted quality"
+
+
+class TestExitCodeContract:
+    """D-05 part 2: the documented exit codes must match the values actually emitted."""
+
+    def test_every_observable_exit_code_is_documented(
+        self, tmp_path: Path, sample_video_url: str
+    ) -> None:
+        """Every exit code the process can emit must be documented for both commands.
+
+        The four values are observed by invoking the CLI, not assumed:
+
+        * ``0``   — ``download`` with the download service mocked to succeed.
+        * ``1``   — ``download`` with a URL that is not a VK video URL, which the
+          command maps to its own "Invalid URL format" handler.
+        * ``2``   — ``download --quality 720p``: a value the argument parser
+          rejects, so the command body never runs. The same value is produced by
+          a missing argument, an unknown command and an unknown option.
+        * ``130`` — ``download`` interrupted with ``KeyboardInterrupt`` from the
+          extraction layer, which the command maps to its cancellation handler.
+        """
+        observed = self._observe_exit_codes(tmp_path, sample_video_url)
+
+        assert set(observed) == {0, 1, 2, 130}, observed
+
+        for doc_name in _REFERENCE_DOC_NAMES:
+            documented = _documented_exit_codes(_REFERENCE_DOCS / doc_name)
+            assert documented.get("download") == {0, 1, 2, 130}, doc_name
+            assert documented.get("batch") == {0, 1, 2, 130}, doc_name
+
+    @staticmethod
+    def _observe_exit_codes(tmp_path: Path, sample_video_url: str) -> dict[int, str]:
+        """Invoke the CLI once per observable exit code and record how it arose."""
+        observed: dict[int, str] = {}
+
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(
+                    id="12345_67890",
+                    streams=[MagicMock(url="https://example.com/1080.m3u8", quality="1080")],
+                )
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080"]
+            mock_selector.select.return_value = MagicMock(quality="1080")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video_1080.mp4"
+
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url],
+                        catch_exceptions=False,
+                    )
+        observed.setdefault(result.exit_code, "download succeeded with a mocked download")
+
+        result = runner.invoke(
+            app,
+            ["download", "https://example.com/invalid"],
+            catch_exceptions=False,
+        )
+        observed.setdefault(result.exit_code, "download rejected a non-VK URL")
+
+        result = runner.invoke(
+            app,
+            ["download", sample_video_url, "--quality", "720p"],
+            catch_exceptions=False,
+        )
+        observed.setdefault(result.exit_code, "parser rejected the --quality value '720p'")
+
+        with patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls:
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(side_effect=KeyboardInterrupt())
+            mock_extractor_cls.return_value = mock_extractor
+
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url],
+                        catch_exceptions=False,
+                    )
+        observed.setdefault(result.exit_code, "download interrupted by KeyboardInterrupt")
+
+        return observed

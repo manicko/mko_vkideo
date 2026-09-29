@@ -20,6 +20,22 @@ def _sanitize_cookie_value(value: str) -> str:
     return value.replace("\r", "").replace("\n", "")
 
 
+def _normalize_expiry(value: float | int | None) -> int:
+    """Map a cookie expiry to the Netscape-sentinel range.
+
+    A browser session cookie is not an expired cookie. Playwright represents a
+    session cookie with an expiry of ``-1`` (D-02), which the Netscape format
+    rejects as a pre-epoch timestamp and the consumer (yt-dlp's
+    ``YoutubeDLCookieJar``) silently drops at parse time. Map any missing,
+    ``None``, or non-positive expiry to ``0`` — the Netscape sentinel for a
+    "session cookie" — and pass positive timestamps through unchanged.
+    """
+    if value is None:
+        return 0
+    numeric = int(value)
+    return numeric if numeric > 0 else 0
+
+
 def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
     """Convert cookies to Netscape HTTP Cookie File format for yt-dlp.
 
@@ -51,7 +67,12 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
             domain = _sanitize_cookie_value(cookie_item.get("domain", ".vkvideo.ru"))
             path = _sanitize_cookie_value(cookie_item.get("path", "/"))
             secure = "TRUE" if cookie_item.get("secure", False) else "FALSE"
-            expires = int(cookie_item.get("expires", 0))
+            # D-02: A browser session cookie is not an expired cookie. Playwright
+            # represents a session cookie with an expiry of -1, which the Netscape
+            # format cannot express. Normalise every missing / None / non-positive
+            # expiry to 0 (the Netscape "session cookie" sentinel); positive
+            # timestamps are preserved unchanged.
+            expires = _normalize_expiry(cookie_item.get("expires", 0))
 
             if name and value:
                 lines.append(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}")

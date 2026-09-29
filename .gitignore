@@ -28,7 +28,10 @@ wheels/
 .env
 .env.local
 .env.*.local
-!.env.example
+# Anchored to the repository root: an unanchored negation also re-includes a
+# copy of the template nested anywhere else, such as inside a worktree, which
+# then rides along in a build made with the builder's default file selection.
+!/.env.example
 
 # Temp backup files
 old_downloader_tmp.txt
@@ -36,3 +39,28 @@ old_downloader_tmp.txt
 # Audit tooling scripts and outputs (not part of application codebase)
 .temp/
 .ai/builders/
+
+# User data: the URL list a user passes to `vkdownloader batch`. It holds the
+# user's own video links, so it must stay out of version control and out of the
+# published artefacts.
+urls.txt
+
+# Agent worktrees: each holds a complete second copy of src/vkdownloader/.
+.kilo/worktrees/
+
+# Vendored Node dependency tree installed for the agent tooling. Ignored here
+# as well as in .kilo/.gitignore because the build backend reads this file, not
+# the nested one, when it selects the files to package.
+.kilo/node_modules/
+
+# Root debris from earlier tool runs. None of it is part of the project; every
+# entry below is currently tracked and is listed so the reason is recorded here
+# and so the files cannot come back once they are untracked.
+%PYFILE%                    # empty file left by an unexpanded %PYFILE% variable
+Continue                    # PowerShell pipeline fragment: `Continue` with no argument
+Continue=SilentlyContinue   # PowerShell pipeline fragment
+ErrorPreference=SilentlyContinue  # PowerShell pipeline fragment
+cli_ruff_output.txt         # captured ruff output
+temp_tests_output.txt       # captured test output
+stage_and_commit.bat        # one-off staging script
+Shows/                      # empty directory left behind by a stray shell command

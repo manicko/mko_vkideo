@@ -80,8 +80,11 @@ vkdownloader download [OPTIONS] URL
 | Code | Condition |
 |------|-----------|
 | `0` | Success — video downloaded successfully. |
-| `1` | Failure — invalid URL, download error, or missing streams. |
+| `1` | Failure — the command ran and failed: invalid URL, configuration error, download error, or missing streams. |
+| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, invalid `--quality` / `--method` / `--cookie-source` value, or the missing `URL` argument. Nothing was downloaded and no file was created. |
 | `130` | Interrupted by user (Ctrl+C). |
+
+`2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed download. Every value printed in the parser's own error message (for example the accepted `--quality` values) is accepted when pasted back into the command line.
 
 **Examples:**
 
@@ -137,7 +140,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 2. Skips empty lines and lines starting with `#`
 3. Validates each remaining URL against the VK video URL pattern; non-matching entries are skipped with a warning and counted as invalid
 4. Downloads each video concurrently as `asyncio` tasks governed by a shared semaphore (up to 4 parallel downloads)
-5. Uses shared semaphore for segment-level concurrency control
+5. Uses a per-video semaphore for video-level concurrency; segment fan-out is bounded by a separate semaphore owned by the segment layer
 6. Shows a live multi-line progress display during download, one line per active download, when the output stream is a terminal
 7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped
 
@@ -163,8 +166,11 @@ When the output stream is not a terminal (piped, redirected, or CI) the display 
 | Code | Condition |
 |------|-----------|
 | `0` | Success — all downloads completed. |
-| `1` | Failure — no URLs found in file or error occurred. |
+| `1` | Failure — the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
+| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, invalid `--quality` / `--method` / `--cookie-source` value, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was downloaded and no file was created. |
 | `130` | Interrupted by user (Ctrl+C). |
+
+`2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed batch. It is also the outcome of invoking `vkdownloader` with no command, an unknown command, or an unknown option.
 
 **Examples:**
 

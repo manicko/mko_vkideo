@@ -27,7 +27,7 @@ from ..exceptions import (
 )
 from ..models.enums import DownloadMethod, ProgressStatus, QualityEnum
 from ..services.downloader import download_video
-from ..services.downloader_throttle import URLBackoffCoordinator
+from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
 from ..services.progress_display import RichProgressReporter
 from ..services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from ..utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
@@ -38,11 +38,12 @@ logger = get_logger(__name__)
 
 @dataclass
 class ConcurrencyTracker:
-    """Track the peak number of concurrently in-flight downloads.
+    """Track the peak number of concurrently in-flight video downloads.
 
-    Incremented when a download acquires the shared semaphore and
-    decremented when it releases, so the peak reflects actual
-    concurrency rather than the configured maximum.
+    Incremented when a video download acquires the shared semaphore and
+    decremented when it releases, so the peak reflects actual concurrency
+    rather than the configured maximum. The unit is **videos**, not segments:
+    the batch semaphore gates one permit per video (see D-01).
     """
 
     _current: int = 0
@@ -58,7 +59,13 @@ class ConcurrencyTracker:
 
 
 class _TrackedSemaphore:
-    """Semaphore wrapper that tracks peak concurrency.
+    """Semaphore wrapper that tracks peak concurrency of in-flight video downloads.
+
+    Wraps the batch-level ``asyncio.Semaphore`` that gates one permit per video.
+    The segment layer must **not** re-acquire from this semaphore per segment:
+    ``asyncio.Semaphore`` is not reentrant, and re-acquiring would deadlock once
+    all video permits are held (D-01). The segment fan-out is bounded by a
+    separate semaphore the segment layer owns.
 
     Implements the async context manager protocol so it can be used
     in place of ``asyncio.Semaphore`` in ``async with`` blocks.
@@ -114,6 +121,39 @@ def _to_progress_status(status: str) -> ProgressStatus:
     if status == ProgressStatus.CANCELLED.value:
         return ProgressStatus.CANCELLED
     return ProgressStatus.FAILED
+
+
+def _classify_download_result(result: Path | None) -> str:
+    """Classify a completed download into a batch status string.
+
+    A transfer that produced an output file succeeded. A transfer that
+    produced nothing is only a *failure* when the user did not ask for it
+    to stop: the signal handler sets the shutdown Event rather than
+    cancelling the task outright, so an interrupted item usually returns
+    ``None`` instead of raising. Classifying that return value as a failure
+    would report the user's own interruption as broken videos, which is the
+    defect this helper exists to prevent (D-04).
+
+    The predicate deliberately mirrors the single-download path in
+    ``cli.py``: ``result is None and get_shutdown_event().is_set()``.
+
+    Only the *returning* path is classified here. A download that raised a
+    domain error reported its own status label, and a download that raised
+    ``CancelledError`` never reaches this function at all.
+
+    Args:
+        result: The output file returned by ``download_video``, or ``None``
+            when the transfer produced no file.
+
+    Returns:
+        ``ProgressStatus.SUCCESS.value``, ``ProgressStatus.CANCELLED.value``,
+        or ``ProgressStatus.FAILED.value``.
+    """
+    if result is not None:
+        return ProgressStatus.SUCCESS.value
+    if get_shutdown_event().is_set():
+        return ProgressStatus.CANCELLED.value
+    return ProgressStatus.FAILED.value
 
 
 async def _download_single(
@@ -205,13 +245,20 @@ async def _download_single(
             echo=echo,
             title_callback=title_cb,
         )
-        status = "success" if result else "failed"
+        status = _classify_download_result(result)
         _finish(_to_progress_status(status))
         return (url, str(result) if result else "", status)
 
     except asyncio.CancelledError:
         # Re-raise CancelledError to allow batch cancellation, but still
         # mark the task as cancelled so the terminal shows a status line (R3).
+        #
+        # This is the *raising* cancellation route: the task was cancelled
+        # outright and never returned a value. The *returning* route is the
+        # common one during a Ctrl-C — the signal handler sets the shutdown
+        # Event and the transfer unwinds to a plain ``None`` result, which
+        # _classify_download_result() above turns into the same cancelled
+        # status. Both routes therefore end as ProgressStatus.CANCELLED.
         _finish(ProgressStatus.CANCELLED)
         raise
     except QualityNotAvailableError as e:
@@ -268,7 +315,7 @@ async def _run_batch_with_progress(
         output: Output directory for downloaded videos.
 
     Returns:
-        Tuple of (results, peak_concurrent) where results is a list of
+        Tuple of (results, peak_concurrent_videos) where results is a list of
         (url, output_path, status) tuples.
     """
     # Setup signal handlers inside async context
@@ -276,7 +323,7 @@ async def _run_batch_with_progress(
     batch_correlation_id = generate_correlation_id()
     bind_correlation_id(batch_correlation_id)
     try:
-        # Create shared semaphore and backoff coordinator at batch level
+        # Create shared semaphore (one permit per video) and backoff coordinator at batch level
         concurrency_tracker = ConcurrencyTracker()
         shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
         backoff_coordinator = URLBackoffCoordinator()
@@ -332,10 +379,13 @@ async def _run_batch_with_progress(
                     raise
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            # The cancelled literal comes from the same ProgressStatus member
+            # _classify_download_result() uses, so the two classification
+            # sites cannot drift apart.
             processed_results = [
                 r
                 if isinstance(r, tuple)
-                else (urls[i], "", "cancelled")
+                else (urls[i], "", ProgressStatus.CANCELLED.value)
                 if isinstance(r, asyncio.CancelledError)
                 else (urls[i], "", f"unexpected_error: {type(r).__name__}")
                 for i, r in enumerate(results)
@@ -354,41 +404,71 @@ async def _run_batch_with_progress(
 
 def _print_batch_summary(
     results: list[tuple[str, str, str]],
-    max_concurrent: int,
+    peak_concurrent_videos: int,
     skipped_count: int = 0,
 ) -> int:
     """Print batch download summary.
 
     Args:
         results: List of result tuples (url, output_path, status).
-        max_concurrent: Measured peak concurrency during the batch.
+        peak_concurrent_videos: Measured peak number of concurrently in-flight
+            video downloads during the batch.
         skipped_count: Number of invalid URLs skipped during validation.
 
     Returns:
-        Exit code: 0 if all downloads succeeded, 1 if any failed.
+        Exit code, three-way:
+
+        * ``130`` if at least one download was cancelled by the user.
+        * ``1`` if no download was cancelled and at least one failed.
+        * ``0`` if every download succeeded.
+
+        Cancellation takes precedence over failure: an interrupted run did
+        not complete by the user's own doing, so its remaining "failures"
+        are indistinguishable from work the interruption cut short. Reporting
+        the interruption as such is the more truthful answer (D-04).
     """
     # Print results
     for url, output_path, status in results:
         typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))
 
-    # Summary
-    successful = sum(1 for _, _, status in results if status == "success")
-    failed = len(results) - successful
+    # Summary. Success, cancellation and failure are three distinct outcomes:
+    # a cancelled item is not a failed item, so the two are counted apart
+    # rather than derived from each other.
+    successful = sum(1 for _, _, status in results if status == ProgressStatus.SUCCESS.value)
+    cancelled = sum(1 for _, _, status in results if status == ProgressStatus.CANCELLED.value)
+    failed = len(results) - successful - cancelled
 
     typer.echo("\n\nDownload Summary:")
     typer.echo(f"  Total connections: {len(results)}")
     if skipped_count > 0:
         typer.echo(f"  Skipped (invalid URLs): {skipped_count}")
-    typer.echo(f"  Peak concurrency: {max_concurrent}")
+    typer.echo(f"  Peak concurrent videos: {peak_concurrent_videos}")
     typer.echo(f"  Successful: {successful}")
     typer.echo(f"  Failed: {failed}")
+    if cancelled > 0:
+        typer.echo(f"  Cancelled: {cancelled}")
 
-    # Show failed URLs with error reasons
-    failed_urls = [(url, status) for url, _, status in results if status != "success"]
+    # Show failed URLs with error reasons. Cancelled items are excluded: they
+    # were not failures and must not be listed as ones.
+    failed_urls = [
+        (url, status)
+        for url, _, status in results
+        if status not in (ProgressStatus.SUCCESS.value, ProgressStatus.CANCELLED.value)
+    ]
     if failed_urls:
         typer.echo("  Failed URLs:")
         for url, status in failed_urls:
             typer.echo(f"    - {url}: {status}")
+
+    if cancelled > 0:
+        # Phrased as a possibility, not a measurement: the batch layer did
+        # not count the segments itself, the segment layer does that and logs
+        # preserving_segments_for_resume whenever it leaves data on disk.
+        typer.echo(
+            "  Interrupted by user: any partial segments already downloaded"
+            " were preserved for resume; re-run this command to resume them."
+        )
+        return 130
 
     # Exit with code 1 if any downloads failed
     return 1 if failed > 0 else 0
@@ -419,9 +499,11 @@ async def run_batch(
         skipped_count: Number of invalid URLs skipped during validation.
 
     Returns:
-        Exit code: 0 if all downloads succeeded, 1 if any failed.
+        Exit code, three-way: ``0`` if all downloads succeeded, ``1`` if any
+        failed, ``130`` if any download was cancelled by the user. Cancellation
+        wins over failure — see :func:`_print_batch_summary`, which computes it.
     """
-    results, peak_concurrent = await _run_batch_with_progress(
+    results, peak_concurrent_videos = await _run_batch_with_progress(
         urls, quality, method, settings, max_retries, output
     )
-    return _print_batch_summary(results, peak_concurrent, skipped_count)
+    return _print_batch_summary(results, peak_concurrent_videos, skipped_count)

@@ -38,6 +38,7 @@ src/
     └── utils/
         ├── __init__.py          # Exports sanitize_url_for_log, _strip_auth_params, validate_output_path
         ├── correlation.py       # Correlation ID binding (structlog contextvars)
+        ├── formatting.py        # Human-readable byte-size rendering (format_bytes)
         ├── security.py          # Security utilities (output path validation, title sanitization)
         └── url_sanitizer.py     # URL redaction (_strip_auth_params, sanitize_url_for_log)
 ```
@@ -47,5 +48,5 @@ src/
 - **Entry layer**: `cli.py`, `__main__.py` — argument parsing, Settings construction, error presentation, exit codes. No business logic or private-symbol imports from service/utils layers.
 - **Service layer**: `services/` — streaming download orchestration, stream extraction, quality selection, throttling, batch coordination. Imports private symbols from `utils/` internally.
 - **Models layer**: `models/` — Pydantic/StrEnum definitions shared with services and entry layer.
-- **Utils layer**: `utils/` — low-level helpers (URL sanitization, correlation IDs, security validation).
+- **Utils layer**: `utils/` — low-level helpers (URL sanitization, correlation IDs, security validation, byte-size formatting).
 - **Infrastructure layer**: `infrastructure/` — Playwright browser automation, network monitoring.

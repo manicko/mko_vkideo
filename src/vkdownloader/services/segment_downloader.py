@@ -57,14 +57,14 @@ class DownloadPolicy:
     """
 
     session: aiohttp.ClientSession
-    semaphore: SemaphoreLike | asyncio.Semaphore
+    semaphore: asyncio.Semaphore
     headers: dict[str, str]
     max_concurrent_downloads: int
     backoff_coordinator: URLBackoffCoordinator | None
     video_url: str
     max_retries: int
     download_timeout: int = 300
-    is_shared_semaphore: bool = False
+    is_bounded_batch: bool = False
     m3u8_url: str = ""
     segments_dir: Path = Path()
     # DF-003: Added to enable per-segment progress reporting from
@@ -710,7 +710,7 @@ async def _download_segment_concurrent(
             downloaded = len(list(task.segments_dir.glob("*.ts")))
             policy.progress_callback(video_id, downloaded, task.total_segments)
 
-        if result and not policy.is_shared_semaphore and policy.max_concurrent_downloads == 1:
+        if result and not policy.is_bounded_batch and policy.max_concurrent_downloads == 1:
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
 
@@ -771,7 +771,7 @@ async def _run_download_session(
     video_url: str,
     extractor: VKVideoExtractor | None,
     backoff_coordinator: URLBackoffCoordinator | None,
-    semaphore: SemaphoreLike | None,
+    video_semaphore: SemaphoreLike | None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -785,7 +785,9 @@ async def _run_download_session(
         video_url: Video URL for progress callback and coordinator keying.
         extractor: Optional extractor for token refresh.
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
-        semaphore: Optional shared semaphore for work-stealing concurrency.
+        video_semaphore: The batch video permit the caller already holds. This is
+            used only to detect batch context (for the ``is_bounded_batch`` flag);
+            the segment fan-out is bounded by a semaphore this layer owns.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -810,12 +812,15 @@ async def _run_download_session(
 
         _clear_stale_segments(segments_dir, segments)
 
-        semaphore_to_use = (
-            semaphore
-            if semaphore is not None
-            else asyncio.Semaphore(settings.max_concurrent_downloads)
-        )
-        is_shared = semaphore is not None
+        # D-01: The batch semaphore gates *videos* (one permit per video, acquired
+        # once in perform_download). asyncio.Semaphore is not reentrant: reusing the
+        # caller's batch permit here for per-segment acquisition would deadlock once
+        # all video permits are held, because every inner acquisition would wait on a
+        # permit the same task already holds. The segment fan-out is therefore
+        # bounded by a semaphore this layer owns, sized by the same
+        # max_concurrent_downloads setting.
+        semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+        is_bounded_batch = video_semaphore is not None
 
         policy = DownloadPolicy(
             session=session,
@@ -826,7 +831,7 @@ async def _run_download_session(
             video_url=video_url,
             max_retries=settings.max_retries,
             download_timeout=settings.download_timeout,
-            is_shared_semaphore=is_shared,
+            is_bounded_batch=is_bounded_batch,
             m3u8_url=m3u8_url,
             segments_dir=segments_dir,
             progress_callback=progress_callback,  # DF-003: enable per-segment progress
@@ -850,7 +855,7 @@ async def download_hls_with_resume(
     settings: Settings | None = None,
     extractor: VKVideoExtractor | None = None,
     backoff_coordinator: URLBackoffCoordinator | None = None,
-    semaphore: SemaphoreLike | None = None,
+    video_semaphore: SemaphoreLike | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -864,8 +869,16 @@ async def download_hls_with_resume(
         settings: Application settings. Uses default if not provided.
         extractor: Optional VKVideoExtractor for token refresh.
         backoff_coordinator: Optional shared URLBackoffCoordinator for rate limiting.
-        semaphore: Optional shared semaphore for work-stealing concurrency in batch downloads.
-            When None, creates a local semaphore based on settings.max_concurrent_downloads.
+        video_semaphore: The batch video permit the caller already holds (one
+            permit per video, acquired once in ``perform_download``). This is the
+            batch-level semaphore, **not** the segment-level one: the segment
+            fan-out is deliberately NOT gated by it, and is bounded instead by a
+            semaphore this layer owns. Passing the batch permit here would
+            deadlock (see D-01): ``asyncio.Semaphore`` is not reentrant, so a
+            second acquisition from the same object per segment could never be
+            satisfied once all video permits are held. When ``None`` (single-download
+            mode), the segment layer still creates its own local semaphore sized
+            by ``settings.max_concurrent_downloads``.
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.
@@ -903,7 +916,7 @@ async def download_hls_with_resume(
             request.video_url,
             extractor,
             backoff_coordinator,
-            semaphore,
+            video_semaphore,
         )
         if result is not None:
             success = True

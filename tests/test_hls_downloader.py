@@ -1,6 +1,7 @@
 """Tests for HLSDownloader service with ffmpeg integration."""
 
 import asyncio
+import os
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -530,13 +531,13 @@ class TestCreateTempCookieFile:
             result.unlink(missing_ok=True)
 
     @pytest.mark.skipif(
-        __import__("os").name == "nt",
-        reason="File permission assertions only apply on Unix",
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
     )
     def test_file_permissions_are_0600(self) -> None:
         """Test that the temp cookie file is created with 0o600 permissions (DF-007)."""
-        import os
-
         cookies = "vk=sensitive_session_token"
         result = _create_temp_cookie_file(cookies)
 
@@ -665,21 +666,28 @@ class TestTempArgfile:
     @pytest.mark.asyncio
     async def test_temp_argfile_creates_and_cleans_up(self) -> None:
         """Test _temp_argfile creates file and cleans up."""
-        import os
-        import sys
-
         args = ["-y", "-i", "https://example.com/video.m3u8"]
         async with _temp_argfile(args) as argfile:
             assert argfile.exists()
             content = argfile.read_text()
             assert "https://example.com/video.m3u8" in content
-            # On POSIX, verify owner-only permissions (SEC-003/SEC-001)
-            if sys.platform != "win32":
-                mode = os.stat(argfile).st_mode & 0o777
-                assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
 
         # File should be cleaned up after context exit
         assert not argfile.exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
+    async def test_temp_argfile_permissions_are_0600(self) -> None:
+        """Test _temp_argfile creates the argument file with 0o600 permissions (SEC-001)."""
+        args = ["-y", "-i", "https://example.com/video.m3u8"]
+        async with _temp_argfile(args) as argfile:
+            mode = os.stat(argfile).st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
 
 
 class TestFfmpegCookiePassing:
@@ -1258,7 +1266,7 @@ class TestParallelSegmentsDownload:
     async def test_shared_semaphore_parameter(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test that download_hls_with_resume accepts and uses shared semaphore parameter."""
+        """D-01: caller's video permit is passed in but not consumed by segment download."""
         import asyncio
 
         from vkdownloader.services.downloader import download_hls_with_resume
@@ -1267,8 +1275,8 @@ class TestParallelSegmentsDownload:
 
         output_path = tmp_path / "video.mp4"
 
-        # Create a shared semaphore with different limit
-        shared_semaphore = asyncio.Semaphore(2)
+        # Create a video semaphore with different limit
+        video_semaphore = asyncio.Semaphore(2)
 
         download_count = 0
 
@@ -1284,6 +1292,12 @@ class TestParallelSegmentsDownload:
             output_path.write_bytes(b"segment data")
             return True
 
+        # Hold all permits to prove the segment layer does not acquire from the
+        # caller's video semaphore (D-01: non-reentrant semaphore would deadlock).
+        await video_semaphore.acquire()
+        await video_semaphore.acquire()
+        initial_value = video_semaphore._value
+
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
@@ -1296,19 +1310,24 @@ class TestParallelSegmentsDownload:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    # Call with shared semaphore parameter
-                    result = await download_hls_with_resume(
-                        HLSDownloadRequest(
-                            video_url="https://vkvideo.ru/video-12345_67890",
-                            m3u8_url="https://example.com/video.m3u8",
-                            output_file=output_path,
+                    # Call with video semaphore parameter
+                    result = await asyncio.wait_for(
+                        download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                            ),
+                            settings=test_settings,
+                            video_semaphore=video_semaphore,
                         ),
-                        settings=test_settings,
-                        semaphore=shared_semaphore,
+                        timeout=10,
                     )
 
+        # Segment layer must complete without acquiring from the caller's semaphore
         assert result == output_path
         assert download_count == 2
+        assert video_semaphore._value == initial_value
 
 
 class TestBrowserCookiesIntegration:
@@ -3161,7 +3180,7 @@ class TestAttemptSegmentResumeQuality:
                 extractor=mock_extractor,
                 settings=test_settings,
                 backoff_coordinator=None,
-                semaphore=None,
+                video_semaphore=None,
             )
 
         assert result == output_file

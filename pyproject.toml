@@ -25,18 +25,6 @@ dependencies = [
     "rich>=14.0.0",
     "structlog>=24.0.0",
     "yt-dlp>=2024.0.0",
-    "pyyaml>=6.0.3",
-]
-
-[project.optional-dependencies]
-dev = [
-    "ruff>=0.4.0",
-    "mypy>=1.10.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pyyaml>=6.0.0",
-    "black>=24.0.0",
-    "isort>=6.0.0",
 ]
 
 [project.scripts]
@@ -48,6 +36,33 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vkdownloader"]
+# stealth.min.js is a runtime data file, not Python: the Playwright browser
+# layer reads it from next to the package at runtime (infrastructure/browser.py
+# resolves the path and passes it to page.add_init_script), so it must ship in
+# both artefacts. It is named here so its presence is stated in the manifest
+# instead of being implied by the directory sweep.
+artifacts = ["src/vkdownloader/stealth.min.js"]
+
+# A source distribution exists so that someone can build, test and run this
+# project from the archive alone. This list is an allow-list: anything not
+# named here is not shipped, so the next untracked development tree - vendored
+# dependencies, agent worktrees, audit corpora, user data - cannot ride along
+# on the builder's default.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/vkdownloader",
+    # Runtime data file loaded by the browser layer; see the wheel target.
+    "/src/vkdownloader/stealth.min.js",
+    "/tests",
+    "/docs",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/.python-version",
+    "/README.md",
+    # Configuration template: every setting is commented out, it carries no
+    # secrets, and it is the documented way to configure the application.
+    "/.env.example",
+]
 
 [tool.ruff]
 line-length = 100
@@ -94,6 +109,8 @@ disallow_untyped_decorators = false
 
 [dependency-groups]
 dev = [
-    "basedpyright>=1.39.9",
-    "pyyaml>=6.0.3",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]

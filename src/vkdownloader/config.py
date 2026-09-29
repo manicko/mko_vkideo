@@ -90,7 +90,11 @@ class Settings(BaseSettings):
         default=4,
         ge=1,
         le=16,
-        description="Maximum concurrent downloads",
+        description="Maximum number of videos downloading concurrently in a batch. "
+        "The batch semaphore gates one permit per video (acquired once per video); "
+        "each video's segment fan-out is bounded separately by a semaphore of the "
+        "same size owned by the segment layer. Setting this to 1 enables an "
+        "anti-detection delay between sequential segment downloads.",
     )
     throttled_rate: int = Field(
         default=100000,
@@ -338,9 +342,14 @@ def setup_logging(settings: Settings | None = None) -> None:
             raise OSError(
                 f"Failed to create log file parent directory '{log_path.parent}': {e}"
             ) from e
-        # SEC-003: Create log file with owner-only permissions (0o600) before
-        # FileHandler opens it, so subprocess output sanitized for SEC-002
-        # is not readable by other local users.
+        # SEC-003: Create the log file before FileHandler opens it, so subprocess
+        # output sanitized for SEC-002 is not readable by other local users.
+        # 0o600 sets POSIX permission bits, and that is the only place the
+        # owner-only confinement is delivered: on Windows `touch(mode=...)` ignores
+        # the mode and `chmod` toggles only the read-only attribute, so both
+        # branches leave the file readable by any local user. Confinement is not
+        # offered there (D-11); the mode is requested for its POSIX effect only,
+        # and no access control list is applied.
         if not log_path.exists():
             log_path.touch(mode=0o600)
         else:

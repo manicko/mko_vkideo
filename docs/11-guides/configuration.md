@@ -30,7 +30,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `download_timeout` | `VKDOWNLOADER_DOWNLOAD_TIMEOUT` | 300 | Download timeout in seconds (30-3600) |
 | `ssl_verify` | `VKDOWNLOADER_SSL_VERIFY` | true | Verify SSL certificates |
 | `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
-| `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Segment-level concurrency limit shared across all batch URLs (1-16); 1 enables anti-detection delay |
+| `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Maximum number of videos downloading concurrently in a batch (1-16); 1 enables anti-detection delay between sequential segment downloads |
 | `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s). |
 | `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 0 | HTTP chunk size in bytes for yt-dlp range-request downloads. 0 disables the flag for reliable HLS segment downloads; non-zero values are for advanced users only |
 | `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none or browser |
@@ -119,12 +119,12 @@ VKDOWNLOADER_MAX_RETRIES=5
 
 ### max_concurrent_downloads
 
-Controls segment-level concurrency shared across all batch URLs.
+Controls the number of videos downloading concurrently in a batch.
 
 - **CLI Flag:** Not available (use environment variable)
 - **Environment Variable:** `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS`
 - **Default:** `4` (range: 1-16)
-- **Description:** The semaphore limit that controls how many concurrent segment downloads can run across all URLs in a batch. Setting this to `1` enables anti-detection delay between segments. This is a shared limit across the entire batch, not per-URL.
+- **Description:** The semaphore limit that controls how many concurrent video downloads can run across all URLs in a batch. The batch semaphore gates one permit per video (acquired once per video download); each video's segment fan-out is bounded separately by a semaphore of the same size owned by the segment layer. This is a shared limit across the entire batch, not per-URL. Setting this to `1` enables an anti-detection delay between sequential segment downloads.
 
 **Example for batch downloads:**
 ```env

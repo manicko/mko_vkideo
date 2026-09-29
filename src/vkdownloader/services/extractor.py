@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from typing import Any, cast
 
 import yt_dlp
 from playwright.async_api import Cookie, Page
@@ -34,6 +35,39 @@ def is_valid_video_url(url: str) -> bool:
         True if the URL contains a valid VK video identifier, False otherwise.
     """
     return bool(VIDEO_ID_PATTERN.search(url))
+
+
+def _build_streams(formats: list[dict[str, Any]]) -> list[Stream]:
+    """Convert raw yt-dlp format dicts into the stream list, in input order.
+
+    Filtering decisions:
+    - Skip audio-only formats (``vcodec == "none"``).
+    - Skip formats with a falsy ``url``.
+    - Treat ``url`` containing ``.m3u8`` as HLS, otherwise MP4.
+    """
+    found_streams: list[Stream] = []
+    for f in formats:
+        # Skip audio-only formats (video codec is "none").
+        if f.get("vcodec") == "none":
+            continue
+        height = cast(int | None, f.get("height"))
+        width = cast(int | None, f.get("width"))
+        format_url = f.get("url")
+        # Skip formats without a usable URL.
+        if not format_url:
+            continue
+        tbr = f.get("tbr")
+        stream = Stream(
+            url=format_url,
+            format=StreamFormat.HLS if ".m3u8" in format_url else StreamFormat.MP4,
+            quality=f"{height}p" if height else "unknown",
+            width=width,
+            height=height,
+            bitrate=int(tbr) if tbr else None,
+            resolution=f"{width}x{height}" if width and height else None,
+        )
+        found_streams.append(stream)
+    return found_streams
 
 
 class VKVideoExtractor:
@@ -185,26 +219,7 @@ class VKVideoExtractor:
                     # Extract title from video metadata
                     title = info.get("title") or info.get("fulltitle")
 
-                    formats = info.get("formats", [])
-                    for f in formats:
-                        # Only include formats with video (skip audio-only)
-                        if f.get("vcodec") != "none":
-                            height = f.get("height")
-                            width = f.get("width")
-                            format_url = f.get("url")
-                            if format_url:
-                                stream = Stream(
-                                    url=format_url,
-                                    format=StreamFormat.HLS
-                                    if ".m3u8" in format_url
-                                    else StreamFormat.MP4,
-                                    quality=f"{height}p" if height else "unknown",
-                                    width=width,
-                                    height=height,
-                                    bitrate=int(f.get("tbr")) if f.get("tbr") else None,
-                                    resolution=f"{width}x{height}" if width and height else None,
-                                )
-                                found_streams.append(stream)
+                    found_streams = _build_streams(info.get("formats", []) or [])
                 except ExtractionError:
                     raise
                 except Exception as e:

@@ -1,6 +1,8 @@
 """Tests for configuration module."""
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -321,8 +323,23 @@ class TestFormatValidationError:
 
 
 class TestSetupLogging:
-    """Tests for setup_logging log file permissions (SEC-003)."""
+    """Tests for setup_logging log file creation and permissions (SEC-003)."""
 
+    def test_log_file_created_when_absent(self, tmp_path: Path) -> None:
+        """SEC-003: setup_logging creates the configured log file."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+
+        setup_logging(settings)
+
+        assert log_file.exists()
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
     def test_log_file_created_with_owner_only_permissions(self, tmp_path: Path) -> None:
         """SEC-003: log file should be created with 0o600 permissions."""
         log_file = tmp_path / "app.log"
@@ -330,20 +347,17 @@ class TestSetupLogging:
 
         setup_logging(settings)
 
-        # File should exist with owner-only permissions
-        assert log_file.exists()
-        import os
-        import sys
+        mode = os.stat(log_file).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
 
-        if sys.platform != "win32":
-            mode = os.stat(log_file).st_mode & 0o777
-            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
-
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
     def test_existing_log_file_permissions_updated(self, tmp_path: Path) -> None:
         """SEC-003: existing log file should have permissions corrected to 0o600."""
-        import os
-        import sys
-
         log_file = tmp_path / "existing.log"
         log_file.write_text("old content")
         # Set insecure permissions
@@ -352,6 +366,95 @@ class TestSetupLogging:
         settings = Settings(log_file=str(log_file), log_level="DEBUG")
         setup_logging(settings)
 
-        if sys.platform != "win32":
-            mode = os.stat(log_file).st_mode & 0o777
-            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+        mode = os.stat(log_file).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+
+
+def _launch_dir(request: pytest.FixtureRequest) -> Path:
+    """Return the directory the test session was launched from."""
+    invocation_dir = request.config.invocation_params.dir
+    assert invocation_dir is not None
+    return Path(invocation_dir).resolve()
+
+
+class TestEnvironmentIsolation:
+    """Tests proving the suite is isolated from the ambient settings source (D-10)."""
+
+    def test_no_ambient_product_variable_reaches_settings(self) -> None:
+        """D-10: the autouse fixture strips every VKDOWNLOADER_* variable for each test."""
+        assert os.environ, "the process environment must be real for this test to mean anything"
+        leaked = sorted(key for key in os.environ if key.startswith("VKDOWNLOADER_"))
+        assert leaked == [], f"ambient product variables reached the test: {leaked}"
+
+        settings = Settings()
+        assert settings.cookie_source == CookieSource.NONE
+        assert settings.max_retries == 3
+        assert settings.max_concurrent_downloads == 4
+        assert settings.download_timeout == 300
+        assert settings.throttled_rate == 100000
+        assert settings.log_level == LogLevel.INFO
+        assert settings.log_file is None
+
+    def test_env_file_in_launch_directory_cannot_reach_settings(
+        self, request: pytest.FixtureRequest, tmp_path: Path
+    ) -> None:
+        """D-10: a .env in the launch directory is unreachable from the per-test cwd.
+
+        The hostile file is built inside ``tmp_path`` and never in the launch
+        directory. Writing it beside the launch point — which on a normal run is
+        the repository root — would rewrite a developer's own configuration file
+        for the duration of the test, and a hard kill between the write and the
+        restore would leave that file poisoned. A stand-in launch directory under
+        ``tmp_path`` gives the same proof with no write outside ``tmp_path``.
+        """
+        stand_in_launch_dir = tmp_path / "launch_dir"
+        stand_in_launch_dir.mkdir()
+        (stand_in_launch_dir / ".env").write_text(
+            "VKDOWNLOADER_COOKIE_SOURCE=browser\nVKDOWNLOADER_MAX_RETRIES=9\n",
+            encoding="utf-8",
+        )
+
+        # Positive control: a process launched *from* that directory reads the
+        # file and takes the hostile values, so the file is proven capable of
+        # flipping a default and the in-process assertions below cannot pass
+        # merely because the file is inert.
+        probe = (
+            "from vkdownloader.config import Settings\n"
+            "settings = Settings()\n"
+            "print(settings.cookie_source)\n"
+            "print(settings.max_retries)\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=stand_in_launch_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert completed.returncode == 0, f"the probe subprocess failed:\n{completed.stderr}"
+        observed = completed.stdout.split()
+        assert observed == ["browser", "9"], (
+            "a .env in the launch directory must be able to flip the documented "
+            f"defaults, otherwise this test proves nothing; observed {observed}"
+        )
+
+        # The mechanism that keeps it out of reach: the autouse fixture moved the
+        # process off the launch point, so no .env is resolvable from here.
+        cwd = Path.cwd().resolve()
+        assert cwd != _launch_dir(request), (
+            f"the per-test working directory {cwd} must not be the launch directory"
+        )
+        assert not (cwd / ".env").exists(), (
+            f"a .env is reachable from the per-test working directory {cwd}"
+        )
+
+        settings = Settings()
+        assert settings.cookie_source == CookieSource.NONE
+        assert settings.max_retries == 3
+
+    def test_autouse_isolation_fixture_is_active(self, request: pytest.FixtureRequest) -> None:
+        """D-10: the autouse fixture is registered and has moved the process off the launch point."""
+        assert "isolate_settings_source" in request.fixturenames
+        assert Path.cwd().resolve() != _launch_dir(request)
+        assert not (Path.cwd() / ".env").exists()

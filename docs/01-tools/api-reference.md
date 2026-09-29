@@ -9,6 +9,7 @@ related:
   - vkdownloader-overview
   - vkdownloader-installation
   - vkdownloader-quality-selection
+  - vkdownloader-limitations
 ---
 # API Reference
 
@@ -191,7 +192,7 @@ Initialize HLSDownloader with optional settings.
 
 Download HLS stream to MP4 using ffmpeg.
 
-Cookies (if provided) are passed via ffmpeg's `cookies` protocol option using a temporary Netscape cookie file (created with `0o600` permissions), not via the `-headers @file` syntax (which is non-functional). All ffmpeg arguments (including the m3u8 URL with signed CDN tokens and the cookie file path) are passed via a temporary argument file (`ffmpeg @argfile`) to prevent exposure in process listings.
+Cookies (if provided) are passed via ffmpeg's `cookies` protocol option using a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there), not via the `-headers @file` syntax (which is non-functional). All ffmpeg arguments (including the m3u8 URL with signed CDN tokens and the cookie file path) are passed via a temporary argument file (`ffmpeg @argfile`) to prevent exposure in process listings.
 
 **Parameters:**
 | Name | Type | Default | Description |
@@ -469,7 +470,7 @@ result = await perform_download(
 | `extractor` | VKVideoExtractor \| None | None | Optional extractor instance. |
 | `settings` | Settings \| None | None | Optional settings instance. |
 | `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
-| `semaphore` | asyncio.Semaphore \| None | None | Shared semaphore for work-stealing concurrency in batch downloads. |
+| `video_semaphore` | asyncio.Semaphore \| None | None | Per-video semaphore for concurrency control. One permit per video, acquired once in `perform_download` (D-01). |
 | `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 | `video_data` | VideoWithStreams \| None | None | Optional pre-extracted video data with streams. When provided, skips extraction. |
 | `selected_stream` | Stream \| None | None | Optional pre-selected stream. When provided, used instead of streams[0]. |
@@ -513,6 +514,9 @@ result = await download_hls_with_resume(
 - Refreshes expired m3u8 tokens via browser automation (when cookie_source=BROWSER)
 - Applies anti-detection delay in sequential mode (max_concurrent_downloads=1)
 - Preserves partial segments on failure for segment-level resume; cleans up only on successful merge
+- Checks the output volume's free space before the merge starts: the batched merge writes its output while its input is still on disk, so it needs the segment bytes twice plus a safety margin. A volume that is short fails before any merge subprocess runs, with a message naming the bytes required and the bytes available; the segments are preserved for resume. See [Segment Merge Disk Space](../11-guides/vkdownloader-limitations.md#segment-merge-disk-space) for the measured amplification factor and the limits of the check
+
+**Raises:** `DownloadError` if the output volume does not have the free space the merge requires.
 
 ---
 
@@ -595,7 +599,7 @@ Request model for HLS download with segment-level resume support.
 | `cookies` | str \| None | Cookies string for CDN authentication. |
 | `progress_callback` | Callable[[str, int, int], None] \| None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 
-> **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.
+> **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `video_semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.
 
 ---
 
@@ -917,7 +921,7 @@ Application settings with defaults and environment variable support. Uses Pydant
 | `download_timeout` | `300` | Download timeout in seconds (30-3600) |
 | `ssl_verify` | `True` | Verify SSL certificates for CDN connections |
 | `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
-| `max_concurrent_downloads` | `4` | Maximum concurrent downloads (1-16) |
+| `max_concurrent_downloads` | `4` | Maximum number of videos downloading concurrently in a batch (1-16) |
 | `throttled_rate` | `100000` | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s). |
 | `http_chunk_size` | `0` | HTTP chunk size in bytes for yt-dlp range-request downloads. 0 disables for reliable HLS segment downloads; non-zero is advanced |
 | cookie_source | `NONE` | Cookie acquisition strategy: none or browser |

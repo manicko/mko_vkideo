@@ -1,9 +1,11 @@
 """Tests for VKVideoExtractor service."""
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from playwright.async_api import Cookie
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from vkdownloader.config import Settings
@@ -11,7 +13,8 @@ from vkdownloader.exceptions import ExtractionError, InvalidVideoUrlError, Video
 from vkdownloader.models.enums import CookieSource, StreamFormat
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape
-from vkdownloader.services.extractor import VKVideoExtractor
+from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+from vkdownloader.services.extractor import VKVideoExtractor, _build_streams
 
 
 def test_parse_video_id_valid() -> None:
@@ -448,3 +451,409 @@ class TestExtractionErrors:
         ):
             with pytest.raises(ExtractionError, match="Failed to navigate to video page"):
                 await extractor._extract_with_browser(url, "12345_67890")
+
+
+class TestBuildStreams:
+    """Unit tests for the _build_streams format-selection oracle (D-12)."""
+
+    def test_build_streams_excludes_audio_only_formats(self) -> None:
+        """D-12: audio-only formats (vcodec 'none') are excluded; video-bearing keep input order."""
+        formats = [
+            {"vcodec": "none", "url": "https://example.com/audio.mp4", "height": 0},
+            {
+                "vcodec": "h264",
+                "url": "https://example.com/720.mp4",
+                "height": 720,
+                "width": 1280,
+                "tbr": 2500,
+            },
+            {
+                "vcodec": "h264",
+                "url": "https://example.com/1080.mp4",
+                "height": 1080,
+                "width": 1920,
+                "tbr": 5000,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 2
+        assert streams[0].height == 720
+        assert streams[1].height == 1080
+
+    def test_build_streams_detects_hls_format(self) -> None:
+        """D-12: a URL containing .m3u8 maps to StreamFormat.HLS."""
+        formats = [
+            {"vcodec": "h264", "url": "https://example.com/stream.m3u8", "height": 720},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].format == StreamFormat.HLS
+
+    def test_build_streams_detects_mp4_format(self) -> None:
+        """D-12: a plain progressive URL maps to StreamFormat.MP4."""
+        formats = [
+            {"vcodec": "h264", "url": "https://example.com/video.mp4", "height": 720},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].format == StreamFormat.MP4
+
+    def test_build_streams_quality_with_height(self) -> None:
+        """D-12: a present height yields quality '720p' and height 720."""
+        formats = [
+            {"vcodec": "h264", "url": "https://example.com/720.mp4", "height": 720},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert streams[0].quality == "720p"
+        assert streams[0].height == 720
+
+    def test_build_streams_quality_unknown_without_height(self) -> None:
+        """D-12: an absent height yields quality 'unknown' and height None."""
+        formats = [
+            {"vcodec": "h264", "url": "https://example.com/idx.mp4"},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert streams[0].quality == "unknown"
+        assert streams[0].height is None
+
+    def test_build_streams_resolution_both_dimensions(self) -> None:
+        """D-12: present width and height yield resolution '1920x1080'."""
+        formats = [
+            {
+                "vcodec": "h264",
+                "url": "https://example.com/1080.mp4",
+                "width": 1920,
+                "height": 1080,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert streams[0].resolution == "1920x1080"
+
+    def test_build_streams_resolution_partial_dimensions(self) -> None:
+        """D-12: width-only or height-only dimensions yield resolution None."""
+        width_only = [
+            {"vcodec": "h264", "url": "https://example.com/w.mp4", "width": 1280},
+        ]
+        height_only = [
+            {"vcodec": "h264", "url": "https://example.com/h.mp4", "height": 720},
+        ]
+
+        assert _build_streams(width_only)[0].resolution is None
+        assert _build_streams(height_only)[0].resolution is None
+
+    def test_build_streams_bitrate_present(self) -> None:
+        """D-12: a present tbr yields bitrate 2500."""
+        formats = [
+            {
+                "vcodec": "h264",
+                "url": "https://example.com/720.mp4",
+                "height": 720,
+                "tbr": 2500,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert streams[0].bitrate == 2500
+
+    def test_build_streams_bitrate_absent_or_zero(self) -> None:
+        """D-12: absent or zero tbr yields bitrate None."""
+        absent = [
+            {"vcodec": "h264", "url": "https://example.com/a.mp4", "height": 720},
+        ]
+        zero = [
+            {
+                "vcodec": "h264",
+                "url": "https://example.com/b.mp4",
+                "height": 720,
+                "tbr": 0,
+            },
+        ]
+
+        assert _build_streams(absent)[0].bitrate is None
+        assert _build_streams(zero)[0].bitrate is None
+
+    def test_build_streams_excludes_falsy_url(self) -> None:
+        """D-12: a format with a falsy/empty URL is excluded."""
+        formats = [
+            {"vcodec": "h264", "url": "", "height": 720},
+            {"vcodec": "h264", "url": None, "height": 1080},
+            {"vcodec": "h264", "url": "https://example.com/ok.mp4", "height": 480},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].url == "https://example.com/ok.mp4"
+
+    def test_build_streams_empty_list_yields_empty(self) -> None:
+        """D-12: an empty format list yields no streams."""
+        assert _build_streams([]) == []
+
+    @pytest.mark.asyncio
+    async def test_build_streams_none_formats_yields_empty(self) -> None:
+        """D-12: None formats in extract_info yields an empty stream list via the production path."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+        info = {"title": "Test Video", "formats": None}
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+            mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = info
+
+            streams, title = await extractor._extract_with_ytdlp(url, "12345_67890")
+
+        assert title == "Test Video"
+        assert streams == []
+
+    @pytest.mark.asyncio
+    async def test_build_streams_reached_via_extract_with_ytdlp(self) -> None:
+        """D-12: _extract_with_ytdlp reaches _build_streams through patched YoutubeDL.extract_info."""
+        extractor = VKVideoExtractor()
+        url = "https://vkvideo.ru/video-12345_67890"
+        info = {
+            "title": "Test Video",
+            "formats": [
+                {"vcodec": "none", "url": "https://example.com/audio.mp4"},
+                {
+                    "vcodec": "h264",
+                    "url": "https://example.com/stream.m3u8",
+                    "height": 720,
+                    "width": 1280,
+                    "tbr": 2500,
+                },
+                {
+                    "vcodec": "h264",
+                    "url": "https://example.com/prog.mp4",
+                    "height": 1080,
+                    "width": 1920,
+                    "tbr": 5000,
+                },
+            ],
+        }
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+            mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = info
+
+            streams, title = await extractor._extract_with_ytdlp(url, "12345_67890")
+
+        assert title == "Test Video"
+        assert len(streams) == 2
+        assert streams[0].format == StreamFormat.HLS
+        assert streams[0].quality == "720p"
+        assert streams[0].height == 720
+        assert streams[0].bitrate == 2500
+        assert streams[0].resolution == "1280x720"
+        assert streams[1].format == StreamFormat.MP4
+        assert streams[1].quality == "1080p"
+        assert streams[1].height == 1080
+        assert streams[1].bitrate == 5000
+        assert streams[1].resolution == "1920x1080"
+
+
+def _browser_settings() -> Settings:
+    """Build Settings for the browser-extraction oracle with both interaction waits at 0.
+
+    ``browser_pre_interaction_wait`` and ``browser_post_interaction_wait`` are declared
+    with ``ge=1``, so a zero wait cannot be passed to the constructor. They are zeroed
+    on the built instance instead, which keeps the two awaited ``asyncio.sleep`` calls
+    inside ``_extract_with_browser`` instant and the outcome independent of wall-clock
+    timing. Every value that matters is still supplied explicitly, so the ``.env`` file
+    resolved from the working directory cannot influence the result.
+    """
+    settings = Settings(
+        cookie_source=CookieSource.BROWSER,
+        browser_pre_interaction_wait=1,
+        browser_post_interaction_wait=1,
+    )
+    settings.browser_pre_interaction_wait = 0
+    settings.browser_post_interaction_wait = 0
+    return settings
+
+
+def _mock_browser_page(cookies: list[Cookie]) -> MagicMock:
+    """Build a mock Playwright page that navigates successfully and returns ``cookies``."""
+    page = MagicMock()
+    page.goto = AsyncMock(return_value=None)
+    page.context.cookies = AsyncMock(return_value=cookies)
+    return page
+
+
+def _mock_browser_manager(page: MagicMock) -> MagicMock:
+    """Build a mock ``BrowserManager`` context manager whose ``__aenter__`` yields ``page``."""
+    browser = MagicMock()
+    browser.create_stealth_page = AsyncMock(return_value=page)
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(return_value=browser)
+    manager.__aexit__ = AsyncMock(return_value=None)
+    return manager
+
+
+def _mock_network_monitor(m3u8_urls: list[str]) -> MagicMock:
+    """Build a mock ``NetworkMonitor`` reporting exactly ``m3u8_urls``."""
+    monitor = MagicMock()
+    monitor.m3u8_urls = m3u8_urls
+    return monitor
+
+
+class TestExtractWithBrowser:
+    """Outcome oracles for the browser extraction body of _extract_with_browser (D-12)."""
+
+    @pytest.mark.asyncio
+    async def test_browser_extraction_captures_cookies(self) -> None:
+        """D-12: browser cookies reach the caller both raw and as the ffmpeg cookie header."""
+        extractor = VKVideoExtractor(settings=_browser_settings())
+        url = "https://vkvideo.ru/video-12345_67890"
+        cookies: list[Cookie] = [
+            {"name": "session_id", "value": "abc123", "domain": ".vkvideo.ru"},
+            {"name": "remixdsid", "value": "xyz789", "domain": ".vkvideo.ru"},
+        ]
+        page = _mock_browser_page(cookies)
+
+        with (
+            patch(
+                "vkdownloader.services.extractor.BrowserManager",
+                return_value=_mock_browser_manager(page),
+            ),
+            patch(
+                "vkdownloader.services.extractor.NetworkMonitor",
+                return_value=_mock_network_monitor([]),
+            ),
+            patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
+        ):
+            _, cookies_str, raw_cookies = await extractor._extract_with_browser(url, "12345_67890")
+
+        assert raw_cookies == cookies
+        assert cookies_str is not None
+        assert "session_id=abc123" in cookies_str
+        assert "remixdsid=xyz789" in cookies_str
+        assert cookies_str.count("=") == 2
+
+    @pytest.mark.asyncio
+    async def test_browser_extraction_survives_cookie_capture_failure(self) -> None:
+        """D-12: a failing cookie capture is contained; the m3u8 stream is still returned."""
+        extractor = VKVideoExtractor(settings=_browser_settings())
+        url = "https://vkvideo.ru/video-12345_67890"
+        m3u8_url = "https://cdn.example.com/video.m3u8"
+        page = _mock_browser_page([])
+        page.context.cookies.side_effect = RuntimeError("browser context closed")
+
+        with (
+            patch(
+                "vkdownloader.services.extractor.BrowserManager",
+                return_value=_mock_browser_manager(page),
+            ),
+            patch(
+                "vkdownloader.services.extractor.NetworkMonitor",
+                return_value=_mock_network_monitor([m3u8_url]),
+            ),
+            patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
+        ):
+            streams, cookies_str, raw_cookies = await extractor._extract_with_browser(
+                url, "12345_67890"
+            )
+
+        assert raw_cookies is None
+        assert cookies_str is None
+        assert [stream.url for stream in streams] == [m3u8_url]
+
+    @pytest.mark.asyncio
+    async def test_browser_extraction_uses_first_m3u8_url(self) -> None:
+        """D-12: only the first captured m3u8 URL becomes an HLS stream with no height."""
+        extractor = VKVideoExtractor(settings=_browser_settings())
+        url = "https://vkvideo.ru/video-12345_67890"
+        first_url = "https://cdn.example.com/first.m3u8"
+        second_url = "https://cdn.example.com/second.m3u8"
+        page = _mock_browser_page([])
+
+        with (
+            patch(
+                "vkdownloader.services.extractor.BrowserManager",
+                return_value=_mock_browser_manager(page),
+            ),
+            patch(
+                "vkdownloader.services.extractor.NetworkMonitor",
+                return_value=_mock_network_monitor([first_url, second_url]),
+            ),
+            patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
+        ):
+            streams, _, _ = await extractor._extract_with_browser(url, "12345_67890")
+
+        assert len(streams) == 1
+        assert streams[0].url == first_url
+        assert second_url not in [stream.url for stream in streams]
+        assert streams[0].format is StreamFormat.HLS
+        assert streams[0].height is None
+
+    @pytest.mark.asyncio
+    async def test_browser_extraction_respects_shutdown_event(self) -> None:
+        """D-12: a set shutdown event cancels extraction before any cookie is read."""
+        extractor = VKVideoExtractor(settings=_browser_settings())
+        url = "https://vkvideo.ru/video-12345_67890"
+        page = _mock_browser_page([])
+
+        # The shutdown Event is loop-bound, so a fresh one is injected and the previous
+        # ContextVar state is restored on the way out: a set Event never leaks to others.
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            _shutdown_event_ctx.get().set()
+
+            with (
+                patch(
+                    "vkdownloader.services.extractor.BrowserManager",
+                    return_value=_mock_browser_manager(page),
+                ),
+                patch(
+                    "vkdownloader.services.extractor.NetworkMonitor",
+                    return_value=_mock_network_monitor(["https://cdn.example.com/video.m3u8"]),
+                ),
+                patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await extractor._extract_with_browser(url, "12345_67890")
+
+            page.context.cookies.assert_not_awaited()
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_browser_extraction_without_m3u8_urls_returns_no_streams(self) -> None:
+        """D-12: no captured m3u8 URL yields an empty stream list, which the caller rejects."""
+        extractor = VKVideoExtractor(settings=_browser_settings())
+        url = "https://vkvideo.ru/video-12345_67890"
+        cookies: list[Cookie] = [
+            {"name": "session_id", "value": "abc123", "domain": ".vkvideo.ru"},
+        ]
+        page = _mock_browser_page(cookies)
+
+        with (
+            patch(
+                "vkdownloader.services.extractor.BrowserManager",
+                return_value=_mock_browser_manager(page),
+            ),
+            patch(
+                "vkdownloader.services.extractor.NetworkMonitor",
+                return_value=_mock_network_monitor([]),
+            ),
+            patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
+        ):
+            streams, cookies_str, raw_cookies = await extractor._extract_with_browser(
+                url, "12345_67890"
+            )
+
+        assert streams == []
+        assert raw_cookies == cookies
+        assert cookies_str == "session_id=abc123"

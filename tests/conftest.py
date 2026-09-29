@@ -1,8 +1,45 @@
 """Pytest configuration and fixtures for VK Video Downloader tests."""
 
+import os
+from pathlib import Path
+
 import pytest
 
 from vkdownloader.config import Settings
+
+ENV_VAR_PREFIX = "VKDOWNLOADER_"
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pin the settings environment source to nothing for the whole suite (D-10).
+
+    ``Settings.model_config`` declares ``env_file=".env"`` as a *relative* path, so
+    pydantic-settings resolves it against the current working directory on every
+    construction, and the ``VKDOWNLOADER_`` variables are read straight from
+    ``os.environ``. Both halves are ambient: without this fixture a developer's
+    own ``.env`` in the directory the suite was launched from and any exported
+    ``VKDOWNLOADER_*`` variable decide test outcomes, so the suite's result
+    depends on the shell it is launched from. Measured by D-10: one documented
+    variable, ``VKDOWNLOADER_COOKIE_SOURCE=browser``, flipped
+    ``test_cookie_source_default`` from pass to fail.
+
+    Two halves are neutralised, both for the duration of a single test:
+
+    * the **file half** — the working directory is moved to ``tmp_path``, a fresh
+      empty directory unique to this test, so no ``.env`` is reachable;
+    * the **variable half** — every ``VKDOWNLOADER_*`` entry in ``os.environ`` is
+      deleted for the duration of the test.
+
+    ``monkeypatch`` restores both the working directory and the environment
+    afterwards, and ``tmp_path`` is removed by pytest's own teardown, so nothing
+    leaks between tests and nothing needs manual cleanup. This is test-side
+    isolation only: no production code carries a branch for the suite.
+    """
+    for key in list(os.environ):
+        if key.startswith(ENV_VAR_PREFIX):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture

@@ -153,8 +153,8 @@ Both commands support:
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
 - Title sanitization for filesystem safety via `sanitize_title()`
-- **Secret-safe ffmpeg argument passing**: VK session cookies (including `remixsid`) and signed m3u8 CDN URLs (including `expires`, `sig`, `urls` tokens) are passed to ffmpeg via a temporary argument file (`ffmpeg @argfile`) instead of command-line arguments. This prevents session tokens and CDN URL signatures from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is created with owner-only `0o600` permissions and is removed automatically after the download completes.
-- **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (with `0o600` permissions) and passed to ffmpeg via the `cookies` protocol option appended to the m3u8 URL. User-Agent and Referer headers are passed as a plain string in the argument file. This avoids the non-functional ffmpeg `-headers @file` syntax.
+- **Secret-safe ffmpeg argument passing**: VK session cookies (including `remixsid`) and signed m3u8 CDN URLs (including `expires`, `sig`, `urls` tokens) are passed to ffmpeg via a temporary argument file (`ffmpeg @argfile`) instead of command-line arguments. This prevents session tokens and CDN URL signatures from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is requested at `0o600` — owner-only on POSIX — and is removed automatically after the download completes. On Windows the owner-only guarantee is **not** offered: `os.chmod` only toggles the read-only attribute there, so the file keeps the permissions inherited from its parent directory (D-11). The tokens are absent from process listings on both platforms; only the on-disk confinement differs.
+- **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) and passed to ffmpeg via the `cookies` protocol option appended to the m3u8 URL. User-Agent and Referer headers are passed as a plain string in the argument file. This avoids the non-functional ffmpeg `-headers @file` syntax.
 
 ## Rate Limiting & Throttling
 
@@ -221,7 +221,7 @@ The `DownloadProgress` model includes:
 
 ### Shared Concurrency Control
 
-All URLs in a batch share a single `asyncio.Semaphore` for segment downloads. The semaphore `max_concurrent_downloads` limit (from Settings) controls the total number of concurrent segment downloads across all URLs in the batch. This design enables **work stealing**: when one URL finishes downloading, its acquired semaphore permits are immediately released and available for remaining URLs.
+All URLs in a batch share a single `asyncio.Semaphore` that gates **video-level** concurrency. The semaphore's `max_concurrent_downloads` limit (from Settings) controls the total number of concurrent video downloads across all URLs in the batch. Each video's segment fan-out is bounded by a separate semaphore owned by the segment layer, sized by the same setting. This design enables **work stealing**: when one video finishes downloading, its acquired permit is immediately released and available for remaining URLs.
 
 ```
 Batch Download Flow
@@ -230,20 +230,22 @@ Batch Download Flow
 ┌─────────────────┐
 │  Shared Semaphore │
 │  (max_concurrent)│
+│  one permit per   │
+│  video            │
 └────────┬────────┘
-         │
-         ▼
+          │
+          ▼
 ┌──────────────────────────────────┐
 │  All URLs start immediately       │
 │  (up to max_concurrent total)   │
 └──────────────────────────────────┘
-         │
-         ├──► video_1 ──► [seg1][seg2][seg3]... (uses shared permits)
-         ├──► video_2 ──► [seg1][seg2][seg3]... (uses shared permits)
-         └──► video_3 ──► [seg1][seg2][seg3]... (uses shared permits)
-         
-As segments complete on shorter videos, permits return to pool
-and are immediately reallocated to remaining URLs.
+          │
+          ├──► video_1 ──► performs download ──► [seg1][seg2][seg3]... (uses own local semaphore)
+          ├──► video_2 ──► performs download ──► [seg1][seg2][seg3]... (uses own local semaphore)
+          └──► video_3 ──► performs download ──► [seg1][seg2][seg3]... (uses own local semaphore)
+          
+As videos complete, permits return to the pool and are immediately reallocated
+to remaining URLs. Each video's segment fan-out never re-acquires from the batch semaphore.
 ```
 
 ### Batch Progress Display
@@ -282,7 +284,7 @@ Each URL's `_download_single()` task (in `services/batch_downloader.py`) drives 
 
 ### Work Stealing Behavior
 
-URLs start immediately without waiting for previous downloads to complete. The shared semaphore ensures total concurrency never exceeds `max_concurrent_downloads`:
+URLs start immediately without waiting for previous downloads to complete. The shared semaphore ensures total concurrency never exceeds `max_concurrent_downloads` — one permit per video (acquired once per video in ``perform_download``; the segment layer does not re-acquire from it, per D-01):
 
 - When video_1 completes (freed its permits), video_2 and video_3 can claim them
 - Available concurrency is automatically reallocated to remaining downloads

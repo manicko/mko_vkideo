@@ -1,0 +1,53 @@
+---
+name: Packaging Check
+
+# The paths filter is derived from the `[tool.hatch.build.targets.sdist]`
+# include list, which is the allow-list of everything the archives ship: the
+# package tree, the test tree, the documentation tree and four root files. Every
+# one of those is a change to the artefact contents, so every one of them has to
+# fire this gate. A path that is not shipped must not appear here, and a shipped
+# path must never be missing: either way the gate is wrong.
+on:
+  push:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - "README.md"
+      - ".env.example"
+      - "src/**"
+      - "tests/**"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - "README.md"
+      - ".env.example"
+      - "src/**"
+      - "tests/**"
+      - "docs/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  packaging-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Build artefacts and assert they match the manifest
+        run: uv run pytest tests/test_packaging.py -v

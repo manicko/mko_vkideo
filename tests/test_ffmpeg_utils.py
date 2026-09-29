@@ -1,18 +1,31 @@
 """Unit tests for ffmpeg_utils merge and process management functions."""
 
 import asyncio
+from collections import namedtuple
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vkdownloader.exceptions import DownloadError
 from vkdownloader.services.ffmpeg_utils import (
+    _MERGE_SPACE_MARGIN_BYTES,
     _build_ffmpeg_concat_command,
     _merge_batch_segments,
     _merge_segments_batched,
     _perform_final_merge,
+    _required_merge_bytes,
     cancel_subprocess,
 )
+
+# Mirrors the shape of the value shutil.disk_usage returns (a named tuple of
+# total/used/free) so a patched probe can be read by production code.
+_DiskUsage = namedtuple("_DiskUsage", "total used free")
+
+
+def _fake_disk_usage(free_bytes: int) -> _DiskUsage:
+    """Build a disk_usage result reporting ``free_bytes`` of free space."""
+    return _DiskUsage(free_bytes * 2, free_bytes, free_bytes)
 
 
 class TestBuildFfmpegConcatCommand:
@@ -492,20 +505,202 @@ class TestMergeSegmentsBatched:
         for i in range(150):
             (tmp_path / f"{i:05d}.ts").write_bytes(b"segment data")
 
-        mock_process = MagicMock(spec=asyncio.subprocess.Process)
-        mock_process.returncode = 0
-        mock_process.pid = 12345
+        # Each batch merge deletes its concat list once it succeeds, so the way the
+        # 150 segments were grouped is only observable while the ffmpeg call is in
+        # flight. Record the list every invocation is handed, and succeed each one.
+        concat_lists: list[tuple[str, list[str]]] = []
 
-        async def mock_communicate() -> tuple[bytes, bytes]:
-            return b"", b""
+        async def fake_exec(*args: str, **kwargs: object) -> MagicMock:
+            file_list = Path(args[args.index("-i") + 1])
+            # Concat demuxer entries read `file '<path>'`; record the path itself.
+            paths = [
+                line.removeprefix("file '").removesuffix("'")
+                for line in file_list.read_text(encoding="utf-8").splitlines()
+            ]
+            concat_lists.append((file_list.name, paths))
+            return _successful_process()
 
-        mock_process.communicate = mock_communicate
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            # Create batch output files (2 batches for 150 segments)
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            # Create batch output files (2 batches for 150 segments). Their names
+            # are the batch starts the merge actually produces, and the final
+            # merge unlinks them, so a wrong batch size fails here too.
             batch_output_1 = tmp_path / "batch_00000.ts"
             batch_output_1.write_bytes(b"batch data")
             batch_output_2 = tmp_path / "batch_00100.ts"
             batch_output_2.write_bytes(b"batch data")
 
-            await _merge_segments_batched(tmp_path, output, 150)
+            result = await _merge_segments_batched(tmp_path, output, 150)
+
+        assert result == output
+
+        # 150 segments at 100 per batch: two batch merges plus one final merge.
+        assert [name for name, _ in concat_lists] == [
+            "batch_list_0.txt",
+            "batch_list_100.txt",
+            "final_list.txt",
+        ]
+        assert [len(paths) for _, paths in concat_lists] == [100, 50, 2]
+
+        # The batch boundaries themselves: 0-99, then 100-149.
+        assert concat_lists[0][1][0].endswith("/00000.ts")
+        assert concat_lists[0][1][-1].endswith("/00099.ts")
+        assert concat_lists[1][1][0].endswith("/00100.ts")
+        assert concat_lists[1][1][-1].endswith("/00149.ts")
+
+        # The final merge concatenates the two batch outputs into the artefact.
+        assert concat_lists[2][1][0].endswith("/batch_00000.ts")
+        assert concat_lists[2][1][1].endswith("/batch_00100.ts")
+
+
+def _write_segments(directory: Path, count: int, size_bytes: int) -> list[Path]:
+    """Create ``count`` segments of ``size_bytes`` each, as the merge names them."""
+    paths = [directory / f"{i:05d}.ts" for i in range(count)]
+    for path in paths:
+        path.write_bytes(b"x" * size_bytes)
+    return paths
+
+
+def _successful_process() -> MagicMock:
+    """Build a mock ffmpeg process that exits cleanly."""
+
+    mock_process = MagicMock(spec=asyncio.subprocess.Process)
+    mock_process.returncode = 0
+    mock_process.pid = 12345
+
+    async def mock_communicate() -> tuple[bytes, bytes]:
+        return b"", b""
+
+    mock_process.communicate = mock_communicate
+    return mock_process
+
+
+class TestMergeFreeSpaceProbe:
+    """Tests for the pre-merge free-space probe (D-09)."""
+
+    def test_required_bytes_cover_final_merge_headroom(self, tmp_path: Path) -> None:
+        """D-09: the requirement is the segments plus a full copy of them.
+
+        The final artefact is written while the input is still on disk, so the
+        required figure must cover the segment bytes twice, and carry the
+        safety margin on top. This is the assertion that fails if the
+        arithmetic drifts toward the segment total alone.
+        """
+        segments = _write_segments(tmp_path, 4, 1000)
+        segment_bytes = 4000
+
+        required = _required_merge_bytes(segments)
+
+        assert required >= segment_bytes * 2
+        assert required == segment_bytes * 2 + _MERGE_SPACE_MARGIN_BYTES
+
+    def test_required_bytes_ignore_missing_segments(self, tmp_path: Path) -> None:
+        """D-09: a segment that is already gone contributes no bytes.
+
+        Its absence is a different precondition, reported by the merge's own
+        existence check; the size probe must not pre-empt that verdict by
+        raising on the unstattable path.
+        """
+        segments = _write_segments(tmp_path, 2, 1000)
+
+        required = _required_merge_bytes([*segments, tmp_path / "00002.ts"])
+
+        assert required == 2000 * 2 + _MERGE_SPACE_MARGIN_BYTES
+
+    @pytest.mark.asyncio
+    async def test_insufficient_space_fails_before_spawning_ffmpeg(self, tmp_path: Path) -> None:
+        """D-09: too little free space fails the merge before any subprocess.
+
+        The subprocess assertion is the "fail early" half of the contract:
+        without the probe the merge would spawn ffmpeg and discover the full
+        volume at an arbitrary later point. The message must name both figures
+        so the user can act on it.
+        """
+        _write_segments(tmp_path, 3, 2048)
+        output = tmp_path / "output.ts"
+        available = 1024
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(available)),
+            patch("asyncio.create_subprocess_exec") as mock_exec,
+            pytest.raises(DownloadError) as exc_info,
+        ):
+            await _merge_segments_batched(tmp_path, output, 3)
+
+        mock_exec.assert_not_called()
+        message = str(exc_info.value)
+        assert str(3 * 2048 * 2 + _MERGE_SPACE_MARGIN_BYTES) in message
+        assert str(available) in message
+        assert "lower quality" in message
+
+    @pytest.mark.asyncio
+    async def test_sufficient_space_merges_normally(self, tmp_path: Path) -> None:
+        """D-09: with room to spare the merge runs exactly as before."""
+        _write_segments(tmp_path, 10, 2048)
+        output = tmp_path / "output.ts"
+        (tmp_path / "batch_00000.ts").write_bytes(b"batch data")
+        mock_process = _successful_process()
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(1024**4)),
+            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec,
+        ):
+            result = await _merge_segments_batched(tmp_path, output, 10)
+
+        assert result == output
+        mock_exec.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_free_space_exactly_meeting_requirement_proceeds(self, tmp_path: Path) -> None:
+        """D-09: free space equal to the requirement is enough, not one byte less."""
+        segments = _write_segments(tmp_path, 4, 4096)
+        exact_free = _required_merge_bytes(segments)
+        output = tmp_path / "output.ts"
+        (tmp_path / "batch_00000.ts").write_bytes(b"batch data")
+        mock_process = _successful_process()
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(exact_free)),
+            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec,
+        ):
+            result = await _merge_segments_batched(tmp_path, output, 4)
+
+        assert result == output
+        mock_exec.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_free_space_one_byte_below_requirement_fails(self, tmp_path: Path) -> None:
+        """D-09: one byte short of the requirement fails before any subprocess."""
+        segments = _write_segments(tmp_path, 4, 4096)
+        short_free = _required_merge_bytes(segments) - 1
+        output = tmp_path / "output.ts"
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(short_free)),
+            patch("asyncio.create_subprocess_exec") as mock_exec,
+            pytest.raises(DownloadError),
+        ):
+            await _merge_segments_batched(tmp_path, output, 4)
+
+        mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_volume_proceeds_with_merge(self, tmp_path: Path) -> None:
+        """D-09: a volume whose usage cannot be read does not block the merge.
+
+        An unreadable mount is not evidence of a full one, and a probe that
+        failed for an unrelated reason must not turn a working download into a
+        failure.
+        """
+        _write_segments(tmp_path, 5, 2048)
+        output = tmp_path / "output.ts"
+        (tmp_path / "batch_00000.ts").write_bytes(b"batch data")
+        mock_process = _successful_process()
+
+        with (
+            patch("shutil.disk_usage", side_effect=OSError("unreadable mount")),
+            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec,
+        ):
+            result = await _merge_segments_batched(tmp_path, output, 5)
+
+        assert result == output
+        mock_exec.assert_called()

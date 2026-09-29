@@ -140,9 +140,9 @@ def download(
         typer.echo(format_validation_error(e), err=True)
         raise typer.Exit(code=1) from None
     except QualityParseError as e:
+        accepted_qualities = ", ".join(quality_value.value for quality_value in QualityEnum)
         typer.echo(
-            f"Invalid quality value: {e.quality}. "
-            "Use one of: 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, best, worst.",
+            f"Invalid quality value: {e.quality}. Use one of: {accepted_qualities}.",
             err=True,
         )
         raise typer.Exit(code=1) from None
@@ -230,6 +230,9 @@ def batch_download(
     with the specified quality to the output directory.
     """
     try:
+        valid_urls: list[str] = []
+        skipped_count = 0
+
         # Detect misspelled VKDOWNLOADER_* env vars before construction
         warn_unknown_env_vars()
         # Create Settings once with environment-loaded values, merging CLI overrides
@@ -239,9 +242,6 @@ def batch_download(
         _log_env_file_path()
 
         # Read and validate URLs from file
-        valid_urls: list[str] = []
-        skipped_count = 0
-
         for line in urls_file.read_text().splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):

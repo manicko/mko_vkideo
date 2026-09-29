@@ -78,25 +78,35 @@ playwright install chromium
 
 ### Install Development Dependencies
 
-```bash
-pip install -e ".[dev]"
-```
+The verification tooling (`ruff`, `mypy`, `pytest`, `pytest-asyncio`) is declared in the
+`dev` dependency group. `uv sync` installs that group by default, so no extra flag is needed:
 
-Or with uv:
 ```bash
-uv sync --extra dev
+uv sync
 ```
 
 ### Run Tests
 
 ```bash
-pytest tests/
+uv run pytest tests/
 ```
 
 ### Run Linting
 
 ```bash
-ruff check src/
+uv run ruff check src/
+```
+
+### Run Formatting Check
+
+```bash
+uv run ruff format --check src/
+```
+
+### Run Type Check
+
+```bash
+uv run mypy src/
 ```
 
 ## Configuration
