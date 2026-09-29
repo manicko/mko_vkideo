@@ -52,35 +52,56 @@ _logging_configured: bool = False
 class _PreambleFailure(Exception):
     """Raised when the shared preamble encounters an OSError.
 
-    Wraps OSErrors from env scanning or logging setup so both commands can
-    route them to a single renderer instead of their own catch-alls.
+    Wraps OSErrors from env scanning, settings construction, or logging
+    setup so both commands can route them to a single renderer instead of
+    their own catch-alls. The ``logging_related`` flag records whether the
+    cause originated from the logging step, so the renderer can append the
+    log-file hint only for logging-related failures.
     """
 
-
-_PREAMBLE_FAILURE_MESSAGE = (
-    "Logging configuration failed; cannot continue. "
-    "Check the --log-file option or VKDOWNLOADER_LOG_FILE environment variable."
-)
+    def __init__(self, message: str, *, logging_related: bool = False) -> None:
+        super().__init__(message)
+        self.logging_related = logging_related
 
 
 def _render_preamble_failure(exc: BaseException) -> None:
     """Render a preamble/bootstrap failure on stderr via the entry layer.
 
     Reached by both ``download`` and ``batch`` for any OSError raised during
-    the shared preamble — currently from ``setup_logging`` when the log
-    directory cannot be created. The structured-log sink is not configured
-    in this state, so the message is emitted to stderr through
-    ``typer.echo`` and a log record is produced only when a sink can
-    actually receive it. The record carries only the error type name —
-    no traceback, no source path, no settings object.
+    the shared preamble — from env scanning, settings construction, or
+    ``setup_logging``. The original cause is included in the message so the
+    operator sees what actually failed. The log-file hint is appended only
+    when the cause originated from the logging step; for env-scan or
+    settings-construction failures the hint would point at the wrong file.
+    The structured-log sink may not be configured in this state, so a log
+    record is produced only when a sink can actually receive it — carrying
+    only the error type name, no traceback, no source path, no settings
+    object.
     """
-    typer.echo(_PREAMBLE_FAILURE_MESSAGE, err=True)
+    cause = exc.__cause__ if isinstance(exc, _PreambleFailure) else exc
+    original = cause if cause is not None else exc
+    cause_str = str(original) or type(original).__name__
+
+    if _is_logging_failure(exc):
+        message = (
+            "Logging configuration failed; cannot continue. "
+            f"{cause_str} "
+            "Check the --log-file option or VKDOWNLOADER_LOG_FILE environment variable."
+        )
+    else:
+        message = f"Command preamble failed; cannot continue. {cause_str}"
+
+    typer.echo(message, err=True)
     if _logging_configured:
-        cause = exc.__cause__
         logger.error(
             "preamble_failed",
-            error_type=type(cause if cause is not None else exc).__name__,
+            error_type=type(original).__name__,
         )
+
+
+def _is_logging_failure(exc: BaseException) -> bool:
+    """Return True when the preamble failure originated from the logging step."""
+    return getattr(exc, "logging_related", False)
 
 
 def _log_env_file_path() -> None:
@@ -151,16 +172,21 @@ def _run_command_preamble(
 
     The single ``Settings`` instance is returned so the calling command can pass
     the same object downstream, keeping logging configuration and the service
-    layer on one identity (A4).      ``warn_unknown_env_vars`` is resolved through
+    layer on one identity (A4).  ``warn_unknown_env_vars`` is resolved through
     this module's global namespace so that string-path patches targeting
     ``vkdownloader.cli.warn_unknown_env_vars`` still take effect here.
 
     Any ``OSError`` raised during the preamble is wrapped in
     ``_PreambleFailure`` so both commands delegate to
     ``_render_preamble_failure`` — keeping the bootstrap-failure path
-    independent of the structured-log sink. After ``setup_logging``
-    returns, ``_logging_configured`` is set so the catch-all can avoid
-    emitting a log record through an unconfigured sink.
+    independent of the structured-log sink. The env-scan / settings step and
+    the logging-setup step run in separate ``try`` blocks so the wrapper can
+    set ``logging_related`` correctly: OSErrors from env scanning or settings
+    construction carry ``logging_related=False``, while the logging step
+    (after ``_build_settings`` returns) carries ``logging_related=True``, so
+    the renderer appends the log-file hint only to logging-related failures.
+    After ``setup_logging`` returns, ``_logging_configured`` is set so the
+    catch-all can avoid emitting a log record through an unconfigured sink.
     """
     global _logging_configured
     _logging_configured = False
@@ -178,13 +204,20 @@ def _run_command_preamble(
         settings = _build_settings(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
+    except OSError as exc:
+        raise _PreambleFailure(
+            "OSError during command preamble (env scan or settings construction)"
+        ) from exc
+
+    try:
         setup_logging(settings)
         _logging_configured = True
         _log_env_file_path()
         return settings
     except OSError as exc:
         raise _PreambleFailure(
-            "OSError during command preamble (env scan or logging setup)"
+            "OSError during command preamble (logging setup)",
+            logging_related=True,
         ) from exc
 
 
@@ -378,8 +411,17 @@ def batch_download(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
 
+        # Read the URL file narrowly so a read failure produces the precise
+        # "Failed to read URL file" message while every other OSError
+        # (e.g. from the batch run) falls through to the generic catch-all.
+        try:
+            raw_urls = urls_file.read_text()
+        except OSError as e:
+            typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
+            raise typer.Exit(code=1) from None
+
         # Read and validate URLs from file
-        for line in urls_file.read_text().splitlines():
+        for line in raw_urls.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
@@ -416,9 +458,6 @@ def batch_download(
         raise typer.Exit(code=1) from None
     except _PreambleFailure as exc:
         _render_preamble_failure(exc)
-        raise typer.Exit(code=1) from None
-    except OSError as e:
-        typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
         raise typer.Exit(code=1) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled by user", err=True)

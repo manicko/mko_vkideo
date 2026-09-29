@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from vkdownloader import cli
 from vkdownloader.cli import app
@@ -1309,6 +1309,35 @@ class TestBatchErrorHandler:
         assert "An error occurred during batch download" in result.output
         assert "UnboundLocalError" not in result.output
 
+    def test_batch_os_error_after_read_not_misreported_as_url_file_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A post-read OSError must not be misreported as a URL file read failure.
+
+        After the URL file is read successfully, an OSError from the batch
+        run itself falls through to the generic catch-all — it does not
+        produce the "Failed to read URL file" message.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+            mock_run_batch.side_effect = OSError("No space left on device")
+
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 1
+        assert "Failed to read URL file" not in result.output
+        assert "An error occurred during batch download" in result.output
+
 
 class TestQualityRecoveryHint:
     """D-05 part 1: the recovery hint must name only values the parser accepts."""
@@ -2000,15 +2029,15 @@ class TestPreambleFailureRendering:
         """Return the repository root path to detect leaked source paths."""
         return str(Path(__file__).resolve().parent.parent)
 
-    def _assert_clean_preamble_failure_output(self, result: object) -> None:
+    def _assert_clean_preamble_failure_output(self, result: Result) -> None:
         """Assert exit 1, single-line stderr message, no traceback/path/settings."""
-        assert result.exit_code == 1  # type: ignore[attr-defined]
-        stderr = result.stderr  # type: ignore[attr-defined]
+        assert result.exit_code == 1
+        stderr = result.stderr
         assert "Logging configuration failed" in stderr
         # Single line — only the trailing newline from typer.echo.
         assert stderr.count("\n") == 1
-        combined = result.output  # type: ignore[attr-defined]
-        assert "Traceback" not in result.stdout  # type: ignore[attr-defined]
+        combined = result.output
+        assert "Traceback" not in result.stdout
         assert "Traceback" not in combined
         assert self._project_root() not in combined
         assert "Settings(" not in combined
@@ -2042,6 +2071,8 @@ class TestPreambleFailureRendering:
             catch_exceptions=False,
         )
         self._assert_clean_preamble_failure_output(result)
+        # A logging-setup failure must not be misreported as a URL-file error.
+        assert "Failed to read URL file" not in result.output
 
     def test_download_and_batch_preamble_failure_render_same_message(
         self,
