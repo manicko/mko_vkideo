@@ -46,7 +46,6 @@ permission:
     "*pytest*": allow
     "*ruff*": allow
     "*mypy*": allow
-    "*basedpyright*": allow
     "alembic*": allow
     "npm test*": allow
     "npm run lint*": allow
@@ -74,6 +73,18 @@ permission:
     "docker network*": allow
     "docker volume*": allow
     "docker system*": allow
+    # === ASK: potentially destructive Docker ===
+    "docker compose down --volumes*": allow
+    "docker compose down -v*": allow
+    "docker volume rm*": allow
+    "docker volume prune*": allow
+    "docker system prune -a*": allow
+    "docker rm*": allow
+    "docker rm -f*": allow
+    "docker rmi -f*": allow
+    "docker image prune -a*": allow
+    "docker container prune*": allow
+    "docker network prune*": allow
 
     # === K8S: read-only ===
     "kubectl get*": allow
@@ -116,19 +127,7 @@ permission:
     "chmod -R 777 *": ask
     "chown -R *": ask
 
-    # === ASK: potentially destructive Docker ===
-    "docker compose down*": allow
-    "docker compose down --volumes*": allow
-    "docker compose down -v*": allow
-    "docker volume rm*": allow
-    "docker volume prune*": allow
-    "docker system prune -a*": allow
-    "docker rm*": allow
-    "docker rm -f*": allow
-    "docker rmi -f*": allow
-    "docker image prune -a*": allow
-    "docker container prune*": allow
-    "docker network prune*": allow
+
 
     # === ASK: potentially destructive K8s ===
     "kubectl describe*": ask
