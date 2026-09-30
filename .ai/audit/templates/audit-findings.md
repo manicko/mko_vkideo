@@ -1,13 +1,13 @@
 ---
 name: audit-findings
 description: Structured findings template for audit phase output
-agent: audit-executor
+agent: auditor
 alwaysApply: false
 ---
 
 # Phase N Audit Findings — {Phase Name}
 
-**Executor:** audit-executor
+**Executor:** auditor
 **Template:** {phase-template-file}
 **Status:** {pending|in-progress|complete}
 **Validated:** {yes|no}

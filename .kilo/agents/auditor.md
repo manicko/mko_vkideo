@@ -257,6 +257,7 @@ Use labels:
 - `[SPEC-DEVIATION]` — code differs from docs
 - `[BEST-PRACTICE]` — improvement beyond current spec
 - `[DOC-UPDATE]` — docs should be updated to reflect reality or new direction
+- `[RUNTIME-ERROR]` — a failure observed at runtime
 
 ## When code diverges from docs
 

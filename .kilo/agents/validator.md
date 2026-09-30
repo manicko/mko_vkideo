@@ -243,6 +243,7 @@ Classification:
 - `SPEC-DEVIATION` — implementation violates requirements
 - `BEST-PRACTICE` — valid improvement that strengthens architecture, reliability, or maintainability
 - `DOC-UPDATE` — code is correct, documentation is outdated
+- `RUNTIME-ERROR` — a failure observed at runtime
 
 Reject:
 
@@ -356,6 +357,7 @@ Validated findings with type:
 - `SPEC-DEVIATION`
 - `BEST-PRACTICE`
 - `DOC-UPDATE`
+- `RUNTIME-ERROR`
 
 ### Rejected Findings
 
