@@ -262,3 +262,112 @@ class TestNetworkMonitor:
 
         # No URL should be extracted (body too large)
         assert len(monitor.m3u8_urls) == 0
+
+    @pytest.mark.parametrize(
+        ("address_form", "expected"),
+        [
+            pytest.param(
+                "https://cdn.example/a/stream.m3u8",
+                "https://cdn.example/a/stream.m3u8",
+                id="absolute-https",
+            ),
+            pytest.param(
+                "http://cdn.example/a/stream.m3u8",
+                None,
+                id="absolute-http",
+            ),
+            pytest.param(
+                "http://cdn.example/a/stream.m3u8?sig=X",
+                None,
+                id="absolute-http-with-query",
+            ),
+            pytest.param(
+                "//cdn.example/a/stream.m3u8",
+                "https://cdn.example/a/stream.m3u8",
+                id="scheme-relative",
+            ),
+            pytest.param(
+                "/a/stream.m3u8",
+                None,
+                id="root-relative",
+            ),
+            pytest.param(
+                "cdn.example/a/stream.m3u8",
+                "https://cdn.example/a/stream.m3u8",
+                id="bare-host",
+            ),
+            pytest.param(
+                "a/stream.m3u8",
+                None,
+                id="bare-relative",
+            ),
+            pytest.param(
+                "stream.m3u8",
+                None,
+                id="bare-filename",
+            ),
+            pytest.param(
+                "  https://cdn.example/a/stream.m3u8  ",
+                "https://cdn.example/a/stream.m3u8",
+                id="whitespace-padded",
+            ),
+        ],
+    )
+    def test_normalize_url_address_forms(self, address_form: str, expected: str | None) -> None:
+        """NET-016: the nine address forms produce the expected classification.
+
+        Five forms are dropped (return None exactly); four are kept or
+        promoted to https.  Scheme-relative is evaluated before root-relative
+        so the former is promoted, not swallowed and dropped.
+        """
+        mock_page = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        result = monitor._normalize_url(address_form)
+
+        if expected is None:
+            assert result is None
+        else:
+            assert result == expected
+
+    def test_extract_urls_from_json_drops_unresolvable_value(self) -> None:
+        """NET-016: a JSON value of 720/stream.m3u8 is not appended to the discovered set."""
+        mock_page = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        data: JsonValue = {"hls": "720/stream.m3u8"}
+        monitor._extract_urls_from_json(data)
+
+        assert monitor.m3u8_urls == []
+
+    def test_extract_urls_from_json_keeps_resolvable_value_in_mixed_payload(self) -> None:
+        """NET-016: a resolvable https value in a mixed payload is the only address kept."""
+        mock_page = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        data: JsonValue = {
+            "drop_me": "720/stream.m3u8",
+            "keep_me": "https://cdn.example.com/stream.m3u8",
+        }
+        monitor._extract_urls_from_json(data)
+
+        assert monitor.m3u8_urls == ["https://cdn.example.com/stream.m3u8"]
+
+    @pytest.mark.asyncio
+    async def test_intercept_response_drops_plaintext_m3u8_address(self) -> None:
+        """NET-016: an http:// response URL yields no captured address.
+
+        Green counterpart: test_network_monitor_m3u8_capture asserts an
+        https:// address is still captured, so the m3u8 branch is narrowed,
+        not broken.
+        """
+        mock_page = MagicMock()
+        mock_page.on = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+
+        mock_response = MagicMock()
+        mock_response.url = "http://cdn.example.com/stream.m3u8"
+
+        await monitor._intercept_response(mock_response)
+
+        assert monitor.m3u8_urls == []

@@ -38,17 +38,36 @@ class NetworkMonitor:
         logger.debug("setting_up_network_interceptors")
         self.page.on("response", self._intercept_response)
 
-    def _normalize_url(self, url: str) -> str:
-        """Convert relative m3u8 URL to absolute URL."""
+    def _normalize_url(self, url: str) -> str | None:
+        """Classify an m3u8 address candidate; return its absolute https URL or None."""
         url = url.strip()
-        if url.startswith("http://") or url.startswith("https://"):
+        if url.startswith("https://"):
             return url
-        # Handle relative URLs from VK CDN
-        if url.startswith("/"):
-            return f"https://{url[1:]}" if not url.startswith("//") else f"https:{url}"
+        # D-14 (NET-016): Two rulings. (1) http:// is dropped, not carried
+        # forward in plaintext — the sole consumer guards emptiness
+        # (`if monitor.m3u8_urls:`) before indexing m3u8_urls[0], so an
+        # http:// address is no longer discovered. (2) root-relative and
+        # bare-relative candidates are dropped, not resolved against
+        # page.url. The constructor holds a Page, so resolving would need no
+        # signature change — which is exactly why the rejection matters: it
+        # would invent a plausible-looking wrong host, the same failure class
+        # this block removes. Rejected alternative: resolve against page.url.
+        # A schemeless candidate is promoted only when its first component
+        # looks like a host (contains a dot) AND it has a path; schemeless
+        # hosts without a dot (intranet/stream.m3u8) and bare filenames
+        # (stream.m3u8) are dropped — conservative, never wrong.
+        if url.startswith("http://"):
+            return None
+        # scheme-relative is promoted before root-relative, so //host is not
+        # swallowed by the / arm and dropped.
         if url.startswith("//"):
             return f"https:{url}"
-        return f"https://{url}"
+        if url.startswith("/"):
+            return None
+        head, sep, _ = url.partition("/")
+        if sep and "." in head:
+            return f"https://{url}"
+        return None
 
     async def _intercept_response(self, response: Response) -> None:
         """
@@ -61,9 +80,10 @@ class NetworkMonitor:
         # Check both absolute and relative m3u8 URLs
         if ".m3u8" in url.lower() or self.M3U8_PATTERN.search(url):
             normalized = self._normalize_url(url)
-            if normalized not in self.m3u8_urls:
-                self.m3u8_urls.append(normalized)
-            logger.debug("m3u8_url_captured", url=_strip_auth_params(normalized))
+            if normalized is not None:
+                if normalized not in self.m3u8_urls:
+                    self.m3u8_urls.append(normalized)
+                logger.debug("m3u8_url_captured", url=_strip_auth_params(normalized))
 
         # Also check for XHR responses containing stream URLs
         if "video" in url and response.headers.get("content-type", "").startswith(
@@ -131,7 +151,7 @@ class NetworkMonitor:
             for value in data.values():
                 if isinstance(value, str) and ".m3u8" in value.lower():
                     normalized = self._normalize_url(value)
-                    if normalized not in self.m3u8_urls:
+                    if normalized is not None and normalized not in self.m3u8_urls:
                         self.m3u8_urls.append(normalized)
                         logger.debug("m3u8_url_found_in_json", url=_strip_auth_params(normalized))
                 elif isinstance(value, (dict, list)):
