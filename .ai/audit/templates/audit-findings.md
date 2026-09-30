@@ -18,6 +18,8 @@ alwaysApply: false
 
 ### {ID}: {Title}
 
+**Decision:** {validated | reclassified | merged | rejected} · {decision_detail}
+
 | Field | Value |
 |-------|-------|
 | **ID** | {id} |
@@ -72,6 +74,8 @@ alwaysApply: false
 | `affected_modules` | list | Affected module paths (e.g., `src/**/`, `frontend/src/features/auth/`) |
 | `recommendation` | string | Concrete fix direction: what to change and why |
 | `classification` | enum | `mandatory` (security, data loss, correctness) or `advisory` (improvement, refactoring) |
+| `decision` | enum | `validated` · `reclassified` · `merged` · `rejected` |
+| `decision_detail` | string | Optional rationale and cross-references; required for every decision except `validated` |
 
 ### Classification Guide
 

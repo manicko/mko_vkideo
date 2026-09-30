@@ -342,7 +342,7 @@ is the question, and the finding is named as a condition to look for.
 ## 7. Edge Cases
 
 - **Conflict vs. complement** — a finding may conflict with one in another phase (escalate as `VAL-`) or legitimately complement it (retain both, cross-ref).
-- **Merge where evidence is incomplete** — preserve original content for reference; add a `Validation Note` block (`## 11`) listing merged IDs.
+- **Merge where evidence is incomplete** — preserve original content for reference; record the decision in the `Decision` field (`## 11`) listing merged IDs.
 - **Findings that span multiple phases** — split or cross-reference; the absorbing finding carries the merged content.
 - **Stale-but-similar** — a finding may be rejected as stale while a sibling finding (same root cause) is validated; record the relationship in `## 11` Merged Findings.
 - **A source report that is absent, empty, or holds only a pass line.** The decision is a non-reproduction with the inputs recorded — never a clean bill of health, and never a set of `VAL-` findings about a report that was never produced.
@@ -370,7 +370,7 @@ sentence and then gives only the conditions that are specific to its own subject
 | LOW | A `DOC-UPDATE` candidate; any advisory finding with no security, data-loss or correctness consequence. |
 
 **The per-finding decision is not a severity.** `Validated / Reclassified / Merged /
-Rejected` is a *decision about a finding*, recorded in the `Validation Note` field
+Rejected` is a *decision about a finding*, recorded in the `Decision` field
 (`## 11`, *Validation Note Format*) and tallied in the Validation Summary (`## 11`).
 **A decision never changes the severity column.** A rejected finding keeps the
 severity it carried, and a reclassified finding keeps it: recording the decision in
@@ -480,8 +480,8 @@ Decisions are applied inline to the copied findings file:
 | Action | How to apply |
 |--------|-------------|
 | **Validated** | Keep as-is. **The severity is re-derived from this phase's own verification, and is not changed by this decision.** |
-| **Reclassified** | Update the `Type` field. Add a `Validation Note` block below the heading. |
-| **Merged** | Keep the original content in the file. Add a `Validation Note` block listing merged IDs and target location. |
+| **Reclassified** | Update the `Type` field. Record the decision in the `Decision` field directly after the heading. |
+| **Merged** | Keep the original content in the file. Record the decision in the `Decision` field directly after the heading, listing merged IDs and target location. |
 | **Rejected** | Leave the block in the file as: `### {ID}: ~~{title}~~ [REJECTED]` + `> **Rejection reason:** {explanation}`. **Never delete it** — the claim and the reason are what stop the next run re-deriving it. |
 | **Cross-phase conflicts** | Add as new finding entries (`VAL-`) at the end of the Findings section. |
 | **Rollout safety issues** | Add as new finding entries (`VAL-`) if detected. |
@@ -494,24 +494,16 @@ contradiction is filed (`## 6` subject 3).
 
 ### Validation Note Format
 
-Add directly after the `### {ID}:` heading, for **every** decision, not only for a
+Write the decision into the `Decision` field the report format now carries, placed
+directly after the `### {ID}:` heading, for **every** decision, not only for a
 merge or a reclassification:
 
 ```markdown
-> **Validation Note:**
-> - **Action:** {validated | reclassified | merged | rejected}
-> - **Detail:** {rationale — required for every decision except `validated`}
-> - **See also:** {other finding IDs or sections}
+**Decision:** {validated | reclassified | merged | rejected} · {decision_detail}
 ```
 
-**The report format has no slot for this field.** Its finding block runs from the
-heading straight into a fixed field table, and the nine mandatory fields it
-defines carry no decision — nowhere to put one. **This phase defines the field and
-requires it; the format must gain it.** The absence of the slot is a defect of the
-format, filed under block (i) with a severity composed here — it is an input defect
-this phase owns, and it is not silently assumed away. Until the format carries it,
-the block is written in the position above and the deviation is stated once in the
-artifact's own header.
+The `decision_detail` carries the rationale — required for every decision except
+`validated` — and any cross-references.
 
 ### Rolling Checkpoint Format
 
