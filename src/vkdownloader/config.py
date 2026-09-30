@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import structlog
+from dotenv import dotenv_values
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings
 
@@ -244,32 +245,68 @@ def _build_valid_env_vars() -> set[str]:
 def _scan_env_file(env_path: Path = Path(".env")) -> dict[str, str]:
     """Parse a ``.env`` file and return its key-value pairs.
 
-    Uses the same simple ``KEY=VALUE`` semantics as pydantic-settings.
-    Lines starting with ``#`` and blank lines are ignored. Surrounding
-    quotes on values are stripped.
+    Delegates to ``dotenv.dotenv_values`` — the exact reader
+    ``pydantic-settings`` uses through
+    ``DotEnvSettingsSource._static_read_env_file``
+    (``dotenv_values(file_path, encoding=encoding or 'utf8')`` at
+    ``pydantic_settings/sources/providers/dotenv.py:80``). Parity with the
+    consuming parser is therefore structural: any assignment form the
+    model accepts, the scan sees with the same key and the same value.
+
+    The call passes no ``interpolate`` argument, so ``dotenv_values``'
+    own default ``interpolate=True`` applies — the same option the consuming
+    parser uses. ``${VAR}`` references are expanded exactly as the model
+    expands them, not left literal.
+
+    Two things the shared reader does **not** normalise for us:
+
+    * **Keys are returned exactly as the reader produces them.** The two
+      quoted-key forms are *not* symmetric: ``'VKDOWNLOADER_X'`` loses
+      its quotes (the model accepts it) while ``"VKDOWNLOADER_X"`` keeps
+      them (the model rejects it), because ``parse_key`` has a dedicated
+      single-quoted-key branch and no double-quoted counterpart
+      (``dotenv/parser.py:112-120``). ``warn_unknown_env_vars`` applies
+      its own normalisation to decide scope, but tests membership against
+      the raw key so a quote-retaining key can never be mistaken for a
+      declared field.
+    * **The reader is case-preserving.** The consumer's case folding
+      happens *after* the read, in ``parse_env_vars`` with
+      ``case_sensitive=False`` (``pydantic_settings/sources/utils.py:32-42``),
+      not in the reader.
 
     Args:
         env_path: Path to the .env file (default: ``.env`` in CWD).
 
     Returns:
         Dict mapping environment variable names to their raw string values.
+        A key with no ``=`` (e.g. a bare ``VKDOWNLOADER_MAX_RETRIES`` line)
+        is returned with an empty-string value, not dropped, so the guard
+        can still flag it as unknown when the name is misspelled.
     """
-    env_vars: dict[str, str] = {}
-    if not env_path.exists():
-        return env_vars
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            # Strip surrounding quotes if present (single or double)
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                value = value[1:-1]
-            env_vars[key] = value
-    return env_vars
+    return {
+        key: "" if value is None else value
+        for key, value in dotenv_values(env_path, encoding="utf-8").items()
+    }
+
+
+def _is_unknown_env_var(key: str, valid_env_vars: set[str]) -> bool:
+    """Return True if *key* is a VKDOWNLOADER_* variable not in *valid_env_vars*.
+
+    **Scope** — *is this a VKDOWNLOADER_* key at all?* — is decided on a
+    normalised copy of the name: one leading ``U+FEFF`` is skipped, one
+    matching pair of surrounding quotes is stripped, and the prefix is
+    tested case-insensitively against ``_ENV_VAR_PREFIX`` (the consumer
+    lower-cases every key before matching, so the guard must match).
+
+    **Membership** — *is this a declared field?* — is decided on the
+    **raw** upper-cased name, never the normalised one. A quoted or
+    BOM-prefixed key therefore can never match a declared field and is
+    always reported, which is correct because the model rejects both.
+    """
+    scope = key.removeprefix("\ufeff")
+    if len(scope) >= 2 and scope[0] == scope[-1] and scope[0] in ("'", '"'):
+        scope = scope[1:-1]
+    return scope.upper().startswith(_ENV_VAR_PREFIX) and key.upper() not in valid_env_vars
 
 
 def warn_unknown_env_vars(env_file: Path = Path(".env")) -> list[str]:
@@ -296,15 +333,11 @@ def warn_unknown_env_vars(env_file: Path = Path(".env")) -> list[str]:
     valid_env_vars = _build_valid_env_vars()
 
     # Scan OS environment
-    os_unknown = [
-        key for key in os.environ if key.startswith(_ENV_VAR_PREFIX) and key not in valid_env_vars
-    ]
+    os_unknown = [key for key in os.environ if _is_unknown_env_var(key, valid_env_vars)]
 
     # Scan .env file for typos (detects .env typos before they crash construction)
     file_env = _scan_env_file(env_file)
-    file_unknown = [
-        key for key in file_env if key.startswith(_ENV_VAR_PREFIX) and key not in valid_env_vars
-    ]
+    file_unknown = [key for key in file_env if _is_unknown_env_var(key, valid_env_vars)]
 
     unknown = os_unknown + file_unknown
     return unknown

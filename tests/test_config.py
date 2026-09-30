@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from vkdownloader.config import (
     Settings,
+    _scan_env_file,
     format_validation_error,
     setup_logging,
     warn_unknown_env_vars,
@@ -262,7 +263,7 @@ class TestDownloadDirEmptyString:
 
 
 class TestEnvFileTypoDetection:
-    """Tests for .env file typo detection in warn_unknown_env_vars (CFG-001)."""
+    """Tests for .env file typo detection in warn_unknown_env_vars (CFG-004)."""
 
     def test_detects_env_file_typo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """warn_unknown_env_vars should detect typos in .env file."""
@@ -295,6 +296,321 @@ class TestEnvFileTypoDetection:
     def test_env_file_missing_returns_empty(self, tmp_path: Path) -> None:
         """warn_unknown_env_vars should return empty list when .env doesn't exist."""
         result = warn_unknown_env_vars(tmp_path / "nonexistent.env")
+        assert result == []
+
+    # ------------------------------------------------------------------
+    # R7b — misspelled keys in every assignment form are reported
+    # (criteria 1, 5, 11)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        ("line", "expected_key"),
+        [
+            # Plain misspelled form
+            ("VKDOWNLOADER_MAXRETRIES=9", "VKDOWNLOADER_MAXRETRIES"),
+            # Leading whitespace — dotenv strips it
+            ("  VKDOWNLOADER_MAXRETRIES=9", "VKDOWNLOADER_MAXRETRIES"),
+            # Inline comment — dotenv strips the comment
+            ("VKDOWNLOADER_MAXRETRIES=9  # oops", "VKDOWNLOADER_MAXRETRIES"),
+            # Export prefix — dotenv strips it
+            ("export VKDOWNLOADER_MAXRETRIES=9", "VKDOWNLOADER_MAXRETRIES"),
+            # Lower-case — scope test is case-insensitive, membership uses raw key
+            ("vkdownloader_maxretries=9", "vkdownloader_maxretries"),
+            # Double-quoted key — dotenv retains the quotes
+            ('"VKDOWNLOADER_MAXRETRIES"=9', '"VKDOWNLOADER_MAXRETRIES"'),
+            # Quoted value — dotenv strips the quotes from the value
+            ('VKDOWNLOADER_MAXRETRIES="9"', "VKDOWNLOADER_MAXRETRIES"),
+        ],
+    )
+    def test_misspelled_forms_are_reported(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        line: str,
+        expected_key: str,
+    ) -> None:
+        """Every misspelled form from the R7b table triggers the guard.
+
+        The returned name is the user's own spelling — never a normalised copy.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(line + "\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert expected_key in result, (
+            f"misspelled form {line!r} should be reported with key {expected_key!r}; got {result!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # R7 — valid keys in every assignment form are not reported
+    # (criterion 2)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "VKDOWNLOADER_MAX_RETRIES=5",
+            "export VKDOWNLOADER_MAX_RETRIES=5",
+            "  VKDOWNLOADER_MAX_RETRIES   =   5   ",
+            "vkdownloader_max_retries=5",
+            "VKDOWNLOADER_MAX_RETRIES=5 # bumped",
+            'VKDOWNLOADER_MAX_RETRIES="5"',
+            "VKDOWNLOADER_MAX_RETRIES='5'",
+            "VKDOWNLOADER_TIMEZONE=America/New York",
+        ],
+    )
+    def test_valid_forms_are_not_reported(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        line: str,
+    ) -> None:
+        """A valid key in every assignment form returns an empty list."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(line + "\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert result == [], f"valid form {line!r} should not be reported; got {result!r}"
+
+    # ------------------------------------------------------------------
+    # Criterion 3 — scanned value matches what the model consumes
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        ("line", "field", "expected_value"),
+        [
+            ("VKDOWNLOADER_MAX_RETRIES=9 # bumped", "VKDOWNLOADER_MAX_RETRIES", "9"),
+            ('VKDOWNLOADER_MAX_RETRIES="9"', "VKDOWNLOADER_MAX_RETRIES", "9"),
+            ("VKDOWNLOADER_MAX_RETRIES='9'", "VKDOWNLOADER_MAX_RETRIES", "9"),
+            (
+                "VKDOWNLOADER_TIMEZONE=America/New York",
+                "VKDOWNLOADER_TIMEZONE",
+                "America/New York",
+            ),
+        ],
+    )
+    def test_scan_returns_value_the_model_consumes(
+        self,
+        tmp_path: Path,
+        line: str,
+        field: str,
+        expected_value: str,
+    ) -> None:
+        """The scan sees exactly the value pydantic-settings consumes.
+
+        dotenv strips inline comments and value-level quotes, so the scan
+        sees the same value the model sees.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(line + "\n", encoding="utf-8")
+
+        scanned = _scan_env_file(env_file)
+
+        assert scanned[field] == expected_value, (
+            f"scan should return {expected_value!r} for {line!r}; got {scanned!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Criterion 4 — interpolation parity with pydantic-settings
+    # ------------------------------------------------------------------
+
+    def test_interpolation_unset_var_returns_empty_string(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unresolved ``${VAR}`` is expanded to the empty string the model consumes."""
+        monkeypatch.delenv("UNSET_VARIABLE", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAX_RETRIES=${UNSET_VARIABLE}\n", encoding="utf-8")
+
+        scanned = _scan_env_file(env_file)
+
+        assert scanned["VKDOWNLOADER_MAX_RETRIES"] == ""
+
+    def test_interpolation_set_var_is_resolved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A resolved ``${VAR}`` reflects the environment variable's value.
+
+        This is the discriminating assertion: it fails if interpolation is
+        disabled, because the literal ``'${SET_VAR}'`` would be returned instead.
+        """
+        monkeypatch.setenv("SET_VAR", "42")
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAX_RETRIES=${SET_VAR}\n", encoding="utf-8")
+
+        scanned = _scan_env_file(env_file)
+        value = scanned["VKDOWNLOADER_MAX_RETRIES"]
+
+        assert value == "42", (
+            f"expected resolved '42', got {value!r} (interpolation may be disabled)"
+        )
+
+    def test_interpolation_second_line_is_not_swallowed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``${UNSET}`` reference on one line does not drop the following line."""
+        monkeypatch.delenv("UNSET_VARIABLE", raising=False)
+        monkeypatch.setenv("SET_VAR", "7")
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "VKDOWNLOADER_MAX_RETRIES=${UNSET_VARIABLE}\nVKDOWNLOADER_THROTTLED_RATE=${SET_VAR}\n",
+            encoding="utf-8",
+        )
+
+        scanned = _scan_env_file(env_file)
+
+        assert scanned["VKDOWNLOADER_MAX_RETRIES"] == ""
+        assert scanned["VKDOWNLOADER_THROTTLED_RATE"] == "7"
+
+    # ------------------------------------------------------------------
+    # Criterion 11 — quoted-key asymmetry
+    # ------------------------------------------------------------------
+
+    def test_single_quoted_valid_key_not_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A single-quoted valid key is accepted by the model, so the guard is silent.
+
+        dotenv's ``parse_key`` has a single-quoted-key branch but no double-quoted
+        counterpart: single quotes are stripped from the key, so the normalised
+        name matches a declared field.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("'VKDOWNLOADER_MAX_RETRIES'=5\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert result == []
+
+    def test_double_quoted_valid_key_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A double-quoted valid key is rejected by the model, so the guard reports it.
+
+        The returned name retains the double quotes — the strip-then-compare
+        guard would have suppressed this, which is the false negative this block fixes.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text('"VKDOWNLOADER_MAX_RETRIES"=5\n', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert '"VKDOWNLOADER_MAX_RETRIES"' in result
+
+    # ------------------------------------------------------------------
+    # Criterion 12 — bare lines (no '=')
+    # ------------------------------------------------------------------
+
+    def test_bare_typo_line_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare misspelled line (no ``=``) is reported, not silently ignored."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAXRETRIES\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert "VKDOWNLOADER_MAXRETRIES" in result
+
+    def test_bare_valid_line_not_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare correctly-spelled line (no ``=``) is not flagged."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAX_RETRIES\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
+        assert result == []
+
+    def test_bare_line_value_is_empty_string(self, tmp_path: Path) -> None:
+        """A bare line (no ``=``) is retained with ``''`` not dropped.
+
+        ``None`` (dotenv's marker for no value) is coerced to ``''``, so the
+        guard can still flag a bare misspelled key.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("VKDOWNLOADER_MAXRETRIES\n", encoding="utf-8")
+
+        scanned = _scan_env_file(env_file)
+
+        assert scanned == {"VKDOWNLOADER_MAXRETRIES": ""}
+
+    # ------------------------------------------------------------------
+    # Criterion 13 — BOM: guard's verdict agrees with the model's verdict
+    # ------------------------------------------------------------------
+
+    def test_bom_valid_key_agrees_with_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A BOM-prefixed valid key: guard verdict must equal model verdict.
+
+        On python-dotenv 1.2.2 the BOM survives into the key, so the model
+        rejects and the guard must report. On 1.2.3 the BOM is stripped, so
+        the model accepts and the guard must be silent. The test asserts
+        agreement on whichever version is installed, not a fixed outcome.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"\xef\xbb\xbfVKDOWNLOADER_MAX_RETRIES=9\n")
+        monkeypatch.chdir(tmp_path)
+
+        guard_reports = bool(warn_unknown_env_vars(env_file))
+
+        try:
+            Settings()
+            model_rejects = False
+        except ValidationError:
+            model_rejects = True
+
+        assert guard_reports == model_rejects, (
+            f"guard reports={guard_reports}, model rejects={model_rejects}"
+        )
+
+    def test_bom_typo_key_agrees_with_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A BOM-prefixed misspelled key: guard and model must agree."""
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"\xef\xbb\xbfVKDOWNLOADER_MAXRETRIES=9\n")
+        monkeypatch.chdir(tmp_path)
+
+        guard_reports = bool(warn_unknown_env_vars(env_file))
+
+        try:
+            Settings()
+            model_rejects = False
+        except ValidationError:
+            model_rejects = True
+
+        assert guard_reports == model_rejects
+
+    # ------------------------------------------------------------------
+    # Criterion 14 — malformed line (unterminated quote) is dropped
+    # ------------------------------------------------------------------
+
+    def test_malformed_line_is_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unterminated quote drops the entire file from the guard's view.
+
+        ``dotenv_values`` returns an empty mapping for a file containing a
+        malformed line, so the guard has nothing to report. The model also
+        sees nothing from that file, so neither flags the typo'd name.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text('VKDOWNLOADER_MAXRETRIES="9\n', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = warn_unknown_env_vars(env_file)
+
         assert result == []
 
 
