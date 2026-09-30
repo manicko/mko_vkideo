@@ -364,13 +364,6 @@ class VKVideoExtractor:
                     host=urlsplit(addresses[0]).netloc or "unknown",
                     quality=QualityEnum.UNKNOWN.value,
                 )
-                # B7: single combined record carrying the chosen address's host
-                # and the chosen quality label together (criterion 3).
-                logger.info(
-                    "browser_stream_selected",
-                    host=urlsplit(addresses[0]).netloc or "unknown",
-                    quality=QualityEnum.UNKNOWN.value,
-                )
 
         return streams, cookies_str, raw_cookies
 
