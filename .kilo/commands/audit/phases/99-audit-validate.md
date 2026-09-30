@@ -307,7 +307,7 @@ is the question, and the finding is named as a condition to look for.
 | Check | Description | Evidence required |
 |---|---|---|
 | Every decision recorded | Does each decided finding carry a decision, a rationale where the decision is not the pass, and its cross-references? | The record, per finding. **A decision with no record is a finding.** |
-| The field exists in the format | Does the report format have a slot for the decision, between the finding heading and the field table? | The format's own finding block; the absence. **This is the input defect this block owns.** |
+| The field exists in the format | Does the report format have a slot for the decision, between the finding heading and the field table? | The format's own finding block; the slot is present. |
 | The retained content is present | Are the rejected and merged contents actually in the artifact? | The blocks, verified in the copy. |
 | The tally reconciles | Does the action tally equal the per-finding records? | The tally; the per-finding count; the difference, or none. |
 | No invented entries | Does the artifact contain any decision, cross-phase conflict or rollout finding that no source finding supports? | The count of each; a zero is not a reason to write a row. |
@@ -355,9 +355,9 @@ is the question, and the finding is named as a condition to look for.
 
 ## 8. Severity Taxonomy
 
-**The findings template is the authority.** `.ai/audit/templates/audit-findings.md:69`
-fixes `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` as the severity of a **defect**; `:68`
-fixes `Type ∈ SPEC-DEVIATION | BEST-PRACTICE | DOC-UPDATE | RUNTIME-ERROR` and `:74`
+**The findings template is the authority.** `.ai/audit/templates/audit-findings.md:71`
+fixes `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` as the severity of a **defect**; `:70`
+fixes `Type ∈ SPEC-DEVIATION | BEST-PRACTICE | DOC-UPDATE | RUNTIME-ERROR` and `:76`
 fixes `Classification ∈ mandatory | advisory`. **The four severity words are not
 redefined here**, and this file adds no fifth. Every sibling phase states the same
 sentence and then gives only the conditions that are specific to its own subject.
@@ -371,7 +371,7 @@ sentence and then gives only the conditions that are specific to its own subject
 
 **The per-finding decision is not a severity.** `Validated / Reclassified / Merged /
 Rejected` is a *decision about a finding*, recorded in the `Decision` field
-(`## 11`, *Validation Note Format*) and tallied in the Validation Summary (`## 11`).
+(`## 11`, *Decision Field Format*) and tallied in the Validation Summary (`## 11`).
 **A decision never changes the severity column.** A rejected finding keeps the
 severity it carried, and a reclassified finding keeps it: recording the decision in
 the severity column is what made severity comparison across reports meaningless.
@@ -439,7 +439,7 @@ invalidates a published finding ID.
 merge, an unsafe ordering, a pipeline-document defect — **and is never used for a
 product-code finding.** A finding about the product belongs to the phase that owns
 its subject. A decision taken about a product finding is recorded in the
-Validation Note; it is not itself a `VAL-` finding unless the decision *created*
+`Decision` field; it is not itself a `VAL-` finding unless the decision *created*
 something — a conflict between phases, an ordering constraint, or a new rollout
 problem.
 
@@ -492,7 +492,7 @@ pipeline rule that strips rejected content from the artifact before it is merged
 Where the two disagree, the preserving side governs this phase's output and the
 contradiction is filed (`## 6` subject 3).
 
-### Validation Note Format
+### Decision Field Format
 
 Write the decision into the `Decision` field the report format now carries, placed
 directly after the `### {ID}:` heading, for **every** decision, not only for a

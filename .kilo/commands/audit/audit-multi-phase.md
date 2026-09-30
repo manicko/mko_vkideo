@@ -134,10 +134,11 @@ produce.
 AUDIT COMPLETE
 
 Phases completed: {COMPLETED_PHASES}/{TOTAL_PHASES}
+Phases validated: {VALIDATED_PHASES}/{TOTAL_PHASES}
 
 Emit the validated-findings block only while `{VALIDATED_PHASES}` > 0
-(the Validator runs for every selected phase, so the block is absent only
-when no phase was executed):
+(the counter advances only for phases whose validator output was actually
+verified present):
 Validated findings: {VALIDATED_FINDINGS} total
 
 By severity:
