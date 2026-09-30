@@ -105,12 +105,20 @@ def _is_logging_failure(exc: BaseException) -> bool:
 
 
 def _log_env_file_path() -> None:
-    """Log the resolved .env file path at debug level."""
+    """Report the resolved .env file at the default log level.
+
+    Called from the command preamble after ``setup_logging`` configures the
+    structured-log sink, so the level chosen by ``log_level`` applies. Emits
+    one INFO record per invocation — the resolved path when a ``.env`` exists
+    in the process's current working directory, or a notice that no ``.env``
+    was found — making the working-directory dependence of that resolution
+    visible without raising the log level (CFG-008).
+    """
     env_file = Path(".env")
     if env_file.exists():
-        logger.debug("env_file_resolved", path=str(env_file.resolve()))
+        logger.info("env_file_resolved", path=str(env_file.resolve()))
     else:
-        logger.debug(".env file not found; using environment variables or defaults only")
+        logger.info("env_file_not_found_using_environment_or_defaults")
 
 
 class _SettingsOverrides(TypedDict, total=False):

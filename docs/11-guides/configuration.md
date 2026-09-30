@@ -16,7 +16,7 @@ This guide documents all configuration options available in VK Video Downloader 
 
 ## Settings Reference
 
-All settings support environment variables via Pydantic Settings. Create a `.env` file to customize defaults.
+All settings support environment variables via Pydantic Settings. Create a `.env` file to customize defaults. The file is read from the directory the command is run from (the process's current working directory), so place `.env` where you invoke `vkdownloader` from, not in the project root.
 
 | Setting | Environment Variable | Default | Description |
 |---------|---------------------|---------|-------------|
@@ -173,8 +173,8 @@ Output directory for downloaded videos. Paths are validated to prevent path trav
 
 | Source | Typos behavior | Detection |
 |--------|---------------|-----------|
-| `.env` file | Unknown `VKDOWNLOADER_*` keys are **rejected** at construction with a `ValidationError` (due to `extra='forbid'`) | `warn_unknown_env_vars()` scans the `.env` file *before* construction to catch typos early and log a warning |
-| OS environment (`os.environ`) | Unknown `VKDOWNLOADER_*` keys are **silently ignored** (the default value is used) | `warn_unknown_env_vars()` detects and warns about these before construction |
+| `.env` file | Unknown `VKDOWNLOADER_*` keys are **rejected** at construction with a `ValidationError` (due to `extra='forbid'`) | `warn_unknown_env_vars()` scans the `.env` file *before* construction and the entry point renders each unknown variable as a line on **stderr** (not a log record) |
+| OS environment (`os.environ`) | Unknown `VKDOWNLOADER_*` keys are **silently ignored** (the default value is used) | `warn_unknown_env_vars()` detects and renders each unknown variable on **stderr** (not a log record) |
 
-The CLI calls `warn_unknown_env_vars()` before each `Settings()` construction, so typos in either the `.env` file or OS environment produce a clear warning log with the valid variable names. A `.env` file typo still causes a hard failure (ValidationError), so fix the typo and try again.
+The CLI calls `warn_unknown_env_vars()` before each `Settings()` construction, so typos in either the `.env` file or OS environment are rendered as a notice on **stderr** — once per command, before logging is configured — listing the offending variable and the set of valid variables. This is not a log record: it is emitted through `typer.echo(..., err=True)` and does not reach the configured log artifact. A `.env` file typo still causes a hard failure (ValidationError), so fix the typo and try again.
 

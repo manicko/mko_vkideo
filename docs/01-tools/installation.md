@@ -111,7 +111,7 @@ uv run mypy src/
 
 ## Configuration
 
-Create a `.env` file for custom settings:
+Create a `.env` file for custom settings. The file is read from the directory the command is run from (the process's current working directory), so place `.env` where you invoke `vkdownloader` from, not in the project root:
 
 ```env
 # Browser Automation settings

@@ -2,6 +2,7 @@
 
 import asyncio
 import locale
+import logging
 import re
 from io import StringIO
 from pathlib import Path
@@ -1927,12 +1928,14 @@ class TestPreambleCalledOncePerCommand:
 
 
 class TestPreSinkDiagnostic:
-    """Pre-sink diagnostics: env-var warnings and download_dir coercion are silent.
+    """Pre-sink diagnostics: env-var warnings, download_dir coercion, and the
+    environment-file resolution report.
 
     Verifies that the bootstrap warning for unknown VKDOWNLOADER_* variables
     is rendered to stderr exactly once per command (not doubled by structured
-    logging), and that empty-string download_dir coercion no longer emits a
-    debug record.
+    logging); that empty-string download_dir coercion no longer emits a debug
+    record; and that the resolved environment file is reported at INFO (CFG-008),
+    with distinct event names for the found and not-found branches.
     """
 
     _UNKNOWN_VAR = "VKDOWNLOADER_UNKNOWN_FOO"
@@ -2004,6 +2007,117 @@ class TestPreSinkDiagnostic:
         assert "download_dir_empty_string_using_default" not in result.stdout
         log_contents = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         assert "download_dir_empty_string_using_default" not in log_contents
+
+    # ---- CFG-008: the env-file resolution report is emitted at INFO --------
+
+    @staticmethod
+    def _make_env_file(path: Path) -> Path:
+        """Write a minimal legal .env and return its resolved absolute path."""
+        path.write_text("VKDOWNLOADER_MAX_RETRIES=5\n", encoding="utf-8")
+        return path.resolve()
+
+    def test_env_file_resolved_info_at_default_level(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A .env present in the working directory is reported at INFO.
+
+        Before CFG-008 the found-branch record was at DEBUG and invisible at
+        the default INFO level.  One INFO record naming the resolved path is
+        emitted per invocation.
+        """
+        resolved_path = self._make_env_file(tmp_path / ".env")
+        monkeypatch.chdir(tmp_path)
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        resolved = [r for r in caplog.records if "env_file_resolved" in r.getMessage()]
+        assert len(resolved) == 1
+        assert str(resolved_path) in resolved[0].getMessage()
+        # The not-found branch must NOT fire when a file is present.
+        assert not any(
+            "env_file_not_found_using_environment_or_defaults" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_env_file_not_found_info_at_default_level(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No .env in the working directory is reported at INFO.
+
+        The not-found branch carries a distinct event name so the two runs
+        are distinguishable at the default level.
+        """
+        monkeypatch.chdir(tmp_path)
+        assert not (tmp_path / ".env").exists()
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        not_found = [
+            r
+            for r in caplog.records
+            if "env_file_not_found_using_environment_or_defaults" in r.getMessage()
+        ]
+        assert len(not_found) == 1
+        # The found branch must NOT fire when no file is present.
+        assert not any("env_file_resolved" in r.getMessage() for r in caplog.records)
+
+    def test_env_file_report_still_visible_at_debug_level(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The resolution report is still emitted when the log level is DEBUG."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("VKDOWNLOADER_LOG_LEVEL", "DEBUG")
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("", encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        not_found = [
+            r
+            for r in caplog.records
+            if "env_file_not_found_using_environment_or_defaults" in r.getMessage()
+        ]
+        assert len(not_found) == 1
+
+    def test_log_env_file_path_calls_info_not_debug(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct: _log_env_file_path uses logger.info, never logger.debug.
+
+        Guards against a regression to DEBUG that would hide the report at the
+        default log level.
+        """
+        monkeypatch.chdir(tmp_path)
+        resolved_path = self._make_env_file(tmp_path / ".env")
+
+        with patch("vkdownloader.cli.logger") as mock_logger:
+            cli._log_env_file_path()
+
+        mock_logger.info.assert_called_once()
+        mock_logger.info.assert_called_once_with("env_file_resolved", path=str(resolved_path))
+        mock_logger.debug.assert_not_called()
 
 
 class TestPreambleFailureRendering:
