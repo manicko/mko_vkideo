@@ -16,7 +16,7 @@ from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import CookieSource, StreamFormat
 from ..models.video import Stream, VideoWithStreams
-from ..services.downloader_throttle import get_shutdown_event
+from ..services.downloader_throttle import URLBackoffCoordinator, _resource_key, get_shutdown_event
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -75,14 +75,22 @@ class VKVideoExtractor:
 
     VIDEO_ID_PATTERN = VIDEO_ID_PATTERN
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        backoff_coordinator: URLBackoffCoordinator | None = None,
+    ) -> None:
         """
         Initialize VKVideoExtractor with optional settings.
 
         Args:
             settings: Application settings. Uses global settings if not provided.
+            backoff_coordinator: Optional shared URLBackoffCoordinator for
+                pausing retryable transport failures on the origin before
+                yt-dlp extraction calls.
         """
         self.settings = settings if settings is not None else Settings()
+        self._backoff_coordinator = backoff_coordinator
 
     def parse_video_id(self, url: str) -> tuple[str, str]:
         """
@@ -190,6 +198,8 @@ class VKVideoExtractor:
         ``asyncio.wait_for`` with ``settings.download_timeout`` so the
         event loop is not blocked indefinitely (INT-003).
         """
+        if self._backoff_coordinator is not None:
+            await self._backoff_coordinator.wait_if_paused(_resource_key(url))
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,

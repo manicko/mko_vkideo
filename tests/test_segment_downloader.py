@@ -1,12 +1,14 @@
 """Tests for segment_downloader token-refresh retry logic."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.services.downloader_throttle import URLBackoffCoordinator, _resource_key
 from vkdownloader.services.segment_downloader import (
+    _download_segment_sequential,
     _fetch_playlist_with_retry,
     _log_preserve_segments,
 )
@@ -30,14 +32,14 @@ class TestFetchPlaylistWithRetry:
         headers: dict[str, str] = {"User-Agent": "test"}
         playlist = "#EXTM3U\nseg1.ts\nseg2.ts"
 
-        refresh_calls: list[tuple[str, dict[str, str]]] = []
+        refresh_calls: list[str] = []
         fetch_urls: list[str] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, hdr: dict[str, str]
-        ) -> str:
-            refresh_calls.append((vid, hdr))
-            return refreshed_url
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str]:
+            refresh_calls.append(vid)
+            return refreshed_url, ""
 
         async def fake_fetch(
             session: MagicMock,
@@ -61,21 +63,23 @@ class TestFetchPlaylistWithRetry:
                 "vkdownloader.services.segment_downloader._fetch_single_playlist",
                 side_effect=fake_fetch,
             ):
-                result = await _fetch_playlist_with_retry(
-                    mock_session,
-                    video_url,
-                    m3u8_url,
-                    headers,
-                    mock_extractor,
-                    test_settings,
-                    max_retries=3,
-                )
+                with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                    result = await _fetch_playlist_with_retry(
+                        mock_session,
+                        video_url,
+                        m3u8_url,
+                        headers,
+                        mock_extractor,
+                        test_settings,
+                        max_retries=3,
+                    )
 
-        # Token refresh actually ran, then a second fetch with the refreshed URL.
-        assert result == playlist
-        assert len(refresh_calls) == 1
-        assert refresh_calls[0][0] == video_url
+        assert result is not None
+        assert result.playlist_text == playlist
+        assert result.base_url == refreshed_url
+        assert refresh_calls == [video_url]
         assert fetch_urls == [m3u8_url, refreshed_url]
+        assert headers.get("Cookie") == ""
 
     @pytest.mark.asyncio
     async def test_token_refresh_runs_on_410_then_retry_succeeds(
@@ -92,10 +96,10 @@ class TestFetchPlaylistWithRetry:
         fetch_statuses: list[int] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, hdr: dict[str, str]
-        ) -> str:
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str]:
             refresh_calls.append(object())
-            return refreshed_url
+            return refreshed_url, ""
 
         async def fake_fetch(
             session: MagicMock,
@@ -120,17 +124,20 @@ class TestFetchPlaylistWithRetry:
                 "vkdownloader.services.segment_downloader._fetch_single_playlist",
                 side_effect=fake_fetch,
             ):
-                result = await _fetch_playlist_with_retry(
-                    mock_session,
-                    video_url,
-                    m3u8_url,
-                    headers,
-                    mock_extractor,
-                    test_settings,
-                    max_retries=3,
-                )
+                with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                    result = await _fetch_playlist_with_retry(
+                        mock_session,
+                        video_url,
+                        m3u8_url,
+                        headers,
+                        mock_extractor,
+                        test_settings,
+                        max_retries=3,
+                    )
 
-        assert result == playlist
+        assert result is not None
+        assert result.playlist_text == playlist
+        assert result.base_url == refreshed_url
         assert len(refresh_calls) == 1
         assert len(fetch_statuses) == 2
         assert fetch_statuses == [410, 200]
@@ -145,8 +152,8 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, hdr: dict[str, str]
-        ) -> str | None:
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
             return None
@@ -170,15 +177,16 @@ class TestFetchPlaylistWithRetry:
                 "vkdownloader.services.segment_downloader._fetch_single_playlist",
                 side_effect=fake_fetch,
             ):
-                result = await _fetch_playlist_with_retry(
-                    mock_session,
-                    video_url,
-                    m3u8_url,
-                    headers,
-                    mock_extractor,
-                    test_settings,
-                    max_retries=3,
-                )
+                with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                    result = await _fetch_playlist_with_retry(
+                        mock_session,
+                        video_url,
+                        m3u8_url,
+                        headers,
+                        mock_extractor,
+                        test_settings,
+                        max_retries=3,
+                    )
 
         assert result is None
         assert refresh_call_count == 0
@@ -195,8 +203,8 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, hdr: dict[str, str]
-        ) -> str | None:
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
             return None
@@ -219,15 +227,16 @@ class TestFetchPlaylistWithRetry:
                 "vkdownloader.services.segment_downloader._fetch_single_playlist",
                 side_effect=fake_fetch,
             ):
-                result = await _fetch_playlist_with_retry(
-                    mock_session,
-                    video_url,
-                    m3u8_url,
-                    headers,
-                    None,
-                    test_settings,
-                    max_retries=3,
-                )
+                with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                    result = await _fetch_playlist_with_retry(
+                        mock_session,
+                        video_url,
+                        m3u8_url,
+                        headers,
+                        None,
+                        test_settings,
+                        max_retries=3,
+                    )
 
         assert result is None
         assert refresh_call_count == 0
@@ -243,8 +252,8 @@ class TestFetchPlaylistWithRetry:
         fetch_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, hdr: dict[str, str]
-        ) -> str | None:
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str] | None:
             refresh_calls.append(object())
             return None
 
@@ -269,20 +278,79 @@ class TestFetchPlaylistWithRetry:
                 "vkdownloader.services.segment_downloader._fetch_single_playlist",
                 side_effect=fake_fetch,
             ):
-                result = await _fetch_playlist_with_retry(
-                    mock_session,
-                    video_url,
-                    m3u8_url,
-                    headers,
-                    mock_extractor,
-                    test_settings,
-                    max_retries=3,
-                )
+                with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                    result = await _fetch_playlist_with_retry(
+                        mock_session,
+                        video_url,
+                        m3u8_url,
+                        headers,
+                        mock_extractor,
+                        test_settings,
+                        max_retries=3,
+                    )
 
         assert result is None
         # Refresh was attempted once, but no second fetch occurred (fell through).
         assert len(refresh_calls) == 1
         assert fetch_count == 1
+
+
+class TestSequentialSharesThePause:
+    """Tests that _download_segment_sequential consults the shared backoff coordinator."""
+
+    @pytest.mark.asyncio
+    async def test_consults_backoff_coordinator_before_attempt(self, tmp_path: Path) -> None:
+        """Sequential download checks wait_if_paused with the resource key."""
+        segment_url = "https://cdn.example.com/seg1.ts"
+        coordinator = URLBackoffCoordinator()
+        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)
+
+        with patch(
+            "vkdownloader.services.segment_downloader._retry_429_with_backoff",
+            return_value=b"segment-data",
+        ):
+            result = await _download_segment_sequential(
+                MagicMock(),
+                segment_url,
+                tmp_path / "seg1.ts",
+                {},
+                backoff_coordinator=coordinator,
+            )
+
+        assert result is True
+        coordinator.wait_if_paused.assert_awaited_once_with(_resource_key(segment_url))
+
+    @pytest.mark.asyncio
+    async def test_retry_loop_rechecks_backoff_coordinator(self, tmp_path: Path) -> None:
+        """Sequential download re-checks the coordinator on each retry attempt."""
+        segment_url = "https://cdn.example.com/seg1.ts"
+        coordinator = URLBackoffCoordinator()
+        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)
+
+        call_count = 0
+
+        async def failing_retry(*args, **kwargs) -> bytes | None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                return b"segment-data"
+            return None
+
+        with patch(
+            "vkdownloader.services.segment_downloader._retry_429_with_backoff",
+            side_effect=failing_retry,
+        ):
+            result = await _download_segment_sequential(
+                MagicMock(),
+                segment_url,
+                tmp_path / "seg1.ts",
+                {},
+                max_retries=3,
+                backoff_coordinator=coordinator,
+            )
+
+        assert result is True
+        assert coordinator.wait_if_paused.await_count == 2
 
 
 class TestPreserveSegmentsReporter:

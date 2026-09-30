@@ -1,5 +1,6 @@
 """Unit tests for throttle utilities with retry logic for rate limiting."""
 
+import time
 from collections.abc import Coroutine
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,11 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vkdownloader.services.downloader_throttle import (
+    _DEFAULT_BACKOFF_PAUSE_SECONDS,
     RETRYABLE_STATUS_CODES,
     ProgressManager,
     URLBackoffCoordinator,
     _compute_backoff_delay,
     _parse_retry_after,
+    _resource_key,
     _retry_429_with_backoff,
     _wait_with_shutdown,
 )
@@ -139,7 +142,9 @@ class TestRetry429WithBackoff:
         mock_session.get = MagicMock(return_value=mock_context)
 
         # Mock random.uniform to return 0 for instant timeout simulation
+        # This avoids real time.sleep and prevents flaky timing
         with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=0.0):
+            start = time.monotonic()
             result = await _retry_429_with_backoff(
                 mock_session,
                 "https://example.com/segment.ts",
@@ -147,9 +152,14 @@ class TestRetry429WithBackoff:
                 segment_index=0,
                 max_retries=3,
             )
+            elapsed = time.monotonic() - start
 
         assert result is None
         assert mock_session.get.call_count == 3
+        # C19: Final attempt (attempt == max_retries - 1) breaks without waiting,
+        # so the total wall-clock stays well under 0.5s even though all retries
+        # return a retryable status.
+        assert elapsed < 0.5
 
     @pytest.mark.asyncio
     async def test_500_status_code_triggers_retry(self) -> None:
@@ -676,11 +686,149 @@ class TestRetryableStatusCodes:
         assert 503 in RETRYABLE_STATUS_CODES
         assert 504 in RETRYABLE_STATUS_CODES
 
+    def test_contains_408(self) -> None:
+        """Test that 408 (Request Timeout) is in RETRYABLE_STATUS_CODES."""
+        assert 408 in RETRYABLE_STATUS_CODES
+
+    def test_contains_425(self) -> None:
+        """Test that 425 (Too Early) is in RETRYABLE_STATUS_CODES."""
+        assert 425 in RETRYABLE_STATUS_CODES
+
     def test_excludes_non_retryable_codes(self) -> None:
         """Test that non-retryable status codes are not in RETRYABLE_STATUS_CODES."""
         assert 200 not in RETRYABLE_STATUS_CODES
         assert 403 not in RETRYABLE_STATUS_CODES
         assert 404 not in RETRYABLE_STATUS_CODES
+
+
+class TestBackoffPauseDuration:
+    """Tests for URLBackoffCoordinator pause_seconds configuration."""
+
+    def test_default_pause_seconds(self) -> None:
+        """Default coordinator uses _DEFAULT_BACKOFF_PAUSE_SECONDS."""
+        coordinator = URLBackoffCoordinator()
+        assert coordinator.pause_seconds == _DEFAULT_BACKOFF_PAUSE_SECONDS
+
+    def test_custom_pause_seconds(self) -> None:
+        """Custom pause_seconds is stored on the coordinator."""
+        coordinator = URLBackoffCoordinator(pause_seconds=5.0)
+        assert coordinator.pause_seconds == 5.0
+
+
+class TestResourceKey:
+    """Tests for _resource_key function."""
+
+    def test_strips_path_and_query(self) -> None:
+        """_resource_key returns just the origin (host:port)."""
+        url = "https://cdn.example.com/path/to/segment.ts?token=abc"
+        assert _resource_key(url) == "cdn.example.com"
+
+    def test_strips_userinfo(self) -> None:
+        """_resource_key strips userinfo from the netloc."""
+        url = "https://user:pass@cdn.example.com/seg.ts"
+        assert _resource_key(url) == "cdn.example.com"
+
+    def test_lowercases_host(self) -> None:
+        """_resource_key lowercases the hostname."""
+        url = "https://CDN.Example.COM/seg.ts"
+        assert _resource_key(url) == "cdn.example.com"
+
+    def test_keeps_port(self) -> None:
+        """_resource_key includes the port when present."""
+        url = "https://cdn.example.com:8080/seg.ts"
+        assert _resource_key(url) == "cdn.example.com:8080"
+
+    def test_different_paths_same_origin(self) -> None:
+        """Different paths on the same origin produce the same key."""
+        url1 = "https://cdn.example.com/path1/seg1.ts"
+        url2 = "https://cdn.example.com/path2/seg2.ts"
+        assert _resource_key(url1) == _resource_key(url2)
+
+    def test_different_origins_different_keys(self) -> None:
+        """Different origins produce different keys."""
+        url1 = "https://cdn1.example.com/seg.ts"
+        url2 = "https://cdn2.example.com/seg.ts"
+        assert _resource_key(url1) != _resource_key(url2)
+
+
+class TestBackoffCoordinatorPause:
+    """Tests for URLBackoffCoordinator.pause method."""
+
+    @pytest.mark.asyncio
+    async def test_pause_sets_timestamp(self) -> None:
+        """After pause, wait_if_paused returns True for the same key."""
+        coordinator = URLBackoffCoordinator()
+        key = _resource_key("https://cdn.example.com/seg.ts")
+        await coordinator.pause(key, 1.0)
+        result = await coordinator.wait_if_paused(key)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_pause_overwrites_previous(self) -> None:
+        """Second pause overwrites the previous timestamp, not stacked."""
+        coordinator = URLBackoffCoordinator()
+        key = _resource_key("https://cdn.example.com/seg.ts")
+        # First pause with a very short duration
+        await coordinator.pause(key, 0.01)
+
+        # Mock wait_for so we don't actually sleep
+        async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
+            raise TimeoutError()
+
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for",
+            side_effect=mock_wait_for,
+        ):
+            result1 = await coordinator.wait_if_paused(key)
+        # Still paused — the first pause (0.01s) is still active
+        assert result1 is True
+
+        # Second pause with a longer duration overwrites the timestamp
+        await coordinator.pause(key, 100.0)
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for",
+            side_effect=mock_wait_for,
+        ):
+            result2 = await coordinator.wait_if_paused(key)
+        assert result2 is True
+
+    @pytest.mark.asyncio
+    async def test_wait_if_paused_false_without_pause(self) -> None:
+        """wait_if_paused returns False when no prior pause for that key."""
+        coordinator = URLBackoffCoordinator()
+        key = _resource_key("https://cdn.example.com/seg.ts")
+        result = await coordinator.wait_if_paused(key)
+        assert result is False
+
+
+class TestBackoffPauseSharedState:
+    """Tests for shared backoff state across different URL paths."""
+
+    @pytest.mark.asyncio
+    async def test_pause_on_one_path_pauses_different_path_same_origin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pausing one path on an origin pauses a different path on the same origin."""
+        coordinator = URLBackoffCoordinator(pause_seconds=10.0)
+        url1 = "https://cdn.example.com/path1/seg.ts"
+        url2 = "https://cdn.example.com/path2/seg.ts"
+
+        await coordinator.pause(_resource_key(url1), coordinator.pause_seconds)
+
+        assert _resource_key(url1) == _resource_key(url2)
+
+        # wait_if_paused should return True for url2 because the key is the same.
+        # Mock asyncio.wait_for so the test does not actually sleep 10 seconds.
+        async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
+            coro.close()  # Prevent unawaited-coroutine warning
+            raise TimeoutError()
+
+        monkeypatch.setattr(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for", mock_wait_for
+        )
+
+        result = await coordinator.wait_if_paused(_resource_key(url2))
+        assert result is True
 
 
 class TestProgressManager:

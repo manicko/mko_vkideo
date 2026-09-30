@@ -319,7 +319,7 @@ async def _run_batch_with_progress(
         # Create shared semaphore (one permit per video) and backoff coordinator at batch level
         concurrency_tracker = ConcurrencyTracker()
         shared_semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
-        backoff_coordinator = URLBackoffCoordinator()
+        backoff_coordinator = URLBackoffCoordinator(pause_seconds=settings.backoff_pause_seconds)
 
         logger.info(
             "batch_download_started",

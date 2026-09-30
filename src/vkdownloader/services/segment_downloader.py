@@ -24,11 +24,15 @@ from .downloader_throttle import (
     RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
     _parse_retry_after,
+    _resource_key,
     _retry_429_with_backoff,
     _wait_with_shutdown,
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
+
+# HTTP status code indicating a transport-layer failure from the upstream server.
+_TRANSPORT_FAILURE_STATUS: int = 500
 
 if TYPE_CHECKING:
     from ..models.dtos import HLSDownloadRequest
@@ -47,6 +51,20 @@ class SegmentTask:
     segment_url: str
     segments_dir: Path
     total_segments: int = 1
+
+
+@dataclass
+class PlaylistFetchResult:
+    """Result of a successful playlist fetch.
+
+    Attributes:
+        playlist_text: The raw m3u8 playlist content.
+        base_url: The actual base URL the playlist was served from, which may
+            differ from the requested URL after a token-refresh redirect.
+    """
+
+    playlist_text: str
+    base_url: str
 
 
 @dataclass
@@ -144,6 +162,8 @@ async def _download_segment_sequential(
     segment_index: int = 0,
     max_retries: int = 3,
     download_timeout: int = 300,
+    *,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
 ) -> bool:
     """Download a single HLS segment with sequential retry logic.
 
@@ -155,45 +175,57 @@ async def _download_segment_sequential(
         segment_index: Index of the segment being downloaded (for logging).
         max_retries: Maximum retry attempts for 429/5xx responses.
         download_timeout: Total timeout for HTTP request in seconds.
+        backoff_coordinator: Optional shared URLBackoffCoordinator for pausing
+            retryable transport failures on the origin before each attempt.
 
     Returns:
         True on success, False on failure.
     """
-    content = await _retry_429_with_backoff(
-        session,
-        segment_url,
-        headers,
-        segment_index,
-        max_retries=max_retries,
-        download_timeout=download_timeout,
-    )
-    if content is not None and len(content) > 0:
-        # DF-010: Write to temp file then os.replace for atomicity
-        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-        try:
-            with open(temp_path, "wb") as f:
-                f.write(content)
-            os.replace(temp_path, output_path)
-        except Exception:
-            temp_path.unlink(missing_ok=True)
-            raise
-        return True
+    shutdown_event = get_shutdown_event()
+
+    for _ in range(max_retries):
+        if shutdown_event.is_set():
+            return False
+        if backoff_coordinator is not None:
+            await backoff_coordinator.wait_if_paused(_resource_key(segment_url))
+
+        content = await _retry_429_with_backoff(
+            session,
+            segment_url,
+            headers,
+            segment_index,
+            max_retries=max_retries,
+            download_timeout=download_timeout,
+        )
+        if content is not None and len(content) > 0:
+            # DF-010: Write to temp file then os.replace for atomicity
+            temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+            try:
+                with open(temp_path, "wb") as f:
+                    f.write(content)
+                os.replace(temp_path, output_path)
+            except Exception:
+                temp_path.unlink(missing_ok=True)
+                raise
+            return True
     return False
 
 
 def _is_retryable_status(status_code: int) -> bool:
-    """Check if HTTP status code is retryable (429, 500, 502, 503, 504)."""
+    """Check if status code is retryable (408, 425, 429, or 5xx transport failure)."""
     return status_code in RETRYABLE_STATUS_CODES
 
 
 async def _notify_backoff_for_retryable_status(
     status_code: int,
     backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str | None,
+    resource_url: str | None,
 ) -> None:
     """Notify backoff coordinator for retryable HTTP status codes."""
-    if backoff_coordinator and video_url and _is_retryable_status(status_code):
-        await backoff_coordinator.pause(video_url, 10.0)
+    if backoff_coordinator and resource_url and _is_retryable_status(status_code):
+        await backoff_coordinator.pause(
+            _resource_key(resource_url), backoff_coordinator.pause_seconds
+        )
 
 
 def _should_continue_on_retry(
@@ -259,12 +291,12 @@ async def _run_parallel_download_with_backoff(
 
 async def _check_backoff_before_attempt(
     backoff_coordinator: URLBackoffCoordinator | None,
-    video_url: str | None,
+    resource_url: str | None,
     shutdown_event: asyncio.Event,
 ) -> bool:
     """Check backoff state before download attempt. Returns True if should abort."""
-    if backoff_coordinator and video_url:
-        was_paused = await backoff_coordinator.wait_if_paused(video_url)
+    if backoff_coordinator and resource_url:
+        was_paused = await backoff_coordinator.wait_if_paused(_resource_key(resource_url))
         if was_paused and shutdown_event.is_set():
             return True
     return False
@@ -395,6 +427,7 @@ async def _download_segment(
             segment_index=segment_index,
             max_retries=max_retries,
             download_timeout=download_timeout,
+            backoff_coordinator=backoff_coordinator,
         )
 
     return await _download_segment_parallel(
@@ -458,7 +491,7 @@ async def _fetch_single_playlist(
             if response.status == 200:
                 return await response.text(), response.status
             return "", response.status
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, TimeoutError) as e:
         logger.warning("playlist_fetch_failed", error=str(e))
         return None
 
@@ -467,18 +500,14 @@ async def _handle_token_refresh(
     video_url: str,
     extractor: VKVideoExtractor,
     settings: Settings,
-    headers: dict[str, str],
-) -> str | None:
-    """Handle token refresh and update headers.
+) -> tuple[str, str] | None:
+    """Handle token refresh on 403/410 error.
 
-    Returns new URL on success, None on failure.
+    Returns (new_url, new_cookies) tuple on success, None on failure.
+    Does not mutate the caller's headers dict; the caller is responsible
+    for applying new_cookies.
     """
-    refresh_result = await _refresh_token_and_retry(video_url, extractor, settings)
-    if refresh_result:
-        current_url, new_cookies = refresh_result
-        headers["Cookie"] = new_cookies
-        return current_url
-    return None
+    return await _refresh_token_and_retry(video_url, extractor, settings)
 
 
 async def _fetch_playlist_with_retry(
@@ -489,8 +518,26 @@ async def _fetch_playlist_with_retry(
     extractor: VKVideoExtractor | None,
     settings: Settings,
     max_retries: int = 3,
-) -> str | None:
-    """Fetch m3u8 playlist with token refresh on 403/410."""
+    *,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+) -> PlaylistFetchResult | None:
+    """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
+
+    Args:
+        session: aiohttp ClientSession for HTTP requests.
+        video_url: Original video URL for token refresh.
+        m3u8_url: Initial playlist URL to fetch.
+        headers: Request headers (mutated on token refresh).
+        extractor: Optional VKVideoExtractor for token refresh.
+        settings: Application settings.
+        max_retries: Maximum retry attempts.
+        backoff_coordinator: Optional shared backoff coordinator for pausing
+            retryable transport failures on the origin.
+
+    Returns:
+        PlaylistFetchResult with playlist text and base URL on success,
+        None on failure.
+    """
     current_url = m3u8_url
     client_timeout = aiohttp.ClientTimeout(
         total=settings.download_timeout,
@@ -498,26 +545,79 @@ async def _fetch_playlist_with_retry(
         sock_connect=30,
         sock_read=60,
     )
+    shutdown_event = get_shutdown_event()
 
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
+        if shutdown_event.is_set():
+            return None
+
+        if backoff_coordinator is not None:
+            await backoff_coordinator.wait_if_paused(_resource_key(current_url))
+
         result = await _fetch_single_playlist(session, current_url, headers, client_timeout)
+
         if result is None:
+            logger.warning(
+                "playlist_retry_transport_error",
+                url=_strip_auth_params(current_url),
+                attempt=attempt + 1,
+                max_retries=max_retries,
+            )
+            if attempt == max_retries - 1:
+                return None
+            if backoff_coordinator is not None:
+                await backoff_coordinator.pause(
+                    _resource_key(current_url), backoff_coordinator.pause_seconds
+                )
             continue
 
         playlist_text, status = result
+
         if status == 200:
-            return playlist_text
+            return PlaylistFetchResult(playlist_text=playlist_text, base_url=current_url)
 
-        # Check if we should attempt token refresh
-        if status not in (403, 410) or not extractor:
-            return None
-
-        logger.info("token_expired_fetching_new")
-        new_url = await _handle_token_refresh(video_url, extractor, settings, headers)
-        if new_url is not None:
-            current_url = new_url
+        if _is_retryable_status(status):
+            logger.warning(
+                "playlist_retry_status",
+                url=_strip_auth_params(current_url),
+                status=status,
+                attempt=attempt + 1,
+                max_retries=max_retries,
+            )
+            if attempt == max_retries - 1:
+                return None
+            if backoff_coordinator is not None:
+                await backoff_coordinator.pause(
+                    _resource_key(current_url), backoff_coordinator.pause_seconds
+                )
             continue
 
+        if status in (403, 410) and extractor is not None:
+            logger.info(
+                "token_expired_fetching_new",
+                url=_strip_auth_params(current_url),
+                status=status,
+                attempt=attempt + 1,
+            )
+            refresh_result = await _handle_token_refresh(video_url, extractor, settings)
+            if refresh_result is not None:
+                current_url, new_cookies = refresh_result
+                headers["Cookie"] = new_cookies
+                continue
+            logger.warning(
+                "playlist_fetch_failed_non_retryable",
+                url=_strip_auth_params(current_url),
+                status=status,
+                reason="token_refresh_failed",
+            )
+            return None
+
+        logger.warning(
+            "playlist_fetch_failed_non_retryable",
+            url=_strip_auth_params(current_url),
+            status=status,
+            reason="non_retryable",
+        )
         return None
 
     return None
@@ -795,7 +895,7 @@ async def _run_download_session(
     connector = _create_connector(settings, video_url)
 
     async with aiohttp.ClientSession(connector=connector) as session:
-        playlist_content = await _fetch_playlist_with_retry(
+        playlist_result = await _fetch_playlist_with_retry(
             session,
             video_url,
             m3u8_url,
@@ -803,11 +903,12 @@ async def _run_download_session(
             extractor,
             settings,
             max_retries=settings.max_retries,
+            backoff_coordinator=backoff_coordinator,
         )
-        if not playlist_content:
+        if playlist_result is None or not playlist_result.playlist_text:
             return None
 
-        segments = _parse_m3u8_segments(playlist_content)
+        segments = _parse_m3u8_segments(playlist_result.playlist_text)
         logger.info("found_segments", count=len(segments))
 
         _clear_stale_segments(segments_dir, segments)
@@ -832,7 +933,7 @@ async def _run_download_session(
             max_retries=settings.max_retries,
             download_timeout=settings.download_timeout,
             is_bounded_batch=is_bounded_batch,
-            m3u8_url=m3u8_url,
+            m3u8_url=playlist_result.base_url,
             segments_dir=segments_dir,
             progress_callback=progress_callback,  # DF-003: enable per-segment progress
         )

@@ -156,6 +156,31 @@ def test_http_chunk_size_validation(test_settings: Settings) -> None:
         Settings(http_chunk_size=104857601)  # Above maximum
 
 
+class TestConfigBackoffPause:
+    """Tests for backoff_pause_seconds configuration (C1)."""
+
+    def test_default_value(self) -> None:
+        """Default backoff_pause_seconds is 10."""
+        settings = Settings()
+        assert settings.backoff_pause_seconds == 10
+
+    def test_accepts_valid_values(self) -> None:
+        """backoff_pause_seconds accepts values in range [1, 120]."""
+        for val in [1, 10, 60, 120]:
+            settings = Settings(backoff_pause_seconds=val)
+            assert settings.backoff_pause_seconds == val
+
+    def test_rejects_below_minimum(self) -> None:
+        """backoff_pause_seconds rejects values below 1."""
+        with pytest.raises(ValidationError):
+            Settings(backoff_pause_seconds=0)
+
+    def test_rejects_above_maximum(self) -> None:
+        """backoff_pause_seconds rejects values above 120."""
+        with pytest.raises(ValidationError):
+            Settings(backoff_pause_seconds=121)
+
+
 def test_log_level_validation() -> None:
     """Test log_level rejects invalid values and accepts valid ones."""
     # Valid log levels - case insensitive

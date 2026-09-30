@@ -63,6 +63,12 @@ class Settings(BaseSettings):
         le=3600,
         description="HTTP client timeout in seconds for individual segment requests and playlist fetches.",
     )
+    backoff_pause_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        description="Seconds a retryable transport failure pauses the origin before retrying, shared across all segment and manifest retries for that origin.",
+    )
     browser_pre_interaction_wait: int = Field(
         default=5,
         ge=1,

@@ -28,6 +28,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `browser_post_interaction_wait` | `VKDOWNLOADER_BROWSER_POST_INTERACTION_WAIT` | 8 | Seconds to wait after video interaction in browser extraction (1-30) |
 | `max_retries` | `VKDOWNLOADER_MAX_RETRIES` | 3 | Maximum retry attempts for failed segment and network requests (1-10) |
 | `download_timeout` | `VKDOWNLOADER_DOWNLOAD_TIMEOUT` | 300 | Download timeout in seconds (30-3600) |
+| `backoff_pause_seconds` | `VKDOWNLOADER_BACKOFF_PAUSE_SECONDS` | 10 | Seconds a retryable transport failure pauses the origin before retrying, shared across all segment and manifest retries for that origin (1-120) |
 | `ssl_verify` | `VKDOWNLOADER_SSL_VERIFY` | true | Verify SSL certificates |
 | `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
 | `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Maximum number of videos downloading concurrently in a batch (1-16); 1 enables anti-detection delay between sequential segment downloads |

@@ -468,7 +468,7 @@ async def perform_download(
     check_ffmpeg_available()
 
     if extractor is None:
-        extractor = VKVideoExtractor(settings=settings)
+        extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)
 
     # Use pre-extracted data when provided, otherwise extract streams
     if video_data is not None and selected_stream is not None:
@@ -647,7 +647,7 @@ async def download_video(
         QualityNotAvailableError: If no streams found or requested quality unavailable.
         VideoNotFoundError: If the video cannot be found or is unavailable.
     """
-    extractor = VKVideoExtractor(settings=settings)
+    extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)
     video = await extractor.extract_streams(url)
 
     if title_callback is not None and video.title:

@@ -5,6 +5,7 @@ import contextvars
 import random
 import time
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import aiohttp
 from structlog import get_logger
@@ -18,8 +19,31 @@ logger = get_logger(__name__)
 # Single source of truth: the download timeout default is owned by Settings.download_timeout.
 _DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].default
 
-# Status codes that should trigger retry
-RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# Default pause duration (seconds) applied to a shared origin backoff across all
+# segment and manifest retries when a retryable transport failure is observed.
+_DEFAULT_BACKOFF_PAUSE_SECONDS: float = 10.0
+
+# HTTP status code indicating a transport-layer failure from the upstream server.
+_TRANSPORT_FAILURE_STATUS: int = 500
+
+# Status codes that should trigger retry.
+# INT-008: widened to include 408 (Request Timeout) and 425 (Too Early) alongside
+# the existing 429 and 5xx transport failures.
+RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _resource_key(url: str) -> str:
+    """Return a normalized origin key for *url*.
+
+    The key is the scheme-stripped, userinfo-stripped, lowercased netloc
+    (``host:port``) so that any path or query variation on the same origin
+    maps to the same backoff slot.
+    """
+    parsed = urlsplit(url)
+    netloc = parsed.hostname or ""
+    if parsed.port is not None:
+        netloc = f"{parsed.hostname}:{parsed.port}"
+    return netloc.lower()
 
 
 # ContextVar for shutdown event - provides loop-safe event per asyncio context
@@ -50,19 +74,20 @@ class URLBackoffCoordinator:
     of that URL pause to avoid cascading rate limit violations.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pause_seconds: float = _DEFAULT_BACKOFF_PAUSE_SECONDS) -> None:
+        self.pause_seconds: float = pause_seconds
         self._backoff_state: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
-    async def pause(self, video_url: str, duration_seconds: float) -> None:
+    async def pause(self, resource_url: str, duration_seconds: float) -> None:
         """Set backoff duration for URL."""
         async with self._lock:
-            self._backoff_state[video_url] = time.time() + duration_seconds
+            self._backoff_state[resource_url] = time.time() + duration_seconds
 
-    async def wait_if_paused(self, video_url: str) -> bool:
+    async def wait_if_paused(self, resource_url: str) -> bool:
         """Block until backoff expires for URL. Returns True if was paused."""
         async with self._lock:
-            timestamp = self._backoff_state.get(video_url, 0)
+            timestamp = self._backoff_state.get(resource_url, 0)
         if time.time() >= timestamp:
             return False
 
@@ -242,6 +267,9 @@ async def _retry_429_with_backoff(
                     segment_index=segment_index,
                     url=sanitized_url,
                 )
+
+                if attempt == max_retries - 1:
+                    break
 
                 if await _wait_with_shutdown(delay, shutdown_event, segment_index, sanitized_url):
                     return None

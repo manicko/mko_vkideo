@@ -28,6 +28,7 @@ from vkdownloader.services.batch_downloader import (
     run_batch,
 )
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+from vkdownloader.services.segment_downloader import PlaylistFetchResult
 
 
 def _make_settings(tmp_path: Path) -> Settings:
@@ -182,7 +183,10 @@ class TestBatchDownloaderSemaphore:
             ),
             patch(
                 "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-                return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                return_value=PlaylistFetchResult(
+                    playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                    base_url="https://example.com/playlist.m3u8",
+                ),
             ),
             patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -250,7 +254,10 @@ class TestBatchDownloaderSemaphore:
         with (
             patch(
                 "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-                return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                return_value=PlaylistFetchResult(
+                    playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                    base_url="https://example.com/playlist.m3u8",
+                ),
             ),
             patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -324,7 +331,10 @@ class TestBatchDownloaderSemaphore:
             ),
             patch(
                 "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-                return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                return_value=PlaylistFetchResult(
+                    playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                    base_url="https://example.com/playlist.m3u8",
+                ),
             ),
             patch(
                 "vkdownloader.services.segment_downloader._download_segment",

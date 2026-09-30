@@ -37,6 +37,7 @@ from vkdownloader.services.ffmpeg_utils import (
 )
 from vkdownloader.services.quality import QualitySelector
 from vkdownloader.services.segment_downloader import (
+    PlaylistFetchResult,
     _download_segment,
     _download_segment_parallel,
     _download_segment_sequential,
@@ -305,7 +306,10 @@ class TestDownloadHlsWithResume:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value=None,
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             result = await download_hls_with_resume(
                 HLSDownloadRequest(
@@ -334,7 +338,10 @@ class TestDownloadHlsWithResume:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1191,7 +1198,10 @@ class TestParallelSegmentsDownload:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1240,7 +1250,10 @@ class TestParallelSegmentsDownload:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1300,7 +1313,10 @@ class TestParallelSegmentsDownload:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1451,7 +1467,10 @@ class TestSequentialDownloadMode:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1517,7 +1536,10 @@ class TestSequentialDownloadMode:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._retry_429_with_backoff",
@@ -1603,7 +1625,10 @@ class TestSequentialDownloadMode:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\nseg3.ts\nseg4.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -1706,7 +1731,10 @@ class TestDownloadMethodLogging:
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
-            return_value="#EXTM3U\nseg1.ts\nseg2.ts\n",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
         ):
             with patch(
                 "vkdownloader.services.segment_downloader._download_segment",
@@ -2549,6 +2577,66 @@ class TestDownloadSegmentRealExecution:
 
         assert result is True
         assert output_path.read_bytes() == b"parallel dispatch content"
+
+
+class TestManifestBaseAddressFeedsSegments:
+    """Tests that PlaylistFetchResult.base_url flows through to segment download."""
+
+    @pytest.mark.asyncio
+    async def test_manifest_base_url_used_for_segment_resolution(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """PlaylistFetchResult.base_url feeds DownloadPolicy.m3u8_url for segment URL resolution."""
+        from typing import Any
+
+        from vkdownloader.services.downloader import download_hls_with_resume
+
+        playlist = "#EXTM3U\nseg1.ts\nseg2.ts"
+        base_url = "https://cdn.example.com/hls/playlist.m3u8"
+        captured_urls: list[str] = []
+
+        async def mock_download_segment(
+            session: Any,
+            segment_url: str,
+            output_path: Path,
+            headers: dict[str, str],
+            **kwargs: Any,
+        ) -> bool:
+            captured_urls.append(segment_url)
+            output_path.write_bytes(b"segment data")
+            return True
+
+        output_path = tmp_path / "video.mp4"
+
+        with patch(
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+            return_value=PlaylistFetchResult(
+                playlist_text=playlist,
+                base_url=base_url,
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.segment_downloader._download_segment",
+                side_effect=mock_download_segment,
+            ):
+                with patch(
+                    "vkdownloader.services.segment_downloader._merge_segments_batched",
+                    return_value=output_path,
+                ):
+                    result = await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/initial.m3u8",
+                            output_file=output_path,
+                        ),
+                        settings=test_settings,
+                    )
+
+        assert result is not None
+        assert len(captured_urls) == 2
+        # Segments resolved relative to base_url, not the initial m3u8_url.
+        assert captured_urls[0] == "https://cdn.example.com/hls/seg1.ts"
+        assert captured_urls[1] == "https://cdn.example.com/hls/seg2.ts"
 
 
 class TestMergeSegmentsBatchedRealExecution:
