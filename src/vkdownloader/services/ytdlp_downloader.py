@@ -501,7 +501,8 @@ async def _attempt_segment_resume(
         if browser_streams:
             try:
                 quality_enum = _parse_quality_to_enum(quality)
-                # Browser streams always have quality="best" with height=None.
+                # Browser streams are stamped with QualityEnum.UNKNOWN.value
+                # ("unknown") and height=None by _extract_with_browser.
                 # Only run quality selection for BEST; for numeric qualities, reuse the
                 # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
                 if quality_enum == QualityEnum.BEST:
@@ -754,7 +755,8 @@ async def _resolve_cookies(
         browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
         if browser_streams:
             quality_enum = _parse_quality_to_enum(quality)
-            # Browser streams always have quality="best" with height=None.
+            # Browser streams are stamped with QualityEnum.UNKNOWN.value
+            # ("unknown") and height=None by _extract_with_browser.
             # Only run quality selection for BEST; for numeric qualities, reuse the
             # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
             if quality_enum == QualityEnum.BEST:

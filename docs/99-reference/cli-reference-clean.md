@@ -61,7 +61,7 @@ vkdownloader download [OPTIONS] URL
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `1440`, `2160`, `best`, `worst` |
+| `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `1440`, `2160`, `best`, `worst`, `unknown` |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
@@ -226,6 +226,7 @@ Available quality values for `--quality` option:
 | `2160` | 2160p (4K) resolution |
 | `best` | Best available quality (default) |
 | `worst` | Worst available quality |
+| `unknown` | Stream with unavailable height (browser HLS capture) |
 
 ---
 

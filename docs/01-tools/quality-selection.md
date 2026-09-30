@@ -30,6 +30,7 @@ VK Video Downloader supports the following quality options:
 | 1080p | `1080` | 1080p resolution (if available) |
 | 1440p | `1440` | 1440p resolution (if available) |
 | 2160p | `2160` | 2160p resolution (if available) |
+| Unknown | `unknown` | Selects a stream whose height is unavailable (browser HLS capture) |
 
 ## How Quality Selection Works
 

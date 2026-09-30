@@ -16,7 +16,7 @@ from ..config import Settings
 from ..exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
 from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
-from ..models.enums import CookieSource, StreamFormat
+from ..models.enums import CookieSource, QualityEnum, StreamFormat
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
 from ..utils.url_sanitizer import _strip_auth_params
@@ -347,11 +347,12 @@ class VKVideoExtractor:
                 "captured_m3u8_urls", urls=[_strip_auth_params(u) for u in monitor.m3u8_urls]
             )
 
-            if monitor.m3u8_urls:
+            addresses = monitor.select()
+            if addresses:
                 stream = Stream(
-                    url=monitor.m3u8_urls[0],
+                    url=addresses[0],
                     format=StreamFormat.HLS,
-                    quality="best",
+                    quality=QualityEnum.UNKNOWN.value,
                     width=None,
                     height=None,
                 )

@@ -10,7 +10,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
-from vkdownloader.models.enums import CookieSource, StreamFormat
+from vkdownloader.models.enums import CookieSource, QualityEnum, StreamFormat
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
@@ -761,6 +761,7 @@ def _mock_network_monitor(m3u8_urls: list[str]) -> MagicMock:
     """Build a mock ``NetworkMonitor`` reporting exactly ``m3u8_urls``."""
     monitor = MagicMock()
     monitor.m3u8_urls = m3u8_urls
+    monitor.select.return_value = list(m3u8_urls)
     return monitor
 
 
@@ -852,6 +853,9 @@ class TestExtractWithBrowser:
         assert second_url not in [stream.url for stream in streams]
         assert streams[0].format is StreamFormat.HLS
         assert streams[0].height is None
+        # Removed-stamp oracle (B7): browser stream quality is stamped
+        # QualityEnum.UNKNOWN.value, not the old literal "best".
+        assert streams[0].quality == QualityEnum.UNKNOWN.value
 
     @pytest.mark.asyncio
     async def test_browser_extraction_respects_shutdown_event(self) -> None:

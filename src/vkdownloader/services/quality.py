@@ -110,7 +110,7 @@ class QualitySelector:
                     result = match
                 else:
                     # Quality not available - raise specific error
-                    available_qualities = [s.quality for s in streams]
+                    available_qualities = list(dict.fromkeys(s.quality for s in streams))
                     raise QualityNotAvailableError(str(quality), available_qualities)
 
         return result

@@ -283,3 +283,75 @@ def test_select_worst_treats_placeholder_zero_as_absent() -> None:
 
     assert result.url == "https://example.com/zero"
     assert result.height == 0
+
+
+def test_select_unknown_quality_returns_matching_stream() -> None:
+    """B7: QualityEnum.UNKNOWN selects a stream whose quality label is "unknown"
+    (i.e. height is absent/None). The label is now re-requestable via CLI."""
+    selector = QualitySelector()
+    streams = [
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(url="https://example.com/hls.m3u8", format=StreamFormat.HLS, quality="unknown"),
+    ]
+
+    result = selector.select(streams, QualityEnum.UNKNOWN)
+
+    assert result.url == "https://example.com/hls.m3u8"
+    assert result.quality == "unknown"
+
+
+def test_select_unknown_quality_not_available_raises() -> None:
+    """B7: when no stream carries the "unknown" label, QualityEnum.UNKNOWN
+    raises QualityNotAvailableError listing the available qualities."""
+    selector = QualitySelector()
+    streams = [
+        Stream(
+            url="https://example.com/720p.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/1080p.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
+    ]
+
+    with pytest.raises(QualityNotAvailableError) as exc_info:
+        selector.select(streams, QualityEnum.UNKNOWN)
+
+    error = exc_info.value
+    assert error.requested == "unknown"
+    assert error.available == ["720", "1080"]
+
+
+def test_quality_not_available_error_available_is_deduplicated() -> None:
+    """B7: the 'available' list in QualityNotAvailableError preserves input
+    order while removing duplicates via dict.fromkeys (not a set)."""
+    selector = QualitySelector()
+    streams = [
+        Stream(
+            url="https://example.com/720a.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/1080a.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
+        Stream(
+            url="https://example.com/720b.m3u8", format=StreamFormat.HLS, quality="720", height=540
+        ),
+        Stream(
+            url="https://example.com/1080b.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080",
+            height=1080,
+        ),
+    ]
+
+    with pytest.raises(QualityNotAvailableError) as exc_info:
+        selector.select(streams, QualityEnum.Q480)
+
+    assert exc_info.value.available == ["720", "1080"]

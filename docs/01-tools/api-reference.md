@@ -647,17 +647,30 @@ Video quality options for stream selection.
 
 | Value | Description |
 |-------|-------------|
-| `Q240` | "240" |
-| `Q360` | "360" |
-| `Q480` | "480" |
-| `Q720` | "720" |
-| `Q1080` | "1080" |
-| `Q1440` | "1440" |
-| `Q2160` | "2160" |
-| `BEST` | "best" |
-| `WORST` | "worst" |
+| `QualityEnum.Q240` | "240" |
+| `QualityEnum.Q360` | "360" |
+| `QualityEnum.Q480` | "480" |
+| `QualityEnum.Q720` | "720" |
+| `QualityEnum.Q1080` | "1080" |
+| `QualityEnum.Q1440` | "1440" |
+| `QualityEnum.Q2160` | "2160" |
+| `QualityEnum.BEST` | "best" |
+| `QualityEnum.WORST` | "worst" |
+| `QualityEnum.UNKNOWN` | "unknown" |
 
 ---
+
+### PlaylistType
+
+Location: `vkdownloader.models.enums`
+
+HLS playlist classification for media-over-master ranking (B7).
+
+| Value | Description |
+|-------|-------------|
+| `MASTER` | "master" — contains `#EXT-X-STREAM-INF` or `#EXT-X-I-FRAME-STREAM-INF` |
+| `MEDIA` | "media" — contains `#EXT-X-PLAYLIST-TYPE` |
+| `UNCLASSIFIED` | "unclassified" — neither tag present |
 
 ### StreamFormat
 
@@ -753,12 +766,22 @@ Async context manager for Playwright browser automation with stealth configurati
 
 Location: `vkdownloader.infrastructure.network_monitor`
 
-Monitors network traffic to capture m3u8 URLs from responses.
+Monitors network traffic to capture m3u8 URLs from responses. The captured
+address set is constrained to HLS-only (path suffix ``.m3u8``) via ``select()``;
+if every captured address would be rejected, the filter is suspended and the
+unconstrained set is returned with a single warning logged.
 
 **Attributes:**
 | Name | Type | Description |
 |------|------|-------------|
 | m3u8_urls | list[str] | List of captured m3u8 URLs |
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `select() -> list[str]` | Return HLS-only addresses (NET-008 filter) with safety suspension. Never raises. Master playlists are ranked first. |
+| `_classify_hls(address: str) -> bool` | Local duplicate of `extractor._classify_format` (NET-008). Returns True when the URL path suffix is `.m3u8`. |
+| `_classify_playlist(body: bytes \| None) -> PlaylistType` | Three-valued media-over-master rank from a playlist response body. Never a filter. |
 
 ---
 
