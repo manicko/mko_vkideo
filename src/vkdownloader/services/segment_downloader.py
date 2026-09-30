@@ -933,7 +933,26 @@ def _log_preserve_segments(segments_dir: Path) -> None:
     Args:
         segments_dir: Directory containing downloaded segments.
     """
-    if segments_dir.exists():
-        segment_count = len(list(segments_dir.glob("*.ts")))
-        if segment_count > 0:
-            logger.info("preserving_segments_for_resume", count=segment_count)
+    if not segments_dir.exists():
+        return
+
+    # D-13: reported on every non-success exit, count 0 included. The old
+    # `count > 0` gate emitted nothing in exactly the case that mattered --
+    # a total loss -- so the operator saw silence instead of "nothing was
+    # kept". The count below is deliberately labelled: it is every `*.ts` in
+    # the working directory, and a failed merge leaves `batch_*.ts` temps
+    # there, which a `*.ts` glob cannot distinguish from segments. Excluding
+    # them is phase 07's ART-004; until then the count is stated as a
+    # working-directory count and the action is to clear the directory.
+    working_count = len(list(segments_dir.glob("*.ts")))
+    logger.info(
+        "preserving_segments_for_resume",
+        working_dir=str(segments_dir),
+        working_dir_ts_count=working_count,
+        count_note=(
+            "every *.ts file in the working directory, including any batch_*.ts "
+            "merge temp a failed merge left behind; this is not a count of "
+            "resumable segments"
+        ),
+        next_action="clear the working directory before re-running the download",
+    )

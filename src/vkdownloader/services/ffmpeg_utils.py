@@ -274,6 +274,10 @@ async def _merge_batch_segments(
 ) -> Path | None:
     """Merge a batch of segments into a single temp file.
 
+    This stage is additive: it does not remove its input segments. They are
+    deleted on the whole-merge success tail in ``_merge_segments_batched``
+    (D-13), so a failure in a later stage cannot destroy already-merged data.
+
     Args:
         batch_files: List of segment file paths to merge.
         temp_dir: Directory for temp files.
@@ -311,9 +315,14 @@ async def _merge_batch_segments(
         logger.error("batch_merge_failed", error=error[:200])
         return None
 
-    # Remove individual segment files after batch merge
-    for segment_path in batch_files:
-        segment_path.unlink()
+    # D-13: this stage is additive. Its input segments are removed only after
+    # the whole merge has succeeded, by _merge_segments_batched's success
+    # tail, and not here: a per-batch deletion destroyed the only copy of
+    # every already-merged byte whenever a later stage failed (NET-001, phase
+    # 03 -- 0 of 250 originals survived a failed final stage).
+    # The concat list is a different matter. It is rebuilt from the surviving
+    # inputs on every attempt, so keeping it would be pure residue, while the
+    # segment files are the residue that is worth keeping.
     file_list_path.unlink()
 
     return batch_output
@@ -479,37 +488,60 @@ async def _merge_segments_batched(
     """
     batch_size = 100
     temp_files: list[Path] = []
+    merged_inputs: list[Path] = []
 
     _check_merge_space(
         (segments_dir / f"{i:05d}.ts" for i in range(count)),
         segments_dir,
     )
 
-    try:
-        # Process in batches
-        for batch_start in range(0, count, batch_size):
-            batch_end = min(batch_start + batch_size, count)
-            batch_files = [segments_dir / f"{i:05d}.ts" for i in range(batch_start, batch_end)]
+    # Process in batches
+    for batch_start in range(0, count, batch_size):
+        batch_end = min(batch_start + batch_size, count)
+        batch_files = [segments_dir / f"{i:05d}.ts" for i in range(batch_start, batch_end)]
 
-            # Check all files exist - raise error if missing instead of silent continue
-            if not all(f.exists() for f in batch_files):
-                missing = [f.name for f in batch_files if not f.exists()]
-                raise FileNotFoundError(f"Missing segment files for merge: {missing}")
+        # Check all files exist - raise error if missing instead of silent continue
+        if not all(f.exists() for f in batch_files):
+            missing = [f.name for f in batch_files if not f.exists()]
+            raise FileNotFoundError(f"Missing segment files for merge: {missing}")
 
-            result = await _merge_batch_segments(batch_files, segments_dir, download_timeout)
-            if result is None:
-                return None
+        result = await _merge_batch_segments(batch_files, segments_dir, download_timeout)
+        if result is None:
+            return None
 
-            temp_files.append(result)
+        temp_files.append(result)
+        merged_inputs.extend(batch_files)
 
-        # Final merge of all batches
-        if temp_files:
-            if await _perform_final_merge(temp_files, output_file, download_timeout):
-                return output_file
+    # Final merge of all batches
+    if temp_files and await _perform_final_merge(temp_files, output_file, download_timeout):
+        # D-13: the input segments are deleted here, and only here, because
+        # this is the first point at which the whole merge is known to have
+        # succeeded. The shape this replaces deleted each batch's inputs the
+        # moment that batch merged and swept every accumulated batch temp on
+        # any non-success exit, so a failure in a later stage destroyed both
+        # copies of every already-merged byte: 250 segments with a failed
+        # final stage left 0 originals, and a failed second batch left 150 of
+        # 250 with the first batch's temp deleted by the same sweep.
+        #
+        # `missing_ok=True` because `returncode == 0` from the final stage
+        # attests only to the batch temps -- the originals are not in
+        # `final_list.txt` -- so a bare unlink() would assert a precondition
+        # no code path established. The bare unlink() on the temps and on the
+        # final list stays: there the exit code does attest.
+        #
+        # Deferred (same tag): a graceful stage failure now leaves the temps
+        # beside a complete segment set, so the `*.ts` counts in
+        # segment_downloader.py also count `batch_*.ts` and a resumed run will
+        # not re-trigger the merge. Excluding the merge temps is phase 07's
+        # ART-004; this block edits no `*.ts` glob. The compensating control
+        # is `_log_preserve_segments`, which now reports the working
+        # directory's `*.ts` count and the clear-the-directory action instead
+        # of implying the directory is resumable as it stands. The merge peak
+        # also moves from 2x to 3x the segment bytes; the sizing belongs to
+        # phase 07's ART-012.
+        for segment_path in merged_inputs:
+            segment_path.unlink(missing_ok=True)
 
-        return None
-    finally:
-        # Remove any partial batch temp files created by this merge on failure.
-        # On success these were already unlinked by _perform_final_merge.
-        for tf in temp_files:
-            tf.unlink(missing_ok=True)
+        return output_file
+
+    return None

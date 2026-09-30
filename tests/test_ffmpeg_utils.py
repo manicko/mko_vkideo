@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import namedtuple
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -187,8 +188,15 @@ class TestMergeBatchSegments:
             assert result.parent == tmp_path
 
     @pytest.mark.asyncio
-    async def test_merge_batch_removes_input_files_on_success(self, tmp_path: Path) -> None:
-        """Test that input files are removed after successful merge."""
+    async def test_merge_batch_preserves_input_files_on_success(self, tmp_path: Path) -> None:
+        """D-13: the batch stage is additive; its inputs outlive it.
+
+        Removing the inputs here destroyed the only copy of every
+        already-merged byte whenever a later stage failed. They are now
+        removed on the whole-merge success tail in _merge_segments_batched;
+        the concat list is still removed here, because it is rebuilt on every
+        attempt and carries no information.
+        """
         segment1 = tmp_path / "00000.ts"
         segment2 = tmp_path / "00001.ts"
         segment1.write_bytes(b"segment1 data")
@@ -204,11 +212,12 @@ class TestMergeBatchSegments:
         mock_process.communicate = mock_communicate
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            await _merge_batch_segments([segment1, segment2], tmp_path, 300)
+            result = await _merge_batch_segments([segment1, segment2], tmp_path, 300)
 
-            # Input files should be removed
-            assert not segment1.exists()
-            assert not segment2.exists()
+        assert segment1.exists()
+        assert segment2.exists()
+        assert result is not None
+        assert result.name == "batch_00000.ts"
 
     @pytest.mark.asyncio
     async def test_merge_batch_removes_file_list(self, tmp_path: Path) -> None:
@@ -551,6 +560,93 @@ class TestMergeSegmentsBatched:
         assert concat_lists[2][1][0].endswith("/batch_00000.ts")
         assert concat_lists[2][1][1].endswith("/batch_00100.ts")
 
+    @pytest.mark.asyncio
+    async def test_final_merge_failure_preserves_every_input_segment(self, tmp_path: Path) -> None:
+        """NET-001: a failed final stage must not destroy any original segment.
+
+        Measured with the local stub: 250 segments + failed final stage left
+        0 of 250 originals surviving (every batch temp and final_list.txt were
+        swept by the finally). The fix preserves all 250 originals, all batch
+        temps and final_list.txt, and returns None.
+        """
+        segments_dir = tmp_path / "segments"
+        segments_dir.mkdir()
+        output = tmp_path / "output.ts"
+        _write_segments(segments_dir, 250, 1024)
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(1 << 40)),
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=_failing_exec("final_list.txt"),
+            ),
+        ):
+            result = await _merge_segments_batched(segments_dir, output, 250)
+
+        assert result is None
+        assert all((segments_dir / f"{i:05d}.ts").exists() for i in range(250))
+        assert (segments_dir / "batch_00000.ts").exists()
+        assert (segments_dir / "batch_00100.ts").exists()
+        assert (segments_dir / "batch_00200.ts").exists()
+        assert (segments_dir / "final_list.txt").exists()
+        assert not output.exists()
+
+    @pytest.mark.asyncio
+    async def test_batch_failure_preserves_inputs_and_earlier_batch_temps(
+        self, tmp_path: Path
+    ) -> None:
+        """NET-001: a failure in a later batch must not destroy earlier data.
+
+        Measured with the local stub: 250 segments + failed second batch left
+        150 of 250 originals surviving and batch_00000.ts destroyed by the
+        finally sweep. The fix preserves all 250 originals and the first
+        batch's temp.
+        """
+        segments_dir = tmp_path / "segments"
+        segments_dir.mkdir()
+        output = tmp_path / "output.ts"
+        _write_segments(segments_dir, 250, 1024)
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(1 << 40)),
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=_failing_exec("batch_list_100.txt"),
+            ),
+        ):
+            result = await _merge_segments_batched(segments_dir, output, 250)
+
+        assert result is None
+        assert all((segments_dir / f"{i:05d}.ts").exists() for i in range(250))
+        assert (segments_dir / "batch_00000.ts").exists()
+        assert not (segments_dir / "batch_00100.ts").exists()
+
+    @pytest.mark.asyncio
+    async def test_success_removes_every_segment_temp_and_list(self, tmp_path: Path) -> None:
+        """NET-001: the success path must leave the working directory empty.
+
+        Every input segment, every batch temp, every batch_list and the
+        final_list are removed -- zero *.ts and zero *.txt remain.
+        """
+        segments_dir = tmp_path / "segments"
+        segments_dir.mkdir()
+        output = tmp_path / "output.ts"
+        _write_segments(segments_dir, 250, 1024)
+
+        with (
+            patch("shutil.disk_usage", return_value=_fake_disk_usage(1 << 40)),
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=_failing_exec(""),
+            ),
+        ):
+            result = await _merge_segments_batched(segments_dir, output, 250)
+
+        assert result == output
+        assert output.exists()
+        remaining = list(segments_dir.iterdir())
+        assert remaining == []
+
 
 def _write_segments(directory: Path, count: int, size_bytes: int) -> list[Path]:
     """Create ``count`` segments of ``size_bytes`` each, as the merge names them."""
@@ -572,6 +668,38 @@ def _successful_process() -> MagicMock:
 
     mock_process.communicate = mock_communicate
     return mock_process
+
+
+def _failed_process() -> MagicMock:
+    """Build a mock ffmpeg process that exits with a failure return code."""
+
+    mock_process = MagicMock(spec=asyncio.subprocess.Process)
+    mock_process.returncode = 1
+    mock_process.pid = 12345
+
+    async def mock_communicate() -> tuple[bytes, bytes]:
+        return b"", b"ffmpeg error: invalid input"
+
+    mock_process.communicate = mock_communicate
+    return mock_process
+
+
+def _failing_exec(fail_on: str) -> Callable[..., MagicMock]:
+    """Build a process-launch stub that fails the named concat list only.
+
+    Materialises the output path the real child would write, so the batch
+    temps and the final output really exist: a MagicMock writes nothing, and
+    a test over one asserts on the mock, not the merge.
+    """
+
+    def exec_(*args: str, **kwargs: object) -> MagicMock:
+        file_list = Path(args[args.index("-i") + 1])
+        if file_list.name == fail_on:
+            return _failed_process()
+        Path(args[-1]).write_bytes(b"merged data")
+        return _successful_process()
+
+    return exec_
 
 
 class TestMergeFreeSpaceProbe:

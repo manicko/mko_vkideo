@@ -1,11 +1,15 @@
 """Tests for segment_downloader token-refresh retry logic."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from vkdownloader.config import Settings
-from vkdownloader.services.segment_downloader import _fetch_playlist_with_retry
+from vkdownloader.services.segment_downloader import (
+    _fetch_playlist_with_retry,
+    _log_preserve_segments,
+)
 
 
 class TestFetchPlaylistWithRetry:
@@ -279,3 +283,59 @@ class TestFetchPlaylistWithRetry:
         # Refresh was attempted once, but no second fetch occurred (fell through).
         assert len(refresh_calls) == 1
         assert fetch_count == 1
+
+
+class TestPreserveSegmentsReporter:
+    """D-13: the reporter speaks on every non-success exit."""
+
+    def test_reports_zero_count_directory(self, tmp_path: Path) -> None:
+        """A directory with zero segments still produces a log record.
+
+        The old `count > 0` gate emitted nothing here -- exactly the case
+        that mattered (a total loss). The count is now labelled as a
+        working-directory count and the action is to clear the directory.
+        """
+        mock_logger = MagicMock()
+        with patch("vkdownloader.services.segment_downloader.logger", mock_logger):
+            _log_preserve_segments(tmp_path)
+
+        mock_logger.info.assert_called_once()
+        call = mock_logger.info.call_args
+        assert call.args[0] == "preserving_segments_for_resume"
+        assert call.kwargs["working_dir"] == str(tmp_path)
+        assert call.kwargs["working_dir_ts_count"] == 0
+        assert "not a count of resumable segments" in call.kwargs["count_note"]
+        assert "clear the working directory" in call.kwargs["next_action"]
+
+    def test_count_includes_merge_temps_and_says_so(self, tmp_path: Path) -> None:
+        """The count includes batch_*.ts temps and the record says so.
+
+        This is the compensating control for the ART-004 deferral: the *.ts
+        glob counts merge temps as well as segments, so the record carries an
+        explicit note that the number is not a resumable-segment count.
+        """
+        (tmp_path / "00000.ts").write_bytes(b"seg")
+        (tmp_path / "00001.ts").write_bytes(b"seg")
+        (tmp_path / "batch_00000.ts").write_bytes(b"merged")
+
+        mock_logger = MagicMock()
+        with patch("vkdownloader.services.segment_downloader.logger", mock_logger):
+            _log_preserve_segments(tmp_path)
+
+        mock_logger.info.assert_called_once()
+        call = mock_logger.info.call_args
+        assert call.args[0] == "preserving_segments_for_resume"
+        assert call.kwargs["working_dir_ts_count"] == 3
+        assert "including any batch_*.ts" in call.kwargs["count_note"]
+        assert "not a count of resumable segments" in call.kwargs["count_note"]
+        assert "clear the working directory" in call.kwargs["next_action"]
+
+    def test_missing_directory_emits_nothing(self, tmp_path: Path) -> None:
+        """An absent segments directory is skipped, not logged as zero."""
+        missing_dir = tmp_path / "does_not_exist"
+
+        mock_logger = MagicMock()
+        with patch("vkdownloader.services.segment_downloader.logger", mock_logger):
+            _log_preserve_segments(missing_dir)
+
+        mock_logger.info.assert_not_called()
