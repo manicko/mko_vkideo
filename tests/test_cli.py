@@ -2028,7 +2028,7 @@ class TestPreSinkDiagnostic:
         the default INFO level.  One INFO record naming the resolved path is
         emitted per invocation.
         """
-        resolved_path = self._make_env_file(tmp_path / ".env")
+        self._make_env_file(tmp_path / ".env")
         monkeypatch.chdir(tmp_path)
 
         urls_file = tmp_path / "urls.txt"
@@ -2040,7 +2040,11 @@ class TestPreSinkDiagnostic:
         assert result.exit_code == 1
         resolved = [r for r in caplog.records if "env_file_resolved" in r.getMessage()]
         assert len(resolved) == 1
-        assert str(resolved_path) in resolved[0].getMessage()
+        # Assert on the structured record, not the rendered string: the
+        # rendered form is renderer-dependent (JSONRenderer escapes
+        # backslashes), but the level is not.  The path content itself is
+        # verified by test_log_env_file_path_calls_info_not_debug.
+        assert resolved[0].levelno == logging.INFO
         # The not-found branch must NOT fire when a file is present.
         assert not any(
             "env_file_not_found_using_environment_or_defaults" in r.getMessage()
@@ -2083,23 +2087,27 @@ class TestPreSinkDiagnostic:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The resolution report is still emitted when the log level is DEBUG."""
+        """The resolution report is still emitted as INFO when the log level is DEBUG.
+
+        At DEBUG verbosity the report must not be downgraded — it stays at
+        INFO so it is visible at the default level.  Captures at DEBUG
+        threshold so any DEBUG-level regression would surface, and asserts
+        the record's level is INFO and that it is the only environment-file
+        record emitted.
+        """
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("VKDOWNLOADER_LOG_LEVEL", "DEBUG")
 
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("", encoding="utf-8")
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.DEBUG):
             result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
 
         assert result.exit_code == 1
-        not_found = [
-            r
-            for r in caplog.records
-            if "env_file_not_found_using_environment_or_defaults" in r.getMessage()
-        ]
-        assert len(not_found) == 1
+        env_file_records = [r for r in caplog.records if "env_file" in r.getMessage()]
+        assert len(env_file_records) == 1
+        assert env_file_records[0].levelno == logging.INFO
 
     def test_log_env_file_path_calls_info_not_debug(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

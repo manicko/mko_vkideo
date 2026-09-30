@@ -368,10 +368,30 @@ class TestEmptyFreeTextSettings:
         assert settings.timezone.strip() != ""
         assert settings.locale.strip() != ""
 
-    def test_a_non_empty_value_is_accepted(self) -> None:
+    def test_a_non_empty_value_is_accepted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """A non-empty value through any path is accepted, not only the default."""
-        settings = Settings(user_agent="MyCustomAgent/2.0")
-        assert settings.user_agent == "MyCustomAgent/2.0"
+        custom_ua = "MyCustomAgent/2.0"
+
+        # Constructor path
+        settings = Settings(user_agent=custom_ua)
+        assert settings.user_agent == custom_ua
+
+        # OS-environment path
+        monkeypatch.setenv("VKDOWNLOADER_USER_AGENT", custom_ua)
+        settings = Settings()
+        assert settings.user_agent == custom_ua
+
+        # .env file path (env override cleared so .env is the source)
+        monkeypatch.delenv("VKDOWNLOADER_USER_AGENT", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"VKDOWNLOADER_USER_AGENT={custom_ua}\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        settings = Settings()
+        assert settings.user_agent == custom_ua
 
 
 class TestEnvFileTypoDetection:
@@ -838,15 +858,62 @@ class TestEnvFileValidationRendering:
             assert f"Did you mean: {expected_suggestion}?" in formatted, (
                 f"expected correct suggestion {expected_suggestion} for {env_key}; got:\n{formatted}"
             )
-            assert "Valid fields:" not in formatted
+            assert "Valid variables:" not in formatted
         else:
             assert "Did you mean" not in formatted, (
                 f"expected NO suggestion for {env_key}; got:\n{formatted}"
             )
-            assert "Valid fields:" in formatted
+            assert "Valid variables:" in formatted
 
+    def test_double_quoted_correctly_spelled_key(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A double-quoted correctly-spelled key shows quotes and no suggestion.
 
-class TestSetupLogging:
+        The quotes are the only defect, so the match-key resolves to the
+        exact variable name and the self-referential suggestion is suppressed
+        in favour of the valid-variable list.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text('"VKDOWNLOADER_MAX_RETRIES"=9\n', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        formatted = format_validation_error(exc_info.value)
+
+        # The displayed location retains the double quotes the user typed.
+        assert '"VKDOWNLOADER_MAX_RETRIES"' in formatted
+        # Self-referential suggestion is suppressed — valid list is shown instead.
+        assert "Did you mean" not in formatted
+        assert "Valid variables:" in formatted
+
+    def test_double_quoted_misspelled_key(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A double-quoted misspelled key shows quotes and a real suggestion.
+
+        The displayed location retains the double quotes, but the match-key
+        is stripped so the typo still resolves to the closest valid variable.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text('"VKDOWNLOADER_SSL_VERFY"=9\n', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        formatted = format_validation_error(exc_info.value)
+
+        # The displayed location retains the double quotes.
+        assert '"VKDOWNLOADER_SSL_VERFY"' in formatted
+        # The stripped match-key resolves to the real target.
+        assert "Did you mean: VKDOWNLOADER_SSL_VERIFY?" in formatted
+        assert "Valid variables:" not in formatted
+
     """Tests for setup_logging log file creation and permissions (SEC-003)."""
 
     def test_log_file_created_when_absent(self, tmp_path: Path) -> None:

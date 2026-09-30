@@ -234,9 +234,14 @@ def _normalise_loc_to_env_var(loc: str) -> str:
     pydantic-settings lower-cased the key before reporting it), upper-cases
     the remainder and re-applies the prefix.
 
-    The single normalised form serves both namespaces: a constructor-keyword
+    The returned value is the **match key** — quote-stripped so that a
+    quoted misspelling still resolves to the right target.  The caller is
+    responsible for computing a quote-preserving display form when the
+    quotes the user typed must stay visible in the rendered error line.
+
+    The match key serves both namespaces: a constructor-keyword
     location (``maxretries``) is already a bare field name and normalises to
-    ``VKDOWNLOADER_MAXRETRIES``; an environment-file location
+    ``VKDOWNLOADER_MAX_RETRIES``; an environment-file location
     (``vkdownloader_maxretries``) normalises to the same value, so the same
     matcher works regardless of which path produced the error.
     """
@@ -258,6 +263,14 @@ def format_validation_error(error: ValidationError) -> str:
     and an intent gate (``cutoff=0.9``) routes keys with no plausible target
     to the valid-name list rather than a wrong suggestion.
 
+    The **displayed** location preserves any quotes the user typed, so a
+    double-quoted key such as ``"VKDOWNLOADER_MAX_RETRIES"`` is shown with
+    the quotes intact.  The **match key** is the quote-stripped form, so a
+    quoted misspelling still resolves to the right target.  A self-referential
+    suggestion (the closest match *is* the correct variable name) is
+    suppressed: the valid-name list is shown instead, because the real
+    problem is the quotes, not a typo.
+
     Args:
         error: The ValidationError to format.
 
@@ -276,13 +289,17 @@ def format_validation_error(error: ValidationError) -> str:
         error_type = err.get("type", "")
 
         if error_type == "extra_forbidden" and loc:
-            rendered_loc = _normalise_loc_to_env_var(loc)
-            lines.append(f"  - {rendered_loc}: {msg}")
-            close = difflib.get_close_matches(rendered_loc, valid_env_vars, n=1, cutoff=0.9)
-            if close:
+            match_key = _normalise_loc_to_env_var(loc)
+            if len(loc) >= 2 and loc[0] == loc[-1] and loc[0] in ("'", '"'):
+                displayed_loc = f"{loc[0]}{match_key}{loc[-1]}"
+            else:
+                displayed_loc = match_key
+            lines.append(f"  - {displayed_loc}: {msg}")
+            close = difflib.get_close_matches(match_key, valid_env_vars, n=1, cutoff=0.9)
+            if close and close[0] != match_key:
                 lines.append(f"    Did you mean: {close[0]}? (check for typos)")
             else:
-                lines.append(f"    Valid fields: {', '.join(valid_env_vars)}")
+                lines.append(f"    Valid variables: {', '.join(valid_env_vars)}")
         else:
             lines.append(f"  - {loc}: {msg}")
 
