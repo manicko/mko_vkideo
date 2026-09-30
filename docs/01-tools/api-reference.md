@@ -908,24 +908,6 @@ Location: `vkdownloader.config`
 
 Application settings with defaults and environment variable support. Uses Pydantic BaseSettings for validation.
 
-**Key Attributes:**
-| Name | Default | Description |
-|------|---------|-------------|
-| `headless` | `False` | Run Playwright browser in headless mode (no visible GUI); enables server, CI, and Docker usage |
-| `user_agent` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for requests |
-| `timezone` | `Europe/Moscow` | Timezone for stealth configuration |
-| `locale` | `ru-RU` | Locale for browser stealth |
-| `browser_pre_interaction_wait` | `5` | Seconds to wait before video interaction in browser extraction (1-30) |
-| `browser_post_interaction_wait` | `8` | Seconds to wait after video interaction in browser extraction (1-30) |
-| `max_retries` | `3` | Maximum retry attempts (1-10) |
-| `download_timeout` | `300` | Download timeout in seconds (30-3600) |
-| `ssl_verify` | `True` | Verify SSL certificates for CDN connections |
-| `download_dir` | `~/Downloads/vkdownloader` | Directory for downloaded videos |
-| `max_concurrent_downloads` | `4` | Maximum number of videos downloading concurrently in a batch (1-16) |
-| `throttled_rate` | `100000` | Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s). |
-| `http_chunk_size` | `0` | HTTP chunk size in bytes for yt-dlp range-request downloads. 0 disables for reliable HLS segment downloads; non-zero is advanced |
-| cookie_source | `NONE` | Cookie acquisition strategy: none or browser |
-| `log_level` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
-| `log_file` | `None` | Optional log file path for file output |
+**Settings attributes are documented in the [Configuration Guide](../11-guides/configuration.md), the single source of truth for all settings, environment-variable mappings, defaults, and valid ranges.**
 
 

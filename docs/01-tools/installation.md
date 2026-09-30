@@ -139,14 +139,6 @@ VKDOWNLOADER_LOG_LEVEL=INFO
 VKDOWNLOADER_LOG_FILE=~/vkdownloader.log
 ```
 
-### ffprobe (Optional)
-
-ffprobe (bundled with ffmpeg) is used for video duration extraction when available:
-
-- Enables ETA (estimated time remaining) in progress display
-- Missing ffprobe is handled gracefully with warning log
-- Falls back to m3u8 playlist parsing for approximate duration
-
 ## Verification
 
 After installation, verify the setup:
