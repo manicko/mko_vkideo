@@ -38,7 +38,8 @@ VK Video Downloader supports the following quality options:
 When extracting streams from a VK video URL, the `VKVideoExtractor` uses yt-dlp as the primary extraction method (handles VK protections):
 
 1. Uses yt-dlp to extract available formats
-2. Filters formats to include only video streams (skips audio-only)
+2. Filters formats to include only video-bearing streams — a record that does not
+   declare a non-`none` video codec (``vcodec``) is dropped
 3. Extracts height, width, and bitrate for each stream variant
 4. Creates Stream objects with quality strings in `{height}p` format
 
@@ -53,8 +54,8 @@ For ffmpeg download method, `extract_streams_with_cookies()` additionally:
 
 The `QualitySelector` uses the following logic:
 
-1. **BEST**: Returns the stream with the highest `height` value
-2. **WORST**: Returns the stream with the lowest `height` value
+1. **BEST**: Returns the stream with the highest usable `height` (a `height <= 0` placeholder is treated as absent)
+2. **WORST**: Returns the stream with the lowest usable `height` (a `height <= 0` placeholder is treated as absent, and the two arms never select the same record from a `{0, None}` set)
 3. **Specific resolution** (e.g., `720`): Finds exact match first, raises `QualityNotAvailableError` if not found
 
 ### Stream Matching
@@ -63,7 +64,7 @@ Streams are matched by comparing the `quality` field:
 
 - Quality string format: `{height}p` (e.g., "720p")
 - Also supports numeric format (e.g., "720" matches "720p")
-- Streams without height are assigned "unknown" quality
+- Streams without a positive `height` (`None`, `0`, or negative) are assigned "unknown" quality
 
 ## CLI Usage
 

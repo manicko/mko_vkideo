@@ -2,7 +2,9 @@
 
 import asyncio
 import re
+from pathlib import PurePosixPath
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import yt_dlp
 from playwright.async_api import Cookie, Page
@@ -37,18 +39,56 @@ def is_valid_video_url(url: str) -> bool:
     return bool(VIDEO_ID_PATTERN.search(url))
 
 
+def _classify_format(url: str) -> StreamFormat:
+    """Classify a stream URL as HLS or MP4 by its parsed path suffix (NET-017).
+
+    Only a ``.m3u8`` path suffix maps to HLS; every other suffix — including a
+    suffixless path — maps to MP4. A ``.m3u8`` appearing only in the query
+    string, a fragment, or a directory name does not count. ``urlsplit`` raising
+    ``ValueError`` falls back to MP4 so the parse is total and the caller never
+    has to handle an exception.
+    """
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        return StreamFormat.MP4
+    suffix = PurePosixPath(path).suffix.lower()
+    return StreamFormat.HLS if suffix == ".m3u8" else StreamFormat.MP4
+
+
+def _declares_video_codec(f: dict[str, Any]) -> bool:
+    """Return True when a format dict declares a usable video codec (NET-017).
+
+    A record is video-bearing only when the ``vcodec`` key is present, its value
+    is a non-empty string, and it is not the audio-only literal ``"none"``
+    (case-insensitive). A record that omits the key is indeterminate — neither
+    video-bearing nor explicitly audio-only — and is therefore not offered.
+
+    Height or width are never read as a proxy here: they are the placeholder
+    field this same block redefines, and a heightless video record would be
+    wrongly dropped (see ``test_build_streams_quality_unknown_without_height``).
+    """
+    codec = f.get("vcodec")
+    if not isinstance(codec, str) or codec == "":
+        return False
+    return codec.lower() != "none"
+
+
 def _build_streams(formats: list[dict[str, Any]]) -> list[Stream]:
     """Convert raw yt-dlp format dicts into the stream list, in input order.
 
-    Filtering decisions:
-    - Skip audio-only formats (``vcodec == "none"``).
+    Filtering decisions (NET-017):
+    - Offer only a record that explicitly declares a video codec (see
+      ``_declares_video_codec``); a record with no ``vcodec`` key is dropped.
     - Skip formats with a falsy ``url``.
-    - Treat ``url`` containing ``.m3u8`` as HLS, otherwise MP4.
+    - Classify format by the parsed path suffix via ``_classify_format``
+      (``.m3u8`` -> HLS, everything else -> MP4), not by a substring test.
     """
     found_streams: list[Stream] = []
     for f in formats:
-        # Skip audio-only formats (video codec is "none").
-        if f.get("vcodec") == "none":
+        # NET-017: exclude records that do not declare a video codec (absent,
+        # empty, or the audio-only literal).
+        if not _declares_video_codec(f):
             continue
         height = cast(int | None, f.get("height"))
         width = cast(int | None, f.get("width"))
@@ -57,10 +97,13 @@ def _build_streams(formats: list[dict[str, Any]]) -> list[Stream]:
         if not format_url:
             continue
         tbr = f.get("tbr")
+        # NET-017: height <= 0 is treated as absent so a placeholder zero cannot
+        # be mistaken for a real resolution. Stream.height keeps the raw value.
+        quality = f"{height}p" if height is not None and height > 0 else "unknown"
         stream = Stream(
             url=format_url,
-            format=StreamFormat.HLS if ".m3u8" in format_url else StreamFormat.MP4,
-            quality=f"{height}p" if height else "unknown",
+            format=_classify_format(format_url),
+            quality=quality,
             width=width,
             height=height,
             bitrate=int(tbr) if tbr else None,

@@ -32,24 +32,47 @@ class QualitySelector:
                 return stream
         return None
 
+    def _rank_key(self, indexed: tuple[int, Stream]) -> tuple[bool, int, int]:
+        """Rank key shared by both the BEST and WORST arms (NET-017).
+
+        ``carries_a_usable_height`` is True only for a strictly positive height;
+        ``height <= 0`` (the placeholder) is treated as absent so it can no
+        longer be confused with a genuinely missing ``None``. This rule is
+        written here in the ranker and separately in ``_build_streams`` (the
+        label): the duplication is deliberate, because ``extractor.py`` may not
+        import this module (the "0 is absent" contract must hold in both places
+        to keep the two parse sites from drifting). The ``input_position`` from
+        ``enumerate`` makes the order total: without it a ``{0, None}`` pair
+        yields two equal keys and both directions return the first record.
+        """
+        index, stream = indexed
+        height = stream.height
+        # NET-017: height <= 0 is treated as absent so a placeholder zero
+        # cannot be confused with a missing None.
+        if height is not None and height > 0:
+            return (True, height, index)
+        return (False, 0, index)
+
     def _get_fallback_stream(self, streams: list[Stream]) -> Stream:
         """
         Get the best quality stream as fallback.
 
-        When streams have mixed height values, those with known heights are ranked
-        higher. When all streams have height=None, selection is deterministic by
-        falling back to the first stream in the list.
+        Streams that carry a usable (positive) height rank above those that do
+        not. The position tiebreaker from ``_rank_key`` makes the order total, so
+        a placeholder ``0`` and an absent ``None`` within the same set are never
+        selected by both arms — they resolve to different streams by input
+        position.
 
         Args:
             streams: List of available streams.
 
         Returns:
-            Stream with highest resolution (or first stream if all heights are None).
+            Stream with the highest usable height (or the last stream in input
+            order when none carry a usable height).
         """
-        # Use tuple key: (has_height, height) for deterministic ordering.
-        # Streams with known height rank higher; None-height streams rank lower.
-        # When all heights are None, max returns the first element (stable).
-        return max(streams, key=lambda s: (s.height is not None, s.height or 0))
+        # NET-017: shared rank key — see _rank_key. max picks the highest usable
+        # height; ties fall to the highest input_position, never both arms alike.
+        return max(enumerate(streams), key=self._rank_key)[1]
 
     def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
         """
@@ -74,10 +97,10 @@ class QualitySelector:
                 result = self._get_fallback_stream(streams)
                 logger.debug("selected_best_quality", quality=result.quality)
             case QualityEnum.WORST:
-                # Use tuple key: (is_none, height) for deterministic ordering.
-                # Streams with known height rank lower (better); None-height rank highest (worst).
-                # When all heights are None, min returns the first element (stable).
-                result = min(streams, key=lambda s: (s.height is None, s.height or 0))
+                # NET-017: shared rank key — see _rank_key. min picks the lowest
+                # usable height; ties fall to the lowest input_position, so the
+                # WORST arm returns a different record than BEST on a {0, None} set.
+                _, result = min(enumerate(streams), key=self._rank_key)
                 logger.debug("selected_worst_quality", quality=result.quality)
             case _:
                 # Try to find matching quality (support both "720" and "720p" formats)

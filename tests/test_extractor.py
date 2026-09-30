@@ -663,6 +663,61 @@ class TestBuildStreams:
         assert streams[1].bitrate == 5000
         assert streams[1].resolution == "1920x1080"
 
+    def test_build_streams_classifies_mp4_when_m3u8_in_query(self) -> None:
+        """NET-017: a progressive URL whose query carries .m3u8 is MP4, not HLS."""
+        formats = [
+            {
+                "vcodec": "h264",
+                "url": "https://c/v.mp4?src=https://x/a.m3u8&t=1",
+                "height": 720,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].format == StreamFormat.MP4
+
+    def test_build_streams_classifies_mp4_when_m3u8_is_directory_name(self) -> None:
+        """NET-017: a .m3u8 directory in the path does not make a progressive URL HLS."""
+        formats = [
+            {
+                "vcodec": "h264",
+                "url": "https://c/v.m3u8/720/v.mp4",
+                "height": 720,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].format == StreamFormat.MP4
+
+    def test_build_streams_classifies_hls_by_path_suffix_only(self) -> None:
+        """NET-017: a true .m3u8 path suffix is HLS even when .mp4 appears in the query."""
+        formats = [
+            {
+                "vcodec": "h264",
+                "url": "https://c/s.m3u8?x=1.mp4",
+                "height": 720,
+            },
+        ]
+
+        streams = _build_streams(formats)
+
+        assert len(streams) == 1
+        assert streams[0].format == StreamFormat.HLS
+
+    def test_build_streams_excludes_record_without_vcodec(self) -> None:
+        """NET-017: a record that omits vcodec is indeterminate and not offered."""
+        formats = [
+            {"url": "https://example.com/video.mp4", "height": 720, "width": 1280},
+        ]
+
+        streams = _build_streams(formats)
+
+        assert streams == []
+
 
 def _browser_settings() -> Settings:
     """Build Settings for the browser-extraction oracle with both interaction waits at 0.

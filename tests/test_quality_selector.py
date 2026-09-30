@@ -218,3 +218,68 @@ def test_get_fallback_stream_handles_none_height() -> None:
     result = selector._get_fallback_stream(streams)
     assert result.quality == "1080"
     assert result.height == 1080
+
+
+def test_select_best_returns_absent_record_for_placeholder_and_none() -> None:
+    """NET-017: BEST on a {0, None} set returns the absent (None) record, not the
+    placeholder zero — the two must not be selected by both arms alike."""
+    selector = QualitySelector()
+    placeholder = Stream(
+        url="https://example.com/zero", format=StreamFormat.MP4, quality="unknown", height=0
+    )
+    absent = Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown")
+
+    result = selector.select([placeholder, absent], QualityEnum.BEST)
+
+    assert result.url == "https://example.com/absent"
+    assert result.height is None
+
+
+def test_select_worst_returns_placeholder_for_placeholder_and_none() -> None:
+    """NET-017: WORST on a {0, None} set returns the placeholder (0) record, not the
+    absent one — the converse direction, so a regression re-inverting the arms
+    fails this test only."""
+    selector = QualitySelector()
+    placeholder = Stream(
+        url="https://example.com/zero", format=StreamFormat.MP4, quality="unknown", height=0
+    )
+    absent = Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown")
+
+    result = selector.select([placeholder, absent], QualityEnum.WORST)
+
+    assert result.url == "https://example.com/zero"
+    assert result.height == 0
+
+
+def test_select_best_ranks_real_height_above_placeholders() -> None:
+    """NET-017: a real positive height outranks both placeholder zero and absent."""
+    selector = QualitySelector()
+    streams = [
+        Stream(
+            url="https://example.com/zero", format=StreamFormat.MP4, quality="unknown", height=0
+        ),
+        Stream(url="https://example.com/real", format=StreamFormat.MP4, quality="720p", height=720),
+        Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown"),
+    ]
+
+    result = selector.select(streams, QualityEnum.BEST)
+
+    assert result.url == "https://example.com/real"
+    assert result.height == 720
+
+
+def test_select_worst_treats_placeholder_zero_as_absent() -> None:
+    """NET-017: WORST picks a placeholder zero over a real height, because 0 is
+    treated as absent (lowest), not as a real resolution."""
+    selector = QualitySelector()
+    streams = [
+        Stream(url="https://example.com/real", format=StreamFormat.MP4, quality="720p", height=720),
+        Stream(
+            url="https://example.com/zero", format=StreamFormat.MP4, quality="unknown", height=0
+        ),
+    ]
+
+    result = selector.select(streams, QualityEnum.WORST)
+
+    assert result.url == "https://example.com/zero"
+    assert result.height == 0
