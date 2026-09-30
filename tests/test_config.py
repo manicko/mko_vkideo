@@ -615,27 +615,123 @@ class TestEnvFileTypoDetection:
 
 
 class TestFormatValidationError:
-    """Tests for format_validation_error (CFG-001 UX improvement)."""
+    """Tests for format_validation_error suggestion quality (CFG-003)."""
 
     def test_extra_forbidden_suggests_did_you_mean(self) -> None:
-        """format_validation_error should suggest 'did you mean' for extra_forbidden errors."""
+        """format_validation_error should suggest 'did you mean' for extra_forbidden errors.
+
+        CFG-003 requires the assertion to name the *correct* setting, not merely
+        that a suggestion or a list is present.  The constructor-keyword typo
+        ``maxretries`` is normalised to ``VKDOWNLOADER_MAXRETRIES`` and must
+        suggest ``VKDOWNLOADER_MAX_RETRIES`` — the field the user actually meant.
+        """
         with pytest.raises(ValidationError) as exc_info:
             Settings(maxretries="9")  # typo: missing underscore
         formatted = format_validation_error(exc_info.value)
         assert "Configuration error" in formatted
-        assert "maxretries" in formatted
-        # Should suggest the correct field name
-        assert "Did you mean" in formatted or "Valid fields" in formatted
+        # The location is rendered in the normalised environment-variable namespace
+        assert "VKDOWNLOADER_MAXRETRIES" in formatted
+        # CFG-003: the suggestion must be the correct setting, not a generic winner
+        assert "Did you mean: VKDOWNLOADER_MAX_RETRIES?" in formatted
 
     def test_unknown_key_error_message(self) -> None:
-        """format_validation_error should include loc and msg for unknown keys."""
+        """format_validation_error should include loc and msg for unknown keys.
+
+        CFG-003 normalises the location to the env-var namespace, so
+        ``unknown_key`` is rendered as ``VKDOWNLOADER_UNKNOWN_KEY``.  Its
+        similarity ratio is below the 0.9 intent gate, so it falls to the
+        valid-name list rather than receiving a confident (and wrong) pointer.
+        """
         with pytest.raises(ValidationError) as exc_info:
             Settings(unknown_key="test_value")
         formatted = format_validation_error(exc_info.value)
-        assert "unknown_key" in formatted
+        assert "VKDOWNLOADER_UNKNOWN_KEY" in formatted
         assert "Extra inputs are not permitted" in formatted
         assert "Received: <redacted>" in formatted
         assert "Fix the offending value(s)" in formatted
+
+
+# CFG-003 R8 — 19 plausible misspellings through the real environment-file path.
+# Each row pairs the misspelled key with its intended target, or ``None`` when
+# the key has no plausible intent (LOGIN, bare prefix, XYZ) or falls below the
+# 0.9 intent gate (MAX_CONCURENT, ratio 0.825 — accepted as lost per D-1).
+_CFG003_R8_TABLE: list[tuple[str, str | None]] = [
+    ("VKDOWNLOADER_MAXRETRIES", "VKDOWNLOADER_MAX_RETRIES"),
+    ("VKDOWNLOADER_MAX_RETRY", "VKDOWNLOADER_MAX_RETRIES"),
+    ("VKDOWNLOADER_MAX_RETREIS", "VKDOWNLOADER_MAX_RETRIES"),
+    ("VKDOWNLOADER_DOWNLAOD_TIMEOUT", "VKDOWNLOADER_DOWNLOAD_TIMEOUT"),
+    ("VKDOWNLOADER_SSL_VERFY", "VKDOWNLOADER_SSL_VERIFY"),
+    ("VKDOWNLOADER_LOG_LVL", "VKDOWNLOADER_LOG_LEVEL"),
+    ("VKDOWNLOADER_COOKIE_SORCE", "VKDOWNLOADER_COOKIE_SOURCE"),
+    ("VKDOWNLOADER_HEADLES", "VKDOWNLOADER_HEADLESS"),
+    ("VKDOWNLOADER_THROTTLEDRATE", "VKDOWNLOADER_THROTTLED_RATE"),
+    ("VKDOWNLOADER_HTTP_CHUNKSIZE", "VKDOWNLOADER_HTTP_CHUNK_SIZE"),
+    ("VKDOWNLOADER_DOWNLOAD_DIRR", "VKDOWNLOADER_DOWNLOAD_DIR"),
+    ("VKDOWNLOADER_USERAGENT", "VKDOWNLOADER_USER_AGENT"),
+    ("VKDOWNLOADER_TIMEZONEE", "VKDOWNLOADER_TIMEZONE"),
+    ("VKDOWNLOADER_LOCALE_", "VKDOWNLOADER_LOCALE"),
+    ("VKDOWNLOADER_MAX_CONCURENT_DOWNLOADS", "VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS"),
+    # Below the 0.9 intent gate or no plausible intent → valid-name list
+    ("VKDOWNLOADER_MAX_CONCURENT", None),
+    ("VKDOWNLOADER_LOGIN", None),
+    ("VKDOWNLOADER_", None),
+    ("VKDOWNLOADER_XYZ", None),
+]
+
+
+class TestEnvFileValidationRendering:
+    """Tests for format_validation_error through the environment-file path (CFG-003).
+
+    Drives the renderer through the **real environment-file path** — the path
+    no test in the suite drives today and the path the defect lives on.
+    Asserts on the rendered text, not on the guard's return value (which
+    :class:`TestEnvFileTypoDetection` already covers).  Covers the full 19-row
+    R8 table from the CFG-003 finding.
+    """
+
+    @pytest.mark.parametrize(
+        ("env_key", "expected_suggestion"),
+        _CFG003_R8_TABLE,
+    )
+    def test_env_file_rendering(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env_key: str,
+        expected_suggestion: str | None,
+    ) -> None:
+        """format_validation_error through the environment-file path.
+
+        The renderer must match in the env-var namespace, so a genuine typo
+        names the correct setting.  Keys below the 0.9 intent gate — including
+        the three no-intent keys and ``VKDOWNLOADER_MAX_CONCURENT`` (ratio
+        0.825, accepted as lost per D-1) — must render the valid-name list with
+        no confident wrong pointer.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{env_key}=9\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        formatted = format_validation_error(exc_info.value)
+
+        # The offending key is rendered in the normalised env-var namespace
+        normalised_key = env_key.upper()
+        assert f"  - {normalised_key}: " in formatted, (
+            f"expected normalised loc {normalised_key} in error line; got:\n{formatted}"
+        )
+
+        if expected_suggestion is not None:
+            assert f"Did you mean: {expected_suggestion}?" in formatted, (
+                f"expected correct suggestion {expected_suggestion} for {env_key}; got:\n{formatted}"
+            )
+            assert "Valid fields:" not in formatted
+        else:
+            assert "Did you mean" not in formatted, (
+                f"expected NO suggestion for {env_key}; got:\n{formatted}"
+            )
+            assert "Valid fields:" in formatted
 
 
 class TestSetupLogging:

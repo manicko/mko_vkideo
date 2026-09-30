@@ -197,12 +197,37 @@ class Settings(BaseSettings):
 _ENV_VAR_PREFIX = "VKDOWNLOADER_"
 
 
+def _normalise_loc_to_env_var(loc: str) -> str:
+    """Normalise a pydantic-reported location into the ``VKDOWNLOADER_*`` namespace.
+
+    Strips one matching pair of surrounding quotes, strips the environment
+    prefix when the location carries it (case-insensitively, because
+    pydantic-settings lower-cased the key before reporting it), upper-cases
+    the remainder and re-applies the prefix.
+
+    The single normalised form serves both namespaces: a constructor-keyword
+    location (``maxretries``) is already a bare field name and normalises to
+    ``VKDOWNLOADER_MAXRETRIES``; an environment-file location
+    (``vkdownloader_maxretries``) normalises to the same value, so the same
+    matcher works regardless of which path produced the error.
+    """
+    if len(loc) >= 2 and loc[0] == loc[-1] and loc[0] in ("'", '"'):
+        loc = loc[1:-1]
+    if loc.lower().startswith(_ENV_VAR_PREFIX.lower()):
+        loc = loc[len(_ENV_VAR_PREFIX) :]
+    return _ENV_VAR_PREFIX + loc.upper()
+
+
 def format_validation_error(error: ValidationError) -> str:
     """Format a Pydantic ValidationError into a concise, user-facing message.
 
-    For ``extra_forbidden`` errors, includes a "did you mean" suggestion
-    based on the closest valid field name, to help users diagnose typos
-    in ``VKDOWNLOADER_*`` variables.
+    For ``extra_forbidden`` errors, normalises the reported location into the
+    ``VKDOWNLOADER_*`` environment-variable namespace and suggests the closest
+    valid variable name. Matching in one namespace avoids the namespace
+    mismatch that produced confident wrong pointers — fuzzy-matching a 25-
+    character prefixed, lower-cased key against 12-character field names —
+    and an intent gate (``cutoff=0.9``) routes keys with no plausible target
+    to the valid-name list rather than a wrong suggestion.
 
     Args:
         error: The ValidationError to format.
@@ -215,22 +240,22 @@ def format_validation_error(error: ValidationError) -> str:
         "Configuration error: one or more settings have invalid values.",
         "Check your .env file or VKDOWNLOADER_* environment variables:",
     ]
-    valid_field_names = sorted(Settings.model_fields.keys())
+    valid_env_vars = sorted(_build_valid_env_vars())
     for err in error.errors():
         loc = ".".join(str(part) for part in err.get("loc", ()))
         msg = err.get("msg", "validation failed")
         error_type = err.get("type", "")
-        lines.append(f"  - {loc}: {msg}")
 
-        # For extra_forbidden errors, suggest the nearest valid field name
-        # to help users diagnose typos (e.g. VKDOWNLOADER_MAXRETRIES -> MAX_RETRIES)
         if error_type == "extra_forbidden" and loc:
-            close = difflib.get_close_matches(loc, valid_field_names, n=1, cutoff=0.3)
+            rendered_loc = _normalise_loc_to_env_var(loc)
+            lines.append(f"  - {rendered_loc}: {msg}")
+            close = difflib.get_close_matches(rendered_loc, valid_env_vars, n=1, cutoff=0.9)
             if close:
-                env_var = f"{_ENV_VAR_PREFIX}{close[0].upper()}"
-                lines.append(f"    Did you mean: {env_var}? (check for typos)")
+                lines.append(f"    Did you mean: {close[0]}? (check for typos)")
             else:
-                lines.append(f"    Valid fields: {', '.join(valid_field_names)}")
+                lines.append(f"    Valid fields: {', '.join(valid_env_vars)}")
+        else:
+            lines.append(f"  - {loc}: {msg}")
 
         lines.append("    Received: <redacted>")
     lines.append("Fix the offending value(s) and try again.")
