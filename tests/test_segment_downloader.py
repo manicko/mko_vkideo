@@ -10,6 +10,7 @@ from vkdownloader.services.downloader_throttle import URLBackoffCoordinator, _re
 from vkdownloader.services.segment_downloader import (
     _download_segment_sequential,
     _fetch_playlist_with_retry,
+    _handle_token_refresh,
     _log_preserve_segments,
 )
 
@@ -36,7 +37,7 @@ class TestFetchPlaylistWithRetry:
         fetch_urls: list[str] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
         ) -> tuple[str, str]:
             refresh_calls.append(vid)
             return refreshed_url, ""
@@ -96,7 +97,7 @@ class TestFetchPlaylistWithRetry:
         fetch_statuses: list[int] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
         ) -> tuple[str, str]:
             refresh_calls.append(object())
             return refreshed_url, ""
@@ -152,7 +153,7 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
         ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
@@ -203,7 +204,7 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
         ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
@@ -252,7 +253,7 @@ class TestFetchPlaylistWithRetry:
         fetch_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
         ) -> tuple[str, str] | None:
             refresh_calls.append(object())
             return None
@@ -318,27 +319,22 @@ class TestSequentialSharesThePause:
             )
 
         assert result is True
-        coordinator.wait_if_paused.assert_awaited_once_with(_resource_key(segment_url))
+        coordinator.wait_if_paused.assert_awaited_once_with(segment_url)
 
     @pytest.mark.asyncio
-    async def test_retry_loop_rechecks_backoff_coordinator(self, tmp_path: Path) -> None:
-        """Sequential download re-checks the coordinator on each retry attempt."""
+    async def test_coordination_consulted_once_before_retry_internal(self, tmp_path: Path) -> None:
+        """wait_if_paused is consulted once before _retry_429_with_backoff (which retries internally).
+
+        D2: the outer for-loop was removed so the coordinator is consulted
+        exactly once, not once-per-internal-retry.
+        """
         segment_url = "https://cdn.example.com/seg1.ts"
         coordinator = URLBackoffCoordinator()
         coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)
 
-        call_count = 0
-
-        async def failing_retry(*args, **kwargs) -> bytes | None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                return b"segment-data"
-            return None
-
         with patch(
             "vkdownloader.services.segment_downloader._retry_429_with_backoff",
-            side_effect=failing_retry,
+            return_value=b"segment-data",
         ):
             result = await _download_segment_sequential(
                 MagicMock(),
@@ -350,7 +346,7 @@ class TestSequentialSharesThePause:
             )
 
         assert result is True
-        assert coordinator.wait_if_paused.await_count == 2
+        assert coordinator.wait_if_paused.await_count == 1
 
 
 class TestPreserveSegmentsReporter:
@@ -407,3 +403,212 @@ class TestPreserveSegmentsReporter:
             _log_preserve_segments(missing_dir)
 
         mock_logger.info.assert_not_called()
+
+
+class TestTokenRefreshDoesNotMutateHeaders:
+    """D3: _handle_token_refresh must not mutate the caller's headers dict."""
+
+    @pytest.mark.asyncio
+    async def test_headers_unchanged_after_refresh(self, test_settings: Settings) -> None:
+        """The headers dict passed to _handle_token_refresh is not modified.
+
+        _handle_token_refresh delegates to _refresh_token_and_retry (which does
+        not accept or mutate headers), so the caller's dict must survive intact.
+        """
+        video_url = "https://vkvideo.ru/video-12345_67890"
+        original_headers = {"User-Agent": "test", "Cookie": "prior=value"}
+
+        async def fake_refresh_token_and_retry(
+            vid: str, extractor: MagicMock, settings: Settings
+        ) -> tuple[str, str]:
+            return "https://refreshed.m3u8", "new=cookie"
+
+        mock_extractor = MagicMock()
+
+        with patch(
+            "vkdownloader.services.segment_downloader._refresh_token_and_retry",
+            side_effect=fake_refresh_token_and_retry,
+        ):
+            with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
+                result = await _handle_token_refresh(
+                    video_url, mock_extractor, test_settings, original_headers
+                )
+
+        assert result == ("https://refreshed.m3u8", "new=cookie")
+        assert original_headers == {"User-Agent": "test", "Cookie": "prior=value"}
+
+
+class TestSequentialIssuesAtMostMaxRetries:
+    """D2: sequential strategy must issue at most max_retries HTTP requests."""
+
+    @pytest.mark.asyncio
+    async def test_at_most_max_retries_requests(self, tmp_path: Path) -> None:
+        """_retry_429_with_backoff is called exactly once, not max_retries times."""
+        segment_url = "https://cdn.example.com/seg1.ts"
+        fetch_count = 0
+
+        async def counting_retry(*args: object, **kwargs: object) -> bytes | None:
+            nonlocal fetch_count
+            fetch_count += 1
+            return None
+
+        with patch(
+            "vkdownloader.services.segment_downloader._retry_429_with_backoff",
+            side_effect=counting_retry,
+        ):
+            result = await _download_segment_sequential(
+                MagicMock(),
+                segment_url,
+                tmp_path / "seg1.ts",
+                {},
+                max_retries=3,
+            )
+
+        assert result is False
+        assert fetch_count == 1
+
+
+class TestManifestRetryComputesBackoffDelay:
+    """D1: _fetch_playlist_with_retry calls _compute_backoff_delay on retryable failures."""
+
+    @pytest.mark.asyncio
+    async def test_transport_failure_triggers_backoff_delay(self, test_settings: Settings) -> None:
+        """A transport failure (None result) triggers _compute_backoff_delay + _wait_with_shutdown."""
+        video_url = "https://vkvideo.ru/video-12345_67890"
+        m3u8_url = "https://example.com/playlist.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+
+        async def fake_fetch(
+            session: MagicMock, url: str, hdr: dict[str, str], timeout: object
+        ) -> tuple[str, int] | None:
+            return None  # Transport failure
+
+        mock_session = MagicMock()
+        mock_extractor = MagicMock()
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._compute_backoff_delay",
+                return_value=0.0,
+            ) as mock_delay,
+            patch(
+                "vkdownloader.services.segment_downloader._wait_with_shutdown",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as mock_wait,
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                mock_session,
+                video_url,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=3,
+            )
+
+        assert result is None
+        # Transport-failure branch: delay computed on each non-final attempt
+        # _compute_backoff_delay is sync, so call_count (not await_count) is tracked.
+        assert mock_delay.call_count == 2  # 2 retries after first attempt
+        assert mock_wait.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retryable_status_triggers_backoff_delay(self, test_settings: Settings) -> None:
+        """A retryable HTTP status (429) triggers _compute_backoff_delay + _wait_with_shutdown."""
+        video_url = "https://vkvideo.ru/video-12345_67890"
+        m3u8_url = "https://example.com/playlist.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+
+        async def fake_fetch(
+            session: MagicMock, url: str, hdr: dict[str, str], timeout: object
+        ) -> tuple[str, int] | None:
+            return "", 429  # Retryable status
+
+        mock_session = MagicMock()
+        mock_extractor = MagicMock()
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._compute_backoff_delay",
+                return_value=0.0,
+            ) as mock_delay,
+            patch(
+                "vkdownloader.services.segment_downloader._wait_with_shutdown",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as mock_wait,
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                mock_session,
+                video_url,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=3,
+            )
+
+        assert result is None
+        assert mock_delay.call_count == 2  # 2 retries after first attempt
+        assert mock_wait.await_count == 2
+        # Verify delay was computed with the actual status code (429)
+        assert mock_delay.call_args_list[0].args[0] == 429
+
+
+class TestBackoffCoordinatorNormalizesInternally:
+    """D4: URLBackoffCoordinator applies _resource_key internally, callers pass raw URLs."""
+
+    @pytest.mark.asyncio
+    async def test_pause_and_wait_same_origin_different_paths(self) -> None:
+        """Pause on one path, wait on a different path of the same origin."""
+        coordinator = URLBackoffCoordinator(pause_seconds=10.0)
+        url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
+        url_b = "https://cdn.example.com:8080/path2/seg.ts"
+
+        # url_a and url_b have different origins (one has port 8080) — use same origin
+        url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
+        url_b = "https://cdn.example.com/path2/seg.ts"
+
+        async def mock_wait_for(coro: object, timeout: float | None) -> object:
+            coro.close()
+            raise TimeoutError()
+
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for",
+            side_effect=mock_wait_for,
+        ):
+            await coordinator.pause(url_a, coordinator.pause_seconds)
+            result = await coordinator.wait_if_paused(url_b)
+
+        assert result is True
+        assert _resource_key(url_a) == _resource_key(url_b)
+
+    @pytest.mark.asyncio
+    async def test_no_external_key_needed(self) -> None:
+        """Callers can pass the raw URL without pre-normalization."""
+        coordinator = URLBackoffCoordinator(pause_seconds=10.0)
+        raw_url = "https://user:pass@cdn.example.com:8080/path/seg.ts?token=abc"
+
+        async def mock_wait_for(coro: object, timeout: float | None) -> object:
+            coro.close()
+            raise TimeoutError()
+
+        with patch(
+            "vkdownloader.services.downloader_throttle.asyncio.wait_for",
+            side_effect=mock_wait_for,
+        ):
+            await coordinator.pause(raw_url, coordinator.pause_seconds)
+            result = await coordinator.wait_if_paused(raw_url)
+
+        assert result is True

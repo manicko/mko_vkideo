@@ -758,18 +758,17 @@ class TestBackoffCoordinatorPause:
     async def test_pause_sets_timestamp(self) -> None:
         """After pause, wait_if_paused returns True for the same key."""
         coordinator = URLBackoffCoordinator()
-        key = _resource_key("https://cdn.example.com/seg.ts")
-        await coordinator.pause(key, 1.0)
-        result = await coordinator.wait_if_paused(key)
+        await coordinator.pause("https://cdn.example.com/seg.ts", 1.0)
+        result = await coordinator.wait_if_paused("https://cdn.example.com/seg.ts")
         assert result is True
 
     @pytest.mark.asyncio
     async def test_pause_overwrites_previous(self) -> None:
         """Second pause overwrites the previous timestamp, not stacked."""
         coordinator = URLBackoffCoordinator()
-        key = _resource_key("https://cdn.example.com/seg.ts")
+        url = "https://cdn.example.com/seg.ts"
         # First pause with a very short duration
-        await coordinator.pause(key, 0.01)
+        await coordinator.pause(url, 0.01)
 
         # Mock wait_for so we don't actually sleep
         async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
@@ -779,25 +778,24 @@ class TestBackoffCoordinatorPause:
             "vkdownloader.services.downloader_throttle.asyncio.wait_for",
             side_effect=mock_wait_for,
         ):
-            result1 = await coordinator.wait_if_paused(key)
+            result1 = await coordinator.wait_if_paused(url)
         # Still paused — the first pause (0.01s) is still active
         assert result1 is True
 
         # Second pause with a longer duration overwrites the timestamp
-        await coordinator.pause(key, 100.0)
+        await coordinator.pause(url, 100.0)
         with patch(
             "vkdownloader.services.downloader_throttle.asyncio.wait_for",
             side_effect=mock_wait_for,
         ):
-            result2 = await coordinator.wait_if_paused(key)
+            result2 = await coordinator.wait_if_paused(url)
         assert result2 is True
 
     @pytest.mark.asyncio
     async def test_wait_if_paused_false_without_pause(self) -> None:
         """wait_if_paused returns False when no prior pause for that key."""
         coordinator = URLBackoffCoordinator()
-        key = _resource_key("https://cdn.example.com/seg.ts")
-        result = await coordinator.wait_if_paused(key)
+        result = await coordinator.wait_if_paused("https://cdn.example.com/seg.ts")
         assert result is False
 
 
@@ -813,7 +811,7 @@ class TestBackoffPauseSharedState:
         url1 = "https://cdn.example.com/path1/seg.ts"
         url2 = "https://cdn.example.com/path2/seg.ts"
 
-        await coordinator.pause(_resource_key(url1), coordinator.pause_seconds)
+        await coordinator.pause(url1, coordinator.pause_seconds)
 
         assert _resource_key(url1) == _resource_key(url2)
 
@@ -827,7 +825,7 @@ class TestBackoffPauseSharedState:
             "vkdownloader.services.downloader_throttle.asyncio.wait_for", mock_wait_for
         )
 
-        result = await coordinator.wait_if_paused(_resource_key(url2))
+        result = await coordinator.wait_if_paused(url2)
         assert result is True
 
 

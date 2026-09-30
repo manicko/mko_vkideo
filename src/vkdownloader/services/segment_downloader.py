@@ -21,18 +21,15 @@ from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
 from .downloader_throttle import (
+    _TRANSPORT_FAILURE_STATUS,
     RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
     _parse_retry_after,
-    _resource_key,
     _retry_429_with_backoff,
     _wait_with_shutdown,
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
-
-# HTTP status code indicating a transport-layer failure from the upstream server.
-_TRANSPORT_FAILURE_STATUS: int = 500
 
 if TYPE_CHECKING:
     from ..models.dtos import HLSDownloadRequest
@@ -183,31 +180,30 @@ async def _download_segment_sequential(
     """
     shutdown_event = get_shutdown_event()
 
-    for _ in range(max_retries):
-        if shutdown_event.is_set():
-            return False
-        if backoff_coordinator is not None:
-            await backoff_coordinator.wait_if_paused(_resource_key(segment_url))
+    if shutdown_event.is_set():
+        return False
+    if backoff_coordinator is not None:
+        await backoff_coordinator.wait_if_paused(segment_url)
 
-        content = await _retry_429_with_backoff(
-            session,
-            segment_url,
-            headers,
-            segment_index,
-            max_retries=max_retries,
-            download_timeout=download_timeout,
-        )
-        if content is not None and len(content) > 0:
-            # DF-010: Write to temp file then os.replace for atomicity
-            temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-            try:
-                with open(temp_path, "wb") as f:
-                    f.write(content)
-                os.replace(temp_path, output_path)
-            except Exception:
-                temp_path.unlink(missing_ok=True)
-                raise
-            return True
+    content = await _retry_429_with_backoff(
+        session,
+        segment_url,
+        headers,
+        segment_index,
+        max_retries=max_retries,
+        download_timeout=download_timeout,
+    )
+    if content is not None and len(content) > 0:
+        # DF-010: Write to temp file then os.replace for atomicity
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(content)
+            os.replace(temp_path, output_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return True
     return False
 
 
@@ -221,11 +217,13 @@ async def _notify_backoff_for_retryable_status(
     backoff_coordinator: URLBackoffCoordinator | None,
     resource_url: str | None,
 ) -> None:
-    """Notify backoff coordinator for retryable HTTP status codes."""
+    """Notify backoff coordinator for retryable HTTP status codes.
+
+    The coordinator normalizes *resource_url* internally via ``_resource_key``,
+    so callers may pass the raw URL.
+    """
     if backoff_coordinator and resource_url and _is_retryable_status(status_code):
-        await backoff_coordinator.pause(
-            _resource_key(resource_url), backoff_coordinator.pause_seconds
-        )
+        await backoff_coordinator.pause(resource_url, backoff_coordinator.pause_seconds)
 
 
 def _should_continue_on_retry(
@@ -296,7 +294,7 @@ async def _check_backoff_before_attempt(
 ) -> bool:
     """Check backoff state before download attempt. Returns True if should abort."""
     if backoff_coordinator and resource_url:
-        was_paused = await backoff_coordinator.wait_if_paused(_resource_key(resource_url))
+        was_paused = await backoff_coordinator.wait_if_paused(resource_url)
         if was_paused and shutdown_event.is_set():
             return True
     return False
@@ -500,6 +498,7 @@ async def _handle_token_refresh(
     video_url: str,
     extractor: VKVideoExtractor,
     settings: Settings,
+    headers: dict[str, str],
 ) -> tuple[str, str] | None:
     """Handle token refresh on 403/410 error.
 
@@ -552,7 +551,7 @@ async def _fetch_playlist_with_retry(
             return None
 
         if backoff_coordinator is not None:
-            await backoff_coordinator.wait_if_paused(_resource_key(current_url))
+            await backoff_coordinator.wait_if_paused(current_url)
 
         result = await _fetch_single_playlist(session, current_url, headers, client_timeout)
 
@@ -566,9 +565,15 @@ async def _fetch_playlist_with_retry(
             if attempt == max_retries - 1:
                 return None
             if backoff_coordinator is not None:
-                await backoff_coordinator.pause(
-                    _resource_key(current_url), backoff_coordinator.pause_seconds
-                )
+                await backoff_coordinator.pause(current_url, backoff_coordinator.pause_seconds)
+            # D1: compute the exponential-backoff delay and honour shutdown
+            # before looping. Manifest retry has no Retry-After, so pass None.
+            delay = _compute_backoff_delay(_TRANSPORT_FAILURE_STATUS, attempt, None)
+            shutdown_triggered = await _wait_with_shutdown(
+                delay, shutdown_event, attempt, _strip_auth_params(current_url)
+            )
+            if shutdown_triggered:
+                return None
             continue
 
         playlist_text, status = result
@@ -587,9 +592,15 @@ async def _fetch_playlist_with_retry(
             if attempt == max_retries - 1:
                 return None
             if backoff_coordinator is not None:
-                await backoff_coordinator.pause(
-                    _resource_key(current_url), backoff_coordinator.pause_seconds
-                )
+                await backoff_coordinator.pause(current_url, backoff_coordinator.pause_seconds)
+            # D1: compute the exponential-backoff delay and honour shutdown
+            # before looping. Manifest retry has no Retry-After, so pass None.
+            delay = _compute_backoff_delay(status, attempt, None)
+            shutdown_triggered = await _wait_with_shutdown(
+                delay, shutdown_event, attempt, _strip_auth_params(current_url)
+            )
+            if shutdown_triggered:
+                return None
             continue
 
         if status in (403, 410) and extractor is not None:
@@ -599,7 +610,7 @@ async def _fetch_playlist_with_retry(
                 status=status,
                 attempt=attempt + 1,
             )
-            refresh_result = await _handle_token_refresh(video_url, extractor, settings)
+            refresh_result = await _handle_token_refresh(video_url, extractor, settings, headers)
             if refresh_result is not None:
                 current_url, new_cookies = refresh_result
                 headers["Cookie"] = new_cookies

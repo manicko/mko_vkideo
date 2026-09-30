@@ -22,7 +22,6 @@ from ..models.enums import CookieSource, QualityEnum
 from ..services.cookies import _cookies_to_netscape
 from ..services.downloader_throttle import (
     _compute_backoff_delay,
-    _resource_key,
     _wait_with_shutdown,
     get_shutdown_event,
 )
@@ -399,7 +398,7 @@ async def download_with_ytdlp_with_resume_fallback(
         # provided, and allows interruption via the shutdown event.
         backoff_delay = _compute_backoff_delay(500, retry_count, None)
         if backoff_coordinator is not None:
-            await backoff_coordinator.wait_if_paused(_resource_key(video_url))
+            await backoff_coordinator.wait_if_paused(video_url)
         shutdown_triggered = await _wait_with_shutdown(
             backoff_delay,
             shutdown_event,

@@ -80,14 +80,24 @@ class URLBackoffCoordinator:
         self._lock = asyncio.Lock()
 
     async def pause(self, resource_url: str, duration_seconds: float) -> None:
-        """Set backoff duration for URL."""
+        """Set backoff duration for URL.
+
+        Normalizes *resource_url* via ``_resource_key`` so that any path or
+        query variation on the same origin maps to the same backoff slot.
+        """
+        key = _resource_key(resource_url)
         async with self._lock:
-            self._backoff_state[resource_url] = time.time() + duration_seconds
+            self._backoff_state[key] = time.time() + duration_seconds
 
     async def wait_if_paused(self, resource_url: str) -> bool:
-        """Block until backoff expires for URL. Returns True if was paused."""
+        """Block until backoff expires for URL. Returns True if was paused.
+
+        Normalizes *resource_url* via ``_resource_key`` internally so callers
+        may pass the raw URL.
+        """
+        key = _resource_key(resource_url)
         async with self._lock:
-            timestamp = self._backoff_state.get(resource_url, 0)
+            timestamp = self._backoff_state.get(key, 0)
         if time.time() >= timestamp:
             return False
 
