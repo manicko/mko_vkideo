@@ -151,12 +151,41 @@ class Settings(BaseSettings):
 
         An empty string (e.g. ``VKDOWNLOADER_LOG_FILE=""``) is coerced to
         ``None`` so pydantic treats it as "no log file," consistent with the
-        default. This differs from ``download_dir`` (see ``normalize_download_dir``),
-        which falls back to the field default instead of ``None``. See CFG-002
-        for the rationale behind this asymmetry.
+        default. This is the same intent as ``normalize_download_dir`` for
+        ``download_dir``: each path-typed field maps an empty string to its
+        own declared default. The two differ only in what that default is.
+        ``log_file`` is optional (``Path | None``) and defaults to ``None``,
+        so empty means "no file"; ``download_dir`` is required (``Path``) and
+        defaults to a concrete directory, so empty means "use the default
+        directory". The behaviour is symmetric in intent -- each path field
+        falls back to its own declared default -- so no audit-finding
+        cross-reference is needed.
         """
         if v == "":
             return None
+        return v
+
+    @field_validator("user_agent", "timezone", "locale", mode="before")
+    @classmethod
+    def reject_empty_string(cls, v: object) -> object:
+        """Reject an empty or whitespace-only free-text setting.
+
+        An empty string (e.g. ``VKDOWNLOADER_USER_AGENT=``) is not a request
+        for the default -- it is a request for an empty user-agent string --
+        and the three free-text fields are forwarded verbatim into request
+        headers, command lines and driver constructors, where an empty value
+        is not neutral. There is no meaningful empty form for these, so the
+        assignment must be removed to use the default rather than silently
+        rewritten to it. This reuses the ``mode="before"`` pattern of
+        ``normalize_download_dir`` and ``empty_string_to_none``; the field
+        defaults are non-empty strings, so ``Settings()`` still constructs
+        cleanly even though ``validate_default`` runs this validator against
+        them.
+        """
+        if isinstance(v, str) and not v.strip():
+            raise ValueError(
+                "must not be empty or whitespace; remove the setting to use the default"
+            )
         return v
 
     @field_validator("download_dir", "log_file", mode="after")

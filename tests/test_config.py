@@ -231,7 +231,7 @@ class TestWarnUnknownEnvVars:
 
 
 class TestDownloadDirEmptyString:
-    """Tests for empty-string download_dir handling (CFG-002)."""
+    """Tests for empty-string handling of the path-typed fields."""
 
     def test_download_dir_empty_string_uses_default(self) -> None:
         """Settings(download_dir='') should use the default, not crash."""
@@ -260,6 +260,118 @@ class TestDownloadDirEmptyString:
         """Settings(log_file='') should still produce None (unchanged behavior)."""
         settings = Settings(log_file="")
         assert settings.log_file is None
+
+
+_EMPTY_FREE_TEXT_SETTINGS: list[tuple[str, str]] = [
+    ("user_agent", "VKDOWNLOADER_USER_AGENT"),
+    ("timezone", "VKDOWNLOADER_TIMEZONE"),
+    ("locale", "VKDOWNLOADER_LOCALE"),
+]
+
+
+class TestEmptyFreeTextSettings:
+    """Tests for empty-value rejection on the free-text settings (CFG-007).
+
+    Covers the three input paths that matter here -- a ``.env`` file, the
+    process environment, and a constructor keyword -- for each of
+    ``user_agent``, ``timezone`` and ``locale``. The adjacent path-field
+    behaviour is pinned by :class:`TestDownloadDirEmptyString`, which this
+    class does not duplicate and leaves untouched.
+    """
+
+    @pytest.mark.parametrize("field_name", ["user_agent", "timezone", "locale"])
+    @pytest.mark.parametrize("bad_value", ["", "   ", "\t\n"])
+    def test_constructor_rejects_empty(self, field_name: str, bad_value: str) -> None:
+        """An empty or whitespace-only constructor value must fail validation.
+
+        The failure must be self-diagnosing: the location names the setting and
+        the message tells the user to remove the assignment, distinguishing it
+        from a request for the default.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(**{field_name: bad_value})
+
+        formatted = format_validation_error(exc_info.value)
+        # The setting is named in the rendered output...
+        assert field_name in formatted
+        # ...the value is redacted through the existing renderer...
+        assert "Received: <redacted>" in formatted
+        # ...and the message is explicit: it is not a silent fall-through.
+        assert "must not be empty" in str(exc_info.value)
+        assert "remove" in str(exc_info.value)
+
+    @pytest.mark.parametrize(("field_name", "env_var"), _EMPTY_FREE_TEXT_SETTINGS)
+    @pytest.mark.parametrize("bad_value", ["", "   ", "\t\n"])
+    def test_empty_env_var_rejected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        field_name: str,
+        env_var: str,
+        bad_value: str,
+    ) -> None:
+        """An exported empty VKDOWNLOADER_* value must fail validation.
+
+        This is the OS-environment path: an empty string exported in the shell
+        reaches the field and must be rejected, not silently dropped by
+        ``env_ignore_empty`` (which is, and stays, ``False``).
+        """
+        monkeypatch.setenv(env_var, bad_value)
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+
+        formatted = format_validation_error(exc_info.value)
+        assert field_name in formatted
+        assert "Received: <redacted>" in formatted
+        assert "must not be empty" in str(exc_info.value)
+
+    @pytest.mark.parametrize(("field_name", "env_var"), _EMPTY_FREE_TEXT_SETTINGS)
+    @pytest.mark.parametrize("bad_value", ["", "   "])
+    def test_empty_env_file_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        field_name: str,
+        env_var: str,
+        bad_value: str,
+    ) -> None:
+        """An empty assignment in a ``.env`` file must fail validation.
+
+        This is the *reported* defect path: ``VKDOWNLOADER_USER_AGENT=`` in a
+        ``.env`` must be rejected, not silently accepted as ``''``. The
+        whitespace-only form is included because dotenv strips it to an empty
+        string, which the validator must still reject.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{env_var}={bad_value}\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+
+        formatted = format_validation_error(exc_info.value)
+        assert field_name in formatted
+        assert "Received: <redacted>" in formatted
+        assert "must not be empty" in str(exc_info.value)
+
+    def test_defaults_construct_cleanly(self) -> None:
+        """Every field default must still validate: ``Settings()`` constructs.
+
+        ``validate_default`` runs the new ``mode="before"`` validator against
+        the field defaults, but each default is a non-empty string, so they
+        all pass and the model constructs with no error.
+        """
+        settings = Settings()
+        assert settings.user_agent == Settings.model_fields["user_agent"].default
+        assert settings.timezone == "Europe/Moscow"
+        assert settings.locale == "ru-RU"
+        assert settings.user_agent.strip() != ""
+        assert settings.timezone.strip() != ""
+        assert settings.locale.strip() != ""
+
+    def test_a_non_empty_value_is_accepted(self) -> None:
+        """A non-empty value through any path is accepted, not only the default."""
+        settings = Settings(user_agent="MyCustomAgent/2.0")
+        assert settings.user_agent == "MyCustomAgent/2.0"
 
 
 class TestEnvFileTypoDetection:
