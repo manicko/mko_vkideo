@@ -40,7 +40,8 @@ From `{SELECTED_PHASES}` parse each remaining filename (`NN-audit-name.md`) to e
 
 
 Read `.ai/context/commands.md` for verification commands.
-Read `AGENTS.md` for project guidelines.
+Read `.kilo/rules/project.md` for project guidelines.
+Read `.kilo/rules/commands.md` for command conventions.
 List documentation structure from `docs/` folder.
 
 Set variables:
@@ -52,6 +53,11 @@ Set variables:
 
 
 ## 2. Execute Phase Loop
+
+`{TOTAL_PHASES}` = number of entries in `{SELECTED_PHASES}`.
+Before the loop, initialise `{COMPLETED_PHASES}`, `{VALIDATED_PHASES}`,
+`{VALIDATED_FINDINGS}`, `{CRITICAL_COUNT}`, `{HIGH_COUNT}`,
+`{MEDIUM_COUNT}` and `{LOW_COUNT}` to 0.
 
 For each phase file in `{SELECTED_PHASES}` 
 
@@ -82,10 +88,15 @@ Task(
 Check that `{OUTPUT_PATH}` exists and is not empty.
 If missing or empty: retry once, then escalate on second failure.
 
-### 2.4 Launch Validator (skip for Phase 99)
-Launch the Validator **only** when Findings are **not trivial** ands relate to **significant code changes** or **architecture modifications**.
+When the check passes, increment `{COMPLETED_PHASES}`.
 
-In all other cases — skip.
+### 2.4 Launch Validator
+
+Launch the Validator for every selected phase. The gate that previously
+decided whether to do so is removed: its condition was not defined anywhere
+in the command, the validator's handbook, or the report format, so it could
+never be evaluated and was always applied by unrecorded judgement. The
+validator's per-finding decisions carry the triage instead.
 
 ```
 Task(
@@ -105,6 +116,14 @@ Task(
 Check that `.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md` exists.
 If missing or empty: retry once, then escalate on second failure.
 
+When the file is present — i.e. the Validator ran for this phase — increment
+`{VALIDATED_PHASES}`, add the number of findings it kept (not rejected) to
+`{VALIDATED_FINDINGS}`, and fold its severity tally into `{CRITICAL_COUNT}`,
+`{HIGH_COUNT}`, `{MEDIUM_COUNT}` and `{LOW_COUNT}`. A phase whose findings file
+held no findings increments `{VALIDATED_PHASES}` but contributes nothing to
+`{VALIDATED_FINDINGS}`, so it cannot claim validation coverage it did not
+produce.
+
 </phase_loop>
 
 </process>
@@ -114,14 +133,18 @@ If missing or empty: retry once, then escalate on second failure.
 ---------------------
 AUDIT COMPLETE
 
-Phases completed: {N}/{N}
-Validated findings: {N} total
+Phases completed: {COMPLETED_PHASES}/{TOTAL_PHASES}
+
+Emit the validated-findings block only while `{VALIDATED_PHASES}` > 0
+(the Validator runs for every selected phase, so the block is absent only
+when no phase was executed):
+Validated findings: {VALIDATED_FINDINGS} total
 
 By severity:
-- CRITICAL: {n}
-- HIGH: {n}
-- MEDIUM: {n}
-- LOW: {n}
+- CRITICAL: {CRITICAL_COUNT}
+- HIGH: {HIGH_COUNT}
+- MEDIUM: {MEDIUM_COUNT}
+- LOW: {LOW_COUNT}
 ---------------------
 
 </output>
