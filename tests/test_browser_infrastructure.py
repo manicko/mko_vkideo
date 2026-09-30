@@ -8,8 +8,7 @@ import pytest
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError
 from vkdownloader.infrastructure.browser import BrowserManager
-from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor
-from vkdownloader.models.enums import PlaylistType
+from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor, _PlaylistType
 
 
 class TestBrowserManager:
@@ -498,7 +497,9 @@ class TestNetworkMonitor:
         await monitor._intercept_response(mock_response)
 
         assert "https://cdn.example.com/master.m3u8" in monitor.m3u8_urls
-        assert monitor._playlist_types["https://cdn.example.com/master.m3u8"] == PlaylistType.MASTER
+        assert (
+            monitor._playlist_types["https://cdn.example.com/master.m3u8"] == _PlaylistType.MASTER
+        )
 
     @pytest.mark.asyncio
     async def test_intercept_response_classifies_media_playlist(self) -> None:
@@ -515,7 +516,7 @@ class TestNetworkMonitor:
 
         await monitor._intercept_response(mock_response)
 
-        assert monitor._playlist_types["https://cdn.example.com/media.m3u8"] == PlaylistType.MEDIA
+        assert monitor._playlist_types["https://cdn.example.com/media.m3u8"] == _PlaylistType.MEDIA
 
     @pytest.mark.asyncio
     async def test_intercept_response_classifies_unclassified_playlist(self) -> None:
@@ -532,11 +533,16 @@ class TestNetworkMonitor:
 
         assert (
             monitor._playlist_types["https://cdn.example.com/unknown.m3u8"]
-            == PlaylistType.UNCLASSIFIED
+            == _PlaylistType.UNCLASSIFIED
         )
 
-    def test_select_sorts_master_first(self) -> None:
-        """B7: select() ranks master playlists ahead of unclassified and media."""
+    def test_select_sorts_media_first(self) -> None:
+        """B7: select() ranks media playlists above unclassified above master.
+
+        Spec: "media above master above unclassified, ties broken by arrival
+        order." A master manifest carries no segments, so it must never be
+        the first address handed to the downloader.
+        """
         mock_page = MagicMock()
         monitor = NetworkMonitor(mock_page)
         monitor.m3u8_urls = [
@@ -545,15 +551,35 @@ class TestNetworkMonitor:
             "https://cdn.example.com/plain.m3u8",
         ]
         monitor._playlist_types = {
-            "https://cdn.example.com/media.m3u8": PlaylistType.MEDIA,
-            "https://cdn.example.com/master.m3u8": PlaylistType.MASTER,
-            "https://cdn.example.com/plain.m3u8": PlaylistType.UNCLASSIFIED,
+            "https://cdn.example.com/media.m3u8": _PlaylistType.MEDIA,
+            "https://cdn.example.com/master.m3u8": _PlaylistType.MASTER,
+            "https://cdn.example.com/plain.m3u8": _PlaylistType.UNCLASSIFIED,
         }
 
         result = monitor.select()
 
-        assert result[0] == "https://cdn.example.com/master.m3u8"
-        assert result[-1] == "https://cdn.example.com/media.m3u8"
+        assert result[0] == "https://cdn.example.com/media.m3u8"
+        assert result[-1] == "https://cdn.example.com/master.m3u8"
+
+    def test_select_media_before_master_with_both_captured(self) -> None:
+        """B7: when both a media playlist and a master manifest are captured,
+        the media playlist is select()[0] — the master would produce a
+        silently corrupt file if passed to the downloader."""
+        mock_page = MagicMock()
+        monitor = NetworkMonitor(mock_page)
+        monitor.m3u8_urls = [
+            "https://cdn.example.com/master.m3u8",
+            "https://cdn.example.com/media.m3u8",
+        ]
+        monitor._playlist_types = {
+            "https://cdn.example.com/master.m3u8": _PlaylistType.MASTER,
+            "https://cdn.example.com/media.m3u8": _PlaylistType.MEDIA,
+        }
+
+        result = monitor.select()
+
+        assert result[0] == "https://cdn.example.com/media.m3u8"
+        assert result[1] == "https://cdn.example.com/master.m3u8"
 
     def test_select_returns_all_when_no_suspension_and_all_hls(self) -> None:
         """select() with all HLS addresses returns them all, ranked."""

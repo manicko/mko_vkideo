@@ -18,19 +18,6 @@ class QualityEnum(StrEnum):
     UNKNOWN = "unknown"
 
 
-class PlaylistType(StrEnum):
-    """HLS playlist classification for media-over-master ranking (B7).
-
-    A three-valued rank derived from the playlist body: master playlists
-    list variant streams, media playlists carry segments for one variant.
-    This enum is a rank only — it never filters captured addresses.
-    """
-
-    MASTER = "master"
-    MEDIA = "media"
-    UNCLASSIFIED = "unclassified"
-
-
 class StreamFormat(StrEnum):
     """Stream format types."""
 

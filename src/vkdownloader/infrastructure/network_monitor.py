@@ -2,13 +2,13 @@
 
 import json
 import re
+from enum import StrEnum
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 from playwright.async_api import Page, Response
 from structlog import get_logger
 
-from ..models.enums import PlaylistType
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -22,6 +22,20 @@ type JsonValue = dict[str, "JsonValue"] | list["JsonValue"] | str | int | float 
 # Master playlists carry variant references; media playlists carry segments.
 _MASTER_PLAYLIST_TAGS = ("#EXT-X-STREAM-INF", "#EXT-X-I-FRAME-STREAM-INF")
 _MEDIA_PLAYLIST_TAG = "#EXT-X-PLAYLIST-TYPE"
+
+
+class _PlaylistType(StrEnum):
+    """Module-private three-valued rank for media-over-master classification (B7).
+
+    A rank only — it never filters captured addresses. Media playlists carry
+    segment lists and are preferred; master manifests list variant references
+    and are ranked last by ``select()``. Re-exported nowhere: this is a
+    capture-time detail of ``NetworkMonitor``, not product vocabulary.
+    """
+
+    MEDIA = "media"
+    UNCLASSIFIED = "unclassified"
+    MASTER = "master"
 
 
 class NetworkMonitor:
@@ -40,7 +54,7 @@ class NetworkMonitor:
         """
         self.page = page
         self.m3u8_urls: list[str] = []
-        self._playlist_types: dict[str, PlaylistType] = {}
+        self._playlist_types: dict[str, _PlaylistType] = {}
         self._hls_filter_suspended_logged: bool = False
         self._setup_interceptors()
 
@@ -98,38 +112,42 @@ class NetworkMonitor:
         suffix = PurePosixPath(path).suffix.lower()
         return suffix == ".m3u8"
 
-    def _classify_playlist(self, body: bytes | None) -> PlaylistType:
+    def _classify_playlist(self, body: bytes | None) -> _PlaylistType:
         """Three-valued media-over-master rank from a playlist response body.
 
         B7: Inspects the raw body bytes for HLS playlist tags. This is a rank
-        only — it never filters addresses. Master playlists (containing
-        ``#EXT-X-STREAM-INF`` or ``#EXT-X-I-FRAME-STREAM-INF``) carry variant
-        stream references and are preferred for quality selection. Media
-        playlists (containing ``#EXT-X-PLAYLIST-TYPE``) carry segments for a
-        single variant. Absence of either tag yields ``UNCLASSIFIED``.
+        only — it never filters addresses. Media playlists (containing
+        ``#EXT-X-PLAYLIST-TYPE``) carry segment lists for a single variant
+        and are ranked first by ``select()``. Master manifests (containing
+        ``#EXT-X-STREAM-INF`` or ``#EXT-X-I-FRAME-STREAM-INF``) list variant
+        references only and are ranked last. Absence of both yields
+        ``UNCLASSIFIED``.
         """
         if body is None:
-            return PlaylistType.UNCLASSIFIED
+            return _PlaylistType.UNCLASSIFIED
         try:
             text = body.decode("utf-8", errors="replace")
         except (UnicodeDecodeError, AttributeError):
-            return PlaylistType.UNCLASSIFIED
+            return _PlaylistType.UNCLASSIFIED
         if any(tag in text for tag in _MASTER_PLAYLIST_TAGS):
-            return PlaylistType.MASTER
+            return _PlaylistType.MASTER
         if _MEDIA_PLAYLIST_TAG in text:
-            return PlaylistType.MEDIA
-        return PlaylistType.UNCLASSIFIED
+            return _PlaylistType.MEDIA
+        return _PlaylistType.UNCLASSIFIED
 
     def _rank_playlist(self, url: str) -> int:
-        """Numeric rank for sorting: master (0) < unclassified (1) < media (2).
+        """Numeric rank for sorting: media (0) < unclassified (1) < master (2).
 
-        Master playlists are ranked first because they enumerate all quality
-        variants — the optimal entry point for stream selection.
+        Media playlists carry segment lists and are the optimal download
+        entry point. Master manifests list variant references only and have
+        no segments on their own; they are ranked last. ``sorted()`` is
+        stable (PEP 1741), so addresses with equal rank retain their
+        arrival order, yielding a total ordering as required.
         """
-        playlist_type = self._playlist_types.get(url, PlaylistType.UNCLASSIFIED)
-        if playlist_type == PlaylistType.MASTER:
+        playlist_type = self._playlist_types.get(url, _PlaylistType.UNCLASSIFIED)
+        if playlist_type == _PlaylistType.MEDIA:
             return 0
-        if playlist_type == PlaylistType.MEDIA:
+        if playlist_type == _PlaylistType.MASTER:
             return 2
         return 1
 
@@ -185,7 +203,23 @@ class NetworkMonitor:
             if not captured:
                 return []
 
-            hls_only = [addr for addr in captured if self._classify_hls(addr)]
+            hls_only: list[str] = []
+            for addr in captured:
+                if self._classify_hls(addr):
+                    hls_only.append(addr)
+                else:
+                    # B7: log every rejected candidate with its host and
+                    # the rejection reason (host is logged only, not filtered).
+                    try:
+                        host = urlsplit(addr).netloc or "unknown"
+                    except Exception:
+                        host = "unknown"
+                    logger.debug(
+                        "hls_filter_rejected",
+                        url=_strip_auth_params(addr),
+                        host=host,
+                        reason="path_suffix_not_m3u8",
+                    )
 
             if not hls_only:
                 if not self._hls_filter_suspended_logged:
@@ -224,10 +258,15 @@ class NetworkMonitor:
                     logger.debug(
                         "m3u8_url_captured",
                         url=_strip_auth_params(normalized),
+                        host=urlsplit(normalized).netloc or "unknown",
                         playlist_type=self._playlist_types[normalized],
                     )
                 else:
-                    logger.debug("m3u8_url_captured", url=_strip_auth_params(normalized))
+                    logger.debug(
+                        "m3u8_url_captured",
+                        url=_strip_auth_params(normalized),
+                        host=urlsplit(normalized).netloc or "unknown",
+                    )
 
         # Also check for XHR responses containing stream URLs
         if "video" in url and response.headers.get("content-type", "").startswith(
@@ -299,10 +338,11 @@ class NetworkMonitor:
                         self.m3u8_urls.append(normalized)
                         # JSON-extracted URLs have no fetched playlist body
                         # yet, so they default to UNCLASSIFIED.
-                        self._playlist_types[normalized] = PlaylistType.UNCLASSIFIED
+                        self._playlist_types[normalized] = _PlaylistType.UNCLASSIFIED
                         logger.debug(
                             "m3u8_url_found_in_json",
                             url=_strip_auth_params(normalized),
+                            host=urlsplit(normalized).netloc or "unknown",
                         )
                 elif isinstance(value, (dict, list)):
                     self._extract_urls_from_json(value)

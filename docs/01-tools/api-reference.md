@@ -660,18 +660,6 @@ Video quality options for stream selection.
 
 ---
 
-### PlaylistType
-
-Location: `vkdownloader.models.enums`
-
-HLS playlist classification for media-over-master ranking (B7).
-
-| Value | Description |
-|-------|-------------|
-| `MASTER` | "master" — contains `#EXT-X-STREAM-INF` or `#EXT-X-I-FRAME-STREAM-INF` |
-| `MEDIA` | "media" — contains `#EXT-X-PLAYLIST-TYPE` |
-| `UNCLASSIFIED` | "unclassified" — neither tag present |
-
 ### StreamFormat
 
 Location: `vkdownloader.models.enums`
@@ -779,9 +767,9 @@ unconstrained set is returned with a single warning logged.
 **Methods:**
 | Method | Description |
 |--------|-------------|
-| `select() -> list[str]` | Return HLS-only addresses (NET-008 filter) with safety suspension. Never raises. Master playlists are ranked first. |
+| `select() -> list[str]` | Return HLS-only addresses (NET-008 filter) with safety suspension. Never raises. Media playlists ranked first. |
 | `_classify_hls(address: str) -> bool` | Local duplicate of `extractor._classify_format` (NET-008). Returns True when the URL path suffix is `.m3u8`. |
-| `_classify_playlist(body: bytes \| None) -> PlaylistType` | Three-valued media-over-master rank from a playlist response body. Never a filter. |
+| `_classify_playlist(body: bytes \| None)` | Three-valued media-over-master rank from a playlist body (media/master/unclassified). Rank only, never a filter. |
 
 ---
 
