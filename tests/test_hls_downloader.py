@@ -2184,10 +2184,22 @@ class TestIterProcessLines:
             callback_calls.append("fired")
             stream.feed_eof()  # stand-in for cancel_subprocess closing the pipe
 
-        lines = [
-            line
-            async for line in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
-        ]
+        async def _drain() -> list[bytes]:
+            return [
+                line
+                async for line in iter_process_lines(
+                    stream, shutdown_event, on_shutdown=on_shutdown
+                )
+            ]
+
+        try:
+            lines = await asyncio.wait_for(_drain(), timeout=5.0)
+        except TimeoutError:
+            pytest.fail(
+                "iter_process_lines did not terminate within 5.0s of a stop "
+                "that landed while readline() was blocked; "
+                f"on_shutdown invoked: {bool(callback_calls)}"
+            )
         await stopper
 
         assert lines == [b"line one\n"]
@@ -2224,10 +2236,22 @@ class TestIterProcessLines:
             stream.feed_data(b"line two\n")
             stream.feed_eof()
 
-        lines = [
-            line
-            async for line in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
-        ]
+        async def _drain() -> list[bytes]:
+            return [
+                line
+                async for line in iter_process_lines(
+                    stream, shutdown_event, on_shutdown=on_shutdown
+                )
+            ]
+
+        try:
+            lines = await asyncio.wait_for(_drain(), timeout=5.0)
+        except TimeoutError:
+            pytest.fail(
+                "iter_process_lines did not terminate within 5.0s of a stop "
+                "that landed while readline() was blocked; "
+                f"on_shutdown invoked: {bool(callback_calls)}"
+            )
         await stopper
 
         assert lines == [b"line one\n", b"line two\n"]
