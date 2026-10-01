@@ -2159,6 +2159,188 @@ class TestIterProcessLines:
         assert result == [b"line1\n"]
         assert callback_called == []
 
+    @pytest.mark.asyncio
+    async def test_stop_while_read_blocked_invokes_on_shutdown(self) -> None:
+        """A stop landing while readline() is blocked must invoke on_shutdown.
+
+        None of the four original tests can observe this case: they either
+        pre-set the event or exhaust a finite side_effect list. This drives a
+        real asyncio.StreamReader fed one line and then left silent, so the
+        next readline() blocks. The stop is set from a task, the watcher fires
+        on_shutdown, and the generator terminates.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line one\n")  # one line, then silence → next read blocks
+        shutdown_event = asyncio.Event()
+
+        async def _stop_soon() -> None:
+            await asyncio.sleep(0)
+            shutdown_event.set()
+
+        stopper = asyncio.create_task(_stop_soon())
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+            stream.feed_eof()  # stand-in for cancel_subprocess closing the pipe
+
+        lines = [
+            line
+            async for line in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        ]
+        await stopper
+
+        assert lines == [b"line one\n"]
+        assert callback_calls == ["fired"]
+        # No watcher task should outlive the generator.
+        leftover = [
+            t for t in asyncio.all_tasks() if t is not asyncio.current_task() and t is not stopper
+        ]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_on_shutdown_fires_exactly_once_after_blocked_read(self) -> None:
+        """A naive fix double-fires on the discriminator sequence.
+
+        The stop lands while a read is blocked; on_shutdown then feeds more
+        data; the generator continues and the next iteration's between-lines
+        guard also calls fire(). The shared fired flag must suppress the second
+        call, so the callback is invoked exactly once.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line one\n")
+        shutdown_event = asyncio.Event()
+
+        async def _stop_soon() -> None:
+            await asyncio.sleep(0)
+            shutdown_event.set()
+
+        stopper = asyncio.create_task(_stop_soon())
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+            # Simulate the child still having buffered output after the kill.
+            stream.feed_data(b"line two\n")
+            stream.feed_eof()
+
+        lines = [
+            line
+            async for line in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        ]
+        await stopper
+
+        assert lines == [b"line one\n", b"line two\n"]
+        assert callback_calls == ["fired"]
+        leftover = [
+            t for t in asyncio.all_tasks() if t is not asyncio.current_task() and t is not stopper
+        ]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_eof_terminates_without_invoking_on_shutdown(self) -> None:
+        """EOF ends the drain without calling on_shutdown, and leaves no tasks.
+
+        Uses a real StreamReader (not AsyncMock) to verify the between-lines
+        path and the watcher cleanup on normal exhaustion.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line1\nline2\n")
+        stream.feed_eof()
+        shutdown_event = asyncio.Event()
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+
+        lines = [
+            line
+            async for line in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        ]
+
+        assert lines == [b"line1\n", b"line2\n"]
+        assert callback_calls == []
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_consumer_break_leaves_no_pending_tasks(self) -> None:
+        """A consumer that breaks mid-stream must not leave the watcher pending."""
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line1\nline2\n")
+        shutdown_event = asyncio.Event()
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+
+        gen = iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        consumed: list[bytes] = []
+        async for line in gen:
+            consumed.append(line)
+            break  # consumer stops mid-stream
+        await gen.aclose()  # finalize the generator so the finally runs
+
+        assert consumed == [b"line1\n"]
+        assert callback_calls == []
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_aclose_leaves_no_pending_tasks(self) -> None:
+        """Explicitly closing the generator must cancel and await the watcher."""
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line one\n")
+        shutdown_event = asyncio.Event()
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+
+        gen = iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        first = await gen.__anext__()
+        assert first == b"line one\n"
+        await gen.aclose()
+
+        assert callback_calls == []
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_consumer_cancellation_cleans_up_watcher(self) -> None:
+        """Cancelling the consumer must not fire on_shutdown or leave tasks.
+
+        The callers own that path via their CancelledError arms; the watcher
+        in this generator must be cancelled and awaited away.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"line one\n")
+        shutdown_event = asyncio.Event()
+        callback_calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            callback_calls.append("fired")
+
+        gen = iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
+        consumed: list[bytes] = []
+
+        async def _consume() -> None:
+            async for line in gen:
+                consumed.append(line)
+
+        consumer = asyncio.create_task(_consume())
+        # Let the consumer receive the first line and block on the next readline.
+        await asyncio.sleep(0.01)
+        consumer.cancel()
+        try:
+            await consumer
+        except asyncio.CancelledError:
+            pass
+
+        assert callback_calls == []
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
 
 class TestReadProgress:
     """Tests for read_progress async generator."""

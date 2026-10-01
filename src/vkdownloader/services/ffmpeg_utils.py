@@ -43,6 +43,13 @@ async def iter_process_lines(
       cancel the subprocess so ``readline`` unblocks), or
     - the stream is exhausted (``readline`` returns an empty bytes object).
 
+    A generator-scoped watcher task awaits ``shutdown_event.wait()`` so that
+    a stop landing *while* ``readline()`` is blocked is observed without
+    waiting for the child to produce more output. The watcher invokes the
+    shared ``fire()`` helper — the single place ``on_shutdown`` is called —
+    so the callback fires at most once whether the stop arrives mid-read or
+    between lines.
+
     Args:
         stream: A subprocess ``StreamReader`` to read lines from.
         shutdown_event: asyncio Event that signals cancellation.
@@ -52,15 +59,38 @@ async def iter_process_lines(
     Yields:
         Raw ``bytes`` lines from the stream (including trailing newline).
     """
-    while True:
-        if shutdown_event.is_set():
-            if on_shutdown is not None:
-                await on_shutdown()
-            break
-        line = await stream.readline()
-        if not line:
-            break
-        yield line
+    fired = False
+
+    async def fire() -> None:
+        """The ONLY place on_shutdown is invoked, so it cannot fire twice."""
+        nonlocal fired
+        if on_shutdown is None or fired:
+            return
+        fired = True
+        await on_shutdown()
+
+    async def _watch_shutdown() -> None:
+        """Unblocks a read that is already in flight."""
+        await shutdown_event.wait()
+        await fire()
+
+    watch_task = asyncio.create_task(_watch_shutdown())
+    try:
+        while True:
+            if shutdown_event.is_set():
+                await fire()
+                break
+            line = await stream.readline()
+            if not line:
+                break
+            yield line
+    finally:
+        if not watch_task.done():
+            watch_task.cancel()
+            try:
+                await watch_task
+            except asyncio.CancelledError:
+                pass
 
 
 def check_ffmpeg_available() -> bool:
