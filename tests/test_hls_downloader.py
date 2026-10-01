@@ -360,6 +360,57 @@ class TestDownloadHlsWithResume:
         # Segments directory should be preserved for resume
         assert segments_dir.exists(), "Segments directory should be preserved for resume"
 
+    @pytest.mark.asyncio
+    async def test_resume_with_all_segments_present_merges_without_download(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """CON-006: when all segments already exist on disk, no download tasks
+        are created, yet _tally_and_merge still runs the merge from the on-disk
+        count.
+
+        Pre-fix code returned None for an empty task list, skipping the merge.
+        """
+        output_path = tmp_path / "video.mp4"
+        segments_dir = output_path.parent / ".video_segments"
+
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "00000.ts").write_bytes(b"segment 0 data")
+        (segments_dir / "00001.ts").write_bytes(b"segment 1 data")
+
+        with patch(
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.segment_downloader._clear_stale_segments",
+            ):
+                with patch(
+                    "vkdownloader.services.segment_downloader._download_segment",
+                    new_callable=AsyncMock,
+                ) as mock_download:
+                    with patch(
+                        "vkdownloader.services.segment_downloader._merge_segments_batched",
+                        return_value=output_path,
+                    ) as mock_merge:
+                        result = await asyncio.wait_for(
+                            download_hls_with_resume(
+                                HLSDownloadRequest(
+                                    video_url="https://vkvideo.ru/video-12345_67890",
+                                    m3u8_url="https://example.com/video.m3u8",
+                                    output_file=output_path,
+                                ),
+                                settings=test_settings,
+                            ),
+                            timeout=5.0,
+                        )
+
+        assert result == output_path
+        mock_download.assert_not_called()
+        mock_merge.assert_called_once()
+
 
 class TestParseM3u8Segments:
     """Tests for _parse_m3u8_segments helper function."""

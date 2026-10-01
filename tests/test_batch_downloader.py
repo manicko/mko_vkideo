@@ -620,6 +620,56 @@ class TestBatchCancellationReporting:
         assert "Cancelled:" not in success_output
 
 
+class TestBatchCancellationPropagates:
+    """Route B: a child that *raises* CancelledError re-raises through run_batch,
+    never reaching _print_batch_summary.
+
+    This is the raising route (B), distinct from the returning route tested by
+    TestBatchCancellationReporting (A): the former propagates CancelledError
+    directly; the latter returns an exit code 130 from the summary printer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_batch_re_raises_cancelled_when_child_raises(self, tmp_path: Path) -> None:
+        """When a child download raises CancelledError, run_batch re-raises it
+        and _print_batch_summary is never called.
+
+        Route B (raising): the CancelledError propagates out of
+        _run_batch_with_progress before run_batch can invoke
+        _print_batch_summary. The exit code 130 is produced by cli.py's
+        CancelledError arm, not by _print_batch_summary.
+        """
+        settings = _make_settings(tmp_path)
+        urls = _batch_urls(1)
+        download = _make_batch_download({urls[0]: asyncio.CancelledError("cancelled by caller")})
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with _batch_runtime(download):
+                with patch(
+                    "vkdownloader.services.batch_downloader._print_batch_summary"
+                ) as mock_summary:
+                    try:
+                        await asyncio.wait_for(
+                            run_batch(
+                                urls,
+                                QualityEnum.BEST,
+                                DownloadMethod.AUTO,
+                                settings,
+                                tmp_path,
+                            ),
+                            timeout=5.0,
+                        )
+                    except TimeoutError:
+                        pytest.fail("run_batch did not propagate CancelledError within 5.0s")
+                    except asyncio.CancelledError:
+                        pass  # expected -- route B raises CancelledError
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        mock_summary.assert_not_called()
+
+
 class TestCorrelationInheritance:
     """Verify correlation-ID scoping through the real batch orchestration.
 

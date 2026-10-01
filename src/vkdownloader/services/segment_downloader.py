@@ -9,8 +9,9 @@ import random
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urljoin
 
 import aiohttp
@@ -654,31 +655,67 @@ def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnecto
     return aiohttp.TCPConnector(ssl=ssl_context, limit=10)
 
 
+_REASON_SHUTDOWN: Final = "shutdown_requested"
+_REASON_CANCELLED: Final = "cancelled"
+
+
+class _SegmentFanoutOutcome(StrEnum):
+    """Why the segment fan-out produced its result (CON-006, CON-008, phase04/VAL-402).
+
+    COMPLETED: the factory produced at least one task and every task settled.
+    NOTHING_TO_DO: no segment was missing, so the merge must still be attempted
+    from what is already on disk. Cancellation is not a member — it is raised.
+    """
+
+    COMPLETED = "completed"
+    NOTHING_TO_DO = "nothing_to_do"
+
+
+@dataclass(frozen=True)
+class _SegmentFanoutResult:
+    """_await_and_cancel return value: the outcome plus the results it produced.
+
+    results is a list, not a tuple, so it reaches _tally_and_merge unchanged.
+    """
+
+    outcome: _SegmentFanoutOutcome
+    results: list[tuple[int, bool]]
+
+
 async def _await_and_cancel(
     tasks: list[asyncio.Task[tuple[int, bool]]],
-) -> list[tuple[int, bool]] | None:
-    """Await segment download tasks with cancellation handling.
+) -> _SegmentFanoutResult:
+    """Await segment download tasks, settling every sibling before returning or raising.
 
     Args:
-        tasks: List of download tasks to await. Each task returns (segment_index, success).
+        tasks: Download tasks to await. Each returns (segment_index, success).
 
     Returns:
-        List of (segment_index, success) tuples on success, None if cancelled.
+        _SegmentFanoutResult with outcome COMPLETED and one (index, success)
+        tuple per task, or outcome NOTHING_TO_DO with an empty results list
+        when no segment was missing.
     """
+    # CON-006: nothing to do is an outcome, not None.
     if not tasks:
-        return None
+        return _SegmentFanoutResult(_SegmentFanoutOutcome.NOTHING_TO_DO, [])
 
     try:
-        return await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        # Cancel any still-running tasks on interruption
+        results = await asyncio.gather(*tasks)
+    except BaseException as exc:
+        # CON-007: a raising part must not orphan its siblings. CON-008: a
+        # cancellation is re-raised, never turned into a return value.
         for task in tasks:
             if not task.done():
                 task.cancel()
-        # Wait for cancellation to propagate
         await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info("download_cancelled", reason="shutdown_requested")
-        return None
+        if isinstance(exc, asyncio.CancelledError):
+            logger.info(
+                "download_cancelled",
+                reason=_REASON_SHUTDOWN if get_shutdown_event().is_set() else _REASON_CANCELLED,
+            )
+        raise
+
+    return _SegmentFanoutResult(_SegmentFanoutOutcome.COMPLETED, results)
 
 
 async def _tally_and_merge(
@@ -713,7 +750,9 @@ async def _tally_and_merge(
         video_id = video_url.split("_")[-1] if "_" in video_url else video_url
         progress_callback(video_id, downloaded_count, len(segments))
 
-    # Detect failed segments explicitly from download results
+    # Detect failed segments explicitly from download results.
+    # download_results is empty on the resume path (CON-006): no segment
+    # failed explicitly, so the merge is decided by the on-disk count below.
     if download_results and not all(r for _, r in download_results):
         failed_indices = [idx for idx, r in download_results if not r]
         logger.warning("segment_download_failed", failed_indices=failed_indices)
@@ -755,11 +794,10 @@ async def _process_downloaded_segments(
     Returns:
         Path to merged file on success, None otherwise.
     """
-    download_results = await _await_and_cancel(tasks)
-    if download_results is None:
-        return None
+    fanout = await _await_and_cancel(tasks)
+    # CON-006: NOTHING_TO_DO (all segments on disk) is not a failure.
     return await _tally_and_merge(
-        download_results,
+        fanout.results,
         segments,
         segments_dir,
         output_file,

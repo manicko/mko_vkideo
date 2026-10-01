@@ -1,17 +1,26 @@
 """Tests for segment_downloader token-refresh retry logic."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vkdownloader.config import Settings
-from vkdownloader.services.downloader_throttle import URLBackoffCoordinator, _resource_key
+from vkdownloader.services.downloader_throttle import (
+    URLBackoffCoordinator,
+    _resource_key,
+    _shutdown_event_ctx,
+)
 from vkdownloader.services.segment_downloader import (
+    _REASON_CANCELLED,
+    _REASON_SHUTDOWN,
+    _await_and_cancel,
     _download_segment_sequential,
     _fetch_playlist_with_retry,
     _handle_token_refresh,
     _log_preserve_segments,
+    _SegmentFanoutOutcome,
 )
 
 
@@ -612,3 +621,135 @@ class TestBackoffCoordinatorNormalizesInternally:
             result = await coordinator.wait_if_paused(raw_url)
 
         assert result is True
+
+
+class TestSegmentFanoutCompletion:
+    """CON-006 + CON-007 + CON-008, enforced by phase04/VAL-402.
+
+    Verifies _await_and_cancel distinguishes three fates at the type level:
+    NOTHING_TO_DO (empty task list), COMPLETED (all settled), and
+    cancellation (re-raised CancelledError with the correct reason logged).
+    """
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_do_returns_empty_result(self) -> None:
+        """An empty task list yields the NOTHING_TO_DO outcome with empty results.
+
+        Pre-fix code returned None here, so result.outcome would raise
+        AttributeError instead of returning the typed outcome.
+        """
+        result = await _await_and_cancel([])
+
+        assert result.outcome is _SegmentFanoutOutcome.NOTHING_TO_DO
+        assert result.results == []
+
+    @pytest.mark.asyncio
+    async def test_raising_part_settles_siblings_before_propagating(self) -> None:
+        """A non-cancellation exception from one task must settle every sibling
+        before the exception is re-raised (CON-007).
+
+        Pre-fix code only caught CancelledError, so a ValueError would escape
+        without cancelling pending siblings — leaving an orphaned task.
+        """
+        started = asyncio.Event()
+        never_set = asyncio.Event()
+
+        async def crashing_task() -> tuple[int, bool]:
+            await started.wait()
+            raise ValueError("segment download crashed")
+
+        async def long_running_task() -> tuple[int, bool]:
+            await started.wait()
+            await never_set.wait()
+            return (1, True)
+
+        task1 = asyncio.create_task(crashing_task())
+        task2 = asyncio.create_task(long_running_task())
+
+        started.set()
+        await asyncio.sleep(0)
+
+        with patch("vkdownloader.services.segment_downloader.logger.info"):
+            with pytest.raises(ValueError, match="segment download crashed"):
+                await asyncio.wait_for(
+                    _await_and_cancel([task1, task2]),
+                    timeout=5.0,
+                )
+
+        assert task1.done()
+        assert task2.done()
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_cancelled_propagates_with_plain_cancelled_reason(self) -> None:
+        """A CancelledError from a child task propagates and logs reason='cancelled'
+        when the shutdown event is NOT set (CON-008).
+        """
+
+        async def raises_cancelled() -> tuple[int, bool]:
+            raise asyncio.CancelledError("cancelled by caller")
+
+        task = asyncio.create_task(raises_cancelled())
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            captured = []
+
+            def capture_info(event, **kw):
+                captured.append((event, dict(kw)))
+
+            with patch(
+                "vkdownloader.services.segment_downloader.logger.info",
+                side_effect=capture_info,
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(
+                        _await_and_cancel([task]),
+                        timeout=5.0,
+                    )
+
+            assert task.done()
+
+            cancelled_events = [c for c in captured if c[0] == "download_cancelled"]
+            assert len(cancelled_events) == 1
+            assert cancelled_events[0][1].get("reason") == _REASON_CANCELLED
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_logs_shutdown_reason_when_stop_state_set(self) -> None:
+        """A CancelledError from a child task logs reason='shutdown_requested'
+        when the shutdown event IS set, and the CancelledError still propagates.
+        """
+
+        async def raises_cancelled() -> tuple[int, bool]:
+            raise asyncio.CancelledError("cancelled by caller")
+
+        task = asyncio.create_task(raises_cancelled())
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            _shutdown_event_ctx.get().set()
+            captured = []
+
+            def capture_info(event, **kw):
+                captured.append((event, dict(kw)))
+
+            with patch(
+                "vkdownloader.services.segment_downloader.logger.info",
+                side_effect=capture_info,
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(
+                        _await_and_cancel([task]),
+                        timeout=5.0,
+                    )
+
+            assert task.done()
+
+            cancelled_events = [c for c in captured if c[0] == "download_cancelled"]
+            assert len(cancelled_events) == 1
+            assert cancelled_events[0][1].get("reason") == _REASON_SHUTDOWN
+        finally:
+            _shutdown_event_ctx.reset(token)
