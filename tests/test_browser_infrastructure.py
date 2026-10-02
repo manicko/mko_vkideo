@@ -4,11 +4,14 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
+from structlog.testing import capture_logs
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError
 from vkdownloader.infrastructure.browser import BrowserManager
 from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor, _PlaylistType
+from vkdownloader.services.downloader_throttle import _shutdown_event_ctx, get_shutdown_event
 
 
 class TestBrowserManager:
@@ -61,22 +64,35 @@ class TestBrowserManager:
     async def test_browser_manager_context_exit_stops_playwright_on_browser_close_error(
         self, test_settings: Settings
     ) -> None:
-        """Test playwright.stop() is called even when browser.close() raises."""
-        manager = BrowserManager(settings=test_settings)
-        mock_browser = AsyncMock()
-        mock_browser.close = AsyncMock(side_effect=RuntimeError("close failed"))
-        mock_playwright = AsyncMock()
-        manager.browser = mock_browser
-        manager.playwright = mock_playwright
+        """CON-004 / phase04/VAL-401: playwright.stop() runs despite a close error
+        and the in-flight primary escapes intact while the driver error does not.
 
-        # __aexit__ guarantees playwright.stop() runs via try/finally,
-        # but does not suppress the browser.close() exception
-        with pytest.raises(RuntimeError, match="close failed"):
-            await manager.__aexit__(None, None, None)
+        browser.close() now raises a typed PlaywrightError (suppressed), not the
+        old RuntimeError stand-in. The primary exception raised in the body must
+        escape __aexit__ with its type and message preserved; the driver error
+        must not. Measured today this test's shape fails: the escaped exception
+        is Error('close failed'), not the primary.
+        """
+        mock_browser = AsyncMock()
+        mock_browser.close = AsyncMock(side_effect=PlaywrightError("close failed"))
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+        mock_instance.stop = AsyncMock()
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+            # __aexit__ returns None (falsy), so the async-with machinery
+            # re-raises the primary. The PlaywrightError from browser.close() is
+            # caught by the typed (PlaywrightError, TimeoutError) set and
+            # suppressed — it never escapes.
+            with pytest.raises(RuntimeError, match="primary failure"):
+                async with BrowserManager(settings=test_settings):
+                    raise RuntimeError("primary failure")
 
         mock_browser.close.assert_called_once()
         # playwright.stop() must still run despite browser.close() raising
-        mock_playwright.stop.assert_called_once()
+        mock_instance.stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_browser_manager_launch_failure_raises_extraction_error(
@@ -137,6 +153,192 @@ class TestBrowserManager:
         # Should not raise; timeout is caught and logged as warning
         await manager.__aexit__(None, None, None)
         mock_browser.close.assert_called_once()
+
+    # --- B4: CON-005, CON-004, phase04/VAL-401 ---
+
+    @pytest.mark.asyncio
+    async def test_con005_close_runs_on_stop_path(self, test_settings: Settings) -> None:
+        """CON-005 oracle (RED today): browser.close() runs even when stop is set.
+
+        On the stop path — which _extract_with_browser takes when it raises
+        CancelledError — both release steps must still execute. Before the fix
+        the guard skipped browser.close() entirely; measured 0 calls against 1
+        expected. The stop event is set via the project token idiom so it never
+        leaks to later tests.
+        """
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+        mock_playwright = AsyncMock()
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            _shutdown_event_ctx.get().set()
+            await manager.__aexit__(None, None, None)
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        mock_browser.close.assert_called_once()
+        mock_playwright.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_con004_con005_val401_cancelled_survives_close_error(
+        self, test_settings: Settings
+    ) -> None:
+        """phase04/VAL-401: a release failure never replaces the in-flight CancelledError.
+
+        Mirrors _extract_with_browser: the body reads the stop state and raises
+        CancelledError; browser.close() raises a PlaywrightError. The escaping
+        exception must be CancelledError, not the driver error. Both release
+        steps run. RED in the forbidden intermediate state (guard dropped,
+        suppression still narrow): the PlaywrightError would escape and replace
+        CancelledError.
+        """
+        mock_browser = AsyncMock()
+        mock_browser.close = AsyncMock(side_effect=PlaywrightError("close failed"))
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+        mock_instance.stop = AsyncMock()
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            _shutdown_event_ctx.get().set()
+
+            with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+                mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+                with pytest.raises(asyncio.CancelledError, match="cancelled by user"):
+                    async with BrowserManager(settings=test_settings):
+                        shutdown_event = get_shutdown_event()
+                        if shutdown_event.is_set():
+                            raise asyncio.CancelledError("cancelled by user")
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        mock_browser.close.assert_called_once()
+        mock_instance.stop.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("failing_step",),
+        [
+            pytest.param("browser_close", id="close-fails"),
+            pytest.param("playwright_stop", id="stop-fails"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_release_failure_nothing_in_flight_is_suppressed(
+        self,
+        failing_step: str,
+        test_settings: Settings,
+    ) -> None:
+        """§3.2 fork: with nothing in flight, a release failure is logged, not raised.
+
+        A PlaywrightError from either release step is suppressed, the OTHER step
+        still ran, and a captured warning carries error_type with
+        primary_error is None.
+        """
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+        mock_playwright = AsyncMock()
+
+        if failing_step == "browser_close":
+            mock_browser.close = AsyncMock(side_effect=PlaywrightError("close failed"))
+        else:
+            mock_playwright.stop = AsyncMock(side_effect=PlaywrightError("stop failed"))
+
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        with capture_logs() as logs:
+            await manager.__aexit__(None, None, None)
+
+        mock_browser.close.assert_called_once()
+        mock_playwright.stop.assert_called_once()
+
+        expected_event = f"{failing_step}_failed"
+        warnings = [e for e in logs if e.get("event") == expected_event]
+        assert len(warnings) == 1
+        entry = warnings[0]
+        assert entry["error_type"] == "Error"
+        assert entry["primary_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_type_error_from_release_escapes(self, test_settings: Settings) -> None:
+        """CON-004 distinction: TypeError is NOT in the suppression set.
+
+        A TypeError from the release path escapes __aexit__ when nothing is in
+        flight; on a real async with with a body error, it still escapes and
+        the body error survives as __context__. Green today — guards against a
+        future blanket except.
+        """
+        # Nothing in flight: TypeError escapes, playwright.stop() still runs.
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+        mock_browser.close = AsyncMock(side_effect=TypeError("defect"))
+        mock_playwright = AsyncMock()
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        with pytest.raises(TypeError, match="defect"):
+            await manager.__aexit__(None, None, None)
+        mock_playwright.stop.assert_called_once()
+
+        # Body error in flight: TypeError escapes, body error preserved as __context__.
+        mock_browser2 = AsyncMock()
+        mock_browser2.close = AsyncMock(side_effect=TypeError("defect"))
+        mock_instance2 = AsyncMock()
+        mock_instance2.chromium.launch = AsyncMock(return_value=mock_browser2)
+        mock_instance2.stop = AsyncMock()
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance2)
+
+            with pytest.raises(TypeError, match="defect") as exc_info:
+                async with BrowserManager(settings=test_settings):
+                    raise RuntimeError("body failed")
+
+        assert exc_info.value.__context__ is not None
+        assert isinstance(exc_info.value.__context__, RuntimeError)
+        assert str(exc_info.value.__context__) == "body failed"
+        mock_instance2.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_hang_guard_close_bounded_by_wait_for(
+        self,
+        test_settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Hang guard: a hanging browser.close() is bounded by _BROWSER_CLOSE_TIMEOUT.
+
+        _BROWSER_CLOSE_TIMEOUT is shrunk via monkeypatch so the guard costs
+        milliseconds rather than seconds. The __aexit__ call is wrapped in an
+        outer wait_for with a ceiling; a regression that drops the bound fails
+        the suite (pytest.fail) instead of hanging. Follows the B1/B2/B3
+        precedent. Green today by design.
+        """
+        monkeypatch.setattr("vkdownloader.infrastructure.browser._BROWSER_CLOSE_TIMEOUT", 0.01)
+        manager = BrowserManager(settings=test_settings)
+        mock_browser = AsyncMock()
+
+        async def hanging_close() -> None:
+            await asyncio.sleep(100)
+
+        mock_browser.close = AsyncMock(side_effect=hanging_close)
+        mock_playwright = AsyncMock()
+        manager.browser = mock_browser
+        manager.playwright = mock_playwright
+
+        try:
+            await asyncio.wait_for(manager.__aexit__(None, None, None), timeout=5.0)
+        except TimeoutError:
+            pytest.fail(
+                "browser.close() was not bounded by asyncio.wait_for — "
+                "the close hung beyond the ceiling and the bound was removed"
+            )
+
+        mock_browser.close.assert_called_once()
+        mock_playwright.stop.assert_called_once()
 
 
 class TestNetworkMonitor:

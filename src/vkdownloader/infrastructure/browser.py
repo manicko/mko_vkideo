@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from playwright.async_api import Browser, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
 from structlog import get_logger
 
 from ..config import Settings
@@ -58,37 +59,56 @@ class BrowserManager:
     ) -> None:
         """Close browser and stop Playwright with timeout safeguards (INT-004).
 
-        Wraps ``browser.close()`` and ``playwright.stop()`` in
-        ``asyncio.wait_for`` with a ~10s timeout and checks the shared
-        ``shutdown_event`` before each step. The ``finally`` guarantee
-        that ``playwright.stop()`` runs even if ``browser.close()`` raises
-        or times out is preserved.
+        Both releases run unconditionally whenever the handle exists: ``browser.close()``
+        is wrapped in ``asyncio.wait_for`` with ``_BROWSER_CLOSE_TIMEOUT`` so a stop
+        SHORTENS the close instead of skipping it, and ``playwright.stop()`` runs in the
+        ``finally`` so it is guaranteed even when ``browser.close()`` raises or times out.
+
+        A release failure of the typed set — ``(PlaywrightError, TimeoutError)`` — is
+        logged and suppressed so it can never replace the exception the ``async with``
+        body was unwinding. Any other exception from the release path propagates,
+        because it is a defect in this code.
         """
         logger.info("closing_browser")
-        # Lazy import to avoid circular dependency:
-        # browser.py -> services.__init__ -> downloader -> extractor -> browser
-        from ..services.downloader_throttle import get_shutdown_event
-
-        shutdown_event = get_shutdown_event()
-
+        # CON-004 + CON-005, enforced by phase04/VAL-401:
+        # The guard previously skipped browser.close() on the stop path — exactly the
+        # path _extract_with_browser takes when it raises CancelledError — so an
+        # interrupted extraction released exactly one of two resources. And each release
+        # arm caught only TimeoutError, so a non-timeout driver failure escaped __aexit__
+        # and replaced the exception already in flight. Both arms now catch
+        # (PlaywrightError, TimeoutError) and log+suppress, so a release failure can never
+        # displace the failure that caused the exit. INT-006 in downloader_throttle.py
+        # is the in-repo precedent for the typed set: a bare `except Exception` would
+        # destroy the only signal that this module's teardown is broken. CancelledError,
+        # KeyboardInterrupt and SystemExit are never suppressed. The finally guaranteeing
+        # playwright.stop() is preserved exactly; handles are not cleared on the way out.
+        primary_error = exc_type.__name__ if exc_type is not None else None
         try:
-            if self.browser and not shutdown_event.is_set():
+            if self.browser:
                 try:
                     await asyncio.wait_for(self.browser.close(), timeout=_BROWSER_CLOSE_TIMEOUT)
-                except TimeoutError:
+                except (PlaywrightError, TimeoutError) as exc:
                     logger.warning(
-                        "browser_close_timeout",
-                        pid=getattr(self.browser, "pid", None),
+                        "browser_close_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
                         timeout=_BROWSER_CLOSE_TIMEOUT,
+                        primary_error=primary_error,
+                        pid=getattr(self.browser, "pid", None),
+                        exc_info=True,
                     )
         finally:
             if self.playwright:
                 try:
                     await asyncio.wait_for(self.playwright.stop(), timeout=_BROWSER_CLOSE_TIMEOUT)
-                except TimeoutError:
+                except (PlaywrightError, TimeoutError) as exc:
                     logger.warning(
-                        "playwright_stop_timeout",
+                        "playwright_stop_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
                         timeout=_BROWSER_CLOSE_TIMEOUT,
+                        primary_error=primary_error,
+                        exc_info=True,
                     )
 
     async def create_stealth_page(self) -> Page:
