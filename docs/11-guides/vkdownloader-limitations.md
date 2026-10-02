@@ -106,7 +106,7 @@ Two limits of that check, stated plainly:
 2. **Headless browser** - May be detected and blocked by VK
 3. **Long-running ffmpeg downloads** - Token expiration leads to incomplete downloads
 4. **Cookie-only approach without browser** - Cookies expire/invalidate without active session
-5. **yt-dlp cancellation in batch mode** - yt-dlp runs in an executor thread that cannot be terminated by `asyncio.CancelledError`; the thread persists as a zombie until process exit. This is a CPython `concurrent.futures` limitation: `Future.cancel()` returns `False` for running futures. No workaround within the current architecture. |
+5. **yt-dlp cancellation in batch mode** - yt-dlp runs in an executor thread that cannot be terminated by `asyncio.CancelledError`; the thread persists as a zombie until process exit. This is a CPython `concurrent.futures` limitation: `Future.cancel()` returns `False` for running futures. No workaround within the current architecture. `VKDOWNLOADER_DOWNLOAD_TIMEOUT` bounds how long the event loop waits for that thread, not the wait for the thread itself: on expiry only the asyncio future is cancelled, and the abandoned thread is joined later at interpreter shutdown under the interpreter's own thread-join rule. |
 
 ## Recommended Usage
 
