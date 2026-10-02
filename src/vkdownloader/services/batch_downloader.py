@@ -332,44 +332,73 @@ async def _run_batch_with_progress(
         # not be shared between runs.
         reporter = RichProgressReporter()
 
-        tasks = [
-            asyncio.create_task(
-                _download_single(
-                    url,
-                    quality,
-                    output,
-                    method,
-                    settings,
-                    DownloadContext(
-                        index=i,
-                        shared_semaphore=shared_semaphore,
-                        backoff_coordinator=backoff_coordinator,
-                        reporter=reporter,
-                        peak_tracker=concurrency_tracker,
-                    ),
-                )
-            )
-            for i, url in enumerate(urls)
-        ]
+        # Bounded producer: keep one asyncio.Task per URL but bound only the
+        # number of LIVE task objects to the configured ceiling (CON-003). The
+        # window is a len() comparison — no permit object is created, and the
+        # batch permit (D-01) is still acquired once-per-video inside
+        # _download_single -> download_video -> perform_download, untouched here.
+        # urls_left is the lazy source: it yields URL work without creating
+        # tasks, so the pump owns task creation and can bound the live set.
+        pending: dict[asyncio.Task[tuple[str, str, str]], int] = {}
+        by_index: dict[int, tuple[str, str, str]] = {}
+        urls_left = iter(enumerate(urls))
 
         try:
-            # start() must run before the first await below: the tasks created
-            # above are scheduled with asyncio.create_task but do not run until
-            # the loop yields, and there is no await between task creation and
-            # here. start() is inside this try so the finally's stop() still
-            # runs if start() raises.
+            # reporter.start() MUST precede the first asyncio.create_task, not
+            # merely the first await. A bounded producer creates its ceiling of
+            # tasks up front and then awaits in the FIRST_COMPLETED pump; that
+            # await yields control to the loop, which would let the created
+            # tasks run and emit log records before start() — which re-points
+            # the log handlers (_repoint_log_handlers) — has run. Ordering
+            # start() ahead of create_task within this single synchronous block
+            # makes the guarantee rest on statement order alone, so a future
+            # edit that inserts an await between create_task and start() cannot
+            # silently re-break it. (The pre-B7 invariant was "no await between
+            # task creation and start()"; a bounded producer invalidates it, so
+            # that wording is retired.) start() is inside this try so the
+            # finally's stop() still runs if start() raises.
             reporter.start()
-            for coro in asyncio.as_completed(tasks):
-                try:
-                    await coro
-                except asyncio.CancelledError:
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    raise
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Fill phase: consume the lazy source, spinning up one task per URL
+            # and pumping (draining completed tasks) only once the live window
+            # is full. Each pulled item is stored on the next statement; there
+            # is no break/return between the pull and the store, so no URL is
+            # dropped (measured: a break there loses one URL per full window).
+            for i, url in urls_left:
+                if len(pending) >= settings.max_concurrent_downloads:
+                    done, _ = await asyncio.wait(list(pending), return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        by_index[pending.pop(task)] = task.result()
+                pending[
+                    asyncio.create_task(
+                        _download_single(
+                            url,
+                            quality,
+                            output,
+                            method,
+                            settings,
+                            DownloadContext(
+                                index=i,
+                                shared_semaphore=shared_semaphore,
+                                backoff_coordinator=backoff_coordinator,
+                                reporter=reporter,
+                                peak_tracker=concurrency_tracker,
+                            ),
+                        )
+                    )
+                ] = i
+
+            # Drain phase: the source is exhausted, settle every still-live task.
+            while pending:
+                done, _ = await asyncio.wait(list(pending), return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    by_index[pending.pop(task)] = task.result()
+
+            # Restore URL-index ordering: the FIRST_COMPLETED pump completes
+            # tasks out of creation order. A gap in by_index raises KeyError
+            # here — a loud failure, the right failure mode beside the
+            # falsy-result lesson of VAL-402.
+            results = [by_index[i] for i in range(len(urls))]
             # The cancelled literal comes from the same ProgressStatus member
             # _classify_download_result() uses, so the two classification
             # sites cannot drift apart.
@@ -382,6 +411,19 @@ async def _run_batch_with_progress(
                 for i, r in enumerate(results)
             ]
             return processed_results, concurrency_tracker.peak
+        except asyncio.CancelledError:
+            # Cancellation reaches the live siblings here: cancel the ones still
+            # running and gather them so none outlives the operation. This is
+            # the fan-out B2 makes live; the body is byte-identical to the
+            # pre-B7 branch except it iterates the live `pending` set instead of
+            # the full task list — semantically equivalent, since a completed
+            # task needs no cancelling. Both 130 routes depend on it; do not
+            # restructure.
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
         finally:
             # stop() is placed in this finally so it also runs when the batch
             # is cancelled (CancelledError), restoring the terminal to normal
