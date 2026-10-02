@@ -3056,6 +3056,116 @@ class TestSetupSignalHandlers:
             shutdown_event.clear()
             signal_handlers.cleanup_signal_handlers()
 
+    @pytest.mark.asyncio
+    async def test_cleanup_restores_each_signals_previous_handler(self) -> None:
+        """Assert each signal's OWN pre-install handler comes back, per signal.
+
+        Before the fix the displaced handler was not restored on the branch that actually
+        runs, so asyncio.run's own SIGINT restore was skipped and the displacement
+        compounded across cycles. Exercises the real signal.signal path with no patching.
+        """
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+
+        pre_int = signal_module.getsignal(signal_module.SIGINT)
+        pre_term = signal_module.getsignal(signal_module.SIGTERM)
+        try:
+            signal_handlers.setup_signal_handlers()
+            assert signal_module.getsignal(signal_module.SIGINT) is not pre_int
+            assert signal_module.getsignal(signal_module.SIGTERM) is not pre_term
+            signal_handlers.cleanup_signal_handlers()
+            assert signal_module.getsignal(signal_module.SIGINT) is pre_int
+            assert signal_module.getsignal(signal_module.SIGTERM) is pre_term
+        finally:
+            # Unconditional: a half-finished fix must not leave pytest-asyncio's own restore
+            # suppressed for the rest of the session.
+            signal_module.signal(signal_module.SIGINT, pre_int)
+            signal_module.signal(signal_module.SIGTERM, pre_term)
+
+    @pytest.mark.asyncio
+    async def test_second_setup_keeps_the_first_captured_handler(self) -> None:
+        """A second setup must not overwrite the captured previous handler.
+
+        Capture-once oracle: the first setup's captured pre-install value is retained
+        through a second setup, so one cleanup restores the ORIGINAL handler and a
+        further cycle re-captures the same original -- proving the stores were cleared
+        rather than left holding a stale (this module's own) value.
+        """
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+
+        pre_int = signal_module.getsignal(signal_module.SIGINT)
+        pre_term = signal_module.getsignal(signal_module.SIGTERM)
+        try:
+            signal_handlers.setup_signal_handlers()
+            installed_1 = signal_module.getsignal(signal_module.SIGINT)
+            signal_handlers.setup_signal_handlers()
+            installed_2 = signal_module.getsignal(signal_module.SIGINT)
+            assert installed_2 is not installed_1
+            signal_handlers.cleanup_signal_handlers()
+            assert signal_module.getsignal(signal_module.SIGINT) is pre_int
+            assert signal_module.getsignal(signal_module.SIGTERM) is pre_term
+            signal_handlers.setup_signal_handlers()
+            signal_handlers.cleanup_signal_handlers()
+            assert signal_module.getsignal(signal_module.SIGINT) is pre_int
+            assert signal_module.getsignal(signal_module.SIGTERM) is pre_term
+        finally:
+            signal_module.signal(signal_module.SIGINT, pre_int)
+            signal_module.signal(signal_module.SIGTERM, pre_term)
+
+    def test_handler_is_not_displaced_across_consecutive_event_loops(self) -> None:
+        """SIGINT must not be left displaced across three consecutive asyncio.run cycles.
+
+        Drives asyncio.run itself (not a shared pytest-asyncio Runner) three times, which
+        is the only shape in which three distinct Runner._on_sigint partials are
+        observable: inside a pytest-asyncio async test the cycles share one Runner and
+        therefore one pre-install object. Uses the project token idiom for the shutdown
+        event so get_shutdown_event() returns a test-owned Event instead of a leaked
+        loop-bound one.
+        """
+        import asyncio as asyncio_module
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        pre_int = signal_module.getsignal(signal_module.SIGINT)
+        pre_term = signal_module.getsignal(signal_module.SIGTERM)
+        token = _shutdown_event_ctx.set(asyncio_module.Event())
+        captured_pre_ints: list[object] = []
+        try:
+
+            async def _cycle() -> None:
+                cycle_pre_int = signal_module.getsignal(signal_module.SIGINT)
+                cycle_pre_term = signal_module.getsignal(signal_module.SIGTERM)
+                captured_pre_ints.append(cycle_pre_int)
+                signal_handlers.setup_signal_handlers()
+                signal_handlers.cleanup_signal_handlers()
+                # Per cycle: the pre-install disposition is restored after cleanup.
+                assert signal_module.getsignal(signal_module.SIGINT) is cycle_pre_int
+                assert signal_module.getsignal(signal_module.SIGTERM) is cycle_pre_term
+
+            for _ in range(3):
+                asyncio_module.run(_cycle())
+                # After asyncio.run returns, the runtime has restored default_int_handler
+                # because the displaced Runner._on_sigint partial was put back rather than
+                # left in place.
+                assert (
+                    signal_module.getsignal(signal_module.SIGINT)
+                    is signal_module.default_int_handler
+                )
+
+            # Three fresh Runner._on_sigint partials were captured, all distinct.
+            assert captured_pre_ints[0] is not captured_pre_ints[1]
+            assert captured_pre_ints[1] is not captured_pre_ints[2]
+            assert captured_pre_ints[0] is not captured_pre_ints[2]
+        finally:
+            _shutdown_event_ctx.reset(token)
+            signal_module.signal(signal_module.SIGINT, pre_int)
+            signal_module.signal(signal_module.SIGTERM, pre_term)
+
 
 class TestResolveCookies:
     """Tests for _resolve_cookies cookie-source branching."""
