@@ -18,7 +18,8 @@ from structlog import get_logger
 from ..config import Settings
 from ..exceptions import ExtractionError, QualityNotAvailableError, QualityParseError
 from ..models.dtos import HLSDownloadRequest
-from ..models.enums import CookieSource, QualityEnum
+from ..models.enums import CookieSource, QualityKind
+from ..models.quality import QualitySpec
 from ..services.cookies import _cookies_to_netscape
 from ..services.downloader_throttle import (
     _compute_backoff_delay,
@@ -108,30 +109,28 @@ async def _await_first_and_cancel_others(
     return done, pending
 
 
-def _parse_quality_to_enum(quality: str) -> QualityEnum:
-    """Parse quality string to QualityEnum for stream selection.
-
-    Args:
-        quality: Quality string (e.g., "720", "1080", "best", "worst", "720p").
-
-    Returns:
-        QualityEnum value matching the string.
-
-    Raises:
-        QualityParseError: If quality string cannot be parsed to QualityEnum.
-    """
-    try:
-        return QualityEnum(quality)
-    except ValueError:
-        normalized = quality.rstrip("p") if quality else "best"
-        try:
-            return QualityEnum(normalized)
-        except ValueError:
-            raise QualityParseError(quality) from None
-
-
-# yt-dlp progress line format (with --newline):
+# yt-dlp progress lines (see yt_dlp/downloader/common.py, msg_template).
+#
+# yt-dlp picks one of five templates depending on what it knows about the
+# download; a fragment (HLS) download only knows an *estimated* total, so the
+# size is prefixed with "~" and the estimate grows as fragments are discovered:
 #   [download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
+#   [download]   0.8% of ~   1.18GiB at 1.42MiB/s ETA 16:38 (frag 5/566)
+#   [download]  12.34MiB at 1.00MiB/s (00:12)
+#   [download]   0.0% at Unknown B/s ETA Unknown
+# Each may carry a trailing " (frag i/n)" or " (frag i)".
+#
+# Every progress line begins with a number right after "[download]" (a percent,
+# "N/A", or a byte count); every one-shot message begins with a word
+# ("Destination:", "Downloading", "has already been downloaded", ...). That
+# distinction is what keeps a progress update on one rewritten line instead of
+# appending a new one per update.
+_YTDLP_PROGRESS_LINE_RE = re.compile(r"^\[download\]\s+(?:N/A|\d+(?:\.\d+)?)(?:%|[KMGT]?i?B)")
+
+# Percent-and-size progress lines, the subset whose byte counts can be derived.
+# The optional "~" marks an estimated total (fragment downloads); without it in
+# the pattern the estimated form is not recognised as progress at all and every
+# update is appended as a new line.
 #
 # yt-dlp produces several ETA formats depending on the calculated value:
 #   - MM:SS        e.g. "06:43"         (eta < 1 hour)
@@ -144,8 +143,7 @@ def _parse_quality_to_enum(quality: str) -> QualityEnum:
 # reads pct, size, and size_unit -- speed/eta groups exist for clarity only.
 _YTDLP_PROGRESS_RE = re.compile(
     r"\[download\]\s+"
-    r"(?P<pct>\d+(?:\.\d+)?)%"
-    r"\s+of\s+"
+    r"(?P<pct>\d+(?:\.\d+)?)%\s+of\s+~?\s*"
     r"(?P<size>\d+(?:\.\d+)?)"
     r"(?P<size_unit>[KMG]?i?B)"
     r"\s+at\s+"
@@ -168,20 +166,40 @@ _SIZE_UNITS: dict[str, int] = {
 }
 
 
+def _is_ytdlp_progress_line(line: str) -> bool:
+    """Report whether a yt-dlp line is a live progress update.
+
+    Covers every template yt-dlp can emit for a download (known total,
+    estimated total with the ``~`` marker, byte count without a total, and the
+    percent-only fallback), optionally followed by a ``(frag i/n)`` suffix.
+    One-shot ``[download]`` messages (Destination, Downloading, Resuming, ...)
+    are not progress and keep their own line.
+
+    Args:
+        line: A decoded stderr line from the yt-dlp subprocess.
+
+    Returns:
+        True if the line is a progress update.
+    """
+    return _YTDLP_PROGRESS_LINE_RE.match(line) is not None
+
+
 def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     """Parse a yt-dlp progress line into (downloaded_bytes, total_bytes).
 
     yt-dlp with ``--newline`` writes lines like::
 
         [download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43
-        [download]   0.0% of    4.93GiB at   10.37KiB/s ETA --:--:--
+        [download]   0.8% of ~   1.18GiB at 1.42MiB/s ETA 16:38 (frag 5/566)
 
     Args:
         line: A decoded stderr line from the yt-dlp subprocess.
 
     Returns:
-        Tuple of (downloaded_bytes, total_bytes) if the line matches the
-        yt-dlp download-progress pattern, otherwise ``None``.
+        Tuple of (downloaded_bytes, total_bytes) if the line carries a percent
+        and a size, otherwise ``None``. Templates without a total (a bare byte
+        count) are still progress updates — see :func:`_is_ytdlp_progress_line`
+        — they simply carry no ratio to report.
     """
     match = _YTDLP_PROGRESS_RE.search(line)
     if match is None:
@@ -218,7 +236,7 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
                 total=total,
             )
         return
-    if _parse_ytdlp_progress(line) is not None:
+    if _is_ytdlp_progress_line(line):
         text = line.rstrip("\n\r")
         width = shutil.get_terminal_size((80, 24)).columns
         sys.stderr.write("\r" + text.ljust(width)[:width] + "\r")
@@ -243,7 +261,9 @@ def _build_ytdlp_cli_command(
 
     Args:
         output_file: Path to save the downloaded video.
-        quality_str: Quality string without ``p`` suffix (e.g., ``"720"``).
+        quality_str: Quality token: ``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers (e.g. ``"1072"``). A numeric token becomes the
+            yt-dlp format selector ``best[height<=1072]``.
         user_agent: User agent string for HTTP requests.
         settings: Application settings.
         cookies: Optional raw cookie string (Netscape format) for backward compat.
@@ -336,7 +356,8 @@ async def download_with_ytdlp_with_resume_fallback(
         video_url: Original VK video URL.
         m3u8_url: HLS playlist URL (may be stale).
         output_file: Output file path.
-        quality: Quality string.
+        quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers, e.g. ``1072``).
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
         cookies: Optional cookies string for ffmpeg headers.
@@ -469,7 +490,8 @@ async def _attempt_segment_resume(
         video_url: Original VK video URL.
         m3u8_url: HLS playlist URL (may be stale).
         output_file: Output file path (partial file is discarded, segment download starts fresh).
-        quality: Quality string.
+        quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers, e.g. ``1072``).
         retry_count: Current retry attempt number.
         extractor: VKVideoExtractor for token refresh.
         settings: Application settings.
@@ -481,6 +503,12 @@ async def _attempt_segment_resume(
 
     Returns:
         Path to downloaded file on success, None on failure.
+
+    Raises:
+        QualityNotAvailableError: If the requested height is absent from the
+            refreshed browser streams.
+        QualityParseError: If ``quality`` is neither a keyword nor a positive
+            height; logged and re-raised so the caller reports it verbatim.
     """
     logger.warning(
         "download_interrupted_switching_to_segments",
@@ -500,14 +528,14 @@ async def _attempt_segment_resume(
         )
         if browser_streams:
             try:
-                quality_enum = _parse_quality_to_enum(quality)
-                # Browser streams are stamped with QualityEnum.UNKNOWN.value
+                quality_spec = QualitySpec.parse(quality)
+                # Browser streams are labelled QualityLabel.UNKNOWN.value
                 # ("unknown") and height=None by _extract_with_browser.
-                # Only run quality selection for BEST; for numeric qualities, reuse the
+                # Only run quality selection for BEST; for exact requests, reuse the
                 # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
-                if quality_enum == QualityEnum.BEST:
+                if quality_spec.kind is QualityKind.BEST:
                     selector = QualitySelector()
-                    selected_stream = selector.select(browser_streams, quality_enum)
+                    selected_stream = selector.select(browser_streams, quality_spec)
                     m3u8_url = str(selected_stream.url)
                     logger.info(
                         "fresh_token_obtained_for_resume",
@@ -551,7 +579,9 @@ async def _attempt_segment_resume(
             url=_strip_auth_params(video_url),
             error=str(e),
         )
-    except ValueError as e:
+    except QualityParseError as e:
+        # QualitySpec.parse() rejects a token that is neither a keyword nor a
+        # height. Surfaced (not swallowed) so the caller reports it verbatim.
         logger.error(
             "invalid_quality_for_browser_streams",
             url=_strip_auth_params(video_url),
@@ -585,7 +615,8 @@ async def _download_with_ytdlp(
     Args:
         video_url: VK video URL to download.
         output_file: Path to save the downloaded video.
-        quality: Quality string (e.g., "720", "1080").
+        quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers, e.g. ``1072``).
         settings: Application settings.
         cookies: Optional cookies string for backward compatibility.
         raw_cookies: Optional raw Cookie objects for Netscape format.
@@ -743,25 +774,28 @@ async def _resolve_cookies(
         settings: Application settings.
         url: Video URL to extract streams from.
         m3u8_url: Current m3u8 URL (may be updated if browser streams used).
-        quality: Quality string for stream selection.
+        quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers, e.g. ``1072``), parsed here to decide
+            whether the browser-captured stream may be re-selected.
 
     Returns:
         Tuple of (updated m3u8_url, cookies string, raw cookies for Netscape format).
 
     Raises:
         QualityNotAvailableError: If requested quality is BEST but not available in browser streams.
+        QualityParseError: If ``quality`` is neither a keyword nor a positive height.
     """
     if settings.cookie_source == CookieSource.BROWSER:
         browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
         if browser_streams:
-            quality_enum = _parse_quality_to_enum(quality)
-            # Browser streams are stamped with QualityEnum.UNKNOWN.value
+            quality_spec = QualitySpec.parse(quality)
+            # Browser streams are labelled QualityLabel.UNKNOWN.value
             # ("unknown") and height=None by _extract_with_browser.
-            # Only run quality selection for BEST; for numeric qualities, reuse the
+            # Only run quality selection for BEST; for exact requests, reuse the
             # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
-            if quality_enum == QualityEnum.BEST:
+            if quality_spec.kind is QualityKind.BEST:
                 selector = QualitySelector()
-                selected_stream = selector.select(browser_streams, quality_enum)
+                selected_stream = selector.select(browser_streams, quality_spec)
                 m3u8_url = str(selected_stream.url)
                 logger.info(
                     "browser_streams_selected",

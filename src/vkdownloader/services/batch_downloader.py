@@ -25,7 +25,8 @@ from ..exceptions import (
     VideoNotFoundError,
     VKDownloadError,
 )
-from ..models.enums import DownloadMethod, ProgressStatus, QualityEnum
+from ..models.enums import DownloadMethod, ProgressStatus
+from ..models.quality import QualitySpec
 from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
 from ..services.progress_display import RichProgressReporter
@@ -158,7 +159,7 @@ def _classify_download_result(result: Path | None) -> str:
 
 async def _download_single(
     url: str,
-    quality: QualityEnum,
+    quality: QualitySpec,
     output: Path,
     method: DownloadMethod,
     settings: Settings,
@@ -168,7 +169,7 @@ async def _download_single(
 
     Args:
         url: Video URL to download.
-        quality: Video quality selection.
+        quality: Parsed quality request (keyword or exact stream label).
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings with environment-loaded values.
@@ -293,7 +294,7 @@ async def _download_single(
 
 async def _run_batch_with_progress(
     urls: list[str],
-    quality: QualityEnum,
+    quality: QualitySpec,
     method: DownloadMethod,
     settings: Settings,
     output: Path,
@@ -302,7 +303,7 @@ async def _run_batch_with_progress(
 
     Args:
         urls: List of video URLs to download.
-        quality: Video quality selection for all downloads.
+        quality: Parsed quality request (keyword or exact stream label) for all downloads.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings.
         output: Output directory for downloaded videos.
@@ -509,7 +510,7 @@ def _print_batch_summary(
 
 async def run_batch(
     urls: list[str],
-    quality: QualityEnum,
+    quality: QualitySpec,
     method: DownloadMethod,
     settings: Settings,
     output: Path,
@@ -523,7 +524,7 @@ async def run_batch(
 
     Args:
         urls: List of validated video URLs to download.
-        quality: Video quality selection for all downloads.
+        quality: Parsed quality request (keyword or exact stream label) for all downloads.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings.
         output: Output directory for downloaded videos.

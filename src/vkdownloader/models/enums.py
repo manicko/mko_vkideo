@@ -3,18 +3,29 @@
 from enum import StrEnum
 
 
-class QualityEnum(StrEnum):
-    """Video quality options for stream selection."""
+class QualityKind(StrEnum):
+    """How a quality request is resolved against the streams of a video.
 
-    Q240 = "240"
-    Q360 = "360"
-    Q480 = "480"
-    Q720 = "720"
-    Q1080 = "1080"
-    Q1440 = "1440"
-    Q2160 = "2160"
+    VK publishes non-standard height ladders (for example 106p, 178p, 268p,
+    358p, 536p, 804p, 1072p, 1610p), so the set of selectable resolutions
+    cannot be a closed enum of "known" values. A request is therefore either
+    a keyword (``BEST`` / ``WORST``) or an exact match against the quality
+    label of one stream (``EXACT``).
+    """
+
     BEST = "best"
     WORST = "worst"
+    EXACT = "exact"
+
+
+class QualityLabel(StrEnum):
+    """Fixed stream quality labels assigned by the extractor.
+
+    These are labels written onto :class:`~vkdownloader.models.video.Stream`
+    records, not user selection modes — a stream whose height cannot be
+    determined (browser HLS capture) is labelled ``UNKNOWN``.
+    """
+
     UNKNOWN = "unknown"
 
 

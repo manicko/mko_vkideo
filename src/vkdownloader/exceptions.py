@@ -150,7 +150,7 @@ class QualityNotAvailableError(VKDownloadError):
 
 
 class QualityParseError(VKDownloadError):
-    """Raised when a quality string cannot be parsed to QualityEnum.
+    """Raised when a quality string cannot be parsed to QualitySpec.
 
     Attributes:
         quality: The quality string that failed to parse.

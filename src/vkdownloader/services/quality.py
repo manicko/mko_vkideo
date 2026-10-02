@@ -3,7 +3,8 @@
 from structlog import get_logger
 
 from ..exceptions import QualityNotAvailableError
-from ..models.enums import QualityEnum
+from ..models.enums import QualityKind
+from ..models.quality import QualitySpec
 from ..models.video import Stream
 
 logger = get_logger(__name__)
@@ -12,22 +13,23 @@ logger = get_logger(__name__)
 class QualitySelector:
     """Selects appropriate stream from available streams based on quality preference."""
 
-    def _find_quality_match(self, streams: list[Stream], quality_str: str) -> Stream | None:
+    def _find_quality_match(self, streams: list[Stream], quality: QualitySpec) -> Stream | None:
         """
-        Find a stream matching the requested quality string.
+        Find a stream whose quality label satisfies the requested quality.
 
-        Supports both "720" and "720p" formats for matching.
+        The match is delegated to :meth:`QualitySpec.matches`, which accepts
+        both the ``720`` and ``720p`` spellings and accepts any height the
+        video happens to offer (not only a fixed set of resolutions).
 
         Args:
             streams: List of available streams to search.
-            quality_str: Quality string to match (e.g., "720", "1080").
+            quality: Parsed quality request to match.
 
         Returns:
             Matching Stream object, or None if not found.
         """
         for stream in streams:
-            stream_quality = stream.quality.replace("p", "") if stream.quality else ""
-            if stream_quality == quality_str or stream.quality == quality_str:
+            if quality.matches(stream.quality):
                 logger.debug("selected_matching_quality", quality=stream.quality)
                 return stream
         return None
@@ -74,13 +76,13 @@ class QualitySelector:
         # height; ties fall to the highest input_position, never both arms alike.
         return max(enumerate(streams), key=self._rank_key)[1]
 
-    def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
+    def select(self, streams: list[Stream], quality: QualitySpec) -> Stream:
         """
         Select a stream based on quality preference.
 
         Args:
             streams: List of available streams to choose from.
-            quality: Quality preference (best, worst, or specific resolution).
+            quality: Parsed quality request (a keyword or an exact height).
 
         Returns:
             Selected Stream object.
@@ -92,20 +94,19 @@ class QualitySelector:
         if not streams:
             raise QualityNotAvailableError("", [], "Cannot select quality from empty streams list")
 
-        match quality:
-            case QualityEnum.BEST:
+        match quality.kind:
+            case QualityKind.BEST:
                 result = self._get_fallback_stream(streams)
                 logger.debug("selected_best_quality", quality=result.quality)
-            case QualityEnum.WORST:
+            case QualityKind.WORST:
                 # NET-017: shared rank key — see _rank_key. min picks the lowest
                 # usable height; ties fall to the lowest input_position, so the
                 # WORST arm returns a different record than BEST on a {0, None} set.
                 _, result = min(enumerate(streams), key=self._rank_key)
                 logger.debug("selected_worst_quality", quality=result.quality)
             case _:
-                # Try to find matching quality (support both "720" and "720p" formats)
-                quality_str = str(quality)
-                match = self._find_quality_match(streams, quality_str)
+                # Exact match on one quality label, whatever height it carries.
+                match = self._find_quality_match(streams, quality)
                 if match:
                     result = match
                 else:

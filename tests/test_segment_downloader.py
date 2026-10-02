@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.models.dtos import HLSDownloadRequest
+from vkdownloader.models.enums import QualityLabel, StreamFormat
+from vkdownloader.models.video import Stream
 from vkdownloader.services.downloader_throttle import (
     URLBackoffCoordinator,
     _resource_key,
@@ -17,13 +21,19 @@ from vkdownloader.services.downloader_throttle import (
 from vkdownloader.services.segment_downloader import (
     _REASON_CANCELLED,
     _REASON_SHUTDOWN,
+    DownloadPolicy,
+    PlaylistFetchResult,
+    SegmentTask,
     _await_and_cancel,
     _download_segment_sequential,
     _fetch_playlist_with_retry,
     _handle_token_refresh,
     _log_preserve_segments,
+    _process_downloaded_segments,
     _SegmentFanoutOutcome,
+    download_hls_with_resume,
 )
+from vkdownloader.utils.url_sanitizer import _strip_auth_params
 
 
 class TestFetchPlaylistWithRetry:
@@ -46,11 +56,21 @@ class TestFetchPlaylistWithRetry:
 
         refresh_calls: list[str] = []
         fetch_urls: list[str] = []
+        forwarded_quality: list[str] = []
+        forwarded_preselected: list[str] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            headers: dict[str, str],
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str]:
             refresh_calls.append(vid)
+            forwarded_quality.append(quality)
+            forwarded_preselected.append(preselected_url)
             return refreshed_url, ""
 
         async def fake_fetch(
@@ -84,6 +104,7 @@ class TestFetchPlaylistWithRetry:
                         mock_extractor,
                         test_settings,
                         max_retries=3,
+                        quality="best",
                     )
 
         assert result is not None
@@ -92,6 +113,9 @@ class TestFetchPlaylistWithRetry:
         assert refresh_calls == [video_url]
         assert fetch_urls == [m3u8_url, refreshed_url]
         assert headers.get("Cookie") == ""
+        # Forced re-scope (B8): assert forwarded keywords by value.
+        assert forwarded_quality == ["best"]
+        assert forwarded_preselected == [m3u8_url]
 
     @pytest.mark.asyncio
     async def test_token_refresh_runs_on_410_then_retry_succeeds(
@@ -108,7 +132,13 @@ class TestFetchPlaylistWithRetry:
         fetch_statuses: list[int] = []
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            headers: dict[str, str],
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str]:
             refresh_calls.append(object())
             return refreshed_url, ""
@@ -145,6 +175,7 @@ class TestFetchPlaylistWithRetry:
                         mock_extractor,
                         test_settings,
                         max_retries=3,
+                        quality="best",
                     )
 
         assert result is not None
@@ -164,7 +195,13 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            headers: dict[str, str],
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
@@ -198,6 +235,7 @@ class TestFetchPlaylistWithRetry:
                         mock_extractor,
                         test_settings,
                         max_retries=3,
+                        quality="best",
                     )
 
         assert result is None
@@ -215,7 +253,13 @@ class TestFetchPlaylistWithRetry:
         refresh_call_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            headers: dict[str, str],
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str] | None:
             nonlocal refresh_call_count
             refresh_call_count += 1
@@ -248,6 +292,7 @@ class TestFetchPlaylistWithRetry:
                         None,
                         test_settings,
                         max_retries=3,
+                        quality="best",
                     )
 
         assert result is None
@@ -264,7 +309,13 @@ class TestFetchPlaylistWithRetry:
         fetch_count = 0
 
         async def fake_refresh(
-            vid: str, extractor: MagicMock, settings: Settings, headers: dict[str, str]
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            headers: dict[str, str],
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str] | None:
             refresh_calls.append(object())
             return None
@@ -299,6 +350,7 @@ class TestFetchPlaylistWithRetry:
                         mock_extractor,
                         test_settings,
                         max_retries=3,
+                        quality="best",
                     )
 
         assert result is None
@@ -417,7 +469,14 @@ class TestPreserveSegmentsReporter:
 
 
 class TestTokenRefreshDoesNotMutateHeaders:
-    """D3: _handle_token_refresh must not mutate the caller's headers dict."""
+    """D3 (B4-era label): _handle_token_refresh must not mutate the caller's
+    headers dict.
+
+    Forced re-scope (B8): the stub now accepts the two new keyword-only
+    parameters (``quality``, ``preselected_url``) and the test asserts their
+    forwarded values by value, alongside the preserved B4 assertion that
+    ``original_headers`` is unchanged.
+    """
 
     @pytest.mark.asyncio
     async def test_headers_unchanged_after_refresh(self, test_settings: Settings) -> None:
@@ -425,13 +484,28 @@ class TestTokenRefreshDoesNotMutateHeaders:
 
         _handle_token_refresh delegates to _refresh_token_and_retry (which does
         not accept or mutate headers), so the caller's dict must survive intact.
+
+        Forced re-scope (B8): the stub accepts ``quality`` and
+        ``preselected_url`` (keyword-only) and the test asserts both
+        forwarded values by value, in addition to the preserved B4
+        assertion that ``original_headers`` is unchanged.
         """
         video_url = "https://vkvideo.ru/video-12345_67890"
         original_headers = {"User-Agent": "test", "Cookie": "prior=value"}
+        preselected_url = "https://example.com/preselected.m3u8"
+
+        forwarded: dict[str, object] = {}
 
         async def fake_refresh_token_and_retry(
-            vid: str, extractor: MagicMock, settings: Settings
+            vid: str,
+            extractor: MagicMock,
+            settings: Settings,
+            *,
+            quality: str,
+            preselected_url: str,
         ) -> tuple[str, str]:
+            forwarded["quality"] = quality
+            forwarded["preselected_url"] = preselected_url
             return "https://refreshed.m3u8", "new=cookie"
 
         mock_extractor = MagicMock()
@@ -442,11 +516,19 @@ class TestTokenRefreshDoesNotMutateHeaders:
         ):
             with patch("vkdownloader.services.segment_downloader.logger", MagicMock()):
                 result = await _handle_token_refresh(
-                    video_url, mock_extractor, test_settings, original_headers
+                    video_url,
+                    mock_extractor,
+                    test_settings,
+                    original_headers,
+                    quality="best",
+                    preselected_url=preselected_url,
                 )
 
         assert result == ("https://refreshed.m3u8", "new=cookie")
         assert original_headers == {"User-Agent": "test", "Cookie": "prior=value"}
+        # B8 forced re-scope: assert forwarded values by value.
+        assert forwarded["quality"] == "best"
+        assert forwarded["preselected_url"] == preselected_url
 
 
 class TestSequentialIssuesAtMostMaxRetries:
@@ -521,6 +603,7 @@ class TestManifestRetryComputesBackoffDelay:
                 mock_extractor,
                 test_settings,
                 max_retries=3,
+                quality="best",
             )
 
         assert result is None
@@ -568,6 +651,7 @@ class TestManifestRetryComputesBackoffDelay:
                 mock_extractor,
                 test_settings,
                 max_retries=3,
+                quality="best",
             )
 
         assert result is None
@@ -587,7 +671,7 @@ class TestBackoffCoordinatorNormalizesInternally:
         url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
         url_b = "https://cdn.example.com:8080/path2/seg.ts"
 
-        # url_a and url_b have different origins (one has port 8080) — use same origin
+        # url_a and url_b have different origins (one has port 8080) вЂ” use same origin
         url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
         url_b = "https://cdn.example.com/path2/seg.ts"
 
@@ -625,6 +709,552 @@ class TestBackoffCoordinatorNormalizesInternally:
         assert result is True
 
 
+class TestRefreshQualitySelection:
+    """T1-T7: Quality selection on the token-refresh path (NET-005).
+
+    Drives the real ``_fetch_playlist_with_retry`` / ``_handle_token_refresh``
+    / ``_refresh_token_and_retry``, patching only ``extractor.extract_streams_with_cookies``
+    and ``_fetch_single_playlist`` вЂ” so threading and both arms are exercised
+    together rather than mocked around.
+
+    New tag: D-15. Does not touch the pre-existing B4-era D1/D2/D3 labels in
+    this file's older docstrings.
+    """
+
+    _VIDEO_URL = "https://vkvideo.ru/video-12345_67890"
+
+    # ------------------------------------------------------------------ #
+    #  T1 вЂ” best arm, two-element set, picks the higher stream           #
+    #  (STUB-ONLY proof; production set is a singleton в†’ best is a noop)  #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t1_best_quality_selects_second_element(self, test_settings: Settings) -> None:
+        """T1: a best request over a two-element refreshed set resolves to the
+        second element, proving the result is not element zero.
+
+        STUB-ONLY proof (D3): ``_extract_with_browser`` appends **at most**
+        one ``Stream``, so the production refreshed set is a singleton and
+        the ``best`` arm is provably a no-op on it.  This stub injects two
+        elements to exercise ``QualitySelector.select`` and prove it returns
+        the higher stream rather than element zero.
+        """
+        m3u8_url = "https://example.com/initial.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+        playlist = "#EXTM3U\nseg1.ts"
+
+        stream_low = Stream(
+            url="https://cdn.low.m3u8",
+            format=StreamFormat.HLS,
+            quality="360p",
+            height=360,
+        )
+        stream_high = Stream(
+            url="https://cdn.high.m3u8",
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream_low, stream_high], "fresh_cookie", [])
+        )
+
+        fetch_count = 0
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 1:
+                return "", 403
+            return playlist, 200
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="best",
+            )
+
+        assert result is not None
+        # Best arm selected the higher stream (index 1), not element zero.
+        assert result.base_url == stream_high.url
+        assert result.base_url != stream_low.url
+
+    # ------------------------------------------------------------------ #
+    #  T2 вЂ” numeric request, singleton set, preselected address returned  #
+    #  (production-shaped; falsifiable against today's unfixed code)      #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t2_numeric_quality_returns_preselected(self, test_settings: Settings) -> None:
+        """T2: a numeric request over a singleton refreshed set whose address
+        differs from the preselected address returns the **preselected**
+        address.
+
+        Production-shaped, falsifiable-against-unfixed-code oracle (D1):
+        unfixed code returns ``streams[0].url`` (the refreshed address that
+        just failed); fixed code returns the ladder's ``m3u8_url``.
+        """
+        m3u8_url = "https://example.com/preselected.m3u8"
+        refreshed_url = "https://cdn.refreshed.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+        playlist = "#EXTM3U\nseg1.ts"
+
+        stream = Stream(
+            url=refreshed_url,
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "fresh_cookie", [])
+        )
+
+        fetch_count = 0
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 1:
+                return "", 403
+            return playlist, 200
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="720",
+            )
+
+        assert result is not None
+        assert result.base_url == m3u8_url
+        assert result.base_url != refreshed_url
+
+    # ------------------------------------------------------------------ #
+    #  T3 вЂ” worst request, singleton set, preselected address returned    #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t3_worst_quality_returns_preselected(self, test_settings: Settings) -> None:
+        """T3: a worst request returns the preselected address (same oracle as T2)."""
+        m3u8_url = "https://example.com/preselected.m3u8"
+        refreshed_url = "https://cdn.refreshed.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+        playlist = "#EXTM3U\nseg1.ts"
+
+        stream = Stream(
+            url=refreshed_url,
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "fresh_cookie", [])
+        )
+
+        fetch_count = 0
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 1:
+                return "", 403
+            return playlist, 200
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="worst",
+            )
+
+        assert result is not None
+        assert result.base_url == m3u8_url
+        assert result.base_url != refreshed_url
+
+    # ------------------------------------------------------------------ #
+    #  T4 вЂ” out-of-enum quality, singleton set, preselected returned      #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t4_out_of_enum_quality_returns_preselected(
+        self, test_settings: Settings
+    ) -> None:
+        """T4: a quality value outside the enumeration (e.g. ``"999"``) returns
+        the preselected address вЂ” no ``QualityParseError``, no ``except ValueError``.
+        """
+        m3u8_url = "https://example.com/preselected.m3u8"
+        refreshed_url = "https://cdn.refreshed.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+        playlist = "#EXTM3U\nseg1.ts"
+
+        stream = Stream(
+            url=refreshed_url,
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], "fresh_cookie", [])
+        )
+
+        fetch_count = 0
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 1:
+                return "", 403
+            return playlist, 200
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="999",
+            )
+
+        assert result is not None
+        assert result.base_url == m3u8_url
+        assert result.base_url != refreshed_url
+
+    # ------------------------------------------------------------------ #
+    #  T5 вЂ” two-refresh sequence, non-best arm, budget exhausted          #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t5_two_refresh_non_best_exhausts_budget(self, test_settings: Settings) -> None:
+        """T5: two-refresh sequence (403 в†’ refresh в†’ 403 в†’ refresh) for the
+        **non-best** arm with ``max_retries=2`` (explicit вЂ” not from
+        ``test_settings`` which carries ``max_retries=1``).
+
+        Asserts:
+        - extractor awaited exactly twice with ``(video_url, force_browser=True)``
+        - both fetch URLs are the **preselected** address (provably NOT the
+          stub's refreshed URL)
+        - cookie written on both refreshes (cookie1 seen on the second fetch;
+          cookie2 in final ``headers``)
+        - final result ``None`` (budget exhausted)
+        - two ``stream_quality_selected`` records, each naming the preselected
+          address
+
+        This is the sequence the D1 decision changes вЂ” a test that merely
+        counts extractor calls is worthless because today's unfixed code
+        would pass it.
+        """
+        m3u8_url = "https://example.com/preselected.m3u8"
+        refreshed_url = "https://cdn.refreshed.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+
+        stream = Stream(
+            url=refreshed_url,
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        extract_mock = AsyncMock(
+            side_effect=[
+                ([stream], "cookie1", []),
+                ([stream], "cookie2", []),
+            ]
+        )
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = extract_mock
+
+        fetch_calls: list[tuple[str, dict[str, str]]] = []
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            fetch_calls.append((url, dict(hdr)))
+            return "", 403
+
+        mock_logger = MagicMock()
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", mock_logger),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="720",
+            )
+
+        assert result is None
+
+        # Extractor awaited exactly twice with (video_url, force_browser=True).
+        assert extract_mock.await_count == 2
+        for c in extract_mock.await_args_list:
+            assert c.args[0] == self._VIDEO_URL
+            assert c.kwargs["force_browser"] is True
+
+        # Both fetches re-requested the preselected address вЂ” NOT the stub's
+        # refreshed URL.  This is the D1 decision: unfixed code would have
+        # re-requested the failed current_url (the 403 address).
+        fetch_urls = [fc[0] for fc in fetch_calls]
+        assert fetch_urls == [m3u8_url, m3u8_url]
+        assert refreshed_url not in fetch_urls
+
+        # Cookie written on both refreshes.
+        assert fetch_calls[0][1].get("Cookie") is None  # before first refresh
+        assert fetch_calls[1][1]["Cookie"] == "cookie1"  # from refresh #1
+        assert headers["Cookie"] == "cookie2"  # from refresh #2
+
+        # Two selection records, each naming the re-requested address.
+        selection_records = [
+            c
+            for c in mock_logger.info.call_args_list
+            if c.args and c.args[0] == "stream_quality_selected"
+        ]
+        assert len(selection_records) == 2
+        expected_url = _strip_auth_params(m3u8_url)
+        for rec in selection_records:
+            assert rec.kwargs["url"] == expected_url
+            assert rec.kwargs["selected_from"] == "preselected"
+            assert rec.kwargs["quality"] == QualityLabel.UNKNOWN.value
+            assert rec.kwargs["height"] is None
+            assert rec.kwargs["width"] is None
+
+    # ------------------------------------------------------------------ #
+    #  T6 вЂ” two-refresh sequence, best arm, budget exhausted              #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t6_two_refresh_best_exhausts_budget(self, test_settings: Settings) -> None:
+        """T6: two-refresh sequence (403 в†’ refresh в†’ 403 в†’ refresh) for the
+        **best** arm with ``max_retries=2`` (explicit вЂ” not from
+        ``test_settings`` which carries ``max_retries=1``).
+
+        Asserts:
+        - extractor awaited exactly twice with ``(video_url, force_browser=True)``
+        - first fetch to the preselected (initial) address; second fetch to
+          the **selector's** address (the refreshed stream)
+        - cookie written on both refreshes
+        - final result ``None`` (budget exhausted)
+        - two ``stream_quality_selected`` records, each naming the selector's
+          address with ``selected_from="refreshed_stream_set"``
+        """
+        m3u8_url = "https://example.com/preselected.m3u8"
+        refreshed_url = "https://cdn.refreshed.m3u8"
+        headers: dict[str, str] = {"User-Agent": "test"}
+
+        stream = Stream(
+            url=refreshed_url,
+            format=StreamFormat.HLS,
+            quality="1080p",
+            height=1080,
+        )
+
+        extract_mock = AsyncMock(
+            side_effect=[
+                ([stream], "cookie1", []),
+                ([stream], "cookie2", []),
+            ]
+        )
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = extract_mock
+
+        fetch_calls: list[tuple[str, dict[str, str]]] = []
+
+        async def fake_fetch(
+            session: MagicMock,
+            url: str,
+            hdr: dict[str, str],
+            timeout: object,
+        ) -> tuple[str, int] | None:
+            fetch_calls.append((url, dict(hdr)))
+            return "", 403
+
+        mock_logger = MagicMock()
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_single_playlist",
+                side_effect=fake_fetch,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", mock_logger),
+        ):
+            result = await _fetch_playlist_with_retry(
+                MagicMock(),
+                self._VIDEO_URL,
+                m3u8_url,
+                headers,
+                mock_extractor,
+                test_settings,
+                max_retries=2,
+                quality="best",
+            )
+
+        assert result is None
+
+        # Extractor awaited exactly twice with (video_url, force_browser=True).
+        assert extract_mock.await_count == 2
+        for c in extract_mock.await_args_list:
+            assert c.args[0] == self._VIDEO_URL
+            assert c.kwargs["force_browser"] is True
+
+        # First fetch to the initial preselected URL; second fetch to the
+        # selector's address (the refreshed stream's URL).
+        fetch_urls = [fc[0] for fc in fetch_calls]
+        assert fetch_urls == [m3u8_url, refreshed_url]
+
+        # Cookie written on both refreshes.
+        assert fetch_calls[0][1].get("Cookie") is None
+        assert fetch_calls[1][1]["Cookie"] == "cookie1"
+        assert headers["Cookie"] == "cookie2"
+
+        # Two selection records, each naming the selector's address.
+        selection_records = [
+            c
+            for c in mock_logger.info.call_args_list
+            if c.args and c.args[0] == "stream_quality_selected"
+        ]
+        assert len(selection_records) == 2
+        expected_url = _strip_auth_params(refreshed_url)
+        for rec in selection_records:
+            assert rec.kwargs["url"] == expected_url
+            assert rec.kwargs["selected_from"] == "refreshed_stream_set"
+            assert rec.kwargs["quality"] == QualityLabel.UNKNOWN.value
+            assert rec.kwargs["height"] is None
+            assert rec.kwargs["width"] is None
+
+    # ------------------------------------------------------------------ #
+    #  T7 вЂ” threading proof via download_hls_with_resume                 #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_t7_quality_threaded_from_request(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """T7: threading proof вЂ” ``download_hls_with_resume`` forwards
+        ``request.quality`` through ``_run_download_session`` to
+        ``_fetch_playlist_with_retry``.
+
+        ``_fetch_playlist_with_retry`` is replaced by a spy that records its
+        keyword arguments.  The spy asserts it received ``quality == "720"``
+        and the request's ``m3u8_url`` as its 3rd positional argument.
+
+        Without this test the threading could be deleted and every other test
+        would still pass вЂ” the others stub ``_handle_token_refresh`` or
+        ``_fetch_playlist_with_retry`` with a static return value.
+        """
+        output_file = tmp_path / "video.mp4"
+
+        spy = AsyncMock(
+            return_value=PlaylistFetchResult(
+                playlist_text="", base_url="https://example.com/playlist.m3u8"
+            )
+        )
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                spy,
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await download_hls_with_resume(
+                HLSDownloadRequest(
+                    video_url="https://vkvideo.ru/video-12345_67890",
+                    m3u8_url="https://example.com/video.m3u8",
+                    output_file=output_file,
+                    quality="720",
+                ),
+                settings=test_settings,
+            )
+
+        assert result is None
+        # Spy received quality="720" as a keyword argument.
+        assert spy.call_args.kwargs["quality"] == "720"
+        # And the request's m3u8_url as the 3rd positional argument.
+        assert spy.call_args.args[2] == "https://example.com/video.m3u8"
+
+
 class TestSegmentFanoutCompletion:
     """CON-006 + CON-007 + CON-008, enforced by phase04/VAL-402.
 
@@ -657,7 +1287,7 @@ class TestSegmentFanoutCompletion:
         before the exception is re-raised (CON-007).
 
         Pre-fix code only caught CancelledError, so a ValueError would escape
-        without cancelling pending siblings — leaving an orphaned task.
+        without cancelling pending siblings вЂ” leaving an orphaned task.
         """
         started = asyncio.Event()
         never_set = asyncio.Event()
@@ -797,3 +1427,209 @@ class TestSegmentFanoutCompletion:
             assert cancelled_events[0][1].get("reason") == _REASON_SHUTDOWN
         finally:
             _shutdown_event_ctx.reset(token)
+
+
+class TestSegmentFanoutBoundedProduction:
+    """CON-003: _process_downloaded_segments bounds the live task set by max_concurrent_downloads.
+
+    Four tests cover:
+      1. Bound check — live pending never exceeds the ceiling.
+      2. No work dropped — every segment index reaches the merge.
+      3. Stop leaves no orphans — CancelledError propagates, semaphore is clean.
+      4. NOTHING_TO_DO still typed — pre-existing segments reach the merge path.
+    """
+
+    @staticmethod
+    def _make_policy(tmp_path: Path) -> DownloadPolicy:
+        """Build a DownloadPolicy suitable for stubbing _download_segment_concurrent."""
+        session = MagicMock()
+        semaphore = asyncio.Semaphore(4)
+        return DownloadPolicy(
+            session=session,
+            semaphore=semaphore,
+            headers={},
+            max_concurrent_downloads=4,
+            backoff_coordinator=None,
+            video_url="https://vkvideo.ru/video-12345_67890",
+            max_retries=3,
+            download_timeout=300,
+            m3u8_url="",
+            segments_dir=tmp_path,
+        )
+
+    @pytest.mark.asyncio
+    async def test_bound_check_live_pending_never_exceeds_ceiling(self, tmp_path: Path) -> None:
+        """The FIRST_COMPLETED pump must keep live concurrent calls <= max_concurrent_downloads.
+
+        A stubbed ``_download_segment_concurrent`` tracks an active-call counter
+        and records the maximum observed value. The ceiling (4) must never be
+        exceeded.
+        """
+        active: list[int] = [0]
+        max_live: list[int] = [0]
+
+        async def stub(task: SegmentTask, policy: DownloadPolicy) -> tuple[int, bool]:
+            active[0] += 1
+            if active[0] > max_live[0]:
+                max_live[0] = active[0]
+            try:
+                await asyncio.sleep(0)
+            finally:
+                active[0] -= 1
+            return task.idx, True
+
+        policy = self._make_policy(tmp_path)
+        segments: list[str] = [f"https://example.com/seg{i}.ts" for i in range(200)]
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with patch(
+                "vkdownloader.services.segment_downloader._download_segment_concurrent",
+                side_effect=stub,
+            ):
+                await asyncio.wait_for(
+                    _process_downloaded_segments(segments, policy, tmp_path / "out.mp4", None),
+                    timeout=30.0,
+                )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        assert max_live[0] <= 4, f"Live task set exceeded ceiling: {max_live[0]}"
+
+    @pytest.mark.asyncio
+    async def test_no_work_dropped_all_indices_reach_merge(self, tmp_path: Path) -> None:
+        """All 200 segment indices must appear in the results passed to _tally_and_merge.
+
+        Patches ``_tally_and_merge`` to capture its ``download_results`` argument
+        and assert that every index 0..199 is present (sorted, no gaps).
+        """
+        policy = self._make_policy(tmp_path)
+        segments: list[str] = [f"https://example.com/seg{i}.ts" for i in range(200)]
+
+        async def stub(task: SegmentTask, policy: DownloadPolicy) -> tuple[int, bool]:
+            await asyncio.sleep(0)
+            return task.idx, True
+
+        captured_results: list[tuple[int, bool]] = []
+
+        async def fake_tally(
+            download_results: list[tuple[int, bool]],
+            segments_list: list[str],
+            segments_dir: Path,
+            output_file: Path,
+            progress_callback: Callable[[str, int, int], None] | None,
+            video_url: str,
+            download_timeout: int,
+        ) -> Path | None:
+            captured_results.extend(download_results)
+            return None  # Don't actually merge
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with (
+                patch(
+                    "vkdownloader.services.segment_downloader._download_segment_concurrent",
+                    side_effect=stub,
+                ),
+                patch(
+                    "vkdownloader.services.segment_downloader._tally_and_merge",
+                    side_effect=fake_tally,
+                ),
+            ):
+                await asyncio.wait_for(
+                    _process_downloaded_segments(segments, policy, tmp_path / "out.mp4", None),
+                    timeout=30.0,
+                )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        assert len(captured_results) == 200
+        indices = [r[0] for r in sorted(captured_results)]
+        assert indices == list(range(200)), f"Missing indices: {set(range(200)) - set(indices)}"
+
+    @pytest.mark.asyncio
+    async def test_stop_leaves_no_orphans(self, tmp_path: Path) -> None:
+        """When the task is cancelled mid-flight, CancelledError propagates and the semaphore is clean.
+
+        The stub raises ``asyncio.CancelledError`` on the first call. We assert:
+        - ``_process_downloaded_segments`` propagates the CancelledError.
+        - After propagation, the semaphore's internal value matches its initial
+          ``max_concurrent_downloads`` (no leaked permits).
+        """
+        policy = self._make_policy(tmp_path)
+        segments: list[str] = [f"https://example.com/seg{i}.ts" for i in range(20)]
+        semaphore = policy.semaphore
+
+        call_count: list[int] = [0]
+
+        async def stub(task: SegmentTask, policy: DownloadPolicy) -> tuple[int, bool]:
+            call_count[0] += 1
+            raise asyncio.CancelledError("simulated stop")
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with patch(
+                "vkdownloader.services.segment_downloader._download_segment_concurrent",
+                side_effect=stub,
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(
+                        _process_downloaded_segments(segments, policy, tmp_path / "out.mp4", None),
+                        timeout=10.0,
+                    )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        assert call_count[0] >= 1
+        assert semaphore._value == policy.max_concurrent_downloads, (
+            f"Semaphore leaked permits: {semaphore._value} (expected {policy.max_concurrent_downloads})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_do_is_typed_not_none(self, tmp_path: Path) -> None:
+        """When all segment files already exist, the outcome is NOTHING_TO_DO, not None.
+
+        Pre-creates all .ts files with non-zero size so ``_iter_pending_segment_tasks``
+        yields nothing. Asserts the final return is None (no merge needed) AND
+        that the fanout result reached ``_tally_and_merge`` with an empty results
+        list and NOTHING_TO_DO outcome — by capturing the call.
+        """
+        num_segments = 3
+        segments: list[str] = [f"https://example.com/seg{i}.ts" for i in range(num_segments)]
+
+        # Pre-create all segment files so _iter_pending_segment_tasks yields nothing
+        for i in range(num_segments):
+            seg_path = tmp_path / f"{i:05d}.ts"
+            seg_path.write_bytes(b"existing-segment-data")
+
+        policy = self._make_policy(tmp_path)
+
+        captured: dict[str, object] = {}
+
+        async def fake_tally(
+            download_results: list[tuple[int, bool]],
+            segments_list: list[str],
+            segments_dir: Path,
+            output_file: Path,
+            progress_callback: Callable[[str, int, int], None] | None,
+            video_url: str,
+            download_timeout: int,
+        ) -> Path | None:
+            captured["results"] = download_results
+            return None
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with patch(
+                "vkdownloader.services.segment_downloader._tally_and_merge",
+                side_effect=fake_tally,
+            ):
+                result = await asyncio.wait_for(
+                    _process_downloaded_segments(segments, policy, tmp_path / "out.mp4", None),
+                    timeout=10.0,
+                )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        assert result is None
+        assert captured["results"] == []

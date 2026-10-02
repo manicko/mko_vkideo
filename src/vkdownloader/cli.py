@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import typer
 from pydantic import ValidationError
@@ -33,7 +33,8 @@ from .exceptions import (
     QualityParseError,
     VideoNotFoundError,
 )
-from .models.enums import CookieSource, DownloadMethod, QualityEnum
+from .models.enums import CookieSource, DownloadMethod
+from .models.quality import QualitySpec
 from .services.batch_downloader import run_batch
 from .services.downloader import download_video
 from .services.downloader_throttle import get_shutdown_event
@@ -229,6 +230,67 @@ def _run_command_preamble(
         ) from exc
 
 
+# The accepted --quality forms live in these two tuples: the help text and the
+# rejection message are both rendered from them, so a new form cannot appear in
+# one and go stale in the other. Every value named in the rejection message is
+# accepted when pasted back into the command line (see
+# docs/99-reference/cli-reference.md).
+_QUALITY_KEYWORDS = ("best", "worst", "unknown")
+_QUALITY_EXAMPLE_HEIGHTS = ("720", "1080", "1072")
+
+_QUALITY_OPTION_HELP = (
+    f"Video quality: {', '.join(_QUALITY_KEYWORDS)}, or any height in pixels "
+    f"the video offers (e.g. {', '.join(_QUALITY_EXAMPLE_HEIGHTS)})"
+)
+_QUALITY_REJECTION_MESSAGE = (
+    f"Use {', '.join(repr(name) for name in _QUALITY_KEYWORDS)}, or a height in "
+    f"pixels the video offers (e.g. {', '.join(_QUALITY_EXAMPLE_HEIGHTS)})."
+)
+
+
+def _quality_option() -> Any:
+    """Build the shared ``--quality`` option definition.
+
+    VK height ladders are non-standard (a single video may offer 106p through
+    1610p), so the option accepts a free-form token validated by
+    :func:`_validate_quality` instead of a closed enum.
+
+    Returns:
+        A Typer option definition carrying the shared callback and help text.
+    """
+    return typer.Option(
+        "best",
+        "--quality",
+        callback=_validate_quality,
+        help=_QUALITY_OPTION_HELP,
+    )
+
+
+def _validate_quality(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:
+    """Validate ``--quality`` during argument parsing.
+
+    This is the single validation point for the option: it runs before the
+    command body, so a bad token is a usage error (exit code 2) and nothing is
+    attempted. The body then parses the accepted token into a ``QualitySpec``.
+
+    Args:
+        ctx: Click context (unused).
+        param: The parameter being parsed (unused).
+        value: Raw token supplied by the user.
+
+    Returns:
+        The unchanged token, which the command body parses into a QualitySpec.
+
+    Raises:
+        typer.BadParameter: If the token is not a keyword or a positive height.
+    """
+    try:
+        QualitySpec.parse(value)
+    except QualityParseError:
+        raise typer.BadParameter(_QUALITY_REJECTION_MESSAGE) from None
+    return value
+
+
 app = typer.Typer(
     name="vkdownloader",
     help="Download videos from vkvideo.ru with quality selection support",
@@ -238,7 +300,7 @@ app = typer.Typer(
 @app.command()
 def download(
     url: str = typer.Argument(..., help="VK Video URL to download"),
-    quality: QualityEnum = typer.Option(QualityEnum.BEST, help="Video quality selection"),
+    quality: str = _quality_option(),
     output: Path = typer.Option(
         ".",
         "--output",
@@ -284,7 +346,7 @@ def download(
         try:
             result = await download_video(
                 url,
-                quality,
+                quality_spec,
                 output,
                 method,
                 settings,
@@ -303,6 +365,9 @@ def download(
         return result
 
     try:
+        # The --quality callback already rejected anything unparseable during
+        # argument parsing, so this cannot fail; it produces the typed request.
+        quality_spec = QualitySpec.parse(quality)
         settings = _run_command_preamble(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
@@ -316,13 +381,6 @@ def download(
 
     except ValidationError as e:
         typer.echo(format_validation_error(e), err=True)
-        raise typer.Exit(code=1) from None
-    except QualityParseError as e:
-        accepted_qualities = ", ".join(quality_value.value for quality_value in QualityEnum)
-        typer.echo(
-            f"Invalid quality value: {e.quality}. Use one of: {accepted_qualities}.",
-            err=True,
-        )
         raise typer.Exit(code=1) from None
     except InvalidVideoUrlError:
         typer.echo(
@@ -344,8 +402,10 @@ def download(
                 err=True,
             )
         else:
+            # `requested` is already the canonical token (a keyword or a bare
+            # height such as "1072"); appending "p" would render "bestp".
             typer.echo(
-                f"\nRequested quality '{requested}p' is not available for this video.",
+                f"\nRequested quality '{requested}' is not available for this video.",
                 err=True,
             )
             typer.echo(f"Available qualities: {', '.join(available_qualities)}", err=True)
@@ -372,10 +432,7 @@ def batch_download(
         exists=True,
         help="Path to file containing video URLs (one per line)",
     ),
-    quality: QualityEnum = typer.Option(
-        QualityEnum.BEST,
-        help="Video quality selection for all downloads",
-    ),
+    quality: str = _quality_option(),
     output: Path = typer.Option(
         ".",
         "--output",
@@ -415,6 +472,9 @@ def batch_download(
         valid_urls: list[str] = []
         skipped_count = 0
 
+        # The --quality callback already rejected anything unparseable during
+        # argument parsing, so this cannot fail; it produces the typed request.
+        quality_spec = QualitySpec.parse(quality)
         settings = _run_command_preamble(
             cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
         )
@@ -452,7 +512,7 @@ def batch_download(
         exit_code = asyncio.run(
             run_batch(
                 valid_urls,
-                quality,
+                quality_spec,
                 method,
                 settings,
                 output,

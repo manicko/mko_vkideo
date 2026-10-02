@@ -15,9 +15,9 @@ from vkdownloader.models.enums import (
     CookieSource,
     DownloadMethod,
     ProgressStatus,
-    QualityEnum,
     StreamFormat,
 )
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.models.video import Stream, VideoWithStreams
 from vkdownloader.services.batch_downloader import (
     ConcurrencyTracker,
@@ -201,7 +201,7 @@ class TestBatchDownloaderSemaphore:
             results, peak = await asyncio.wait_for(
                 _run_batch_with_progress(
                     urls,
-                    QualityEnum.BEST,
+                    QualitySpec.parse("best"),
                     DownloadMethod.AUTO,
                     settings,
                     output=tmp_path,
@@ -349,7 +349,7 @@ class TestBatchDownloaderSemaphore:
             result = await asyncio.wait_for(
                 _download_single(
                     url,
-                    QualityEnum.BEST,
+                    QualitySpec.parse("best"),
                     tmp_path,
                     DownloadMethod.AUTO,
                     settings,
@@ -408,7 +408,7 @@ class TestBatchCancellationReporting:
                 results, peak = await asyncio.wait_for(
                     _run_batch_with_progress(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         output=tmp_path,
@@ -440,7 +440,7 @@ class TestBatchCancellationReporting:
                 exit_code = await asyncio.wait_for(
                     run_batch(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         tmp_path,
@@ -476,7 +476,7 @@ class TestBatchCancellationReporting:
                 results, peak = await asyncio.wait_for(
                     _run_batch_with_progress(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         output=tmp_path,
@@ -519,7 +519,7 @@ class TestBatchCancellationReporting:
                 results, peak = await asyncio.wait_for(
                     _run_batch_with_progress(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         output=tmp_path,
@@ -562,7 +562,7 @@ class TestBatchCancellationReporting:
                 exit_code = await asyncio.wait_for(
                     run_batch(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         tmp_path,
@@ -654,7 +654,7 @@ class TestBatchCancellationPropagates:
                         await asyncio.wait_for(
                             run_batch(
                                 urls,
-                                QualityEnum.BEST,
+                                QualitySpec.parse("best"),
                                 DownloadMethod.AUTO,
                                 settings,
                                 tmp_path,
@@ -734,7 +734,7 @@ class TestCorrelationInheritance:
             results, _peak = await asyncio.wait_for(
                 _run_batch_with_progress(
                     [url],
-                    QualityEnum.BEST,
+                    QualitySpec.parse("best"),
                     DownloadMethod.AUTO,
                     settings,
                     output=tmp_path,
@@ -807,7 +807,7 @@ class TestBatchLiveTaskBounding:
             results, peak = await asyncio.wait_for(
                 _run_batch_with_progress(
                     urls,
-                    QualityEnum.BEST,
+                    QualitySpec.parse("best"),
                     DownloadMethod.AUTO,
                     settings,
                     output=tmp_path,
@@ -846,7 +846,7 @@ class TestBatchLiveTaskBounding:
                 results, peak = await asyncio.wait_for(
                     _run_batch_with_progress(
                         urls,
-                        QualityEnum.BEST,
+                        QualitySpec.parse("best"),
                         DownloadMethod.AUTO,
                         settings,
                         output=tmp_path,
@@ -920,7 +920,7 @@ class TestBatchLiveTaskBounding:
                         await asyncio.wait_for(
                             _run_batch_with_progress(
                                 urls,
-                                QualityEnum.BEST,
+                                QualitySpec.parse("best"),
                                 DownloadMethod.AUTO,
                                 settings,
                                 output=tmp_path,

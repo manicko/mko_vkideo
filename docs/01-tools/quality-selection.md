@@ -17,20 +17,24 @@ This guide explains how to select video quality when downloading from VK Video u
 
 ## Quality Options
 
-VK Video Downloader supports the following quality options:
+VK Video Downloader accepts a keyword or any height the video actually offers. VK does not publish a fixed resolution ladder: one reported video offers `106p`, `178p`, `268p`, `358p`, `536p`, `804p`, `1072p`, `1610p`, so a closed list of known resolutions would make most real requests impossible to express.
 
 | Option | Value | Description |
 |--------|-------|-------------|
-| Best | `best` | Selects the highest available resolution |
+| Best | `best` | Selects the highest available resolution (default) |
 | Worst | `worst` | Selects the lowest available resolution |
-| 240p | `240` | 240p resolution (if available) |
-| 360p | `360` | 360p resolution (if available) |
-| 480p | `480` | 480p resolution (if available) |
-| 720p | `720` | 720p resolution (if available) |
-| 1080p | `1080` | 1080p resolution (if available) |
-| 1440p | `1440` | 1440p resolution (if available) |
-| 2160p | `2160` | 2160p resolution (if available) |
 | Unknown | `unknown` | Selects a stream whose height is unavailable (browser HLS capture) |
+| Height in pixels | `720`, `1080`, `1072`, any other offered height | Selects the stream whose quality label is exactly that height, when the video offers it |
+
+A height is a positive integer in pixels with an optional trailing `p`, so `720` and `720p` are the same request. The token is case-insensitive and surrounding whitespace is ignored, so `720P` and ` 720 ` are accepted too. An empty value falls back to `best`, matching the CLI default.
+
+Anything else is rejected: a keyword other than `best`, `worst` or `unknown`, `0`, a negative number, `abc`, `720x`. Through the CLI the rejection is a usage error with exit code `2`, raised while the command line is parsed, so nothing is downloaded:
+
+```
+Invalid value for '--quality': Use 'best', 'worst', 'unknown', or a height in pixels the video offers (e.g. 720, 1080, 1072).
+```
+
+Every value that message names is accepted when pasted back into the command line.
 
 ## How Quality Selection Works
 
@@ -53,19 +57,22 @@ For ffmpeg download method, `extract_streams_with_cookies()` additionally:
 
 ### Selection Algorithm
 
-The `QualitySelector` uses the following logic:
+A user-supplied token is parsed once by `QualitySpec.parse` into a request with a `QualityKind` — how it is resolved against the streams of the video. The `QualitySelector` then takes one of three paths:
 
-1. **BEST**: Returns the stream with the highest usable `height` (a `height <= 0` placeholder is treated as absent)
-2. **WORST**: Returns the stream with the lowest usable `height` (a `height <= 0` placeholder is treated as absent, and the two arms never select the same record from a `{0, None}` set)
-3. **Specific resolution** (e.g., `720`): Finds exact match first, raises `QualityNotAvailableError` if not found
+1. **BEST** (`QualityKind.BEST`): Returns the stream with the highest usable `height` (a `height <= 0` placeholder is treated as absent)
+2. **WORST** (`QualityKind.WORST`): Returns the stream with the lowest usable `height` (a `height <= 0` placeholder is treated as absent, and the two arms never select the same record from a `{0, None}` set)
+3. **EXACT** (`QualityKind.EXACT`): Finds the stream whose quality label matches the request exactly — whatever height it carries, including a non-standard one such as `1072p` — and raises `QualityNotAvailableError` if no such stream exists
+
+There is no silent fallback to a lower quality on the exact path. A request for a height the video does not offer is reported, not downgraded.
 
 ### Stream Matching
 
 Streams are matched by comparing the `quality` field:
 
-- Quality string format: `{height}p` (e.g., "720p")
-- Also supports numeric format (e.g., "720" matches "720p")
-- Streams without a positive `height` (`None`, `0`, or negative) are assigned "unknown" quality
+- Quality string format: `{height}p` (e.g., "1072p")
+- A request also matches the numeric form (e.g., `1072` matches "1072p"), and a request written as `1072p` matches either spelling
+- Streams without a positive `height` (`None`, `0`, or negative) are assigned the `unknown` quality label, which `--quality unknown` selects
+- A `best` or `worst` request never matches a single label; it ranks the streams instead
 
 ## CLI Usage
 
@@ -77,12 +84,18 @@ vkdownloader download "https://vkvideo.ru/video-123_456"
 
 ### Download Specific Quality
 
+Any height the video offers is valid, including non-standard ones. Both spellings below request the same 1072p stream:
+
 ```bash
-# 720p
+# 720p, when the video offers it
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720
 
-# 1080p
+# 1080p, when the video offers it
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 1080
+
+# A non-standard height, with or without the trailing p
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 1072
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 1072p
 
 # Best available
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality best
@@ -115,27 +128,33 @@ vkdownloader batch ./urls.txt --quality 720
 
 ### Using QualitySelector
 
+`QualitySelector.select` takes a `QualitySpec`, not an enum member. Build one with `QualitySpec.parse` from the same token the CLI accepts.
+
 ```python
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.services.quality import QualitySelector
-from vkdownloader.models.enums import QualityEnum
 
 selector = QualitySelector()
 
 # Get available qualities
 available = selector.list_available_qualities(video.streams)
-print(available)  # ['1080p', '720p', '480p', ...]
+print(available)  # ['1610p', '1072p', '804p', ...]
 
 # Select best quality
-stream = selector.select(video.streams, QualityEnum.BEST)
+stream = selector.select(video.streams, QualitySpec.parse("best"))
 
-# Select specific resolution
-stream = selector.select(video.streams, QualityEnum.Q720)
+# Select a specific height the video offers, including a non-standard one
+stream = selector.select(video.streams, QualitySpec.parse("1072"))
 
 # Select worst quality
-stream = selector.select(video.streams, QualityEnum.WORST)
+stream = selector.select(video.streams, QualitySpec.parse("worst"))
 ```
 
+`QualitySpec.parse` raises `QualityParseError` for a token that is neither a keyword nor a positive height. The parsed request carries `kind` (`QualityKind.BEST`, `QualityKind.WORST` or `QualityKind.EXACT`) and, for an exact request, the `label` it matches (`"1072p"`). `str(spec)` renders the token the CLI accepts — `"1072"` — which is also the value handed to the yt-dlp format selector as `best[height<=1072]`.
+
 ### Complete Download Flow with Method Selection
+
+`perform_download` takes the plain token string, not a `QualitySpec`; `download_video` is the entry point that takes a `QualitySpec` and performs the selection itself.
 
 ```python
 import asyncio
@@ -146,7 +165,7 @@ from vkdownloader.models.enums import DownloadMethod
 async def download_quality_example():
     result = await perform_download(
         url="https://vkvideo.ru/video-123_456",
-        quality="720",
+        quality="720",  # "best", "worst", "unknown" or any offered height
         output_file=Path("video_720.mp4"),
         method=DownloadMethod.AUTO,  # or DownloadMethod.FFMPEG
     )
@@ -159,8 +178,15 @@ asyncio.run(download_quality_example())
 
 If a specific quality is requested but not available:
 
-1. The selector attempts to find an exact match
-2. If no match is found, `QualityNotAvailableError` is raised with available options listed
-3. Error message includes: `"Requested quality 'X' not available. Available: [...]`
+1. The selector looks for an exact match on the quality label
+2. If no match is found, `QualityNotAvailableError` is raised, carrying the requested token and the available labels
+3. The exception message reads `"Quality '1072' not available. Available: ['1610p', '1072p', ...]"`, and the `download` command renders the requested value verbatim followed by the ladder the video does offer:
 
-This ensures users are informed when their quality preference cannot be met.
+```
+Requested quality '1000' is not available for this video.
+Available qualities: 106p, 178p, 268p, 358p, 536p, 804p, 1072p, 1610p
+```
+
+   In `batch`, the same condition reports that URL as failed with the `quality_not_available` status label in the summary, and the command exits `1`.
+
+This ensures users are informed when their quality preference cannot be met, rather than silently receiving a different one.

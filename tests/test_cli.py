@@ -16,10 +16,10 @@ from vkdownloader import cli
 from vkdownloader.cli import app
 from vkdownloader.exceptions import (
     QualityNotAvailableError,
-    QualityParseError,
     VideoNotFoundError,
 )
-from vkdownloader.models.enums import CookieSource, ProgressStatus, QualityEnum
+from vkdownloader.models.enums import CookieSource, ProgressStatus
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.services import batch_downloader
 from vkdownloader.services.downloader import download_video as _real_download_video
 from vkdownloader.services.progress_display import RichProgressReporter
@@ -279,6 +279,45 @@ class TestBatchCommand:
         assert "Failed URLs:" in result.output
         assert "video_not_found" in result.output
         assert "video-2_2" in result.output
+
+    def test_batch_non_standard_height_reaches_the_service_layer(self, tmp_path: Path) -> None:
+        """`batch --quality 1072` parses into the same request `download` builds.
+
+        batch is a separate command with its own option declaration, so the
+        open-ended quality contract has to hold on both paths.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-1_1\n")
+
+        with patch(
+            "vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0
+        ) as mock_run_batch:
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--quality", "1072"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        requested = mock_run_batch.call_args.args[1]
+        assert isinstance(requested, QualitySpec)
+        assert requested.label == "1072p"
+        assert str(requested) == "1072"
+
+    def test_batch_invalid_quality_is_a_usage_error(self, tmp_path: Path) -> None:
+        """`batch --quality nope` is rejected before the command body runs."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-1_1\n")
+
+        with patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch:
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--quality", "nope"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 2
+        mock_run_batch.assert_not_called()
 
     def test_batch_all_success_exits_zero(self, tmp_path: Path) -> None:
         """Check that batch exits with code 0 when all downloads succeed."""
@@ -908,7 +947,7 @@ class TestBatchCommand:
 
 
 class TestQualityOptionValidation:
-    """Tests for quality enum validation in CLI."""
+    """Tests for --quality validation in CLI."""
 
     def test_quality_not_available_error(self, tmp_path: Path, sample_video_url: str) -> None:
         """Check that requesting unavailable quality shows helpful error message."""
@@ -948,18 +987,72 @@ class TestQualityOptionValidation:
                     )
 
         assert result.exit_code == 1
-        assert "Requested quality '1440p' is not available" in result.output
+        # The requested value is rendered verbatim: it is already a bare height,
+        # so appending "p" would be wrong (and used to print "bestp" for keywords).
+        assert "Requested quality '1440' is not available" in result.output
+        assert "'1440p'" not in result.output
         assert "Available qualities:" in result.output
 
     def test_invalid_quality_option(self, tmp_path: Path) -> None:
-        """Check quality enum validation rejects invalid values."""
+        """Check quality validation rejects invalid values as a usage error."""
         result = runner.invoke(
             app,
             ["download", "https://vkvideo.ru/video-12345_67890", "--quality", "invalid_quality"],
             catch_exceptions=False,
         )
 
-        assert result.exit_code != 0
+        assert result.exit_code == 2
+
+    def test_non_standard_height_is_accepted(self, tmp_path: Path, sample_video_url: str) -> None:
+        """A height outside any fixed ladder (1072) reaches the service layer.
+
+        VK ladders are non-standard (106p … 1072p … 1610p); before the open-ended
+        quality model the argument parser rejected such a value outright.
+        """
+        with patch(
+            "vkdownloader.cli.download_video",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "video_1072.mp4",
+        ) as mock_download_video:
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url, "--quality", "1072"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        requested = mock_download_video.call_args.args[1]
+        assert isinstance(requested, QualitySpec)
+        assert requested.label == "1072p"
+        assert str(requested) == "1072"
+
+    def test_non_standard_height_missing_from_video_is_reported(self, tmp_path: Path) -> None:
+        """An unavailable height is reported with the ladder the video offers."""
+        streams = [
+            MagicMock(url="https://example.com/1072p.m3u8", quality="1072p", height=1072),
+            MagicMock(url="https://example.com/804p.m3u8", quality="804p", height=804),
+        ]
+
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.perform_download"),
+            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=streams)
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            result = runner.invoke(
+                app,
+                ["download", "https://vkvideo.ru/video-12345_67890", "--quality", "1000"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 1
+        assert "Requested quality '1000' is not available" in result.output
+        assert "1072p" in result.output
 
     def test_valid_quality_option_accepted(self, tmp_path: Path, sample_video_url: str) -> None:
         """Check that valid quality options are accepted."""
@@ -1343,62 +1436,62 @@ class TestBatchErrorHandler:
 class TestQualityRecoveryHint:
     """D-05 part 1: the recovery hint must name only values the parser accepts."""
 
+    _QUOTED_TOKEN_RE = re.compile(r"'([^']+)'")
+    _EXAMPLE_RE = re.compile(r"e\.g\.\s*([^)]+)\)")
+
+    def _named_tokens(self, message: str) -> list[str]:
+        """Extract every value the rejection message names as acceptable.
+
+        Both spellings are collected: quoted keywords ('best', 'worst',
+        'unknown') and the example heights in the trailing "(e.g. …)" clause.
+        The option name that Click prints in the prefix is not a value, so the
+        search starts after the colon that follows it.
+        """
+        _, separator, body = message.partition("Invalid value for '--quality':")
+        assert separator, "the rejection message carries no recognizable prefix"
+        tokens = set(self._QUOTED_TOKEN_RE.findall(body))
+        for group in self._EXAMPLE_RE.findall(body):
+            tokens.update(part.strip() for part in group.split(","))
+        return sorted(token for token in tokens if token and not token.startswith("-"))
+
     def test_quality_recovery_hint_names_only_accepted_values(
         self, tmp_path: Path, sample_video_url: str
     ) -> None:
-        """Every value printed in "Use one of:" must be a valid ``QualityEnum`` value.
+        """Every value the rejection message prints must be accepted when pasted back.
 
-        The ``except QualityParseError`` arm is unreachable through a normal CLI
-        invocation: ``--quality`` is typed ``QualityEnum``, so Click rejects an
-        unknown value at parse time and the command body never runs. The test
-        therefore forces the producer — ``_parse_quality_to_enum``, the only
-        function that raises ``QualityParseError`` — by patching it to raise, and
-        asserts on the message the CLI actually prints.
+        The hint is emitted by the ``--quality`` callback, which runs during
+        argument parsing, so it is observable by invoking the CLI with a rejected
+        token and reading the parser's own message.
         """
-        stream = MagicMock(url="https://example.com/preselected.m3u8", quality="best", height=None)
-        video = MagicMock(id="12345_67890", title=None, streams=[stream])
+        rejected = runner.invoke(
+            app,
+            ["download", sample_video_url, "--quality", "bogus"],
+            catch_exceptions=False,
+        )
 
-        with (
-            patch(
-                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
-                new_callable=AsyncMock,
-                return_value=video,
-            ),
-            patch(
-                "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
-                new_callable=AsyncMock,
-                return_value=([stream], None, None),
-            ),
-            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
-            patch(
-                "vkdownloader.services.ytdlp_downloader._parse_quality_to_enum",
-                side_effect=QualityParseError("720p"),
-            ) as mock_parse_quality,
-            patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path),
-        ):
-            mock_selector = MagicMock()
-            mock_selector.list_available_qualities.return_value = ["best"]
-            mock_selector.select.return_value = stream
-            mock_selector_cls.return_value = mock_selector
+        assert rejected.exit_code == 2
+        assert "Invalid value for '--quality'" in rejected.output
 
-            result = runner.invoke(
-                app,
-                ["download", sample_video_url, "--cookie-source", "browser"],
-                catch_exceptions=False,
+        tokens = self._named_tokens(rejected.output)
+        assert tokens, "the recovery hint named no values"
+
+        for token in tokens:
+            with patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "video.mp4",
+            ):
+                result = runner.invoke(
+                    app,
+                    ["download", sample_video_url, "--quality", token],
+                    catch_exceptions=False,
+                )
+
+            assert "Invalid value for '--quality'" not in result.output, (
+                f"recovery hint names '{token}', which the parser rejects"
             )
-
-        assert mock_parse_quality.call_count > 0, "the producer was never reached"
-        assert result.exit_code == 1
-        assert "Invalid quality value: 720p" in result.output
-
-        hint = result.output.split("Use one of: ", 1)[1].splitlines()[0].rstrip(".")
-        printed = {name.strip() for name in hint.split(",") if name.strip()}
-        accepted = {member.value for member in QualityEnum}
-
-        assert printed, "the recovery hint listed no values"
-        for name in sorted(printed):
-            assert name in accepted, f"recovery hint names '{name}', which the parser rejects"
-        assert printed == accepted, "the recovery hint does not list every accepted quality"
+            assert result.exit_code == 0
+            assert QualitySpec.parse(token)
 
 
 class TestExitCodeContract:
@@ -1414,9 +1507,10 @@ class TestExitCodeContract:
         * ``0``   — ``download`` with the download service mocked to succeed.
         * ``1``   — ``download`` with a URL that is not a VK video URL, which the
           command maps to its own "Invalid URL format" handler.
-        * ``2``   — ``download --quality 720p``: a value the argument parser
-          rejects, so the command body never runs. The same value is produced by
-          a missing argument, an unknown command and an unknown option.
+        * ``2``   — ``download --quality not-a-quality``: a value the argument
+          parser rejects, so the command body never runs. The same value is
+          produced by a missing argument, an unknown command and an unknown
+          option. (``720p`` no longer belongs here: it is a valid height.)
         * ``130`` — ``download`` interrupted with ``KeyboardInterrupt`` from the
           extraction layer, which the command maps to its cancellation handler.
         """
@@ -1474,10 +1568,10 @@ class TestExitCodeContract:
 
         result = runner.invoke(
             app,
-            ["download", sample_video_url, "--quality", "720p"],
+            ["download", sample_video_url, "--quality", "not-a-quality"],
             catch_exceptions=False,
         )
-        observed.setdefault(result.exit_code, "parser rejected the --quality value '720p'")
+        observed.setdefault(result.exit_code, "parser rejected the --quality value 'not-a-quality'")
 
         with patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls:
             mock_extractor = MagicMock()
@@ -1571,7 +1665,6 @@ class TestExitCodeContract:
 
         assert result.exit_code == 130, result.output
         assert "Download Summary:" not in result.output
-
 
 
 class TestEntryPointSourcePrecedence:

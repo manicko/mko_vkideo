@@ -12,7 +12,8 @@ import pytest
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import QualityNotAvailableError
 from vkdownloader.models.dtos import HLSDownloadRequest
-from vkdownloader.models.enums import CookieSource, QualityEnum, StreamFormat
+from vkdownloader.models.enums import CookieSource, QualityKind, StreamFormat
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape, _sanitize_cookie_value
 from vkdownloader.services.downloader import (
@@ -21,9 +22,10 @@ from vkdownloader.services.downloader import (
     _build_ytdlp_cli_command,
     _cleanup_segments,
     _create_temp_cookie_file,
+    _echo_ytdlp_line,
     _format_argfile,
+    _is_ytdlp_progress_line,
     _parse_m3u8_segments,
-    _parse_quality_to_enum,
     _parse_ytdlp_progress,
     _resolve_cookies,
     _temp_argfile,
@@ -311,20 +313,14 @@ class TestDownloadHlsWithResume:
                 base_url="https://example.com/playlist.m3u8",
             ),
         ):
-            try:
-                result = await asyncio.wait_for(
-                    download_hls_with_resume(
-                        HLSDownloadRequest(
-                            video_url="https://vkvideo.ru/video-12345_67890",
-                            m3u8_url="https://example.com/video.m3u8",
-                            output_file=output_path,
-                        ),
-                        settings=test_settings,
-                    ),
-                    timeout=5.0,
-                )
-            except TimeoutError:
-                pytest.fail("download_hls_with_resume did not return within 5.0s")
+            result = await download_hls_with_resume(
+                HLSDownloadRequest(
+                    video_url="https://vkvideo.ru/video-12345_67890",
+                    m3u8_url="https://example.com/video.m3u8",
+                    output_file=output_path,
+                ),
+                settings=test_settings,
+            )
 
         assert result is None
         # Segments directory should be preserved for resume
@@ -353,20 +349,14 @@ class TestDownloadHlsWithResume:
                 "vkdownloader.services.segment_downloader._download_segment",
                 return_value=False,
             ):
-                try:
-                    result = await asyncio.wait_for(
-                        download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
-                            ),
-                            settings=test_settings,
-                        ),
-                        timeout=5.0,
-                    )
-                except TimeoutError:
-                    pytest.fail("download_hls_with_resume did not return within 5.0s")
+                result = await download_hls_with_resume(
+                    HLSDownloadRequest(
+                        video_url="https://vkvideo.ru/video-12345_67890",
+                        m3u8_url="https://example.com/video.m3u8",
+                        output_file=output_path,
+                    ),
+                    settings=test_settings,
+                )
 
         assert result is None
         # Segments directory should be preserved for resume
@@ -1051,6 +1041,27 @@ class TestYtdlpCliCommand:
         idx = cmd.index("-f")
         assert cmd[idx + 1] == "best"
 
+    def test_cli_command_format_selector_for_non_standard_height(
+        self, test_settings: Settings
+    ) -> None:
+        """A height outside any fixed ladder reaches yt-dlp as a height filter.
+
+        The user's reported case: a video offering 106p вЂ¦ 1610p, requested at
+        1072p. The token produced by ``QualitySpec`` must become
+        ``best[height<=1072]``, not a rejected value.
+        """
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str=str(QualitySpec.parse("1072p")),
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        idx = cmd.index("-f")
+        assert cmd[idx + 1] == "best[height<=1072]"
+
     def test_cli_command_uses_python_module(self, test_settings: Settings) -> None:
         """Test CLI command uses sys.executable -m yt_dlp for environment consistency."""
         import sys
@@ -1230,6 +1241,111 @@ class TestYtdlpProgressParsing:
         downloaded, total = result
         assert total == int(1.50 * 1024**3)
         assert downloaded == int(total * 30.0 / 100)
+
+    def test_parse_progress_estimated_total(self) -> None:
+        """The "~" estimate form of a fragment download is progress, not a new line.
+
+        A fragment (HLS) download has no exact total, so yt-dlp prefixes the
+        running estimate with "~". This is the line shape reported for
+        ``--quality 1072`` on video-225794656_456243579 (566 fragments).
+        """
+        line = "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5/566)"
+
+        result = _parse_ytdlp_progress(line)
+
+        assert result is not None
+        downloaded, total = result
+        assert total == int(1.18 * 1024**3)
+        assert downloaded == int(total * 0.8 / 100)
+
+
+class TestYtdlpProgressLineDetection:
+    """Tests for the live-progress line detection behind the in-place rewrite.
+
+    A line that is not recognised as progress is written with a newline, so a
+    missed template turns the one rewriting progress line into an endless list.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # total known
+            "[download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43",
+            "[download]  100.0% of 100.00MiB at 2.00MiB/s ETA 00:00",
+            # estimated total (fragment download), with and without fragment index
+            "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5/566)",
+            "[download]   0.0% of ~  340.05MiB at    756.65B/s ETA Unknown (frag 0/566)",
+            "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5)",
+            # no total at all: byte count instead of percent
+            "[download]  12.34MiB at 1.00MiB/s",
+            "[download]  12.34MiB at 1.00MiB/s (00:12)",
+            "[download]   0.00B at Unknown B/s (00:00)",
+            # percent-only fallback
+            "[download]   0.0% at Unknown B/s ETA Unknown",
+            "[download]  N/A% at Unknown B/s ETA Unknown",
+        ],
+    )
+    def test_progress_templates_are_detected(self, line: str) -> None:
+        """Every template yt-dlp can emit must rewrite the same console line."""
+        assert _is_ytdlp_progress_line(line) is True
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "[download] Destination: /tmp/video.mp4",
+            "[download] Downloading 1 format(s): hls-5108",
+            "[download] video.mp4 has already been downloaded",
+            "[download] Resuming download at byte 1000",
+            "[download] Got error: unable to resume",
+            "[download] Unable to resume",
+            "[hlsnative] Downloading m3u8 manifest",
+            "[hlsnative] Total fragments: 566",
+            "ERROR: [vk] Unable to download JSON metadata",
+        ],
+    )
+    def test_one_shot_messages_are_not_progress(self, line: str) -> None:
+        """One-shot messages keep their own line instead of being overwritten."""
+        assert _is_ytdlp_progress_line(line) is False
+
+
+class TestEchoYtdlpLine:
+    """Tests for the console rendering of a yt-dlp line."""
+
+    def test_progress_line_is_rewritten_in_place(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """A progress update must not append a newline (it would scroll)."""
+        line = "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5/566)\n"
+
+        _echo_ytdlp_line(line)
+
+        captured = capsys.readouterr()
+        assert captured.err.startswith("\r")
+        assert captured.err.endswith("\r")
+        assert "\n" not in captured.err
+        assert "frag 5/566" in captured.err
+
+    def test_one_shot_line_keeps_its_newline(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Non-progress output is passed through unchanged."""
+        line = "[download] Destination: /tmp/video.mp4\n"
+
+        _echo_ytdlp_line(line)
+
+        captured = capsys.readouterr()
+        assert captured.err == line
+
+    def test_shorter_progress_line_clears_the_previous_one(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The line is padded to the terminal width, so no tail is left behind."""
+        _echo_ytdlp_line("[download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n")
+        _echo_ytdlp_line(
+            "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5/566)\n"
+        )
+
+        captured = capsys.readouterr()
+        updates = captured.err.split("\r")
+        assert all(
+            update == "" or update.endswith(" ") or "(frag 5/566)" in update for update in updates
+        )
 
 
 class TestParallelSegmentsDownload:
@@ -3205,9 +3321,7 @@ class TestSetupSignalHandlers:
 
             installed = signal_module.getsignal(signal_module.SIGINT)
             if installed is _displaced:
-                pytest.fail(
-                    "setup_signal_handlers did not displace the stand-in handler"
-                )
+                pytest.fail("setup_signal_handlers did not displace the stand-in handler")
 
             with patch.object(signal_handlers, "logger") as mock_logger:
                 # Fire 1: requests a stop, one shutdown_signal_received record.
@@ -3295,7 +3409,6 @@ class TestSetupSignalHandlers:
             signal_handlers.cleanup_signal_handlers()
             get_shutdown_event().clear()
             _shutdown_event_ctx.reset(token)
-
 
 
 class TestResolveCookies:
@@ -3405,7 +3518,7 @@ class TestResolveCookies:
         )
 
         class _FailingSelector:
-            def select(self, streams: list[Stream], quality: QualityEnum) -> Stream:
+            def select(self, streams: list[Stream], quality: QualitySpec) -> Stream:
                 raise QualityNotAvailableError("best", ["720p"])
 
         with patch("vkdownloader.services.ytdlp_downloader.QualitySelector", _FailingSelector):
@@ -3876,34 +3989,47 @@ class TestSslVerifyFfmpegWarning:
         assert len(ssl_warnings) == 0, "Stale ssl_verify warning should not be logged"
 
 
-class TestParseQualityToEnum:
-    """Tests for _parse_quality_to_enum quality string parsing."""
+class TestQualitySpecParsing:
+    """Tests for the QualitySpec parsing that replaces _parse_quality_to_enum.
+
+    The old helper could only return members of the fixed 240/360/720/1080
+    ladder, so heights such as 1072p were unexpressible. ``QualitySpec.parse``
+    accepts every positive height the video offers.
+    """
 
     def test_parse_numeric_quality(self) -> None:
         """Test parsing numeric quality strings without p suffix."""
-        assert _parse_quality_to_enum("720") == QualityEnum("720")
-        assert _parse_quality_to_enum("1080") == QualityEnum("1080")
+        assert QualitySpec.parse("720").label == "720p"
+        assert QualitySpec.parse("1080").label == "1080p"
 
     def test_parse_quality_with_p_suffix(self) -> None:
         """Test parsing quality strings with p suffix are stripped."""
-        assert _parse_quality_to_enum("720p") == QualityEnum("720")
-        assert _parse_quality_to_enum("480p") == QualityEnum("480")
+        assert QualitySpec.parse("720p").label == "720p"
+        assert QualitySpec.parse("480p").label == "480p"
+
+    def test_parse_non_standard_height(self) -> None:
+        """A height outside the old fixed ladder is accepted."""
+        spec = QualitySpec.parse("1072")
+
+        assert spec.kind is QualityKind.EXACT
+        assert spec.label == "1072p"
+        assert str(spec) == "1072"
 
     def test_parse_named_qualities(self) -> None:
         """Test parsing named quality strings."""
-        assert _parse_quality_to_enum("best") == QualityEnum.BEST
-        assert _parse_quality_to_enum("worst") == QualityEnum.WORST
+        assert QualitySpec.parse("best").kind is QualityKind.BEST
+        assert QualitySpec.parse("worst").kind is QualityKind.WORST
 
     def test_parse_unknown_quality_raises(self) -> None:
         """Test that unparseable quality strings raise QualityParseError."""
         from vkdownloader.exceptions import QualityParseError
 
         with pytest.raises(QualityParseError):
-            _parse_quality_to_enum("invalid_quality")
+            QualitySpec.parse("invalid_quality")
 
     def test_parse_empty_quality_defaults_to_best(self) -> None:
         """Test that empty quality string defaults to BEST."""
-        assert _parse_quality_to_enum("") == QualityEnum.BEST
+        assert QualitySpec.parse("").kind is QualityKind.BEST
 
 
 class TestYtDlpRetryBackoff:
@@ -4053,7 +4179,7 @@ class TestDownloadVideoTitleCallback:
             ):
                 result = await download_video(
                     "https://vkvideo.ru/video-12345_67890",
-                    QualityEnum.Q720,
+                    QualitySpec.parse("720"),
                     tmp_path,
                     DownloadMethod.YTDLP,
                     test_settings,
@@ -4100,7 +4226,7 @@ class TestDownloadVideoTitleCallback:
             ):
                 result = await download_video(
                     "https://vkvideo.ru/video-12345_67890",
-                    QualityEnum.Q720,
+                    QualitySpec.parse("720"),
                     tmp_path,
                     DownloadMethod.YTDLP,
                     test_settings,
@@ -4141,7 +4267,7 @@ class TestDownloadVideoTitleCallback:
             ) as mock_perform:
                 result = await download_video(
                     "https://vkvideo.ru/video-12345_67890",
-                    QualityEnum.Q720,
+                    QualitySpec.parse("720"),
                     tmp_path,
                     DownloadMethod.YTDLP,
                     test_settings,

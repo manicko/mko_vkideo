@@ -21,7 +21,7 @@ VK Video Downloader provides a programmatic and CLI interface for downloading vi
 ## Features
 
 - Extract video streams from VK video URLs using yt-dlp or browser automation
-- Quality selection (240p, 360p, 480p, 720p, 1080p, best, worst)
+- Quality selection by keyword (`best`, `worst`, `unknown`) or by any height in pixels the video offers
 - Download method selection (yt-dlp, ffmpeg, auto)
 - Segment-level resume on token expiration
 - Batch download support via CLI
@@ -46,9 +46,18 @@ vkdownloader download "https://vkvideo.ru/video-123_456"
 
 ### Download with Specific Quality
 
+`--quality` accepts `best`, `worst`, `unknown`, or any height in pixels the video offers. A height is an exact match, so pick one the video actually publishes.
+
 ```bash
+# Highest available resolution (the default)
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality best
+
+# A specific height the video offers, with or without the trailing p
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720
+vkdownloader download "https://vkvideo.ru/video-123_456" --quality 1072p
 ```
+
+A height the video does not offer is reported rather than downgraded, and the error lists the qualities it does offer. Any token that is neither a keyword nor a positive height (`abc`, `720x`, `0`) is rejected as a usage error with exit code 2, before any download is attempted.
 
 ### Download with Specific Method
 
@@ -68,7 +77,10 @@ vkdownloader download "https://vkvideo.ru/video-123_456" -o ./videos
 
 
 ```bash
-vkdownloader download "https://vkvideo.ru/video-225794656_456243903" --quality 1440 --method yt-dlp --output ".\Shows" --no-ssl-verify
+# A real-world run: pick the method, the output directory, and the quality.
+# A keyword such as best needs no knowledge of the video's ladder; replace it
+# with a height only when you know the video offers that exact height.
+vkdownloader download "https://vkvideo.ru/video-225794656_456243903" --quality best --method yt-dlp --output ".\Shows" --no-ssl-verify
 
 ```
 
@@ -96,7 +108,11 @@ async def download_video():
     # Simple download with method selection
     result = await perform_download(
         url="https://vkvideo.ru/video-123_456",
-        quality="720",
+        # The quality token, as a plain string: "best", "worst", "unknown",
+        # or any height in pixels the video offers. The stream itself is
+        # pre-selected by the caller; use download_video() for the full
+        # extract -> select -> download pipeline.
+        quality="best",
         output_file=Path("output.mp4"),
         method=DownloadMethod.AUTO,
     )

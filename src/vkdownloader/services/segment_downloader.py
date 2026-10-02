@@ -18,6 +18,8 @@ import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
+from ..models.enums import QualityKind, QualityLabel
+from ..models.quality import QualitySpec
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
@@ -31,6 +33,7 @@ from .downloader_throttle import (
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
+from .quality import QualitySelector
 
 if TYPE_CHECKING:
     from ..models.dtos import HLSDownloadRequest
@@ -459,23 +462,69 @@ async def _refresh_token_and_retry(
     video_url: str,
     extractor: VKVideoExtractor,
     settings: Settings,
+    *,
+    preselected_url: str,
+    quality: str,
 ) -> tuple[str, str] | None:
     """Refresh token via browser extraction on 403/410 error.
 
-    Returns tuple of (new_url, cookies) on success, None if refresh failed.
+    Returns tuple of (address, cookies) on success, None if refresh failed.
+
+    Quality arm (D1, NET-005): for the ``best`` arm the address is selected
+    from the refreshed stream set via :class:`QualitySelector`. For every
+    other arm the *preselected* address — the ladder's own ``m3u8_url``,
+    never the ``current_url`` that just failed with 403/410 — is returned
+    so the fresh cookie is applied to an address that did not already
+    exhaust the retry budget once.
+
+    The ``settings`` parameter is retained for signature stability (B4
+    four-positional contract) but is not read here.
     """
     # DF-006: Removed the `cookie_source != BROWSER` guard. The
     # `force_browser=True` parameter already bypasses the CookieSource
     # check inside extract_streams_with_cookies, matching the pattern in
     # _attempt_segment_resume (downloader.py). Token refresh was
     # impossible with the default CookieSource.NONE configuration.
+    #
+    # The refresh does NOT bypass B7's filter: extract_streams_with_cookies
+    # → _extract_with_browser → NetworkMonitor.select(), and the returned
+    # streams[0].url is addresses[0] from that same filter.
     streams, new_cookies, _raw_cookies = await extractor.extract_streams_with_cookies(
         video_url, force_browser=True
     )
     if not streams:
         return None
 
-    return str(streams[0].url), new_cookies or ""
+    selector = QualitySelector()
+    quality_spec = QualitySpec.parse(quality)
+
+    if quality_spec.kind is QualityKind.BEST:
+        # D3: on the real extractor _extract_with_browser appends at most
+        # one Stream, so a singleton best-select is a no-op. The record
+        # below makes the arm visible; the address comes from the selector
+        # over the refreshed set.
+        selected = selector.select(streams, quality_spec)
+        address = str(selected.url)
+        selected_from = "refreshed_stream_set"
+    else:
+        # D1: non-best arms return the ladder's preselected address, not
+        # the address that just failed (current_url).
+        address = preselected_url
+        selected_from = "preselected"
+
+    # D2: one additional selection record alongside the token_expired_fetching_new
+    # record emitted by the caller. quality is UNKNOWN (B7's label), not "best".
+    logger.info(
+        "stream_quality_selected",
+        url=_strip_auth_params(address),
+        quality=QualityLabel.UNKNOWN.value,
+        selected_from=selected_from,
+        height=None,
+        width=None,
+        preselected_url=_strip_auth_params(preselected_url),
+    )
+
+    return address, new_cookies or ""
 
 
 async def _fetch_single_playlist(
@@ -500,14 +549,27 @@ async def _handle_token_refresh(
     extractor: VKVideoExtractor,
     settings: Settings,
     headers: dict[str, str],
+    *,
+    quality: str,
+    preselected_url: str,
 ) -> tuple[str, str] | None:
     """Handle token refresh on 403/410 error.
 
-    Returns (new_url, new_cookies) tuple on success, None on failure.
+    Returns (address, new_cookies) tuple on success, None on failure.
     Does not mutate the caller's headers dict; the caller is responsible
     for applying new_cookies.
+
+    ``quality`` and ``preselected_url`` are forwarded to
+    :func:`_refresh_token_and_retry` unchanged (D4: no parsing, no default).
+    The four positional parameters are unchanged from B4.
     """
-    return await _refresh_token_and_retry(video_url, extractor, settings)
+    return await _refresh_token_and_retry(
+        video_url,
+        extractor,
+        settings,
+        quality=quality,
+        preselected_url=preselected_url,
+    )
 
 
 async def _fetch_playlist_with_retry(
@@ -520,19 +582,25 @@ async def _fetch_playlist_with_retry(
     max_retries: int = 3,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
+    quality: str,
 ) -> PlaylistFetchResult | None:
     """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
 
     Args:
         session: aiohttp ClientSession for HTTP requests.
         video_url: Original video URL for token refresh.
-        m3u8_url: Initial playlist URL to fetch.
+        m3u8_url: Initial playlist URL to fetch and preselected address (D1)
+            for the non-best arm on token refresh.
         headers: Request headers (mutated on token refresh).
         extractor: Optional VKVideoExtractor for token refresh.
         settings: Application settings.
         max_retries: Maximum retry attempts.
         backoff_coordinator: Optional shared backoff coordinator for pausing
             retryable transport failures on the origin.
+        quality: Requested quality token, threaded unchanged from the
+            download request (D4). Parsed into a QualitySpec to select an
+            arm, exactly as the yt-dlp cookie sites do, so the BEST decision
+            cannot depend on the token's spelling; never defaulted here.
 
     Returns:
         PlaylistFetchResult with playlist text and base URL on success,
@@ -611,7 +679,14 @@ async def _fetch_playlist_with_retry(
                 status=status,
                 attempt=attempt + 1,
             )
-            refresh_result = await _handle_token_refresh(video_url, extractor, settings, headers)
+            refresh_result = await _handle_token_refresh(
+                video_url,
+                extractor,
+                settings,
+                headers,
+                quality=quality,
+                preselected_url=m3u8_url,
+            )
             if refresh_result is not None:
                 current_url, new_cookies = refresh_result
                 headers["Cookie"] = new_cookies
@@ -720,7 +795,7 @@ async def _await_and_cancel(
         sibling is settled. Any other exception from a task is re-raised,
         also after every sibling is settled.
     """
-    # CON-006: "nothing to do" is an outcome, not None -- the consumer must reach
+    # CON-006: "nothing to do" is an outcome, not None — the consumer must reach
     # the merge in the resume case instead of being told the download failed.
     if not tasks:
         return _SegmentFanoutResult(_SegmentFanoutOutcome.NOTHING_TO_DO, [])
@@ -775,6 +850,7 @@ async def _tally_and_merge(
 
     # Detect failed segments explicitly from download results.
     # download_results is empty on the resume path (CON-006): no segment failed
+    # explicitly, so the merge is decided by the on-disk count below.
     if download_results and not all(r for _, r in download_results):
         failed_indices = [idx for idx, r in download_results if not r]
         logger.warning("segment_download_failed", failed_indices=failed_indices)
@@ -995,6 +1071,8 @@ async def _run_download_session(
     extractor: VKVideoExtractor | None,
     backoff_coordinator: URLBackoffCoordinator | None,
     video_semaphore: SemaphoreLike | None,
+    *,
+    quality: str,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1027,6 +1105,7 @@ async def _run_download_session(
             settings,
             max_retries=settings.max_retries,
             backoff_coordinator=backoff_coordinator,
+            quality=quality,
         )
         if playlist_result is None or not playlist_result.playlist_text:
             return None
@@ -1139,6 +1218,7 @@ async def download_hls_with_resume(
             extractor,
             backoff_coordinator,
             video_semaphore,
+            quality=request.quality,
         )
         if result is not None:
             success = True

@@ -34,8 +34,8 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 
 | Function | Module | Responsibility |
 |----------|--------|----------------|
-| `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, ffmpeg, auto); quality is pre-selected by caller |
-| `download_video()` | `services/downloader.py` | Extract-select-download pipeline: extraction, quality selection, perform_download dispatch |
+| `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, ffmpeg, auto); takes the quality as a plain token string, and the stream is pre-selected by the caller |
+| `download_video()` | `services/downloader.py` | Extract-select-download pipeline: extraction, quality selection from a `QualitySpec`, perform_download dispatch |
 | `download_hls_with_resume()` | `services/segment_downloader.py` | Segment-level download with token refresh and anti-detection throttling |
 | `HLSDownloader.download_with_ffmpeg()` | `services/downloader.py` | Instance method: direct ffmpeg download with real-time progress tracking |
 | `download_with_ytdlp_with_resume_fallback()` | `services/ytdlp_downloader.py` | yt-dlp download with segment fallback on failure (SRV-006: includes inter-retry backoff) |
@@ -56,13 +56,15 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `Stream` | `models/video.py` | Video stream with URL and quality info |
 | `VideoWithStreams` | `models/video.py` | Video model with available streams |
 | `HLSDownloadRequest` | `models/dtos.py` | Request model for segment-level resume download |
+| `QualitySpec` | `models/quality.py` | Validated quality request (a keyword or one exact stream label), parsed from the `--quality` token |
 
 ### Enums
 
 | Enum | Module | Description |
 |------|--------|-------------|
-| `QualityEnum` | `models/enums.py` | Quality options (240, 360, 480, 720, 1080, 1440, 2160, best, worst, unknown) |
-| `StreamFormat` | `models/enums.py` | Stream format types (HLS, DASH, MP4) |
+| `QualityKind` | `models/enums.py` | How a quality request is resolved against the streams (`best`, `worst`, `exact`) |
+| `QualityLabel` | `models/enums.py` | Fixed stream quality labels the extractor stamps on a stream (`unknown`) |
+| `StreamFormat` | `models/enums.py` | Stream format types (HLS, MP4) |
 | `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
 | `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` was removed as unimplemented) |
 | `LogLevel` | `models/enums.py` | Logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
@@ -134,7 +136,7 @@ The CLI (`cli.py`) provides two commands:
 
 Both commands support:
 
-- `--quality`: Quality selection (240, 360, 480, 720, 1080, 1440, 2160, best, worst, unknown)
+- `--quality`: Quality selection — `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`). Any other token is a usage error (exit code 2) raised while the command line is parsed. See the [Quality Selection Guide](quality-selection.md).
 - `--method`: Download method (yt-dlp, ffmpeg, auto)
 - `--output/-o`: Output directory (defaults to `Settings.download_dir` when not provided)
 

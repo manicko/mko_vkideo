@@ -22,7 +22,8 @@ from structlog import get_logger
 from ..config import Settings
 from ..exceptions import QualityNotAvailableError
 from ..models.dtos import HLSDownloadRequest
-from ..models.enums import CookieSource, DownloadMethod, QualityEnum
+from ..models.enums import CookieSource, DownloadMethod
+from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
 from ..utils.security import _resolve_output_file, sanitize_title
@@ -61,7 +62,7 @@ from .ytdlp_downloader import (
     _create_temp_cookie_file,  # noqa: F401 — backward-compat re-export
     _download_with_ytdlp,  # noqa: F401 — backward-compat re-export
     _echo_ytdlp_line,  # noqa: F401 — backward-compat re-export
-    _parse_quality_to_enum,  # noqa: F401 — backward-compat re-export
+    _is_ytdlp_progress_line,  # noqa: F401 — backward-compat re-export
     _parse_ytdlp_progress,  # noqa: F401 — backward-compat re-export
     _resolve_cookies,
     download_with_ytdlp_with_resume_fallback,
@@ -156,8 +157,8 @@ def _format_argfile(args: list[str]) -> str:
 #   * ytdlp_downloader.py:
 #       download_with_ytdlp_with_resume_fallback, _build_ytdlp_cli_command,
 #       _download_with_ytdlp, _echo_ytdlp_line, _parse_ytdlp_progress,
-#       _parse_quality_to_enum, _resolve_cookies, _create_temp_cookie_file,
-#       _await_first_and_cancel_others, _attempt_segment_resume
+#       _resolve_cookies, _create_temp_cookie_file, _await_first_and_cancel_others,
+#       _attempt_segment_resume
 #   * ffmpeg_utils.py:
 #       FfmpegProgress, ProgressParser, read_progress,
 #       cancel_subprocess, _build_ffmpeg_concat_command,
@@ -237,7 +238,8 @@ class HLSDownloader:
         Args:
             m3u8_url: HLS playlist URL.
             output_file: Output file path.
-            quality: Quality string (e.g., "720", "1080").
+            quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+                pixels the video offers, e.g. ``1072``).
             cookies: Optional cookies string for authenticated downloads.
             raw_cookies: Optional list of Playwright Cookie objects.
             progress_callback: Optional callback for real-time progress updates.
@@ -432,7 +434,8 @@ async def perform_download(
 
     Args:
         url: VK Video URL to download.
-        quality: Quality string (e.g., "720", "1080").
+        quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
+            pixels the video offers, e.g. ``1072``).
         output_file: Output file path.
         method: Download method (yt-dlp, ffmpeg, or auto).
         extractor: Optional VKVideoExtractor for token refresh.
@@ -600,7 +603,7 @@ async def perform_download(
 
 async def download_video(
     url: str,
-    quality: QualityEnum,
+    quality: QualitySpec,
     output: Path,
     method: DownloadMethod,
     settings: Settings,
@@ -621,7 +624,7 @@ async def download_video(
 
     Args:
         url: Video URL to download.
-        quality: Video quality selection.
+        quality: Parsed quality request (a keyword or an exact height).
         output: Output directory for downloaded video.
         method: Download method (yt-dlp, ffmpeg, or auto).
         settings: Application settings with environment-loaded values.
@@ -673,7 +676,7 @@ async def download_video(
 
     return await perform_download(
         url,
-        str(quality),  # DF-001: pass original QualityEnum, not degraded str(stream.quality)
+        str(quality),  # DF-001: pass the original request, not the degraded str(stream.quality)
         output_file,
         method,
         extractor,

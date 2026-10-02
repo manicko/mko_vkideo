@@ -16,7 +16,7 @@ from ..config import Settings
 from ..exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
 from ..infrastructure.browser import BrowserManager
 from ..infrastructure.network_monitor import NetworkMonitor
-from ..models.enums import CookieSource, QualityEnum, StreamFormat
+from ..models.enums import CookieSource, QualityLabel, StreamFormat
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
 from ..utils.url_sanitizer import _strip_auth_params
@@ -352,7 +352,7 @@ class VKVideoExtractor:
                 stream = Stream(
                     url=addresses[0],
                     format=StreamFormat.HLS,
-                    quality=QualityEnum.UNKNOWN.value,
+                    quality=QualityLabel.UNKNOWN.value,
                     width=None,
                     height=None,
                 )
@@ -362,7 +362,7 @@ class VKVideoExtractor:
                 logger.info(
                     "browser_stream_selected",
                     host=urlsplit(addresses[0]).netloc or "unknown",
-                    quality=QualityEnum.UNKNOWN.value,
+                    quality=QualityLabel.UNKNOWN.value,
                 )
 
         return streams, cookies_str, raw_cookies

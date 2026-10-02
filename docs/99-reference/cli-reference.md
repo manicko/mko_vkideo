@@ -61,7 +61,7 @@ vkdownloader download [OPTIONS] URL
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--quality` | | str | `best` | Video quality selection: `240`, `360`, `480`, `720`, `1080`, `1440`, `2160`, `best`, `worst`, `unknown` |
+| `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
@@ -81,10 +81,10 @@ vkdownloader download [OPTIONS] URL
 |------|-----------|
 | `0` | Success — video downloaded successfully. |
 | `1` | Failure — the command ran and failed: invalid URL, configuration error, download error, or missing streams. |
-| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, invalid `--quality` / `--method` / `--cookie-source` value, or the missing `URL` argument. Nothing was downloaded and no file was created. |
+| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, an invalid `--method` / `--cookie-source` value, or the missing `URL` argument. Nothing was downloaded and no file was created. |
 | `130` | Interrupted by user (Ctrl+C). |
 
-`2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed download. Every value printed in the parser's own error message (for example the accepted `--quality` values) is accepted when pasted back into the command line.
+`2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed download. Every value printed in the parser's own error message (for example the accepted `--quality` values, quoted under [Quality Options](#quality-options)) is accepted when pasted back into the command line.
 
 **Examples:**
 
@@ -94,6 +94,9 @@ vkdownloader download "https://vkvideo.ru/video-12345_67890"
 
 # Download with specific quality and method
 vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method ffmpeg
+
+# Download the exact height the video offers, including a non-standard one
+vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 1072
 
 # Download to specific directory
 vkdownloader download "https://vkvideo.ru/video-12345_67890" -o "./videos"
@@ -122,7 +125,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads (env: `VKDOWNLOADER_MAX_RETRIES`) |
-| `--quality` | | str | `best` | Video quality selection for all downloads |
+| `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
@@ -167,7 +170,7 @@ When the output stream is not a terminal (piped, redirected, or CI) the display 
 |------|-----------|
 | `0` | Success — all downloads completed. |
 | `1` | Failure — the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
-| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, invalid `--quality` / `--method` / `--cookie-source` value, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was downloaded and no file was created. |
+| `2` | Usage error — the command line was rejected by the argument parser before anything ran: unknown option, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, an invalid `--method` / `--cookie-source` value, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was downloaded and no file was created. |
 | `130` | Interrupted by user (Ctrl+C). |
 
 `2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed batch. It is also the outcome of invoking `vkdownloader` with no command, an unknown command, or an unknown option.
@@ -214,20 +217,47 @@ Available cookie source values for `--cookie-source` option:
 
 ## Quality Options
 
-Available quality values for `--quality` option:
+Available quality values for `--quality` option. VK does not publish a fixed
+resolution ladder — one reported video offers `106p`, `178p`, `268p`, `358p`,
+`536p`, `804p`, `1072p`, `1610p` — so the option is not a closed list. A keyword
+or any height the video actually offers is accepted:
 
 | Value | Description |
 |-------|-------------|
-| `240` | 240p resolution |
-| `360` | 360p resolution |
-| `480` | 480p resolution |
-| `720` | 720p (HD) resolution |
-| `1080` | 1080p (Full HD) resolution |
-| `1440` | 1440p (2K) resolution |
-| `2160` | 2160p (4K) resolution |
-| `best` | Best available quality (default) |
-| `worst` | Worst available quality |
+| `best` | Highest available resolution (default) |
+| `worst` | Lowest available resolution |
 | `unknown` | Stream with unavailable height (browser HLS capture) |
+| `720` or `720p` | 720p resolution, when the video offers it |
+| `1080` or `1080p` | 1080p resolution, when the video offers it |
+| `1072` or `1072p` | 1072p resolution, a non-standard height, when the video offers it |
+
+A height is a positive integer in pixels with an optional trailing `p`. The
+token is case-insensitive and surrounding whitespace is ignored, so `720`,
+`720P` and ` 720 ` are the same request.
+
+The option's `--help` text is:
+
+```
+Video quality: best, worst, unknown, or any height in pixels the video offers (e.g. 720, 1080, 1072)
+```
+
+**Selection semantics:**
+
+- `best` and `worst` rank the streams of the video by height. A stream whose height is unavailable is treated as absent.
+- A specific height is an **exact match** on the stream's quality label. There is no silent fallback to a lower quality. When the video does not offer the requested height, `download` fails with exit code `1` and prints the requested value verbatim, followed by the ladder the video does offer:
+
+```
+Requested quality '1000' is not available for this video.
+Available qualities: 106p, 178p, 268p, 358p, 536p, 804p, 1072p, 1610p
+```
+
+  In `batch`, the same condition marks that URL as failed with the `quality_not_available` status in the summary, and the command exits `1`.
+
+**Rejected tokens:** anything that is neither a keyword nor a positive height — a keyword other than `best`, `worst` or `unknown`, `0`, a negative number, `abc`, `720x` — is a usage error with exit code `2`, raised during argument parsing, so nothing is downloaded:
+
+```
+Invalid value for '--quality': Use 'best', 'worst', 'unknown', or a height in pixels the video offers (e.g. 720, 1080, 1072).
+```
 
 ---
 

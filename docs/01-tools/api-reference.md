@@ -111,13 +111,13 @@ Location: `vkdownloader.services.quality`
 Selects appropriate stream from available streams based on quality preference.
 
 ```python
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.services.quality import QualitySelector
-from vkdownloader.models.enums import QualityEnum
 
 selector = QualitySelector()
 ```
 
-#### `select(streams: list[Stream], quality: QualityEnum) -> Stream`
+#### `select(streams: list[Stream], quality: QualitySpec) -> Stream`
 
 Select a stream based on quality preference.
 
@@ -125,26 +125,24 @@ Select a stream based on quality preference.
 | Name | Type | Description |
 |------|------|-------------|
 | streams | list[Stream] | List of available streams to choose from. |
-| quality | QualityEnum | Quality preference (best, worst, or specific resolution). |
+| quality | QualitySpec | Parsed quality request (a keyword or an exact height). |
 
 **Returns:** Selected `Stream` object.
 
-**Raises:** `ValueError` if streams list is empty.
+**Raises:** `QualityNotAvailableError` if the streams list is empty, or if an exact request matches no stream. The error carries the requested token and the available labels.
 
-**Quality Options:**
-| Value | Description |
-|-------|-------------|
-| `QualityEnum.BEST` | Highest available resolution |
-| `QualityEnum.WORST` | Lowest available resolution |
-| `QualityEnum.Q240` | 240p resolution or nearest available |
-| `QualityEnum.Q360` | 360p resolution or nearest available |
-| `QualityEnum.Q480` | 480p resolution or nearest available |
-| `QualityEnum.Q720` | 720p resolution or nearest available |
-| `QualityEnum.Q1080` | 1080p resolution or nearest available |
+**Selection by `quality.kind`:**
+| Kind | Behavior |
+|------|----------|
+| `QualityKind.BEST` | Stream with the highest usable `height` (a `height <= 0` placeholder is treated as absent) |
+| `QualityKind.WORST` | Stream with the lowest usable `height` (same placeholder rule) |
+| `QualityKind.EXACT` | The stream whose `quality` label matches the request exactly; there is no fallback to a lower quality |
 
 **Example:**
 ```python
-stream = selector.select(video.streams, QualityEnum.Q720)
+from vkdownloader.models.quality import QualitySpec
+
+stream = selector.select(video.streams, QualitySpec.parse("1072"))
 ```
 
 #### `list_available_qualities(streams: list[Stream]) -> list[str]`
@@ -156,12 +154,12 @@ Get sorted list of available quality options from streams.
 |------|------|-------------|
 | streams | list[Stream] | List of available streams. |
 
-**Returns:** Sorted list of unique quality strings in descending order by resolution.
+**Returns:** Sorted list of unique quality strings in descending order by resolution. A label with no numeric height (the `unknown` label) sorts last.
 
 **Example:**
 ```python
 qualities = selector.list_available_qualities(video.streams)
-# Returns: ["1080p", "720p", "480p", "360p", "240p"]
+# Returns: ["1610p", "1072p", "804p", "536p"]
 ```
 
 ---
@@ -464,7 +462,7 @@ result = await perform_download(
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `url` | str | Required | VK video URL to download. |
-| `quality` | str | Required | Quality string (e.g., "720", "1080"). |
+| `quality` | str | Required | Quality token as a plain string: `best`, `worst`, `unknown`, or any offered height (e.g. "720", "1072"). A numeric token becomes the yt-dlp format selector `best[height<=N]`. Not a `QualitySpec`. |
 | `output_file` | Path | Required | Output file path. |
 | `method` | DownloadMethod | Required | Download method (YTDLP, FFMPEG, or AUTO). |
 | `extractor` | VKVideoExtractor \| None | None | Optional extractor instance. |
@@ -614,7 +612,7 @@ Represents a video stream with URL and quality information.
 |------|------|-------------|
 | url | str | Stream URL |
 | format | StreamFormat | Stream format (HLS, MP4) |
-| quality | str | Quality string (e.g., "720p", "best") |
+| quality | str | Quality label written by the extractor: `{height}p` (e.g. "1072p"), or `unknown` when the height is unavailable |
 | resolution | str \| None | Resolution string |
 | bitrate | int \| None | Bitrate in kbps |
 | width | int \| None | Video width in pixels |
@@ -637,26 +635,72 @@ Video model extended with available streams.
 
 ---
 
+### QualitySpec
+
+Location: `vkdownloader.models.quality`
+
+A validated quality request: a selection keyword (`best` / `worst`) or the exact quality label of a single stream. VK height ladders are non-standard, so a request cannot be modelled as a closed enum of resolutions. Frozen Pydantic v2 model, re-exported from `vkdownloader.models`.
+
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| kind | QualityKind | How the request is resolved against the available streams. |
+| label | str \| None | Quality label matched exactly; set only for `QualityKind.EXACT` (e.g. `"1072p"`). |
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `QualitySpec.parse(raw: str) -> QualitySpec` | Classmethod. Parses a user-supplied token. Accepted: `best`, `worst`, `unknown`, or any positive height in pixels with an optional trailing `p` (`720`, `720p`, `1072`). Case-insensitive, surrounding whitespace ignored, empty value falls back to `best`. Raises `QualityParseError` otherwise. |
+| `matches(stream_label: str) -> bool` | True for an exact request whose label equals `stream_label` (the numeric form without the `p` suffix is accepted too). A `best` / `worst` request never matches a single label. |
+| `__str__() -> str` | The canonical token: `"1072"` for an exact height, otherwise the keyword. This is the string handed to the yt-dlp format selector as `best[height<=1072]`. |
+
+**Example:**
+```python
+from vkdownloader.exceptions import QualityParseError
+from vkdownloader.models.quality import QualitySpec
+
+spec = QualitySpec.parse("1072p")
+spec.kind    # QualityKind.EXACT
+spec.label   # "1072p"
+str(spec)    # "1072"
+spec.matches("1072p")   # True
+spec.matches("1610p")   # False
+
+try:
+    QualitySpec.parse("720x")
+except QualityParseError as exc:
+    print(exc.quality)  # "720x"
+```
+
+**Note:** the model validator rejects a structurally invalid state: `QualityKind.EXACT` without a non-empty label, and a `best` or `worst` request carrying a label.
+
+---
+
 ## Enums
 
-### QualityEnum
+### QualityKind
 
 Location: `vkdownloader.models.enums`
 
-Video quality options for stream selection.
+How a quality request is resolved against the streams of a video. Replaces the former closed `QualityEnum` of fixed resolutions, which could not express the non-standard height ladders VK publishes.
 
 | Value | Description |
 |-------|-------------|
-| `QualityEnum.Q240` | "240" |
-| `QualityEnum.Q360` | "360" |
-| `QualityEnum.Q480` | "480" |
-| `QualityEnum.Q720` | "720" |
-| `QualityEnum.Q1080` | "1080" |
-| `QualityEnum.Q1440` | "1440" |
-| `QualityEnum.Q2160` | "2160" |
-| `QualityEnum.BEST` | "best" |
-| `QualityEnum.WORST` | "worst" |
-| `QualityEnum.UNKNOWN` | "unknown" |
+| `BEST` | "best" — the stream with the highest usable height |
+| `WORST` | "worst" — the stream with the lowest usable height |
+| `EXACT` | "exact" — one stream, matched on its quality label |
+
+---
+
+### QualityLabel
+
+Location: `vkdownloader.models.enums`
+
+Fixed stream quality labels written onto `Stream` records by the extractor. These are labels, not user selection modes.
+
+| Value | Description |
+|-------|-------------|
+| `UNKNOWN` | "unknown" — the label on a stream whose height cannot be determined (browser HLS capture); the label `--quality unknown` matches |
 
 ---
 
@@ -886,8 +930,32 @@ Location: `vkdownloader.exceptions`
 
 Raised when the requested quality is not available for a video.
 
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| requested | str | The requested quality token, verbatim (e.g. "1072"). |
+| available | list[str] | The quality labels the video does offer. |
+
 **Raised by:**
-- `QualitySelector.select()` — When specific quality not found in streams
+- `QualitySelector.select()` — When an exact request matches no stream, and when the streams list is empty
+
+---
+
+### QualityParseError
+
+Location: `vkdownloader.exceptions`
+
+Raised when a quality token is neither a keyword nor a positive height.
+
+**Attributes:**
+| Name | Type | Description |
+|------|------|-------------|
+| quality | str | The token that failed to parse. |
+
+**Raised by:**
+- `QualitySpec.parse()` — When the token is not `best`, `worst`, `unknown`, or a positive height in pixels
+
+**Note:** through the CLI this is caught by the `--quality` argument callback, which turns it into a usage error with exit code `2` before the command body runs.
 
 ---
 

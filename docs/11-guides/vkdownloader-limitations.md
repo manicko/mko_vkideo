@@ -130,8 +130,9 @@ For fastest download with authentication (~1MB/s):
 ```bash
 vkdownloader download --method ffmpeg --cookie-source browser --quality 720 "VIDEO_URL"
 ```
-- Works with numeric quality values (`--quality 720`, `--quality 1080`, etc.)
-- Stream URL is captured fresh from browser and reused for the quality selection
+- Accepts a keyword (`--quality best`, `worst`, `unknown`) or any height in pixels the video actually offers (`--quality 720`, `--quality 1072`, ...). There is no fixed resolution set, because VK publishes non-standard ladders
+- A specific height is an exact match on the stream's quality label; there is no silent fallback to a lower quality, so a height the video does not offer is reported with the ladder it does offer
+- Cookies are captured fresh from the browser. The browser-captured stream is only re-selected for `--quality best`; for any other request the stream selected before the browser launch is reused, because the browser capture labels its streams `unknown` (no height)
 - Falls back to yt-dlp if ffmpeg fails
 
 For most reliable download (~100KB/s):

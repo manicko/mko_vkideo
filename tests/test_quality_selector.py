@@ -3,7 +3,8 @@
 import pytest
 
 from vkdownloader.exceptions import QualityNotAvailableError
-from vkdownloader.models.enums import QualityEnum, StreamFormat
+from vkdownloader.models.enums import StreamFormat
+from vkdownloader.models.quality import QualitySpec
 from vkdownloader.models.video import Stream
 from vkdownloader.services.quality import QualitySelector
 
@@ -23,7 +24,7 @@ def test_select_best_quality() -> None:
         ),
     ]
 
-    result = selector.select(streams, QualityEnum.BEST)
+    result = selector.select(streams, QualitySpec.parse("best"))
     assert result.quality == "1080"
 
 
@@ -45,7 +46,7 @@ def test_select_worst_quality() -> None:
         ),
     ]
 
-    result = selector.select(streams, QualityEnum.WORST)
+    result = selector.select(streams, QualitySpec.parse("worst"))
     assert result.quality == "240"
 
 
@@ -66,7 +67,7 @@ def test_quality_not_available_raises() -> None:
 
     # Request 480p which doesn't exist - should raise QualityNotAvailableError
     with pytest.raises(QualityNotAvailableError) as exc_info:
-        selector.select(streams, QualityEnum.Q480)
+        selector.select(streams, QualitySpec.parse("480"))
 
     # Verify structured fields
     error = exc_info.value
@@ -88,7 +89,7 @@ def test_select_specific_quality() -> None:
         ),
     ]
 
-    result = selector.select(streams, QualityEnum.Q480)
+    result = selector.select(streams, QualitySpec.parse("480"))
     assert result.quality == "480"
 
 
@@ -99,7 +100,7 @@ def test_select_empty_streams_raises() -> None:
     with pytest.raises(
         QualityNotAvailableError, match="Cannot select quality from empty streams list"
     ):
-        selector.select([], QualityEnum.BEST)
+        selector.select([], QualitySpec.parse("best"))
 
 
 def test_select_empty_streams_error_status_label() -> None:
@@ -107,7 +108,7 @@ def test_select_empty_streams_error_status_label() -> None:
     selector = QualitySelector()
 
     with pytest.raises(QualityNotAvailableError) as exc_info:
-        selector.select([], QualityEnum.BEST)
+        selector.select([], QualitySpec.parse("best"))
 
     assert exc_info.value.status_label() == "no_streams"
     assert exc_info.value.error_code is not None  # Error code is set
@@ -129,7 +130,7 @@ def test_list_available_qualities() -> None:
 
 
 def test_find_quality_match_returns_matching_stream() -> None:
-    """Test _find_quality_match finds stream by quality string."""
+    """Test _find_quality_match finds stream by requested height."""
     selector = QualitySelector()
     streams = [
         Stream(
@@ -140,7 +141,7 @@ def test_find_quality_match_returns_matching_stream() -> None:
         ),
     ]
 
-    result = selector._find_quality_match(streams, "480")
+    result = selector._find_quality_match(streams, QualitySpec.parse("480"))
     assert result is not None
     assert result.quality == "480"
 
@@ -157,7 +158,7 @@ def test_find_quality_match_returns_none_for_no_match() -> None:
         ),
     ]
 
-    result = selector._find_quality_match(streams, "1080")
+    result = selector._find_quality_match(streams, QualitySpec.parse("1080"))
     assert result is None
 
 
@@ -174,7 +175,7 @@ def test_find_quality_match_handles_p_suffix() -> None:
     ]
 
     # Match with "720" against stream quality "720p"
-    result = selector._find_quality_match(streams, "720")
+    result = selector._find_quality_match(streams, QualitySpec.parse("720"))
     assert result is not None
     assert result.quality == "720p"
 
@@ -229,7 +230,7 @@ def test_select_best_returns_absent_record_for_placeholder_and_none() -> None:
     )
     absent = Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown")
 
-    result = selector.select([placeholder, absent], QualityEnum.BEST)
+    result = selector.select([placeholder, absent], QualitySpec.parse("best"))
 
     assert result.url == "https://example.com/absent"
     assert result.height is None
@@ -245,7 +246,7 @@ def test_select_worst_returns_placeholder_for_placeholder_and_none() -> None:
     )
     absent = Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown")
 
-    result = selector.select([placeholder, absent], QualityEnum.WORST)
+    result = selector.select([placeholder, absent], QualitySpec.parse("worst"))
 
     assert result.url == "https://example.com/zero"
     assert result.height == 0
@@ -262,7 +263,7 @@ def test_select_best_ranks_real_height_above_placeholders() -> None:
         Stream(url="https://example.com/absent", format=StreamFormat.MP4, quality="unknown"),
     ]
 
-    result = selector.select(streams, QualityEnum.BEST)
+    result = selector.select(streams, QualitySpec.parse("best"))
 
     assert result.url == "https://example.com/real"
     assert result.height == 720
@@ -279,14 +280,14 @@ def test_select_worst_treats_placeholder_zero_as_absent() -> None:
         ),
     ]
 
-    result = selector.select(streams, QualityEnum.WORST)
+    result = selector.select(streams, QualitySpec.parse("worst"))
 
     assert result.url == "https://example.com/zero"
     assert result.height == 0
 
 
 def test_select_unknown_quality_returns_matching_stream() -> None:
-    """B7: QualityEnum.UNKNOWN selects a stream whose quality label is "unknown"
+    """B7: the "unknown" request selects a stream whose quality label is "unknown"
     (i.e. height is absent/None). The label is now re-requestable via CLI."""
     selector = QualitySelector()
     streams = [
@@ -296,14 +297,14 @@ def test_select_unknown_quality_returns_matching_stream() -> None:
         Stream(url="https://example.com/hls.m3u8", format=StreamFormat.HLS, quality="unknown"),
     ]
 
-    result = selector.select(streams, QualityEnum.UNKNOWN)
+    result = selector.select(streams, QualitySpec.parse("unknown"))
 
     assert result.url == "https://example.com/hls.m3u8"
     assert result.quality == "unknown"
 
 
 def test_select_unknown_quality_not_available_raises() -> None:
-    """B7: when no stream carries the "unknown" label, QualityEnum.UNKNOWN
+    """B7: when no stream carries the "unknown" label, the "unknown" request
     raises QualityNotAvailableError listing the available qualities."""
     selector = QualitySelector()
     streams = [
@@ -319,7 +320,7 @@ def test_select_unknown_quality_not_available_raises() -> None:
     ]
 
     with pytest.raises(QualityNotAvailableError) as exc_info:
-        selector.select(streams, QualityEnum.UNKNOWN)
+        selector.select(streams, QualitySpec.parse("unknown"))
 
     error = exc_info.value
     assert error.requested == "unknown"
@@ -352,6 +353,59 @@ def test_quality_not_available_error_available_is_deduplicated() -> None:
     ]
 
     with pytest.raises(QualityNotAvailableError) as exc_info:
-        selector.select(streams, QualityEnum.Q480)
+        selector.select(streams, QualitySpec.parse("480"))
 
     assert exc_info.value.available == ["720", "1080"]
+
+
+def _vk_ladder_streams() -> list[Stream]:
+    """Return streams for the real VK ladder that motivated open-ended quality.
+
+    Reproduces the ladder reported for video-225794656_456243579: none of these
+    heights is a member of the old fixed enum, so the request could not even be
+    expressed on the command line.
+    """
+    heights = [106, 178, 268, 358, 536, 804, 1072, 1610]
+    return [
+        Stream(
+            url=f"https://example.com/{height}p.m3u8",
+            format=StreamFormat.HLS,
+            quality=f"{height}p",
+            height=height,
+        )
+        for height in heights
+    ]
+
+
+def test_select_non_standard_height_from_vk_ladder() -> None:
+    """A height outside any fixed ladder (1072p) selects its exact stream."""
+    selector = QualitySelector()
+    streams = _vk_ladder_streams()
+
+    result = selector.select(streams, QualitySpec.parse("1072"))
+
+    assert result.quality == "1072p"
+    assert result.height == 1072
+
+
+def test_select_non_standard_height_accepts_p_suffix() -> None:
+    """The same request spelled "1072p" resolves to the same stream."""
+    selector = QualitySelector()
+    streams = _vk_ladder_streams()
+
+    result = selector.select(streams, QualitySpec.parse("1072p"))
+
+    assert result.quality == "1072p"
+
+
+def test_select_missing_height_reports_available_vk_ladder() -> None:
+    """A height between two ladder steps is refused, listing the real ladder."""
+    selector = QualitySelector()
+    streams = _vk_ladder_streams()
+
+    with pytest.raises(QualityNotAvailableError) as exc_info:
+        selector.select(streams, QualitySpec.parse("1000"))
+
+    error = exc_info.value
+    assert error.requested == "1000"
+    assert error.available == ["106p", "178p", "268p", "358p", "536p", "804p", "1072p", "1610p"]
