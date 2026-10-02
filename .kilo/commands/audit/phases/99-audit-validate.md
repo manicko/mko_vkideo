@@ -356,9 +356,12 @@ is the question, and the finding is named as a condition to look for.
 
 ## 8. Severity Taxonomy
 
-**The findings template is the authority.** `.ai/audit/templates/audit-findings.md:71`
-fixes `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` as the severity of a **defect**; `:70`
-fixes `Type ∈ SPEC-DEVIATION | BEST-PRACTICE | DOC-UPDATE | RUNTIME-ERROR` and `:76`
+**The findings template is the authority.** `.ai/audit/templates/audit-findings.md`, the
+`severity` row of `## Template Field Reference`
+fixes `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` as the severity of a **defect**; the
+`type` row
+fixes `Type ∈ SPEC-DEVIATION | BEST-PRACTICE | DOC-UPDATE | RUNTIME-ERROR` and the
+`classification` row
 fixes `Classification ∈ mandatory | advisory`. **The four severity words are not
 redefined here**, and this file adds no fifth. Every sibling phase states the same
 sentence and then gives only the conditions that are specific to its own subject.
