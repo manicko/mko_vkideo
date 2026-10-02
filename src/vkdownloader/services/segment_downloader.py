@@ -673,9 +673,12 @@ class _SegmentFanoutOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class _SegmentFanoutResult:
-    """_await_and_cancel return value: the outcome plus the results it produced.
+    """``_await_and_cancel``' return value: the outcome plus the results it produced.
 
-    results is a list, not a tuple, so it reaches _tally_and_merge unchanged.
+    ``results`` is a list, not a tuple, so it reaches ``_tally_and_merge``
+    unchanged. It is empty exactly when the outcome is NOTHING_TO_DO; the
+    outcome is still carried explicitly, because a consumer must not be left
+    inferring the distinction from a falsy length.
     """
 
     outcome: _SegmentFanoutOutcome
@@ -691,11 +694,17 @@ async def _await_and_cancel(
         tasks: Download tasks to await. Each returns (segment_index, success).
 
     Returns:
-        _SegmentFanoutResult with outcome COMPLETED and one (index, success)
-        tuple per task, or outcome NOTHING_TO_DO with an empty results list
-        when no segment was missing.
+        ``_SegmentFanoutResult`` with outcome COMPLETED and one (index, success) tuple per
+        task, or outcome NOTHING_TO_DO with an empty results list when no
+        segment was missing.
+
+    Raises:
+        asyncio.CancelledError if the enclosing task is cancelled, after every
+        sibling is settled. Any other exception from a task is re-raised,
+        also after every sibling is settled.
     """
-    # CON-006: nothing to do is an outcome, not None.
+    # CON-006: "nothing to do" is an outcome, not None -- the consumer must reach
+    # the merge in the resume case instead of being told the download failed.
     if not tasks:
         return _SegmentFanoutResult(_SegmentFanoutOutcome.NOTHING_TO_DO, [])
 
@@ -751,8 +760,7 @@ async def _tally_and_merge(
         progress_callback(video_id, downloaded_count, len(segments))
 
     # Detect failed segments explicitly from download results.
-    # download_results is empty on the resume path (CON-006): no segment
-    # failed explicitly, so the merge is decided by the on-disk count below.
+    # download_results is empty on the resume path (CON-006): no segment failed
     if download_results and not all(r for _, r in download_results):
         failed_indices = [idx for idx, r in download_results if not r]
         logger.warning("segment_download_failed", failed_indices=failed_indices)
@@ -795,7 +803,9 @@ async def _process_downloaded_segments(
         Path to merged file on success, None otherwise.
     """
     fanout = await _await_and_cancel(tasks)
-    # CON-006: NOTHING_TO_DO (all segments on disk) is not a failure.
+    # CON-006: NOTHING_TO_DO (all segments already on disk) is not a failure --
+    # fall through to _tally_and_merge, which checks the on-disk count and
+    # merges if complete, rather than short-circuiting as a "download failed".
     return await _tally_and_merge(
         fanout.results,
         segments,

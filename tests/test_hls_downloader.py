@@ -311,14 +311,20 @@ class TestDownloadHlsWithResume:
                 base_url="https://example.com/playlist.m3u8",
             ),
         ):
-            result = await download_hls_with_resume(
-                HLSDownloadRequest(
-                    video_url="https://vkvideo.ru/video-12345_67890",
-                    m3u8_url="https://example.com/video.m3u8",
-                    output_file=output_path,
-                ),
-                settings=test_settings,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                        ),
+                        settings=test_settings,
+                    ),
+                    timeout=5.0,
+                )
+            except TimeoutError:
+                pytest.fail("download_hls_with_resume did not return within 5.0s")
 
         assert result is None
         # Segments directory should be preserved for resume
@@ -347,14 +353,20 @@ class TestDownloadHlsWithResume:
                 "vkdownloader.services.segment_downloader._download_segment",
                 return_value=False,
             ):
-                result = await download_hls_with_resume(
-                    HLSDownloadRequest(
-                        video_url="https://vkvideo.ru/video-12345_67890",
-                        m3u8_url="https://example.com/video.m3u8",
-                        output_file=output_path,
-                    ),
-                    settings=test_settings,
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                            ),
+                            settings=test_settings,
+                        ),
+                        timeout=5.0,
+                    )
+                except TimeoutError:
+                    pytest.fail("download_hls_with_resume did not return within 5.0s")
 
         assert result is None
         # Segments directory should be preserved for resume
@@ -368,11 +380,14 @@ class TestDownloadHlsWithResume:
         are created, yet _tally_and_merge still runs the merge from the on-disk
         count.
 
-        Pre-fix code returned None for an empty task list, skipping the merge.
+        Pre-fix code returned None for an empty task list, skipping the merge
+        entirely.
         """
         output_path = tmp_path / "video.mp4"
         segments_dir = output_path.parent / ".video_segments"
 
+        # Pre-create both segment files so _create_segment_download_tasks
+        # produces zero tasks -> _await_and_cancel returns NOTHING_TO_DO.
         segments_dir.mkdir(parents=True, exist_ok=True)
         (segments_dir / "00000.ts").write_bytes(b"segment 0 data")
         (segments_dir / "00001.ts").write_bytes(b"segment 1 data")

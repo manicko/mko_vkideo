@@ -1,5 +1,7 @@
 """Tests for segment_downloader token-refresh retry logic."""
 
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -635,10 +637,16 @@ class TestSegmentFanoutCompletion:
     async def test_nothing_to_do_returns_empty_result(self) -> None:
         """An empty task list yields the NOTHING_TO_DO outcome with empty results.
 
-        Pre-fix code returned None here, so result.outcome would raise
+        Pre-fix code returned None here, so ``result.outcome`` would raise
         AttributeError instead of returning the typed outcome.
         """
-        result = await _await_and_cancel([])
+        try:
+            result = await asyncio.wait_for(
+                _await_and_cancel([]),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            pytest.fail("_await_and_cancel did not return within 5.0s for empty task list")
 
         assert result.outcome is _SegmentFanoutOutcome.NOTHING_TO_DO
         assert result.results == []
@@ -666,10 +674,14 @@ class TestSegmentFanoutCompletion:
         task1 = asyncio.create_task(crashing_task())
         task2 = asyncio.create_task(long_running_task())
 
+        # Signal both tasks to start; task2 will block on never_set.
         started.set()
         await asyncio.sleep(0)
 
-        with patch("vkdownloader.services.segment_downloader.logger.info"):
+        with patch(
+            "vkdownloader.services.segment_downloader.logger.info",
+            side_effect=lambda *a, **kw: None,
+        ):
             with pytest.raises(ValueError, match="segment download crashed"):
                 await asyncio.wait_for(
                     _await_and_cancel([task1, task2]),
@@ -678,13 +690,20 @@ class TestSegmentFanoutCompletion:
 
         assert task1.done()
         assert task2.done()
+        # No orphaned tasks remain after the exception propagates.
         leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert leftover == []
+        # Sibling permit: task2 must have been cancelled (not just done), proving
+        # _await_and_cancel settled the sibling before re-raising the exception.
+        assert task2.cancelled(), "sibling task must be cancelled, not orphaned"
 
     @pytest.mark.asyncio
     async def test_cancelled_propagates_with_plain_cancelled_reason(self) -> None:
         """A CancelledError from a child task propagates and logs reason='cancelled'
         when the shutdown event is NOT set (CON-008).
+
+        Pre-fix code always logged 'shutdown_requested' and swallowed the
+        CancelledError (returned None instead of re-raising).
         """
 
         async def raises_cancelled() -> tuple[int, bool]:
@@ -694,10 +713,10 @@ class TestSegmentFanoutCompletion:
 
         token = _shutdown_event_ctx.set(asyncio.Event())
         try:
-            captured = []
+            captured: list[tuple[str, dict[str, object]]] = []
 
-            def capture_info(event, **kw):
-                captured.append((event, dict(kw)))
+            def capture_info(event: str, **kwargs: object) -> None:
+                captured.append((event, dict(kwargs)))
 
             with patch(
                 "vkdownloader.services.segment_downloader.logger.info",
@@ -721,6 +740,9 @@ class TestSegmentFanoutCompletion:
     async def test_cancelled_logs_shutdown_reason_when_stop_state_set(self) -> None:
         """A CancelledError from a child task logs reason='shutdown_requested'
         when the shutdown event IS set, and the CancelledError still propagates.
+
+        This distinguishes a user-initiated stop from a plain cancellation:
+        the reason field is driven by the actual stop state, not a constant.
         """
 
         async def raises_cancelled() -> tuple[int, bool]:
@@ -731,10 +753,10 @@ class TestSegmentFanoutCompletion:
         token = _shutdown_event_ctx.set(asyncio.Event())
         try:
             _shutdown_event_ctx.get().set()
-            captured = []
+            captured: list[tuple[str, dict[str, object]]] = []
 
-            def capture_info(event, **kw):
-                captured.append((event, dict(kw)))
+            def capture_info(event: str, **kwargs: object) -> None:
+                captured.append((event, dict(kwargs)))
 
             with patch(
                 "vkdownloader.services.segment_downloader.logger.info",
