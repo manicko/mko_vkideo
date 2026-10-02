@@ -661,6 +661,10 @@ class TestSegmentFanoutCompletion:
         """
         started = asyncio.Event()
         never_set = asyncio.Event()
+        # Sibling permit: starts at 1, the sibling acquires it (0), and
+        # _await_and_cancel must release it back to 1 when it settles the
+        # sibling before re-raising. Value 1 is the initial state.
+        sibling_permit = asyncio.Semaphore(1)
 
         async def crashing_task() -> tuple[int, bool]:
             await started.wait()
@@ -668,7 +672,11 @@ class TestSegmentFanoutCompletion:
 
         async def long_running_task() -> tuple[int, bool]:
             await started.wait()
-            await never_set.wait()
+            await sibling_permit.acquire()
+            try:
+                await never_set.wait()
+            finally:
+                sibling_permit.release()
             return (1, True)
 
         task1 = asyncio.create_task(crashing_task())
@@ -678,24 +686,32 @@ class TestSegmentFanoutCompletion:
         started.set()
         await asyncio.sleep(0)
 
-        with patch(
-            "vkdownloader.services.segment_downloader.logger.info",
-            side_effect=lambda *a, **kw: None,
-        ):
-            with pytest.raises(ValueError, match="segment download crashed"):
-                await asyncio.wait_for(
-                    _await_and_cancel([task1, task2]),
-                    timeout=5.0,
-                )
+        # Assert the permit is held by the sibling before the raise.
+        assert sibling_permit._value == 0
+
+        try:
+            with patch(
+                "vkdownloader.services.segment_downloader.logger.info",
+                side_effect=lambda *a, **kw: None,
+            ):
+                with pytest.raises(ValueError, match="segment download crashed"):
+                    await asyncio.wait_for(
+                        _await_and_cancel([task1, task2]),
+                        timeout=5.0,
+                    )
+        except TimeoutError:
+            pytest.fail("_await_and_cancel did not settle siblings within 5.0s")
 
         assert task1.done()
         assert task2.done()
         # No orphaned tasks remain after the exception propagates.
         leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert leftover == []
-        # Sibling permit: task2 must have been cancelled (not just done), proving
-        # _await_and_cancel settled the sibling before re-raising the exception.
-        assert task2.cancelled(), "sibling task must be cancelled, not orphaned"
+        # Sibling permit returned to initial state after settlement.
+        assert sibling_permit._value == 1, (
+            "sibling permit must be released when the sibling is cancelled"
+        )
+        assert task2.done()
 
     @pytest.mark.asyncio
     async def test_cancelled_propagates_with_plain_cancelled_reason(self) -> None:
@@ -718,15 +734,18 @@ class TestSegmentFanoutCompletion:
             def capture_info(event: str, **kwargs: object) -> None:
                 captured.append((event, dict(kwargs)))
 
-            with patch(
-                "vkdownloader.services.segment_downloader.logger.info",
-                side_effect=capture_info,
-            ):
-                with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(
-                        _await_and_cancel([task]),
-                        timeout=5.0,
-                    )
+            try:
+                with patch(
+                    "vkdownloader.services.segment_downloader.logger.info",
+                    side_effect=capture_info,
+                ):
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(
+                            _await_and_cancel([task]),
+                            timeout=5.0,
+                        )
+            except TimeoutError:
+                pytest.fail("_await_and_cancel did not re-raise CancelledError within 5.0s")
 
             assert task.done()
 
@@ -758,15 +777,18 @@ class TestSegmentFanoutCompletion:
             def capture_info(event: str, **kwargs: object) -> None:
                 captured.append((event, dict(kwargs)))
 
-            with patch(
-                "vkdownloader.services.segment_downloader.logger.info",
-                side_effect=capture_info,
-            ):
-                with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(
-                        _await_and_cancel([task]),
-                        timeout=5.0,
-                    )
+            try:
+                with patch(
+                    "vkdownloader.services.segment_downloader.logger.info",
+                    side_effect=capture_info,
+                ):
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(
+                            _await_and_cancel([task]),
+                            timeout=5.0,
+                        )
+            except TimeoutError:
+                pytest.fail("_await_and_cancel did not re-raise CancelledError within 5.0s")
 
             assert task.done()
 
