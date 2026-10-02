@@ -386,8 +386,8 @@ class TestDownloadHlsWithResume:
         output_path = tmp_path / "video.mp4"
         segments_dir = output_path.parent / ".video_segments"
 
-        # Pre-create both segment files so _create_segment_download_tasks
-        # produces zero tasks -> _await_and_cancel returns NOTHING_TO_DO.
+        # Pre-create both segment files so _iter_pending_segment_tasks
+        # produces zero tasks в†’ _await_and_cancel returns NOTHING_TO_DO.
         segments_dir.mkdir(parents=True, exist_ok=True)
         (segments_dir / "00000.ts").write_bytes(b"segment 0 data")
         (segments_dir / "00001.ts").write_bytes(b"segment 1 data")

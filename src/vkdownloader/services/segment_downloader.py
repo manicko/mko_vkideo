@@ -7,7 +7,7 @@ import hashlib
 import os
 import random
 import ssl
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -685,6 +685,23 @@ class _SegmentFanoutResult:
     results: list[tuple[int, bool]]
 
 
+async def _cancel_and_settle(tasks: Iterable[asyncio.Task[object]]) -> None:
+    """Cancel every unfinished task and wait for all of them to settle (CON-007).
+
+    Shared by ``_await_and_cancel`` and the segment pump so the cancellation
+    contract lives in one place — phase04/VAL-402.
+
+    Args:
+        tasks: Iterable of tasks to cancel and await. Tasks already done
+            are left untouched.
+    """
+    pending = [task for task in tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def _await_and_cancel(
     tasks: list[asyncio.Task[tuple[int, bool]]],
 ) -> _SegmentFanoutResult:
@@ -713,10 +730,7 @@ async def _await_and_cancel(
     except BaseException as exc:
         # CON-007: a raising part must not orphan its siblings. CON-008: a
         # cancellation is re-raised, never turned into a return value.
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await _cancel_and_settle(tasks)
         if isinstance(exc, asyncio.CancelledError):
             logger.info(
                 "download_cancelled",
@@ -780,40 +794,95 @@ async def _tally_and_merge(
 
 
 async def _process_downloaded_segments(
-    tasks: list[asyncio.Task[tuple[int, bool]]],
     segments: list[str],
-    segments_dir: Path,
+    policy: DownloadPolicy,
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
-    video_url: str,
-    download_timeout: int,
 ) -> Path | None:
     """Process downloaded segments and merge if complete.
 
+    Uses a FIRST_COMPLETED completion pump over a counting window of
+    ``max_concurrent_downloads`` task objects, bounding the live task set
+    by the configured ceiling (CON-003). The per-item ``async with
+    policy.semaphore:`` claim stays inside ``_download_segment_concurrent``;
+    the window is a ``len()`` comparison on an int — no permit object is
+    created by the pump.
+
     Args:
-        tasks: List of download tasks to await. Each returns (segment_index, success).
         segments: List of all segment URLs.
-        segments_dir: Directory containing downloaded segments.
+        policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
-        video_url: Video URL for progress callback video_id extraction.
-        download_timeout: Maximum seconds for ffmpeg subprocess merge operations.
 
     Returns:
         Path to merged file on success, None otherwise.
     """
-    fanout = await _await_and_cancel(tasks)
-    # CON-006: NOTHING_TO_DO (all segments already on disk) is not a failure --
-    # fall through to _tally_and_merge, which checks the on-disk count and
-    # merges if complete, rather than short-circuiting as a "download failed".
+    source = _iter_pending_segment_tasks(segments, policy)
+
+    # first is None ⇒ no missing segments ⇒ NOTHING_TO_DO. Decided before any
+    # task exists, so "results is empty" and "outcome is NOTHING_TO_DO" are
+    # the same event by construction (phase04/VAL-402).
+    first = next(source, None)
+    if first is None:
+        # Delegate NOTHING_TO_DO to _await_and_cancel — single authority.
+        fanout = await _await_and_cancel([])
+    else:
+        pending: dict[asyncio.Task[tuple[int, bool]], int] = {}
+        all_done: list[asyncio.Task[tuple[int, bool]]] = []
+
+        task = asyncio.create_task(_download_segment_concurrent(first, policy))
+        pending[task] = first.idx
+
+        try:
+            for item in source:
+                # Store the pulled item on the next line, never break/return
+                # before storing (measured: drops one item per full window).
+                if len(pending) >= policy.max_concurrent_downloads:
+                    done, _ = await asyncio.wait(
+                        list(pending),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for completed in done:
+                        pending.pop(completed, None)
+                        all_done.append(completed)
+                new_task = asyncio.create_task(_download_segment_concurrent(item, policy))
+                pending[new_task] = item.idx
+
+            # Drain remaining tasks after the source is exhausted.
+            while pending:
+                done, _ = await asyncio.wait(
+                    list(pending),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for completed in done:
+                    pending.pop(completed, None)
+                    all_done.append(completed)
+        except BaseException:
+            # CON-007/CON-008: cancel any still-live tasks, then propagate.
+            await _cancel_and_settle(pending.keys())
+            raise
+
+        # Every _SegmentFanoutResult is minted by _await_and_cancel;
+        # all tasks are now done, so gather returns immediately.
+        fanout = await _await_and_cancel(all_done)
+
+    # Restore input order: the FIRST_COMPLETED pump completes tasks out of
+    # creation order, but _tally_and_merge's failed_indices ordering in the
+    # segment_download_failed warning depends on index order.
+    results = fanout.results
+    results.sort(key=lambda r: r[0])
+
+    # CON-006: fall through to _tally_and_merge UNCONDITIONALLY — even
+    # NOTHING_TO_DO with an empty results list must reach the merge, which
+    # checks the on-disk count. Never gate on truthiness.
     return await _tally_and_merge(
-        fanout.results,
+        results,
         segments,
-        segments_dir,
+        policy.segments_dir,
         output_file,
         progress_callback,
-        video_url,
-        download_timeout,
+        policy.video_url,
+        policy.download_timeout,
     )
 
 
@@ -883,11 +952,15 @@ async def _download_segment_concurrent(
         return task.idx, result
 
 
-def _create_segment_download_tasks(
+def _iter_pending_segment_tasks(
     segments: list[str],
     policy: DownloadPolicy,
-) -> list[asyncio.Task[tuple[int, bool]]]:
-    """Create tasks for downloading missing segments.
+) -> Iterator[SegmentTask]:
+    """Yield SegmentTask objects for missing segments only (lazy source).
+
+    Does NOT create asyncio tasks — the caller (the segment pump in
+    ``_process_downloaded_segments``) owns task creation so it can bound
+    the live task set by ``max_concurrent_downloads`` (CON-003).
 
     Skips segments whose .ts file already exists with non-zero size.
 
@@ -895,29 +968,20 @@ def _create_segment_download_tasks(
         segments: List of segment URLs to download.
         policy: DownloadPolicy containing HTTP session, rate-limiting, and retry settings.
 
-    Returns:
-        List of download tasks for missing segments only.
+    Yields:
+        SegmentTask objects for segments that need downloading.
     """
-    tasks = []
     for i, seg in enumerate(segments):
         segment_path = policy.segments_dir / f"{i:05d}.ts"
         if segment_path.exists() and segment_path.stat().st_size > 0:
             logger.debug("skipping_existing_segment", idx=i)
             continue
-        tasks.append(
-            asyncio.create_task(
-                _download_segment_concurrent(
-                    SegmentTask(
-                        idx=i,
-                        segment_url=seg,
-                        segments_dir=policy.segments_dir,
-                        total_segments=len(segments),
-                    ),
-                    policy,
-                )
-            )
+        yield SegmentTask(
+            idx=i,
+            segment_url=seg,
+            segments_dir=policy.segments_dir,
+            total_segments=len(segments),
         )
-    return tasks
 
 
 async def _run_download_session(
@@ -978,7 +1042,10 @@ async def _run_download_session(
         # all video permits are held, because every inner acquisition would wait on a
         # permit the same task already holds. The segment fan-out is therefore
         # bounded by a semaphore this layer owns, sized by the same
-        # max_concurrent_downloads setting.
+        # max_concurrent_downloads setting. The live task set is further
+        # bounded by a counting window of that same ceiling in the segment
+        # pump (len(pending) >= policy.max_concurrent_downloads), so no more
+        # than max_concurrent_downloads task objects exist at once (CON-003).
         semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
         is_bounded_batch = video_semaphore is not None
 
@@ -997,16 +1064,11 @@ async def _run_download_session(
             progress_callback=progress_callback,  # DF-003: enable per-segment progress
         )
 
-        tasks = _create_segment_download_tasks(segments, policy)
-
         return await _process_downloaded_segments(
-            tasks,
             segments,
-            segments_dir,
+            policy,
             output_file,
             progress_callback,
-            video_url,
-            settings.download_timeout,
         )
 
 
