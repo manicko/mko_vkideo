@@ -308,6 +308,7 @@ is the question, and the finding is named as a condition to look for.
 |---|---|---|
 | Every decision recorded | Does each decided finding carry a decision, a rationale where the decision is not the pass, and its cross-references? | The record, per finding. **A decision with no record is a finding.** |
 | The field exists in the format | Does the report format have a slot for the decision, between the finding heading and the field table? | The format's own finding block; the slot is present. |
+| Verification recorded | Does a finding whose runtime consequence was not executed carry the format's `verification` field, and is its severity band composed from the structural fact under the owning phase's severity table rather than asserted? | The field's value; the structural fact recorded; the owning phase's severity-table row the band was composed under. **A band no observed output supports is the finding**, and a missing field on a finding whose consequence was not executed is the finding. |
 | The retained content is present | Are the rejected and merged contents actually in the artifact? | The blocks, verified in the copy. |
 | The tally reconciles | Does the action tally equal the per-finding records? | The tally; the per-finding count; the difference, or none. |
 | No invented entries | Does the artifact contain any decision, cross-phase conflict or rollout finding that no source finding supports? | The count of each; a zero is not a reason to write a row. |

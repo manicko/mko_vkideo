@@ -48,18 +48,25 @@ problems-only: true
 >   reproduced shape is the first, its severity composed from the run's own R1, R4
 >   and R5 evidence. The **production trigger** — the shipped condition that
 >   reaches the inner claim from inside the outer one — is the second, carrying
->   the structural fact, the literal marker **`UNVERIFIED`**, and **no severity**.
->   It is not executed by design, is not asserted as fact anywhere in this file,
->   and may not be.
+>   the structural fact, the literal marker **`UNVERIFIED`**, and a severity band
+>   composed from that structural fact under **this phase's own `## 9` table** —
+>   the rule the report template states, and the table this phase's own `LOW` row
+>   already applies. It is not executed by design, is not asserted as fact
+>   anywhere in this file, and may not be.
 > - **The two are never merged.** One finding would apply the reproduced part's
 >   severity to the unexecuted part, which the admissibility rule forbids.
 > - **Silence is not available.** Under `problems-only`, an omitted finding reads
 >   as "no finding". The reproduced shape is filed even if the trigger route is
 >   never attempted; the trigger is filed even if the route is attempted and the
 >   attempt is inconclusive. The attempt changes only the marker.
-> - **No structure-only severity.** A severity assigned from the code's shape with
->   no R1–Rn output behind it is inadmissible. So is collapsing this subject into
->   a single finding, and so is collapsing it into none.
+> - **No severity the run did not observe.** A severity assigned from the code's
+>   shape with no `R1`–`Rn` output behind it is inadmissible — read as *a band no
+>   observed output supports*, not as *a band read off an observed structural
+>   fact*. Where the run recorded the structural fact and did not record its
+>   consequence, the band is composed from `## 9`'s own `LOW` row — *"A shape,
+>   naming or structure deviation with no runtime consequence"* — and so is
+>   composing this subject into a single finding, and so is composing it into
+>   none.
 
 ## 1. Goal
 
@@ -102,7 +109,7 @@ Who holds a concurrency permit, how cancellation propagates and unwinds, and wha
   - *Real console delivery of a key press to a running process.* R4 invokes the installed handler programmatically. Delivery belongs to the console, not to the code; the handler's behaviour **once invoked** is executed.
   - *Whether a browser driver completes its own teardown after a timeout.* The driver is a third-party object and is never launched here.
   - *Whether a child writing more than its output buffer holds blocks.* No product child is spawned; that is `05`'s subject — named, not run.
-  - *The production condition that reaches the per-part transfer from inside the outer claim.* R2 establishes that the **path** is reachable with the media method replaced. The condition itself is not executed by design and is carried as a finding marked `UNVERIFIED` — not as a skip, and never with a severity.
+  - *The production condition that reaches the per-part transfer from inside the outer claim.* R2 establishes that the **path** is reachable with the media method replaced. The condition itself is not executed by design and is carried as a finding marked `UNVERIFIED` — not as a skip, and never with a severity the run did not observe. Its band is composed from the structural fact under `## 9`.
 
 ## 4. Discovery
 
@@ -345,4 +352,4 @@ Use `CON-` for all findings in this phase. `CON-` is unique in the catalogue, sh
   - Every finding MUST carry (1) **runtime evidence** obtained by a named method, and (2) the **exact consequence** — not "violates invariant X".
   - A finding whose runtime consequence was not observed is filed with the structural fact and an explicit **UNVERIFIED** marker, never with an observed severity.
   - Findings without R1–Rn evidence are not admissible.
-  - **W-4, and this bullet is binding on the report:** the claim subject is filed as **exactly two** findings. The **reproduced shape** carries an observed severity composed from the run's own R1, R4 and R5 evidence — `CRITICAL` only when all three legs are **observed**, otherwise capped at `HIGH` with the leg that did not execute named. A leg that was not executed is `UNVERIFIED`, and no severity is written for it. The **production trigger** carries `UNVERIFIED` and **no severity**. The two are never merged and never omitted; under `problems-only`, omitting either reads as "no finding". Do not cite any document's characterisation of the subject as a severity.
+  - **W-4, and this bullet is binding on the report:** the claim subject is filed as **exactly two** findings. The **reproduced shape** carries an observed severity composed from the run's own R1, R4 and R5 evidence — `CRITICAL` only when all three legs are **observed**, otherwise capped at `HIGH` with the leg that did not execute named. A leg that was not executed is `UNVERIFIED`, and its band is composed from the structural fact under `## 9`. The **production trigger** carries `UNVERIFIED` and a band composed from its structural fact under `## 9`. The two are never merged and never omitted; under `problems-only`, omitting either reads as "no finding". Do not cite any document's characterisation of the subject as a severity.
