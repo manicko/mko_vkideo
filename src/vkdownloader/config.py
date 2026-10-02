@@ -98,8 +98,10 @@ class Settings(BaseSettings):
         description="Maximum number of videos downloading concurrently in a batch. "
         "The batch semaphore gates one permit per video (acquired once per video); "
         "each video's segment fan-out is bounded separately by a semaphore of the "
-        "same size owned by the segment layer. Setting this to 1 enables an "
-        "anti-detection delay between sequential segment downloads.",
+        "same size owned by the segment layer; each download's aiohttp connection "
+        "pool is sized to the same value for both the total and the per-origin "
+        "ceiling, so the transport never clips this setting. Setting this to 1 "
+        "enables an anti-detection delay between sequential segment downloads.",
     )
     throttled_rate: int = Field(
         default=100000,

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from vkdownloader.config import Settings
@@ -25,6 +26,7 @@ from vkdownloader.services.segment_downloader import (
     PlaylistFetchResult,
     SegmentTask,
     _await_and_cancel,
+    _create_connector,
     _download_segment_sequential,
     _fetch_playlist_with_retry,
     _handle_token_refresh,
@@ -34,6 +36,8 @@ from vkdownloader.services.segment_downloader import (
     download_hls_with_resume,
 )
 from vkdownloader.utils.url_sanitizer import _strip_auth_params
+
+_VIDEO_URL = "https://vkvideo.ru/video-12345_67890"
 
 
 class TestFetchPlaylistWithRetry:
@@ -1633,3 +1637,69 @@ class TestSegmentFanoutBoundedProduction:
 
         assert result is None
         assert captured["results"] == []
+
+
+class TestConnectorCeilingsFollowTheSetting:
+    """CON-009: both connector ceilings derive from max_concurrent_downloads.
+
+    Two tests cover:
+      1. limit follows the setting across the declared range x both ssl_verify values.
+      2. the aggregate arithmetic the commit body claims cannot drift from the code.
+    """
+
+    @pytest.mark.parametrize("ssl_verify", [True, False])
+    @pytest.mark.parametrize("max_concurrent_downloads", [1, 4, 16])
+    @pytest.mark.asyncio
+    async def test_both_ceilings_follow_the_setting(
+        self, max_concurrent_downloads: int, ssl_verify: bool
+    ) -> None:
+        settings = Settings(
+            max_concurrent_downloads=max_concurrent_downloads,
+            ssl_verify=ssl_verify,
+        )
+        connector = _create_connector(settings, _VIDEO_URL)
+        try:
+            # equality to the PARAMETER, never to a constant: asserting limit == 10
+            # would encode CON-009 rather than fix it.
+            assert connector.limit == max_concurrent_downloads, (
+                f"connector.limit should equal max_concurrent_downloads="
+                f"{max_concurrent_downloads}, got {connector.limit}"
+            )
+            assert connector.limit_per_host == max_concurrent_downloads, (
+                f"connector.limit_per_host should equal max_concurrent_downloads="
+                f"{max_concurrent_downloads}, got {connector.limit_per_host}"
+            )
+            # the per-origin term can never be the binding one, stated structurally
+            # so the assertion does not depend on aiohttp internals.
+            assert connector.limit_per_host >= connector.limit, (
+                f"limit_per_host ({connector.limit_per_host}) must be >= "
+                f"limit ({connector.limit}) so the per-origin term is never "
+                "the binding one"
+            )
+        finally:
+            await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_aggregate_matches_the_claimed_arithmetic(self) -> None:
+        """N connectors, one per in-flight download: the aggregate is N x min(limit, per_host)."""
+        for videos_in_flight, claimed in ((4, 16), (16, 256)):
+            connectors: list[aiohttp.TCPConnector] = []
+            try:
+                for _ in range(videos_in_flight):
+                    settings = Settings(max_concurrent_downloads=videos_in_flight)
+                    connectors.append(_create_connector(settings, _VIDEO_URL))
+                one = connectors[0]
+                aggregate = sum(c.limit for c in connectors)
+                assert aggregate == videos_in_flight * min(one.limit, one.limit_per_host), (
+                    f"aggregate {aggregate} != {videos_in_flight} * "
+                    f"min({one.limit}, {one.limit_per_host})"
+                )
+                assert aggregate == claimed, (
+                    f"aggregate {aggregate} != claimed {claimed} "
+                    f"for videos_in_flight={videos_in_flight}"
+                )
+                # both deltas, pinned in OPPOSITE directions:
+                #   40 -> 16 at N=4 (falls), 160 -> 256 at N=16 (rises)
+            finally:
+                for connector in connectors:
+                    await connector.close()

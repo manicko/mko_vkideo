@@ -720,14 +720,29 @@ def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnecto
     Returns:
         Configured TCPConnector.
     """
+    # CON-009: both ceilings are the same setting, so limit_per_host == limit is
+    # provably non-binding (aiohttp enforces min(limit, limit_per_host) only when
+    # limit_per_host > 0, and acquired per-host connections are a subset of all
+    # acquired). The segment semaphore stays the single binding authority and the
+    # transport never clips an operator's setting. The connector is per download
+    # — this is NOT a process-wide pool — so the aggregate is per-download times
+    # concurrent downloads.
+    connection_ceiling = settings.max_concurrent_downloads
     if settings.ssl_verify:
-        return aiohttp.TCPConnector(limit=10)
+        return aiohttp.TCPConnector(
+            limit=connection_ceiling,
+            limit_per_host=connection_ceiling,
+        )
 
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
-    return aiohttp.TCPConnector(ssl=ssl_context, limit=10)
+    return aiohttp.TCPConnector(
+        ssl=ssl_context,
+        limit=connection_ceiling,
+        limit_per_host=connection_ceiling,
+    )
 
 
 _REASON_SHUTDOWN: Final = "shutdown_requested"
@@ -1125,6 +1140,14 @@ async def _run_download_session(
         # bounded by a counting window of that same ceiling in the segment
         # pump (len(pending) >= policy.max_concurrent_downloads), so no more
         # than max_concurrent_downloads task objects exist at once (CON-003).
+        # CON-009: the connector this function constructs carries the SAME value as
+        # both its total and its per-origin ceiling, so limit_per_host == limit is
+        # provably non-binding (the per-host term can never be the binding one —
+        # acquired per-host connections are a subset of all acquired) and the
+        # transport never clips an operator's setting: the segment semaphore stays
+        # the single binding authority. The connector is per download — this is NOT
+        # a process-wide pool — so the aggregate is per-download times concurrent
+        # downloads.
         semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
         is_bounded_batch = video_semaphore is not None
 

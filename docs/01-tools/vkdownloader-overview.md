@@ -223,7 +223,7 @@ The `DownloadProgress` model includes:
 
 ### Shared Concurrency Control
 
-All URLs in a batch share a single `asyncio.Semaphore` that gates **video-level** concurrency. The semaphore's `max_concurrent_downloads` limit (from Settings) controls the total number of concurrent video downloads across all URLs in the batch. Each video's segment fan-out is bounded by a separate semaphore owned by the segment layer, sized by the same setting. This design enables **work stealing**: when one video finishes downloading, its acquired permit is immediately released and available for remaining URLs.
+All URLs in a batch share a single `asyncio.Semaphore` that gates **video-level** concurrency. The semaphore's `max_concurrent_downloads` limit (from Settings) controls the total number of concurrent video downloads across all URLs in the batch. Each video's segment fan-out is bounded by a separate semaphore owned by the segment layer, sized by the same setting. Each download also owns its own aiohttp `TCPConnector`, sized to `max_concurrent_downloads` for both the total and per-origin ceiling so the transport never clips the setting — this is per-download, **not** a process-wide pool, and the aggregate is per-download times concurrent downloads. This design enables **work stealing**: when one video finishes downloading, its acquired permit is immediately released and available for remaining URLs.
 
 ```
 Batch Download Flow
