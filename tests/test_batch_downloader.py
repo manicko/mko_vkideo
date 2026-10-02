@@ -25,6 +25,7 @@ from vkdownloader.services.batch_downloader import (
     _download_single,
     _print_batch_summary,
     _run_batch_with_progress,
+    _TrackedSemaphore,
     run_batch,
 )
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
@@ -762,3 +763,174 @@ class TestCorrelationInheritance:
         )
 
         assert results[0][2] == "success"
+
+
+class TestBatchLiveTaskBounding:
+    """B7: bound the live asyncio task set to the concurrency ceiling."""
+
+    @pytest.mark.asyncio
+    async def test_bounded_producer_never_exceeds_ceiling(self, tmp_path: Path) -> None:
+        """B7: with more URLs than the ceiling, live ``_download_single`` tasks peak at the ceiling.
+
+        Stubs ``download_video`` (not ``_download_single``) so the real batch
+        pump and classification run. Counts live tasks via ``asyncio.all_tasks``
+        filtered on ``get_coro().__qualname__ == "_download_single"``.
+        """
+        ceiling = 4
+        settings = Settings(
+            cookie_source=CookieSource.NONE,
+            max_concurrent_downloads=ceiling,
+            max_retries=1,
+            download_dir=tmp_path,
+        )
+        n_urls = 200
+        urls = _batch_urls(n_urls)
+
+        peak_live = 0
+        current_live = 0
+
+        async def _counting_download(*args: object, **kwargs: object) -> Path | None:
+            nonlocal current_live, peak_live
+            # Count live _download_single tasks via asyncio.all_tasks() --
+            # this matches the production measurement approach (D-01).
+            live = sum(
+                1
+                for t in asyncio.all_tasks()
+                if not t.done() and t.get_coro().__qualname__ == "_download_single"
+            )
+            current_live = live
+            peak_live = max(peak_live, current_live)
+            await asyncio.sleep(0.01)
+            return tmp_path / "video.mp4"
+
+        with _batch_runtime(_counting_download):
+            results, peak = await asyncio.wait_for(
+                _run_batch_with_progress(
+                    urls,
+                    QualityEnum.BEST,
+                    DownloadMethod.AUTO,
+                    settings,
+                    output=tmp_path,
+                ),
+                timeout=30,
+            )
+
+        assert len(results) == n_urls
+        assert peak_live <= ceiling, f"peak_live={peak_live} exceeded ceiling={ceiling}"
+        result_urls = {url for url, _, _ in results}
+        assert result_urls == set(urls), "some URLs were dropped by the bounded producer"
+
+    @pytest.mark.asyncio
+    async def test_stop_with_unstarted_urls_reports_cancelled_exit_130(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """B7: stopping before all URLs are claimed yields all-CANCELLED + exit 130.
+
+        Uses ``_make_batch_download`` with ``None`` outcomes + a pre-set shutdown
+        Event (the returning route A), mirroring ``test_interrupted_batch_reports_cancelled_not_failed``.
+        """
+        ceiling = 2
+        settings = Settings(
+            cookie_source=CookieSource.NONE,
+            max_concurrent_downloads=ceiling,
+            max_retries=1,
+            download_dir=tmp_path,
+        )
+        urls = _batch_urls(3)
+        download = _make_batch_download(dict.fromkeys(urls, None))
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            _shutdown_event_ctx.get().set()
+            with _batch_runtime(download):
+                results, peak = await asyncio.wait_for(
+                    _run_batch_with_progress(
+                        urls,
+                        QualityEnum.BEST,
+                        DownloadMethod.AUTO,
+                        settings,
+                        output=tmp_path,
+                    ),
+                    timeout=30,
+                )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        statuses = [status for _url, _output_path, status in results]
+        assert statuses == [ProgressStatus.CANCELLED.value] * len(urls)
+        assert peak <= ceiling
+
+        exit_code = _print_batch_summary(results, peak, 0)
+        captured = capsys.readouterr()
+        assert exit_code == 130
+        assert "Successful: 0" in captured.out
+        assert "Failed: 0" in captured.out
+        assert f"  Cancelled: {len(urls)}" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_no_half_claimed_batch_permit_after_stop(self, tmp_path: Path) -> None:
+        """B7 / D-01: stopping mid-batch leaks no batch-level semaphore permits.
+
+        Drives the raising route (a child that raises ``CancelledError``) so
+        control reaches the ``asyncio.CancelledError`` handler in
+        ``_run_batch_with_progress``. Patches ``_TrackedSemaphore`` to count
+        acquire/release calls: every acquire must have a matching release even
+        when the batch is cancelled mid-flight.
+        """
+        ceiling = 2
+        settings = Settings(
+            cookie_source=CookieSource.NONE,
+            max_concurrent_downloads=ceiling,
+            max_retries=1,
+            download_dir=tmp_path,
+        )
+        urls = _batch_urls(4)
+        download = _make_batch_download(
+            {
+                urls[0]: asyncio.CancelledError("stop"),
+                urls[1]: None,
+                urls[2]: None,
+                urls[3]: None,
+            }
+        )
+
+        original_cls = _TrackedSemaphore
+        acquire_count = 0
+        release_count = 0
+
+        class _CountingTrackedSemaphore(original_cls):  # type: ignore[misc]
+            async def acquire(self) -> bool:
+                nonlocal acquire_count
+                acquire_count += 1
+                return await super().acquire()
+
+            def release(self) -> None:
+                nonlocal release_count
+                release_count += 1
+                super().release()
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            with _batch_runtime(download):
+                with patch(
+                    "vkdownloader.services.batch_downloader._TrackedSemaphore",
+                    _CountingTrackedSemaphore,
+                ):
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(
+                            _run_batch_with_progress(
+                                urls,
+                                QualityEnum.BEST,
+                                DownloadMethod.AUTO,
+                                settings,
+                                output=tmp_path,
+                            ),
+                            timeout=5.0,
+                        )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        # Every acquire must have a matching release -- no half-claimed permits.
+        assert acquire_count == release_count, (
+            f"permits leaked: {acquire_count} acquired, {release_count} released"
+        )
