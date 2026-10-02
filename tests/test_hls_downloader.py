@@ -3166,6 +3166,137 @@ class TestSetupSignalHandlers:
             signal_module.signal(signal_module.SIGINT, pre_int)
             signal_module.signal(signal_module.SIGTERM, pre_term)
 
+    @pytest.mark.asyncio
+    async def test_repeated_interrupt_forwards_to_displaced_handler(self) -> None:
+        """B5: a second interrupt escalates by re-invoking the displaced handler.
+
+        First fire: requests stop — one ``shutdown_signal_received`` record,
+        shutdown event set.
+        Second fire: escalates — the stand-in installed **before** setup (the
+        displaced object) runs, so its call list becomes ``[SIGINT]``.
+        Third fire: one-shot guard already set — no-op, call list unchanged.
+
+        Exercises the real ``signal.signal`` fallback (loop.add_signal_handler is
+        unavailable on this platform) with a recording stand-in substituted for
+        the runtime's own ``Runner._on_sigint``, so the escalation forwards to a
+        safe stand-in rather than cancelling the test task.
+        """
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        pre_int = signal_module.getsignal(signal_module.SIGINT)
+        pre_term = signal_module.getsignal(signal_module.SIGTERM)
+
+        # Token idiom: supply a test-owned Event so the handler writes to one
+        # we control instead of a leaked loop-bound one.
+        token = _shutdown_event_ctx.set(asyncio.Event())
+
+        displaced_calls: list[int] = []
+
+        def _displaced(signum: int, _frame: object) -> None:
+            """Recording stand-in that captures the forwarded signal number."""
+            displaced_calls.append(signum)
+
+        try:
+            signal_module.signal(signal_module.SIGINT, _displaced)
+            signal_handlers.setup_signal_handlers()
+
+            installed = signal_module.getsignal(signal_module.SIGINT)
+            if installed is _displaced:
+                pytest.fail(
+                    "setup_signal_handlers did not displace the stand-in handler"
+                )
+
+            with patch.object(signal_handlers, "logger") as mock_logger:
+                # Fire 1: requests a stop, one shutdown_signal_received record.
+                installed(signal_module.SIGINT, None)
+                assert get_shutdown_event().is_set()
+                assert mock_logger.info.call_count == 1
+                assert mock_logger.info.call_args_list[0].args[0] == "shutdown_signal_received"
+
+                # Fire 2: escalates — the displaced object ran.
+                installed(signal_module.SIGINT, None)
+                assert mock_logger.warning.call_count == 1
+                warning_call = mock_logger.warning.call_args_list[0]
+                assert warning_call.args[0] == "shutdown_signal_escalated"
+                assert warning_call.kwargs["reason"] == "displaced_handler"
+                assert displaced_calls == [signal_module.SIGINT]
+
+                # Fire 3: one-shot guard, no-op — stand-in call list unchanged.
+                installed(signal_module.SIGINT, None)
+                assert mock_logger.warning.call_count == 1
+                assert displaced_calls == [signal_module.SIGINT]
+        finally:
+            signal_handlers.cleanup_signal_handlers()
+            _shutdown_event_ctx.reset(token)
+            signal_module.signal(signal_module.SIGINT, pre_int)
+            signal_module.signal(signal_module.SIGTERM, pre_term)
+
+    @pytest.mark.asyncio
+    async def test_repeated_interrupt_raises_keyboard_interrupt_when_no_handler_captured(
+        self,
+    ) -> None:
+        """B5: when the loop owns the disposition, escalation raises
+        ``KeyboardInterrupt`` directly.
+
+        On a platform where ``loop.add_signal_handler`` succeeds, no previous
+        handler is captured (the loop path does not go through
+        ``_capture_previous_handler``), so ``_escalate_interrupt`` finds nothing
+        callable and raises ``KeyboardInterrupt`` with ``reason="keyboard_interrupt"``.
+        """
+        import signal as signal_module
+
+        from vkdownloader.services import signal_handlers
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+
+        registered: dict[int, Any] = {}
+
+        class _SucceedingLoop:
+            def add_signal_handler(self, sig: int, callback: object) -> None:
+                registered[sig] = callback
+
+            def remove_signal_handler(self, sig: int) -> None:
+                registered.pop(sig, None)
+
+        try:
+            with patch.object(asyncio, "get_running_loop", return_value=_SucceedingLoop()):
+                with patch.object(signal_module, "signal") as mock_signal:
+                    signal_handlers.setup_signal_handlers()
+
+                    # signal.signal must NOT be called when the loop path succeeds.
+                    assert mock_signal.call_count == 0
+
+            # The loop-path callback takes no arguments.
+            callback = registered[signal_module.SIGINT]
+
+            with patch.object(signal_handlers, "logger") as mock_logger:
+                # Fire 1: requests a stop, one record.
+                callback()
+                assert get_shutdown_event().is_set()
+                assert mock_logger.info.call_count == 1
+                assert mock_logger.info.call_args_list[0].args[0] == "shutdown_signal_received"
+
+                # Fire 2: escalation raises KeyboardInterrupt (no callable captured).
+                with pytest.raises(KeyboardInterrupt):
+                    callback()
+                assert mock_logger.warning.call_count == 1
+                warning_call = mock_logger.warning.call_args_list[0]
+                assert warning_call.args[0] == "shutdown_signal_escalated"
+                assert warning_call.kwargs["reason"] == "keyboard_interrupt"
+
+                # Fire 3: one-shot guard, no-op.
+                callback()
+                assert mock_logger.warning.call_count == 1
+        finally:
+            signal_handlers.cleanup_signal_handlers()
+            get_shutdown_event().clear()
+            _shutdown_event_ctx.reset(token)
+
+
 
 class TestResolveCookies:
     """Tests for _resolve_cookies cookie-source branching."""

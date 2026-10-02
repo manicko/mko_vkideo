@@ -1496,6 +1496,83 @@ class TestExitCodeContract:
 
         return observed
 
+    def test_repeated_interrupt_escalates_to_exit_130(self, tmp_path: Path) -> None:
+        """B5: a second Ctrl-C escalates to a cancellation that exits 130.
+
+        Without the escalator, a second interrupt is a silent no-op: the batch
+        completes, prints its summary, and exits 1.  With it, the displaced
+        ``Runner._on_sigint`` cancels the main task, ``_print_batch_summary`` is
+        never reached, and ``cli.py``'s cancellation arm raises ``Exit(130)``.
+
+        Patches **only** ``vkdownloader.services.batch_downloader.download_video``
+        so the real CLI preamble, signal handler installation, and ``asyncio.run``
+        Runner lifecycle all run end-to-end.
+        """
+        import signal as signal_module
+
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+
+        # Token idiom: supply a fresh, unset Event so the handler inside
+        # asyncio.run copies the ContextVar and writes to one we control.
+        token = _shutdown_event_ctx.set(asyncio.Event())
+
+        def _fire_sigint() -> None:
+            """Resolve and fire the SIGINT dispatch installed by setup_signal_handlers."""
+            loop = asyncio.get_running_loop()
+            loop_handlers = getattr(loop, "_signal_handlers", {})
+            if signal_module.SIGINT in loop_handlers:
+                # Loop path: callback takes no arguments.
+                loop_handlers[signal_module.SIGINT]()
+                return
+            handler = signal_module.getsignal(signal_module.SIGINT)
+            if (
+                handler is signal_module.SIG_DFL
+                or handler is signal_module.SIG_IGN
+                or not callable(handler)
+            ):
+                pytest.fail(
+                    "could not resolve SIGINT dispatch: neither the loop handler "
+                    "table nor signal.getsignal returns a callable handler"
+                )
+            handler(signal_module.SIGINT, None)
+
+        async def _stalls(url: str, *args: object, **kwargs: object) -> Path | None:
+            # First fire: request a stop.
+            _fire_sigint()
+            try:
+                await asyncio.wait_for(asyncio.sleep(0), timeout=5.0)
+            except TimeoutError:
+                pytest.fail("first SIGINT did not yield control within 5.0s")
+
+            # Second fire: the escalation — forwards to Runner._on_sigint which
+            # cancels main_task; if the escalation is a no-op, we fall through.
+            _fire_sigint()
+            try:
+                await asyncio.wait_for(asyncio.sleep(1.0), timeout=1.5)
+            except TimeoutError:
+                pytest.fail("second SIGINT did not escalate within 1.5s")
+            raise TimeoutError("the second interrupt did not escalate")
+
+        try:
+            with patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=_stalls,
+            ):
+                result = runner.invoke(
+                    app,
+                    ["batch", str(urls_file)],
+                    catch_exceptions=False,
+                )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+        assert result.exit_code == 130, result.output
+        assert "Download Summary:" not in result.output
+
+
 
 class TestEntryPointSourcePrecedence:
     """A1-A4: the .env file and CLI options both reach the Settings that runs.
