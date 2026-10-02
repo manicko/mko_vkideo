@@ -61,7 +61,12 @@ class Settings(BaseSettings):
         default=300,
         ge=30,
         le=3600,
-        description="HTTP client timeout in seconds for individual segment requests and playlist fetches.",
+        description="Timeout in seconds applied to individual segment and playlist "
+        "HTTP requests, to each ffmpeg merge subprocess, to the off-loop yt-dlp "
+        "extraction's wait_for, and to yt-dlp's socket timeout as a library option and "
+        "as a CLI flag. On expiry of that wait_for the extraction thread is not "
+        "stopped and is joined at interpreter shutdown under the interpreter's own "
+        "thread-join rule, not under this setting.",
     )
     backoff_pause_seconds: int = Field(
         default=10,

@@ -1,6 +1,7 @@
 """Tests for configuration module."""
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1126,3 +1127,97 @@ class TestConditionalOverridesConstruction:
             max_retries=ceiling,
         )
         assert settings.max_retries == ceiling
+
+
+class TestDownloadTimeoutDescriptionStatesTheExitPath:
+    """CON-010: download_timeout's description is the doc of record, and
+    CON-010's remedy under D9 is a statement in it that may not be a
+    partial truth.
+
+    Three semantic facts are pinned, never the wording. Full-string
+    equality is deliberately not used: the description is prose, and
+    a test that failed on any reword would be a maintenance cost with
+    no oracle value (rule 5).
+
+      1. every consumer class the setting actually bounds is named;
+      2. the exit-path subject -- the abandoned extraction thread
+         joined at interpreter shutdown -- is named;
+      3. the description states that THIS SETTING is not the bound
+         applied on that path.
+    """
+
+    # Consumer classes, each verified present in src/: segment and
+    # playlist HTTP (segment_downloader.py aiohttp.ClientTimeout and
+    # downloader_throttle.download_segment_throttled);
+    # each ffmpeg merge subprocess (segment_downloader.py ->
+    # ffmpeg_utils._merge_segments_batched -> _merge_batch_segments
+    # and _perform_final_merge, via policy.download_timeout);
+    # the off-loop extraction's wait_for
+    # (VKVideoExtractor._extract_with_ytdlp); and yt-dlp's socket
+    # timeout as BOTH a library option (the ydl_opts dict) and a CLI
+    # flag (ytdlp_downloader._build_ytdlp_cli_command's
+    # --socket-timeout).
+    _CONSUMER_TOKENS = (
+        "segment",
+        "playlist",
+        "ffmpeg",
+        "yt-dlp",
+        "extraction",
+    )
+
+    # The mechanism is CPython's thread-pool join, so any wording
+    # that still states the finding must name the thread, the
+    # executor, or the shutdown. An "any of three" test rather than
+    # one fixed word keeps a legitimate rewording green.
+    _EXIT_PATH_SUBJECT_TOKENS = ("thread", "executor", "shutdown")
+
+    # "this setting is not the bound on that path", in the ordinary
+    # English forms that claim takes. The character class forbids a
+    # sentence break between the negator and its referent, so a
+    # negation about some other subject cannot satisfy it.
+    _EXIT_PATH_DISCLAIMER_RE = re.compile(
+        r"\b(?:not|never|no|neither|rather|instead)\b[^.?!]*"
+        r"\b(?:this setting|download_timeout|this timeout)\b",
+        re.IGNORECASE,
+    )
+
+    def _description(self) -> str:
+        description = Settings.model_fields["download_timeout"].description
+        assert isinstance(description, str), (
+            "download_timeout must carry a description -- it is the doc "
+            f"of record for what the setting bounds; got {description!r}"
+        )
+        return description
+
+    def test_names_every_consumer_class_the_setting_bounds(self) -> None:
+        """A description corrected to name three of four is still wrong."""
+        lowered = self._description().lower()
+
+        missing = [t for t in self._CONSUMER_TOKENS if t not in lowered]
+        assert not missing, (
+            "download_timeout's description must name every consumer class "
+            f"the setting bounds; missing {missing} from "
+            f"{self._description()!r}"
+        )
+
+    def test_names_the_exit_path_subject(self) -> None:
+        """CON-010's first clause: state the exit-path bound here."""
+        lowered = self._description().lower()
+
+        assert any(t in lowered for t in self._EXIT_PATH_SUBJECT_TOKENS), (
+            "download_timeout's description must name the exit-path "
+            "subject -- the extraction thread joined at interpreter "
+            f"shutdown; found none of {self._EXIT_PATH_SUBJECT_TOKENS} "
+            f"in {self._description()!r}"
+        )
+
+    def test_states_this_setting_is_not_the_exit_path_bound(self) -> None:
+        """D8 item 1: the description must disclaim the exit path."""
+        description = self._description()
+
+        assert self._EXIT_PATH_DISCLAIMER_RE.search(description), (
+            "download_timeout's description must state that this setting "
+            "is not the bound applied on the exit path (a negator and "
+            "'this setting'/'download_timeout' in one clause); got "
+            f"{description!r}"
+        )

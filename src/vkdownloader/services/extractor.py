@@ -238,8 +238,16 @@ class VKVideoExtractor:
         Propagates relevant :class:`Settings` fields (``socket_timeout``,
         ``retries``, ``fragment_retries``, ``throttled_rate``) into the
         yt-dlp options dict and wraps the blocking extraction in
-        ``asyncio.wait_for`` with ``settings.download_timeout`` so the
-        event loop is not blocked indefinitely (INT-003).
+        ``asyncio.wait_for`` with ``settings.download_timeout`` (INT-003).
+
+        The wrap bounds the EVENT LOOP, not the PROCESS: on expiry the
+        asyncio future is cancelled, but the executor thread is not and
+        cannot be. ``asyncio.run`` joins that thread while tearing the
+        interpreter down, so the process can stay alive after the
+        ``ExtractionError`` has been raised. That exit-path wait is
+        bounded by the interpreter's own thread-join rule, NOT by
+        ``download_timeout``, and no bound is applied to it here
+        (CON-010).
         """
         ydl_opts = {
             "quiet": True,
@@ -286,8 +294,12 @@ class VKVideoExtractor:
             return found_streams, title
 
         # Run in thread pool to avoid blocking, with a timeout (INT-003)
-        # so a hung yt-dlp extraction cannot block the event loop
-        # indefinitely.
+        # so a hung yt-dlp extraction cannot block the EVENT LOOP
+        # indefinitely. It does not bound the PROCESS: on expiry only the
+        # asyncio future is cancelled and the executor thread cannot be, so
+        # asyncio.run joins that thread at teardown under the interpreter's
+        # own thread-join rule, not under this setting, and no bound is
+        # applied to that path (CON-010).
         if self.backoff_coordinator is not None:
             await self.backoff_coordinator.wait_if_paused(url)
         loop = asyncio.get_running_loop()
