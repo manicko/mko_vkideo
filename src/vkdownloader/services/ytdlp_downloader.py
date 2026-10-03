@@ -131,6 +131,48 @@ async def _await_first_and_cancel_others(
     return done, pending
 
 
+async def _await_ytdlp_reap_with_timeout(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+) -> int:
+    """Bound the one-shot re-wait after the yt-dlp reader has drained the stream.
+
+    Wraps ``process.wait()`` in ``asyncio.wait_for`` and ensures the child is
+    terminated via ``cancel_subprocess`` on timeout or cancellation, preventing
+    an unreaped orphan. The shape mirrors ``_await_ffmpeg_with_timeout``.
+
+    The bound is an **inactivity** bound: it is only armed once the reader task
+    (``_monitor_progress`` or ``_drain_output``) has finished consuming the
+    child's stdout — i.e. the child has gone silent. While the reader is still
+    yielding lines the clock is never started, so a child that keeps producing
+    output is never killed, no matter how long it runs. A bare
+    ``asyncio.wait_for(process.wait(), ...)`` without this ladder would leave
+    the child unreaped on timeout.
+
+    Args:
+        process: The yt-dlp subprocess whose re-wait is being bounded.
+        timeout: Maximum seconds of inactivity (silence) to wait for the
+            child to exit before terminating it. Mandatory — has no default
+            so the bound cannot be forgotten.
+
+    Returns:
+        The child's exit code, or ``None``-equivalent if already set.
+
+    Raises:
+        TimeoutError: If the child does not exit within ``timeout`` seconds
+            of the reader finishing. The child is terminated before
+            re-raise.
+        asyncio.CancelledError: If the caller is cancelled. The child is
+            terminated before re-raise.
+    """
+    try:
+        returncode = await asyncio.wait_for(process.wait(), timeout=timeout)
+        return returncode
+    except (TimeoutError, asyncio.CancelledError):
+        await cancel_subprocess(process)
+        raise
+
+
 # yt-dlp progress lines (see yt_dlp/downloader/common.py, msg_template).
 #
 # yt-dlp picks one of five templates depending on what it knows about the
@@ -659,6 +701,15 @@ async def _download_with_ytdlp(
     ``-R`` (retries), ``--fragment-retries``, and ``-N`` (concurrent
     fragments) for network robustness — no application-level download
     timeout is imposed, avoiding premature kill of legitimate long downloads.
+    A download that keeps producing output is never killed, no matter how
+    long it runs. Only the **inactivity** of the stream — the one-shot reap
+    applied after the reader has consumed every line and the child has gone
+    silent — is bounded by ``download_stall_timeout``: on expiry the child is
+    terminated through the cancellation ladder (``cancel_subprocess``) and
+    the resulting ``TimeoutError`` is re-raised. This is not a whole-operation
+    budget (see ``download_timeout`` for the per-request and per-subprocess
+    bounds that are), and it does not apply to the merge subprocesses, which
+    ``download_timeout`` already bounds.
 
     Args:
         video_url: VK video URL to download.
@@ -781,9 +832,23 @@ async def _download_with_ytdlp(
             drain_task = asyncio.create_task(_drain_output())
             await _await_first_and_cancel_others(process_task, drain_task)
 
-        # Ensure the process is fully reaped before reading returncode.
+        # Reap the child exactly once before reading ``returncode``. In normal
+        # operation the process has already exited and ``wait()`` returns
+        # immediately; bound this one-shot re-wait with ``download_stall_timeout``
+        # so a child that stopped producing output but has not yet exited (e.g. the
+        # reader drained the pipe yet the child lingers) cannot stall shutdown or
+        # retry indefinitely. On expiry the child is destroyed via the
+        # cancellation path and the ``TimeoutError`` is re-raised; the call site
+        # below translates it to a normal ``None`` result.
         if process.returncode is None:
-            await process.wait()
+            try:
+                await _await_ytdlp_reap_with_timeout(process, settings.download_stall_timeout)
+            except TimeoutError:
+                logger.error(
+                    "yt_dlp_download_stall_timeout",
+                    stall_timeout=settings.download_stall_timeout,
+                )
+                return None
 
         output_data = bytes(output_chunks) if output_chunks else b""
 

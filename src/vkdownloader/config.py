@@ -66,7 +66,24 @@ class Settings(BaseSettings):
         "extraction's wait_for, and to yt-dlp's socket timeout as a library option and "
         "as a CLI flag. On expiry of that wait_for the extraction thread is not "
         "stopped and is joined at interpreter shutdown under the interpreter's own "
-        "thread-join rule, not under this setting.",
+        "thread-join rule, not under this setting. Does not bound the yt-dlp child's "
+        "post-drain re-wait — see ``download_stall_timeout`` for that inactivity bound.",
+    )
+    download_stall_timeout: float = Field(
+        default=300.0,
+        ge=30,
+        le=3600,
+        description="Inactivity bound, in seconds, on the one-shot re-wait that follows "
+        "the yt-dlp reader consuming the download stream — ``process.wait()`` "
+        "after EOF on the child's stdout. Once the reader task has drained every line "
+        "and the child has gone silent, the clock starts: if the child has not exited "
+        "within this many seconds it is terminated through the existing cancellation "
+        "ladder (``cancel_subprocess``) and the resulting ``TimeoutError`` is "
+        "re-raised. This is NOT a whole-operation budget — a download that keeps "
+        "producing output is never killed, no matter how long it runs, because the "
+        "reader's continued liveness holds the bound at bay until EOF. It does not "
+        "apply to the ffmpeg merge subprocesses, which ``download_timeout`` already "
+        "bounds.",
     )
     backoff_pause_seconds: int = Field(
         default=10,

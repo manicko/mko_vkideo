@@ -4097,6 +4097,230 @@ class TestYtDlpSubprocessShutdown:
                     task.cancel()
 
 
+class TestYtDlpStallTimeout:
+    """Tests for the inactivity-bounded yt-dlp child reap (TRN-007).
+
+    ``_download_with_ytdlp`` reaps the child exactly once before reading
+    ``returncode``. When the reader has finished draining the stream and the
+    child has not yet exited, that one-shot reap is bounded by
+    ``download_stall_timeout`` — an INACTIVITY bound, not a whole-operation
+    budget. On expiry the child is terminated through the cancellation ladder
+    (``cancel_subprocess``) and the ``TimeoutError`` is re-raised. A child
+    that keeps producing output is never killed.
+    """
+
+    @staticmethod
+    def _fast_settings(stall: float = 1.0) -> Settings:
+        """Settings with a short stall timeout (bypassing the ge=30 floor).
+
+        ``Settings`` has no ``validate_assignment``, so direct field mutation
+        is the established pattern in this suite (mirrors the drain trio's
+        use of ``test_settings``).
+        """
+        s = Settings(
+            download_dir=Settings.model_fields["download_dir"].default,
+            max_concurrent_downloads=2,
+            max_retries=1,
+        )
+        s.download_stall_timeout = stall
+        return s
+
+    @pytest.mark.asyncio
+    async def test_stall_terminates_and_reaps_silent_child(self, tmp_path: Path) -> None:
+        """STALL CASE: a child that emits then goes silent is killed within the
+        bound AND the child is reaped (cancel_subprocess is awaited)."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        stall_timeout = 1.0
+        settings = self._fast_settings(stall=stall_timeout)
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        # Child emits one line then goes silent (EOF).
+        mock_process.stdout.readline = AsyncMock(side_effect=[b"some output\n", b""])
+
+        async def blocking_wait() -> int:
+            await asyncio.sleep(3600)
+            return 0
+
+        mock_process.wait = blocking_wait
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_cancel:
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    settings,
+                )
+
+        # The call returns within the bound, not after 3600 s.
+        assert result is None
+        # Both halves: the termination ladder ran.
+        mock_cancel.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_liveness_continuous_output_never_killed(self, tmp_path: Path) -> None:
+        """LIVENESS CASE: a child that keeps emitting output does NOT trip the
+        bound, proving this is an inactivity limit (not a total-time budget)
+        and that NET-007 is preserved, not reinstated."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        stall_timeout = 1.0
+        settings = self._fast_settings(stall=stall_timeout)
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+
+        # Reader emits 4 lines at 0.3 s intervals (1.2 s total), then EOF.
+        # The child is still active well past the 1 s stall budget — proving
+        # the clock only starts after EOF.
+        lines_remaining = [b"line1\n", b"line2\n", b"line3\n", b"line4\n"]
+
+        async def emitting_readline() -> bytes:
+            await asyncio.sleep(0.3)
+            if lines_remaining:
+                return lines_remaining.pop(0)
+            return b""
+
+        mock_process.stdout.readline = emitting_readline
+
+        # Child exits 0.5 s after the reader finishes (within the 1 s stall).
+        exit_event = asyncio.Event()
+
+        async def schedule_exit() -> None:
+            await asyncio.sleep(2.0)
+            exit_event.set()
+
+        exit_task = asyncio.create_task(schedule_exit())
+        try:
+
+            async def waiting_wait() -> int:
+                await exit_event.wait()
+                mock_process.returncode = 0
+                return 0
+
+            mock_process.wait = waiting_wait
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    settings,
+                )
+        finally:
+            exit_task.cancel()
+
+        # Child kept producing, was never killed — returned normally.
+        assert result == output_file
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_reap_propagates_and_reaps(self, tmp_path: Path) -> None:
+        """CANCELLATION ARM: cancelling the holder still propagates
+        ``CancelledError`` and the termination ladder still runs."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        settings = self._fast_settings(stall=10.0)
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+
+        async def blocking_wait() -> int:
+            await asyncio.sleep(3600)
+            return 0
+
+        mock_process.wait = blocking_wait
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_cancel:
+                task = asyncio.create_task(
+                    _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        settings,
+                    )
+                )
+                # Let the re-wait arm be armed, then cancel before the 10 s
+                # stall expiry.
+                await asyncio.sleep(0.2)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+        mock_cancel.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_setting_default_and_bounds(self, tmp_path: Path) -> None:
+        """SETTING: the default constructs against ``Settings``; the documented
+        ``.env.example`` value constructs against ``Settings``; ``ge=30`` and
+        ``le=3600`` reject out-of-range values."""
+        from pydantic import ValidationError
+
+        # Default constructs.
+        default_settings = Settings(
+            download_dir=Settings.model_fields["download_dir"].default,
+            max_concurrent_downloads=2,
+            max_retries=1,
+        )
+        assert default_settings.download_stall_timeout == 300.0
+        assert isinstance(default_settings.download_stall_timeout, float)
+
+        # The .env.example value constructs.
+        env_example_path = Path(__file__).resolve().parent.parent / ".env.example"
+        env_text = env_example_path.read_text(encoding="utf-8")
+        # Extract the commented value next to VKDOWNLOADER_DOWNLOAD_STALL_TIMEOUT.
+        stall_line = [
+            line for line in env_text.splitlines() if "VKDOWNLOADER_DOWNLOAD_STALL_TIMEOUT" in line
+        ][0]
+        # "# VKDOWNLOADER_DOWNLOAD_STALL_TIMEOUT=300.0" -> "300.0"
+        env_value = float(stall_line.split("=")[1])
+        env_settings = Settings(
+            download_dir=Settings.model_fields["download_dir"].default,
+            max_concurrent_downloads=2,
+            max_retries=1,
+            download_stall_timeout=env_value,
+        )
+        assert env_settings.download_stall_timeout == env_value
+
+        # ge=30 rejects below the floor.
+        with pytest.raises(ValidationError):
+            Settings(
+                download_dir=Settings.model_fields["download_dir"].default,
+                max_concurrent_downloads=2,
+                max_retries=1,
+                download_stall_timeout=29.9,
+            )
+
+        # le=3600 rejects above the ceiling.
+        with pytest.raises(ValidationError):
+            Settings(
+                download_dir=Settings.model_fields["download_dir"].default,
+                max_concurrent_downloads=2,
+                max_retries=1,
+                download_stall_timeout=3600.1,
+            )
+
+
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""
 
