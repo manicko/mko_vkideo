@@ -311,7 +311,7 @@ def download(
         DownloadMethod.AUTO,
         "--method",
         "-m",
-        help="Download method: yt-dlp, ffmpeg, or auto",
+        help="Download method: yt-dlp or auto",
     ),
     cookie_source: CookieSource | None = typer.Option(
         None,
@@ -443,7 +443,7 @@ def batch_download(
         DownloadMethod.AUTO,
         "--method",
         "-m",
-        help="Download method: yt-dlp, ffmpeg, or auto",
+        help="Download method: yt-dlp or auto",
     ),
     cookie_source: CookieSource | None = typer.Option(
         None,

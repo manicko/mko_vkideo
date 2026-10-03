@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
-from dataclasses import dataclass
 from pathlib import Path
 
 from structlog import get_logger
@@ -117,93 +116,6 @@ def check_ffmpeg_available() -> bool:
                 ),
             )
     return _ffmpeg_available
-
-
-@dataclass
-class FfmpegProgress:
-    """Progress state from ffmpeg -progress pipe output."""
-
-    frame: int | None = None
-    fps: float | None = None
-    speed: float | None = None
-    total_size: int | None = None
-    out_time_us: int | None = None
-    out_time_ms: int | None = None
-    out_time: str | None = None
-    progress: str | None = None
-
-
-# Type alias for progress key handler
-_ProgressHandler = Callable[[str, FfmpegProgress], None]
-
-
-# Lookup table for progress key handlers
-_PROGRESS_KEY_HANDLERS: dict[str, _ProgressHandler] = {
-    "frame": lambda v, p: setattr(p, "frame", int(v) if v != "N/A" else None),
-    "fps": lambda v, p: setattr(p, "fps", float(v) if v != "N/A" else None),
-    "speed": lambda v, p: setattr(p, "speed", float(v.rstrip("x")) if v != "N/A" else None),
-    "total_size": lambda v, p: setattr(p, "total_size", int(v) if v != "N/A" else None),
-    "out_time_us": lambda v, p: setattr(p, "out_time_us", int(v) if v != "N/A" else None),
-    "out_time_ms": lambda v, p: setattr(p, "out_time_ms", int(v) if v != "N/A" else None),
-    "out_time": lambda v, p: setattr(p, "out_time", v if v != "N/A" else None),
-}
-
-
-class ProgressParser:
-    """Parser for ffmpeg KEY=VALUE progress output."""
-
-    @staticmethod
-    def parse_line(line: str) -> tuple[str, str] | None:
-        """Parse a single progress line in KEY=VALUE format.
-
-        Args:
-            line: Raw line from ffmpeg stderr.
-
-        Returns:
-            Tuple of (key, value) if valid format, None otherwise.
-        """
-        if "=" in line:
-            key, value = line.strip().split("=", 1)
-            return key, value
-        return None
-
-
-async def read_progress(
-    stderr: asyncio.StreamReader,
-    stderr_collector: list[bytes] | None = None,
-    *,
-    shutdown_event: asyncio.Event | None = None,
-    on_shutdown: Callable[[], Awaitable[None]] | None = None,
-) -> AsyncIterator[FfmpegProgress]:
-    """Read ffmpeg progress output in real-time.
-
-    Args:
-        stderr: StreamReader from ffmpeg process stderr.
-        stderr_collector: Optional list to collect raw stderr lines for error handling.
-        shutdown_event: Optional asyncio Event; if set, the loop breaks early.
-        on_shutdown: Optional async callback invoked when shutdown is detected.
-
-    Yields:
-        FfmpegProgress objects as they are parsed.
-    """
-    progress = FfmpegProgress()
-    async for line in iter_process_lines(
-        stderr, shutdown_event or asyncio.Event(), on_shutdown=on_shutdown
-    ):
-        if stderr_collector is not None:
-            stderr_collector.append(line)
-        parsed = ProgressParser.parse_line(line.decode())
-        if parsed:
-            key, value = parsed
-            handler = _PROGRESS_KEY_HANDLERS.get(key)
-            if handler is not None:
-                handler(value, progress)
-            elif key == "progress":
-                progress.progress = value
-                yield progress
-                if value == "end":
-                    break
-                progress = FfmpegProgress()  # Reset for next block
 
 
 async def cancel_subprocess(

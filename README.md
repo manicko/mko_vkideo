@@ -22,7 +22,7 @@ VK Video Downloader provides a programmatic and CLI interface for downloading vi
 
 - Extract video streams from VK video URLs using yt-dlp or browser automation
 - Quality selection by keyword (`best`, `worst`, `unknown`) or by any height in pixels the video offers
-- Download method selection (yt-dlp, ffmpeg, auto)
+- Download method selection (yt-dlp, auto)
 - Segment-level resume on token expiration
 - Batch download support via CLI
 - Path traversal prevention for security
@@ -62,9 +62,6 @@ A height the video does not offer is reported rather than downgraded, and the er
 ### Download with Specific Method
 
 ```bash
-# Use ffmpeg for faster download (~1MB/s)
-vkdownloader download "https://vkvideo.ru/video-123_456" --method ffmpeg
-
 # Use yt-dlp for higher reliability (~100KB/s)
 vkdownloader download "https://vkvideo.ru/video-123_456" --method yt-dlp
 ```

@@ -63,7 +63,7 @@ vkdownloader download [OPTIONS] URL
 |------|-------|------|---------|-------------|
 | `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto` |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -93,7 +93,7 @@ vkdownloader download [OPTIONS] URL
 vkdownloader download "https://vkvideo.ru/video-12345_67890"
 
 # Download with specific quality and method
-vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method ffmpeg
+vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method yt-dlp
 
 # Download the exact height the video offers, including a non-standard one
 vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 1072
@@ -127,7 +127,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `ffmpeg`, or `auto` |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto` |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -199,7 +199,6 @@ Available method values for `--method` option:
 | Value | Description |
 |-------|-------------|
 | `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
-| `ffmpeg` | Direct ffmpeg download with browser-captured cookies |
 | `auto` | Tries yt-dlp first, falls back to segment download on failure (default) |
 
 ---

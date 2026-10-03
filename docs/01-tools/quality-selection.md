@@ -46,14 +46,7 @@ When extracting streams from a VK video URL, the `VKVideoExtractor` uses yt-dlp 
 2. Filters formats to include only video-bearing streams — a record that does not
    declare a non-`none` video codec (``vcodec``) is dropped
 3. Extracts height, width, and bitrate for each stream variant
-4. Creates Stream objects with quality strings in `{height}p` format
-
-For ffmpeg download method, `extract_streams_with_cookies()` additionally:
-
-1. Opens video page in stealth browser
-2. Captures cookies for CDN authentication
-3. Simulates video interaction to trigger stream loading
-4. Captures m3u8 URLs from network traffic
+    4. Creates Stream objects with quality strings in `{height}p` format
 
 ### Selection Algorithm
 
@@ -107,12 +100,6 @@ vkdownloader download "https://vkvideo.ru/video-123_456" --quality worst
 ### Download with Specific Method
 
 ```bash
-# Use ffmpeg for faster download (~1MB/s)
-vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method ffmpeg
-
-# Use ffmpeg with browser cookies for authenticated content
-vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method ffmpeg --cookie-source browser
-
 # Use yt-dlp for higher reliability (~100KB/s)
 vkdownloader download "https://vkvideo.ru/video-123_456" --quality 720 --method yt-dlp
 ```
@@ -167,7 +154,7 @@ async def download_quality_example():
         url="https://vkvideo.ru/video-123_456",
         quality="720",  # "best", "worst", "unknown" or any offered height
         output_file=Path("video_720.mp4"),
-        method=DownloadMethod.AUTO,  # or DownloadMethod.FFMPEG
+        method=DownloadMethod.AUTO,
     )
     return result
 

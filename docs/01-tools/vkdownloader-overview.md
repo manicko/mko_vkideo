@@ -23,7 +23,6 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 |---------|--------|----------------|
 | VKVideoExtractor | `services/extractor.py` | Extracts stream URLs from VK video URLs using yt-dlp or browser automation |
 | QualitySelector | `services/quality.py` | Selects appropriate stream based on quality preference |
-| HLSDownloader | `services/downloader.py` | Downloads HLS streams via ffmpeg integration (real-time progress tracking) |
 | YtDlpDownloader | `services/ytdlp_downloader.py` | yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback |
 | URLBackoffCoordinator | `services/downloader_throttle.py` | Coordinates backoff across batch URLs for 429/5xx errors (AWS Full Jitter) |
 | RichProgressReporter | `services/progress_display.py` | Multi-line rich progress display for concurrent batch downloads |
@@ -34,10 +33,9 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 
 | Function | Module | Responsibility |
 |----------|--------|----------------|
-| `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, ffmpeg, auto); takes the quality as a plain token string, and the stream is pre-selected by the caller |
+| `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, auto); takes the quality as a plain token string, and the stream is pre-selected by the caller |
 | `download_video()` | `services/downloader.py` | Extract-select-download pipeline: extraction, quality selection from a `QualitySpec`, perform_download dispatch |
 | `download_hls_with_resume()` | `services/segment_downloader.py` | Segment-level download with token refresh and anti-detection throttling |
-| `HLSDownloader.download_with_ffmpeg()` | `services/downloader.py` | Instance method: direct ffmpeg download with real-time progress tracking |
 | `download_with_ytdlp_with_resume_fallback()` | `services/ytdlp_downloader.py` | yt-dlp download with segment fallback on failure (SRV-006: includes inter-retry backoff) |
 
 ### Infrastructure
@@ -65,7 +63,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `QualityKind` | `models/enums.py` | How a quality request is resolved against the streams (`best`, `worst`, `exact`) |
 | `QualityLabel` | `models/enums.py` | Fixed stream quality labels the extractor stamps on a stream (`unknown`) |
 | `StreamFormat` | `models/enums.py` | Stream format types (HLS, MP4) |
-| `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, ffmpeg, auto) |
+| `DownloadMethod` | `models/enums.py` | Download method selection (yt-dlp, auto) |
 | `CookieSource` | `models/enums.py` | Cookie acquisition strategy (`none`, `browser`; `file` was removed as unimplemented) |
 | `LogLevel` | `models/enums.py` | Logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 
@@ -110,12 +108,12 @@ User Request
 │  DownloadMethod  │
 │  Routing (AUTO)   │
 └────────┬────────┘
-         │
-          ├── YTDLP ──► download_with_ytdlp_with_resume_fallback()
-          │              (fallback to segment on partial failure)
           │
-          └── FFMPEG ──► HLSDownloader.download_with_ffmpeg() + extract_streams_with_cookies()
-                         (with segment fallback on failure)
+           ├── YTDLP ──► download_with_ytdlp_with_resume_fallback()
+           │              (fallback to segment on partial failure)
+           │
+           └── AUTO ──► download_with_ytdlp_with_resume_fallback()
+                          (fallback to segment download on failure)
 ```
 
 ## Configuration
@@ -145,7 +143,6 @@ Both commands support:
 | Method | Speed | Reliability | Notes |
 |--------|-------|-------------|-------|
 | `yt-dlp` | ~100KB/s | High | Handles token refresh automatically, fallback to segments |
-| `ffmpeg` | ~1MB/s | Medium-High | Uses fresh browser cookies, faster but needs token refresh |
 | `auto` | Variable | High | Tries yt-dlp first, falls back to segment download on failure |
 
 ## Security Features
@@ -155,8 +152,7 @@ Both commands support:
 - SSL verification enabled by default
 - Secure-by-default browser stealth configuration
 - Title sanitization for filesystem safety via `sanitize_title()`
-- **Secret-safe ffmpeg argument passing**: VK session cookies (including `remixsid`) and signed m3u8 CDN URLs (including `expires`, `sig`, `urls` tokens) are passed to ffmpeg via a temporary argument file (`ffmpeg @argfile`) instead of command-line arguments. This prevents session tokens and CDN URL signatures from leaking into process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is requested at `0o600` — owner-only on POSIX — and is removed automatically after the download completes. On Windows the owner-only guarantee is **not** offered: `os.chmod` only toggles the read-only attribute there, so the file keeps the permissions inherited from its parent directory (D-11). The tokens are absent from process listings on both platforms; only the on-disk confinement differs.
-- **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) and passed to ffmpeg via the `cookies` protocol option appended to the m3u8 URL. User-Agent and Referer headers are passed as a plain string in the argument file. This avoids the non-functional ffmpeg `-headers @file` syntax.
+- **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) and passed to the yt-dlp subprocess via its configuration file. This ensures that signed CDN URLs and session tokens never appear in process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is removed automatically after the download completes.
 
 ## Rate Limiting & Throttling
 
@@ -177,47 +173,6 @@ In sequential download mode (`max_concurrent_downloads=1`), an additional anti-d
 - **Delay**: 1.5 seconds base + 0-0.5s random jitter between segment requests
 - **Placement**: After semaphore release to avoid blocking the semaphore
 - **Purpose**: Reduces detection risk by mimicking human-like request patterns
-
-## Real-time Progress Tracking
-
-### FFmpeg Progress Integration
-
-The `download_with_ffmpeg()` function supports real-time progress updates:
-
-- **`-progress pipe:2`**: FFmpeg outputs progress to stderr in KEY=VALUE format
-- **`-nostats`**: Suppresses stdout noise, keeps output clean
-- **`FfmpegProgress` dataclass**: Captures frame, fps, speed, total_size, out_time_us, out_time_ms, out_time, progress
-
-### Progress Callback
-
-```python
-async def download_with_ffmpeg(
-    m3u8_url: str,
-    output_file: Path,
-    quality: str = "best",
-    cookies: str | None = None,
-    progress_callback: Callable[[FfmpegProgress], None] | None = None,
-) -> Path | None:
-    ...
-```
-
-The `progress_callback` parameter is optional for backward compatibility. When provided, it receives `FfmpegProgress` objects during download for live progress bars and ETA calculation.
-
-### ProgressParser
-
-The `ProgressParser` class handles ffmpeg's KEY=VALUE output:
-
-- `parse_line(line)` - Static method returning tuple of (key, value) or None
-- Ignores lines without `=` separator
-- Handles `N/A` values gracefully
-
-### DownloadProgress Model Enhancement
-
-The `DownloadProgress` model includes:
-
-- `speed` - Bytes per second download rate
-- `eta_seconds` - Estimated time to completion
-- `percent` - Percentage completion (when duration known)
 
 ## Batch Download Architecture
 
@@ -280,7 +235,7 @@ Where:
 - A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` or `cancelled`, with the outcome word appended to the label
 - When the batch ends, the terminal is restored to normal output
 
-ffmpeg downloads report an unknown total, so their bar pulses indeterminately and shows no percentage. Segment-count progress and yt-dlp byte progress both render a determinate bar with a percentage. The percentage column does not label its unit, and under `--method auto` the download method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side — a known, accepted limitation.
+All download methods report an unknown total, so their bar pulses indeterminately and shows no percentage. Segment-count progress and yt-dlp byte progress both render a determinate bar with a percentage. The percentage column does not label its unit, and under `--method auto` the download method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side — a known, accepted limitation.
 
 yt-dlp's own native progress echo is suppressed while the display is active, so its lines cannot interleave with the bars. The same data still reaches the display through the progress callback, and the parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed`. structlog INFO, WARNING and ERROR lines render above the live display, which resumes below them. The log record format is unchanged — structlog's `ConsoleRenderer` is still the renderer — but while the display is open the re-pointed console stream is rich's `FileProxy`, which passes each line to `Console.print` and word-wraps it at the terminal width, so a log line longer than the terminal spans several rows. Log files are not affected: `VKDOWNLOADER_LOG_FILE` is written by a `logging.FileHandler` that is never re-pointed, so file output is byte-identical throughout.
 
@@ -324,13 +279,13 @@ The downloader module has been refactored into focused components per project ru
 
 ```
 services/
-├── downloader.py          (~582 lines)  - Orchestration (perform_download, download_video), ffmpeg integration (HLSDownloader)
+├── downloader.py          (~350 lines)  - Orchestration (perform_download, download_video)
 ├── ytdlp_downloader.py    (~722 lines)  - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
 ├── segment_downloader.py  (~901 lines) - Segment download, playlist fetching, merging
 ├── ffmpeg_utils.py        (~360 lines) - FFmpeg commands, progress parsing, process management
 └── downloader_throttle.py - Rate limiting, progress management, backoff coordination
 ```
 
-The `downloader.py` module was split (SRV-001) into a focused orchestration layer (~582 lines, down from ~1,218) and `ytdlp_downloader.py` (~722 lines). The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
+The `downloader.py` module was split (SRV-001) into a focused orchestration layer and `ytdlp_downloader.py` (~722 lines). The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
 
 All modules export their public APIs through `downloader.py` for backward compatibility.

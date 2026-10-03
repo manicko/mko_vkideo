@@ -1,8 +1,8 @@
 """Tests for ``perform_download`` method ladder (D-12).
 
-Covers the FFMPEG fallback arm, the AUTO arm, and the unknown-method arm of
-``perform_download`` in ``vkdownloader.services.downloader``. Each test patches
-the names that ``perform_download`` re-exports from its own module namespace.
+Covers the AUTO arm, and the unknown-method arm of ``perform_download``
+in ``vkdownloader.services.downloader``. Each test patches the names that
+``perform_download`` re-exports from its own module namespace.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import pytest
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import QualityNotAvailableError
-from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.models.enums import CookieSource, DownloadMethod, StreamFormat
 from vkdownloader.models.video import Stream, VideoWithStreams
 from vkdownloader.services.downloader import perform_download
@@ -64,7 +63,7 @@ def _shutdown_event_set(is_set: bool) -> Iterator[None]:
 
 
 class TestPerformDownload:
-    """D-12: perform_download method-ladder coverage (FFMPEG/AUTO/unknown arms)."""
+    """D-12: perform_download method-ladder coverage (AUTO/unknown arms)."""
 
     @pytest.mark.asyncio
     async def test_auto_none_cookie_source_skips_cookie_resolution(
@@ -252,154 +251,13 @@ class TestPerformDownload:
         assert result == output_file
 
     @pytest.mark.asyncio
-    async def test_ffmpeg_method_success_returns_path_without_segment_fallback(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """D-12 case 5: FFMPEG success returns path; segment download is NOT awaited."""
-        settings = _make_settings(tmp_path, CookieSource.BROWSER)
-        output_file = tmp_path / "video.mp4"
-
-        with (
-            patch(
-                "vkdownloader.services.downloader.check_ffmpeg_available",
-                return_value=True,
-            ),
-            patch(
-                "vkdownloader.services.downloader._resolve_cookies",
-                new_callable=AsyncMock,
-                return_value=(_M3U8, "ck", None),
-            ),
-            patch(
-                "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
-                new_callable=AsyncMock,
-                return_value=output_file,
-            ) as mock_ffmpeg,
-            patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
-                new_callable=AsyncMock,
-            ) as mock_seg,
-        ):
-            result = await perform_download(
-                _URL,
-                _QUALITY,
-                output_file,
-                DownloadMethod.FFMPEG,
-                settings=settings,
-                video_data=_VIDEO,
-                selected_stream=_STREAM,
-            )
-
-        mock_ffmpeg.assert_awaited_once()
-        mock_seg.assert_not_awaited()
-        assert result == output_file
-
-    @pytest.mark.asyncio
-    async def test_ffmpeg_method_failure_falls_back_to_segment_download(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """D-12 case 6: FFMPEG failure (not cancelled) => segment fallback awaited with matching request; result propagates."""
-        settings = _make_settings(tmp_path, CookieSource.BROWSER)
-        output_file = tmp_path / "video.mp4"
-        resolved_m3u8 = "https://cdn.example.com/resolved.m3u8"
-        cookies_str = "ck=1"
-        raw_cookies = [{"name": "ck", "value": "1"}]
-
-        with (
-            patch(
-                "vkdownloader.services.downloader.check_ffmpeg_available",
-                return_value=True,
-            ),
-            patch(
-                "vkdownloader.services.downloader._resolve_cookies",
-                new_callable=AsyncMock,
-                return_value=(resolved_m3u8, cookies_str, raw_cookies),
-            ),
-            patch(
-                "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
-                new_callable=AsyncMock,
-                return_value=None,
-            ) as mock_ffmpeg,
-            patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
-                new_callable=AsyncMock,
-                return_value=output_file,
-            ) as mock_seg,
-            _shutdown_event_set(False),
-        ):
-            result = await perform_download(
-                _URL,
-                _QUALITY,
-                output_file,
-                DownloadMethod.FFMPEG,
-                settings=settings,
-                video_data=_VIDEO,
-                selected_stream=_STREAM,
-            )
-
-        mock_ffmpeg.assert_awaited_once()
-        mock_seg.assert_awaited_once()
-        request = mock_seg.call_args.args[0]
-        assert isinstance(request, HLSDownloadRequest)
-        assert request.video_url == _URL
-        assert request.m3u8_url == resolved_m3u8
-        assert request.output_file == output_file
-        assert request.quality == _QUALITY
-        assert request.cookies == cookies_str
-        assert result == output_file
-
-    @pytest.mark.asyncio
-    async def test_ffmpeg_method_failure_cancelled_returns_none(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """D-12 case 7: FFMPEG failure + shutdown set => returns None; segment fallback NOT awaited."""
-        settings = _make_settings(tmp_path, CookieSource.BROWSER)
-        output_file = tmp_path / "video.mp4"
-
-        with (
-            patch(
-                "vkdownloader.services.downloader.check_ffmpeg_available",
-                return_value=True,
-            ),
-            patch(
-                "vkdownloader.services.downloader._resolve_cookies",
-                new_callable=AsyncMock,
-                return_value=(_M3U8, "ck", None),
-            ),
-            patch(
-                "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
-                new_callable=AsyncMock,
-                return_value=None,
-            ) as mock_ffmpeg,
-            patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
-                new_callable=AsyncMock,
-            ) as mock_seg,
-            _shutdown_event_set(True),
-        ):
-            result = await perform_download(
-                _URL,
-                _QUALITY,
-                output_file,
-                DownloadMethod.FFMPEG,
-                settings=settings,
-                video_data=_VIDEO,
-                selected_stream=_STREAM,
-            )
-
-        mock_ffmpeg.assert_awaited_once()
-        mock_seg.assert_not_awaited()
-        assert result is None
-
-    @pytest.mark.asyncio
     async def test_semaphore_forwarded_to_ytdlp_and_segment_paths_without_leak(
         self,
         tmp_path: Path,
     ) -> None:
-        """D-12 case 8: shared semaphore forwarded to both ladders and fully released (no permit leak)."""
+        """D-12 case 8: shared semaphore forwarded to both AUTO ladders and fully released (no permit leak)."""
         settings = _make_settings(tmp_path, CookieSource.NONE)
+        settings_browser = _make_settings(tmp_path, CookieSource.BROWSER)
         output_file = tmp_path / "video_output.mp4"
         semaphore = asyncio.Semaphore(2)
         initial = semaphore._value
@@ -439,28 +297,22 @@ class TestPerformDownload:
                 return_value=(_M3U8, "ck", None),
             ),
             patch(
-                "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
-                new_callable=AsyncMock,
-                return_value=None,
-            ),
-            patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
+                "vkdownloader.services.downloader.download_with_ytdlp_with_resume_fallback",
                 new_callable=AsyncMock,
                 return_value=output_file,
-            ) as mock_seg,
-            _shutdown_event_set(False),
+            ) as mock_ytdlp_browser,
         ):
             await perform_download(
                 _URL,
                 _QUALITY,
                 output_file,
-                DownloadMethod.FFMPEG,
-                settings=settings,
+                DownloadMethod.AUTO,
+                settings=settings_browser,
                 video_data=_VIDEO,
                 selected_stream=_STREAM,
                 semaphore=semaphore,
             )
-        assert mock_seg.call_args.kwargs["video_semaphore"] is semaphore
+        assert mock_ytdlp_browser.call_args.kwargs["video_semaphore"] is semaphore
         assert semaphore._value == initial
 
     @pytest.mark.asyncio
@@ -520,14 +372,6 @@ class TestPerformDownload:
                 "vkdownloader.services.downloader.download_with_ytdlp_with_resume_fallback",
                 new_callable=AsyncMock,
             ) as mock_ytdlp,
-            patch(
-                "vkdownloader.services.downloader.HLSDownloader.download_with_ffmpeg",
-                new_callable=AsyncMock,
-            ) as mock_ffmpeg,
-            patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
-                new_callable=AsyncMock,
-            ) as mock_seg,
         ):
             result = await perform_download(
                 _URL,
@@ -542,8 +386,6 @@ class TestPerformDownload:
         assert result is None
         mock_resolve.assert_not_awaited()
         mock_ytdlp.assert_not_awaited()
-        mock_ffmpeg.assert_not_awaited()
-        mock_seg.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_extraction_empty_streams_raises_quality_not_available(

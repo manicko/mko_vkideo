@@ -84,7 +84,7 @@ for stream in video.streams:
 
 #### `extract_streams_with_cookies(url: str, force_browser: bool = False) -> tuple[list[Stream], str | None]`
 
-Extract streams using browser automation to capture cookies for ffmpeg authentication.
+Extract streams using browser automation to capture cookies for CDN authentication.
 
 **Parameters:**
 | Name | Type | Default | Description |
@@ -92,7 +92,7 @@ Extract streams using browser automation to capture cookies for ffmpeg authentic
 | url | str | Required | VK video URL to extract streams from. |
 | force_browser | bool | False | Force browser launch even when cookie_source=NONE (for token refresh scenarios). |
 
-**Returns:** Tuple of (streams list, cookies string) for ffmpeg headers.
+**Returns:** Tuple of (streams list, cookies string) for CDN headers.
 
 **Behavior:**
 - When `cookie_source=NONE` and `force_browser=False`: Returns streams without cookies via yt-dlp
@@ -164,55 +164,6 @@ qualities = selector.list_available_qualities(video.streams)
 
 ---
 
-### HLSDownloader
-
-Location: `vkdownloader.services.downloader`
-
-Downloads HLS streams to MP4 using ffmpeg's native HLS support.
-
-```python
-from vkdownloader.services.downloader import HLSDownloader
-from pathlib import Path
-
-downloader = HLSDownloader()
-```
-
-#### `__init__(settings: Settings | None = None)`
-
-Initialize HLSDownloader with optional settings.
-
-**Parameters:**
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| settings | Settings \| None | None | Application settings. Uses global settings if not provided. |
-
-#### `download_with_ffmpeg(m3u8_url: str, output_file: Path, quality: str = "best", cookies: str | None = None, raw_cookies: list[Cookie] | None = None, progress_callback: Callable[[FfmpegProgress], None] | None = None) -> Path | None`
-
-Download HLS stream to MP4 using ffmpeg.
-
-Cookies (if provided) are passed via ffmpeg's `cookies` protocol option using a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there), not via the `-headers @file` syntax (which is non-functional). All ffmpeg arguments (including the m3u8 URL with signed CDN tokens and the cookie file path) are passed via a temporary argument file (`ffmpeg @argfile`) to prevent exposure in process listings.
-
-**Parameters:**
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| m3u8_url | str | Required | URL of the HLS m3u8 playlist to download. |
-| output_file | Path | Required | Path where the output MP4 file will be saved. |
-| quality | str | "best" | Quality identifier for logging purposes. |
-| cookies | str \| None | None | Cookies string for authenticated downloads. |
-| raw_cookies | list[Cookie] \| None | None | Optional list of Playwright Cookie objects. |
-| progress_callback | Callable[[FfmpegProgress], None] \| None | None | Optional callback for real-time progress updates. |
-
-**Returns:** Path to downloaded MP4 file on success, None on failure.
-
-**Example:**
-```python
-result = await downloader.download_with_ffmpeg(
-    "https://example.com/playlist.m3u8",
-    Path("output.mp4"),
-    quality="720"
-)
-```
-
 ---
 
 ### DownloaderThrottle
@@ -253,69 +204,6 @@ Download segment with AWS Full Jitter backoff for 429/5xx errors.
 - Retries on: 429, 500, 502, 503, 504
 
 ---
-
-### FfmpegProgress
-
-Location: `vkdownloader.services.ffmpeg_utils`
-
-Progress state from ffmpeg -progress pipe output.
-
-**Attributes:**
-| Name | Type | Description |
-|------|------|-------------|
-| frame | int \| None | Frame count |
-| fps | float \| None | Frames per second |
-| speed | float \| None | Speed multiplier (e.g., 1.5 = 1.5x) |
-| total_size | int \| None | Total bytes |
-| out_time_us | int \| None | Output time in microseconds |
-| out_time_ms | int \| None | Output time in milliseconds |
-| out_time | str \| None | Output time as string |
-| progress | str \| None | Progress state ("continue" or "end") |
-
----
-
-### ProgressParser
-
-Location: `vkdownloader.services.ffmpeg_utils`
-
-Parser for ffmpeg KEY=VALUE progress output.
-
-#### `parse_line(line: str) -> tuple[str, str] | None`
-
-Parse a single progress line in KEY=VALUE format.
-
-**Parameters:**
-| Name | Type | Description |
-|------|------|-------------|
-| line | str | Raw line from ffmpeg stderr. |
-
-**Returns:** Tuple of (key, value) if valid format, None otherwise.
-
----
-
-### read_progress
-
-Location: `vkdownloader.services.ffmpeg_utils`
-
-Async generator reading ffmpeg progress output in real-time.
-
-```python
-async def read_progress(
-    stderr: asyncio.StreamReader,
-    duration_ms: int | None = None,
-    stderr_collector: list[bytes] | None = None,
-) -> AsyncIterator[FfmpegProgress]:
-    ...
-```
-
-**Parameters:**
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| stderr | asyncio.StreamReader | Required | StreamReader from ffmpeg process stderr. |
-| duration_ms | int \| None | None | Optional video duration in milliseconds for percentage calculation. |
-| stderr_collector | list[bytes] \| None | None | Optional list to collect raw stderr lines for error handling. |
-
-**Yields:** FfmpegProgress objects as they are parsed from stdout.
 
 ---
 
@@ -464,7 +352,7 @@ result = await perform_download(
 | `url` | str | Required | VK video URL to download. |
 | `quality` | str | Required | Quality token as a plain string: `best`, `worst`, `unknown`, or any offered height (e.g. "720", "1072"). A numeric token becomes the yt-dlp format selector `best[height<=N]`. Not a `QualitySpec`. |
 | `output_file` | Path | Required | Output file path. |
-| `method` | DownloadMethod | Required | Download method (YTDLP, FFMPEG, or AUTO). |
+| `method` | DownloadMethod | Required | Download method (YTDLP or AUTO). |
 | `extractor` | VKVideoExtractor \| None | None | Optional extractor instance. |
 | `settings` | Settings \| None | None | Optional settings instance. |
 | `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
@@ -472,7 +360,7 @@ result = await perform_download(
 | `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 | `video_data` | VideoWithStreams \| None | None | Optional pre-extracted video data with streams. When provided, skips extraction. |
 | `selected_stream` | Stream \| None | None | Optional pre-selected stream. When provided, used instead of streams[0]. |
-| `echo` | bool | True | Keyword-only. When False, suppresses yt-dlp's native console echo; parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed` and still reach `progress_callback`. Governs the yt-dlp path only — the ffmpeg and HLS segment paths are unaffected. |
+| `echo` | bool | True | Keyword-only. When False, suppresses yt-dlp's native console echo; parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed` and still reach `progress_callback`. Governs the yt-dlp path only. |
 
 **Returns:** Path to downloaded file on success, None on failure.
 
@@ -748,7 +636,6 @@ Download method selection for video downloads. Controls how videos are downloade
 | Value | Description |
 |-------|-------------|
 | `YTDLP` | "yt-dlp" — Uses yt-dlp for download with automatic segment-based resume on failure |
-| `FFMPEG` | "ffmpeg" — Direct ffmpeg download with browser-captured cookies |
 | `AUTO` | "auto" — Tries yt-dlp first, falls back to segment download on failure (default) |
 
 **Example:**
@@ -760,7 +647,7 @@ result = await perform_download(
     url="https://vkvideo.ru/video-123_456",
     quality="720",
     output_file=Path("output.mp4"),
-    method=DownloadMethod.FFMPEG,
+    method=DownloadMethod.AUTO,
 )
 ```
 

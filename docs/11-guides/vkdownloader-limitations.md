@@ -23,7 +23,7 @@ Document key findings from development: what works, what doesn't, and workaround
 
 1. **Videos accessible without login** - VK video pages can be opened and video metadata extracted without authentication
 2. **Strong bot protection** - VK implements multiple layers: headless detection, time-limited tokens, CDN request authentication
-3. **Speed limitations** - yt-dlp has artificial throttling (~100KB/s), ffmpeg achieves full speed (~1MB/s)
+3. **Speed limitations** - yt-dlp has artificial throttling (~100KB/s); segment download provides full speed with resume support
 
 ## Protection Mechanisms
 
@@ -53,23 +53,21 @@ Document key findings from development: what works, what doesn't, and workaround
 https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 ```
 
-**Consequence:** Tokens expire during long ffmpeg downloads, causing incomplete files.
+**Consequence:** Tokens expire during long downloads, causing incomplete files.
 
-**Workaround:** Capture master m3u8 URL immediately before download, ensure quick download.
+**Workaround:** Extract m3u8 URL immediately before download, ensure quick download, and use segment download with resume support for long-running downloads.
 
 ### 3. CDN Request Authentication
 
 **Finding:** CDN segments require cookies from the browser session.
 
-**Workaround:** Extract cookies from active browser session and pass to ffmpeg. Cookies are written to a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there) and supplied via ffmpeg's `cookies` protocol option; all ffmpeg arguments (including the m3u8 URL with CDN tokens and the cookie file path) are passed via `ffmpeg @argfile` syntax so neither session tokens nor URL signatures appear in process listings.
+**Workaround:** Extract cookies from active browser session and pass to yt-dlp. Cookies are written to a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there) and supplied to yt-dlp via its configuration file.
 
 ## Download Methods Comparison
 
 | Method | Speed | Reliability | Notes |
 |--------|-------|-------------|-------|
 | yt-dlp direct | ~100KB/s | High | Handles token refresh automatically |
-| ffmpeg + m3u8 URL | ~1MB/s | Medium | Token expiration risk, needs cookies |
-| ffmpeg + cookies | ~1MB/s | Medium-High | Best with fresh non-headless browser |
 | Segment download | Variable | High | Has retry backoff and anti-detection delay |
 
 ### Segment Download Throttling
@@ -95,16 +93,15 @@ Two limits of that check, stated plainly:
 
 ## What Works
 
-1. **yt-dlp extraction** - Successfully extracts all 8 quality variants
-2. **Browser automation (non-headless)** - Captures m3u8 URLs and cookies
-3. **ffmpeg with headers** - Downloads at full speed when cookies are valid
-4. **Automatic fallback** - yt-dlp fallback when ffmpeg fails
+1. **Browser automation (non-headless)** - Captures m3u8 URLs and cookies
+2. **yt-dlp download** - Downloads with segment-level resume on token expiration
+3. **Automatic fallback** - Segment retry when yt-dlp fails
 
 ## What Doesn't Work
 
 1. **`ffmpeg -ssl_verification`** - Invalid option, causes immediate failure. Correct flag is `-tls_verify 0`.
 2. **Headless browser** - May be detected and blocked by VK
-3. **Long-running ffmpeg downloads** - Token expiration leads to incomplete downloads
+3. **Long-running downloads** - Token expiration leads to incomplete downloads (segment download with resume support mitigates this)
 4. **Cookie-only approach without browser** - Cookies expire/invalidate without active session
 5. **yt-dlp cancellation in batch mode** - yt-dlp runs in an executor thread that cannot be terminated by `asyncio.CancelledError`; the thread persists as a zombie until process exit. This is a CPython `concurrent.futures` limitation: `Future.cancel()` returns `False` for running futures. No workaround within the current architecture. `VKDOWNLOADER_DOWNLOAD_TIMEOUT` bounds how long the event loop waits for that thread, not the wait for the thread itself: on expiry only the asyncio future is cancelled, and the abandoned thread is joined later at interpreter shutdown under the interpreter's own thread-join rule. |
 
@@ -115,7 +112,7 @@ For public videos (fastest download, no authentication needed):
 vkdownloader download --cookie-source none "VIDEO_URL"
 ```
 - No browser launch, fastest execution
-- Uses yt-dlp or ffmpeg without cookies
+- Uses yt-dlp with segment-level resume
 
 For authenticated content:
 ```bash
@@ -123,21 +120,14 @@ vkdownloader download --cookie-source browser "VIDEO_URL"
 ```
 - Browser opens (user must wait for page load)
 - m3u8 URL captured with fresh token
-- ffmpeg downloads with cookies for authenticated content
-- Falls back to yt-dlp if needed
+- yt-dlp downloads with captured cookies
+- Falls back to segment download if needed
 
-For fastest download with authentication (~1MB/s):
+For most reliable download (~100KB/s):
 ```bash
-vkdownloader download --method ffmpeg --cookie-source browser --quality 720 "VIDEO_URL"
+vkdownloader download --method yt-dlp --cookie-source browser --quality 720 "VIDEO_URL"
 ```
 - Accepts a keyword (`--quality best`, `worst`, `unknown`) or any height in pixels the video actually offers (`--quality 720`, `--quality 1072`, ...). There is no fixed resolution set, because VK publishes non-standard ladders
 - A specific height is an exact match on the stream's quality label; there is no silent fallback to a lower quality, so a height the video does not offer is reported with the ladder it does offer
 - Cookies are captured fresh from the browser. The browser-captured stream is only re-selected for `--quality best`; for any other request the stream selected before the browser launch is reused, because the browser capture labels its streams `unknown` (no height)
-- Falls back to yt-dlp if ffmpeg fails
-
-For most reliable download (~100KB/s):
-```bash
-vkdownloader download --method yt-dlp --cookie-source browser "VIDEO_URL"
-```
-- Always works but significantly slower
-- yt-dlp handles all token management internally
+- Falls back to segment download if yt-dlp fails

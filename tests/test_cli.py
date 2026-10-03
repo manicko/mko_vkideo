@@ -1147,6 +1147,40 @@ class TestMethodOptionValidation:
         assert result.exit_code == 0
 
 
+class TestMethodFfmpegRemoved:
+    """Tests that --method ffmpeg is no longer accepted after the download transport was removed."""
+
+    def test_download_method_ffmpeg_rejected(self, tmp_path: Path) -> None:
+        """Check that --method ffmpeg is rejected with a usage error."""
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890", "--method", "ffmpeg"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 2
+
+    def test_batch_method_ffmpeg_rejected(self, tmp_path: Path) -> None:
+        """Check that --method ffmpeg is rejected for batch command."""
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file), "--method", "ffmpeg"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 2
+
+    def test_method_help_text_excludes_ffmpeg(self) -> None:
+        """Verify ffmpeg is not listed in the --method help text."""
+        result = runner.invoke(app, ["download", "--help"])
+
+        assert result.exit_code == 0
+        assert "ffmpeg" not in result.output.lower()
+
+
 class TestSslVerifyOption:
     """Tests for SSL verify option in CLI."""
 
