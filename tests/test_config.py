@@ -32,6 +32,29 @@ def test_settings_creates_with_defaults() -> None:
     assert settings.max_concurrent_downloads == 4
     assert settings.log_level == LogLevel.INFO
     assert settings.log_file is None
+    assert settings.stealth_enabled is False
+
+
+def test_stealth_enabled_default_is_false() -> None:
+    """B15 / D5: stealth_enabled defaults to False (opt-in, disabled by default)."""
+    settings = Settings()
+    assert settings.stealth_enabled is False
+
+
+def test_stealth_enabled_env_example_value_constructs() -> None:
+    """B15: the .env.example default value (false) constructs cleanly."""
+    settings = Settings(stealth_enabled=False)
+    assert settings.stealth_enabled is False
+
+
+def test_stealth_enabled_from_env() -> None:
+    """B15: VKDOWNLOADER_STEALTH_ENABLED=true is accepted and parsed to bool."""
+    os.environ["VKDOWNLOADER_STEALTH_ENABLED"] = "true"
+    try:
+        settings = Settings()
+        assert settings.stealth_enabled is True
+    finally:
+        del os.environ["VKDOWNLOADER_STEALTH_ENABLED"]
 
 
 def test_settings_accepts_valid_fields() -> None:

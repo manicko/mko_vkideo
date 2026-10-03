@@ -45,11 +45,22 @@ class Settings(BaseSettings):
     )
     timezone: str = Field(
         default="Europe/Moscow",
-        description="Timezone for browser stealth configuration",
+        description="Timezone for the browser context",
     )
     locale: str = Field(
         default="ru-RU",
-        description="Locale for browser stealth configuration",
+        description="Locale for the browser context",
+    )
+    stealth_enabled: bool = Field(
+        default=False,
+        description="Gates the browser anti-detection posture: when true, "
+        "--disable-blink-features=AutomationControlled is passed to the "
+        "chromium launch and stealth.min.js is injected as an init script. "
+        "The stealth.min.js asset is a declared build artifact, so when this "
+        "is true a missing asset is a hard error before the browser starts. "
+        "Does NOT gate the browser context's viewport, user agent, locale or "
+        "timezone, which are applied unconditionally as ordinary context "
+        "identity. Disabled by default.",
     )
     max_retries: int = Field(
         default=3,

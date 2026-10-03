@@ -672,12 +672,12 @@ Cookie acquisition strategy for video downloads. Controls whether browser is lau
 
 Location: `vkdownloader.infrastructure.browser`
 
-Async context manager for Playwright browser automation with stealth configuration.
+Async context manager for Playwright browser automation. Anti-detection measures are applied only when `stealth_enabled` is true.
 
 **Methods:**
 | Method | Description |
 |--------|-------------|
-| `create_stealth_page() -> Page` | Create a new page with stealth configuration |
+| `create_stealth_page() -> Page` | Create a new page with the configured browser context identity; injects stealth.min.js when `stealth_enabled` is true |
 
 ---
 

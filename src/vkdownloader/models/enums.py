@@ -74,6 +74,7 @@ class ErrorCode(StrEnum):
     QUALITY_PARSE_ERROR = "quality_parse_error"
     EXTRACTION_ERROR = "extraction_error"
     DOWNLOAD_ERROR = "download_error"
+    STEALTH_ASSET_MISSING = "stealth_asset_missing"
     PATH_TRAVERSAL = "path_traversal"
     UNEXPECTED_ERROR = "unexpected_error"
 

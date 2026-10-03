@@ -22,8 +22,9 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 |---------|---------------------|---------|-------------|
 | `headless` | `VKDOWNLOADER_HEADLESS` | false | Run Playwright browser in headless mode (no visible GUI); required for server, CI, and Docker usage |
 | `user_agent` | `VKDOWNLOADER_USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | User agent string for browser requests |
-| `timezone` | `VKDOWNLOADER_TIMEZONE` | Europe/Moscow | Timezone for stealth configuration |
-| `locale` | `VKDOWNLOADER_LOCALE` | ru-RU | Locale for browser stealth |
+| `timezone` | `VKDOWNLOADER_TIMEZONE` | Europe/Moscow | Timezone for browser context |
+| `locale` | `VKDOWNLOADER_LOCALE` | ru-RU | Locale for browser context |
+| `stealth_enabled` | `VKDOWNLOADER_STEALTH_ENABLED` | false | Gates the browser anti-detection posture: when true, `--disable-blink-features=AutomationControlled` is passed to the chromium launch and `stealth.min.js` is injected as an init script. The `stealth.min.js` asset is a declared build artifact, so when this is true a missing asset is a hard error before the browser starts. Does NOT gate the browser context's viewport, user agent, locale or timezone (these are applied unconditionally as ordinary context identity). Off by default. |
 | `browser_pre_interaction_wait` | `VKDOWNLOADER_BROWSER_PRE_INTERACTION_WAIT` | 5 | Seconds to wait before video interaction in browser extraction (1-30) |
 | `browser_post_interaction_wait` | `VKDOWNLOADER_BROWSER_POST_INTERACTION_WAIT` | 8 | Seconds to wait after video interaction in browser extraction (1-30) |
 | `max_retries` | `VKDOWNLOADER_MAX_RETRIES` | 3 | Maximum retry attempts for failed segment and network requests (1-10) |

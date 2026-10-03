@@ -18,7 +18,15 @@ _BROWSER_CLOSE_TIMEOUT = 10.0
 
 
 class BrowserManager:
-    """Async context manager for Playwright browser automation with stealth configuration."""
+    """Async context manager for Playwright browser automation.
+
+    Anti-detection measures — the
+    ``--disable-blink-features=AutomationControlled`` launch argument and the
+    ``stealth.min.js`` init-script injection — are applied only when
+    :attr:`Settings.stealth_enabled` is true. The browser context's viewport,
+    user agent, locale and timezone are applied unconditionally as ordinary
+    context identity.
+    """
 
     def __init__(self, settings: Settings | None = None) -> None:
         """
@@ -33,14 +41,38 @@ class BrowserManager:
         self._stealth_path = Path(__file__).parent.parent / "stealth.min.js"
 
     async def __aenter__(self) -> "BrowserManager":
-        """Start Playwright and launch browser with stealth configuration."""
+        """Start Playwright and launch the browser.
+
+        When ``stealth_enabled`` is true, the ``stealth.min.js`` asset must be
+        present — its absence is a hard error raised here, before the Playwright
+        driver starts, so no browser is launched and no cleanup is needed. When
+        stealth is disabled the asset is not consulted at all.
+        """
         logger.info("starting_browser")
+
+        if self.settings.stealth_enabled and not self._stealth_path.exists():
+            msg = (
+                f"stealth.min.js asset not found at {self._stealth_path}; "
+                "stealth.min.js is a declared build artifact in pyproject.toml, "
+                "so a missing file indicates a broken build or partial "
+                "deployment rather than a bad install; "
+                "VKDOWNLOADER_STEALTH_ENABLED is true but the asset is "
+                "missing, so extraction cannot proceed"
+            )
+            logger.warning("stealth_asset_missing", hint=msg)
+            error = ExtractionError(msg, error_code="stealth_asset_missing")
+            raise error
 
         playwright_instance = await async_playwright().start()
         try:
+            launch_args: list[str] = (
+                ["--disable-blink-features=AutomationControlled"]
+                if self.settings.stealth_enabled
+                else []
+            )
             browser = await playwright_instance.chromium.launch(
                 headless=self.settings.headless,
-                args=["--disable-blink-features=AutomationControlled"],
+                args=launch_args,
             )
         except Exception as exc:
             # BRW-001: carry the actionable cause (the missing binary and the
@@ -120,11 +152,16 @@ class BrowserManager:
                     )
 
     async def create_stealth_page(self) -> Page:
-        """
-        Create a new page with stealth configuration.
+        """Create a new page with the configured browser context identity.
+
+        The page carries the ``stealth.min.js`` init script **iff**
+        ``stealth_enabled`` is true; when disabled no anti-detection measures
+        are applied.
 
         Returns:
-            Page: Configured browser page with user-agent and stealth scripts.
+            Page: Configured browser page with the user-agent, locale,
+            timezone and viewport set, and the stealth script injected when
+            enabled.
         """
         logger.debug("creating_stealth_page")
 
@@ -137,7 +174,7 @@ class BrowserManager:
 
         page = await context.new_page()
 
-        if self._stealth_path.exists():
+        if self.settings.stealth_enabled and self._stealth_path.exists():
             await page.add_init_script(path=str(self._stealth_path))
             logger.debug("stealth_script_applied")
 

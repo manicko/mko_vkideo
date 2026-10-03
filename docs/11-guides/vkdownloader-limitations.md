@@ -30,7 +30,7 @@ Document key findings from development: what works, what doesn't, and workaround
 ### 1. Headless Browser Detection
 
 **Finding:** VK implements multi-layer bot detection:
-- `navigator.webdriver` flag (masked by stealth.min.js)
+- `navigator.webdriver` flag (masked by stealth.min.js when `stealth_enabled` is true)
 - WebGL fingerprinting (partially masked)
 - Canvas rendering (masked via getContext override)
 - Missing Chrome plugins/extensions

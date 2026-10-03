@@ -174,9 +174,35 @@ class QualityParseError(VKDownloadError):
 
 
 class ExtractionError(VKDownloadError):
-    """Raised when video data extraction fails."""
+    """Raised when video data extraction fails.
+
+    Carries an ``error_code`` that may differ from the class-level
+    ``EXTRACTION_ERROR`` to distinguish sub-causes (for example, a missing
+    stealth asset) while remaining an ``ExtractionError`` so that callers
+    need no new handler.
+    """
 
     error_code = ErrorCode.EXTRACTION_ERROR
+
+    def __init__(
+        self,
+        message: str | None = None,
+        error_code: ErrorCode | str | None = None,
+    ) -> None:
+        """Initialize with an optional message and optional error code.
+
+        Args:
+            message: Optional human-readable message. Defaults to the
+                class name when not provided.
+            error_code: Optional machine-readable code. When provided as a
+                string it is resolved to its ``ErrorCode`` member so callers
+                need not import the enum directly.
+        """
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = (
+                error_code if isinstance(error_code, ErrorCode) else ErrorCode(error_code)
+            )
 
     def status_label(self) -> str:
         """Return status label for extraction errors."""

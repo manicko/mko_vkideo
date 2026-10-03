@@ -42,7 +42,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management with stealth configuration (user agent, locale, timezone) |
+| BrowserManager | `infrastructure/browser.py` | Playwright browser lifecycle management (user agent, locale, timezone; stealth is opt-in via `stealth_enabled`) |
 | NetworkMonitor | `infrastructure/network_monitor.py` | Captures m3u8 URLs from browser network traffic |
 | **_retry_429_with_backoff** | `services/downloader_throttle.py` | AWS Full Jitter backoff for rate-limited segment downloads |
 
@@ -120,7 +120,7 @@ User Request
 
 The `Settings` class in `config.py` provides:
 
-- **Browser settings**: User agent, locale, timezone for stealth; `headless` mode toggle for server/CI/Docker
+- **Browser settings**: User agent, locale, timezone for browser context identity; `headless` mode toggle for server/CI/Docker
 - **Download settings**: Timeout, concurrent downloads, output directory, download method
 - **Security settings**: SSL verification (enabled by default)
 - **Logging settings**: Log level and optional file output
@@ -150,7 +150,7 @@ Both commands support:
 - Path traversal prevention via `validate_output_path()`
 - Authentication token stripping from logged URLs
 - SSL verification enabled by default
-- Secure-by-default browser stealth configuration
+- Opt-in browser stealth configuration (`stealth_enabled`, off by default)
 - Title sanitization for filesystem safety via `sanitize_title()`
 - **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) and passed to the yt-dlp subprocess via its configuration file. This ensures that signed CDN URLs and session tokens never appear in process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is removed automatically after the download completes.
 

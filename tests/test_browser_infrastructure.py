@@ -2,6 +2,7 @@
 
 import asyncio
 import traceback
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from vkdownloader.config import Settings
 from vkdownloader.exceptions import ExtractionError
 from vkdownloader.infrastructure.browser import BrowserManager
 from vkdownloader.infrastructure.network_monitor import JsonValue, NetworkMonitor, _PlaylistType
+from vkdownloader.models.enums import ErrorCode
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx, get_shutdown_event
 
 
@@ -462,6 +464,168 @@ class TestBrowserManager:
 
         mock_browser.close.assert_called_once()
         mock_playwright.stop.assert_called_once()
+
+    # --- B15: stealth_enabled opt-in gating (D5, BRW-003) ---
+
+    @pytest.mark.asyncio
+    async def test_stealth_disabled_no_automation_suppression_no_injection(
+        self, test_settings: Settings
+    ) -> None:
+        """B15: with stealth_enabled False, launch args do NOT contain the
+        automation-suppression argument and add_init_script is never called,
+        yet the page is still returned."""
+        manager = BrowserManager(settings=test_settings)
+
+        mock_page = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+            async with manager:
+                page = await manager.create_stealth_page()
+
+            launch_kwargs = mock_instance.chromium.launch.call_args.kwargs
+            assert "--disable-blink-features=AutomationControlled" not in launch_kwargs.get(
+                "args", []
+            )
+            mock_page.add_init_script.assert_not_called()
+            assert page is mock_page
+
+    @pytest.mark.asyncio
+    async def test_stealth_disabled_asset_absent_no_check_no_error(
+        self, test_settings: Settings
+    ) -> None:
+        """B15: with stealth_enabled False, an absent asset produces no error,
+        no warning, and no check — nothing consults self._stealth_path.
+
+        This dissolves BRW-003: silence about an asset never asked for is
+        not a defect.
+        """
+        manager = BrowserManager(settings=test_settings)
+        manager._stealth_path = MagicMock()
+
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=AsyncMock())
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+            with capture_logs() as logs:
+                async with manager:
+                    page = await manager.create_stealth_page()
+
+            manager._stealth_path.exists.assert_not_called()
+            assert not [e for e in logs if e.get("event") == "stealth_asset_missing"]
+            assert page is not None
+
+    @pytest.mark.asyncio
+    async def test_stealth_enabled_asset_present_injects_and_suppresses(
+        self,
+    ) -> None:
+        """B15: with stealth_enabled True and the asset present, launch args
+        contain the automation-suppression argument and add_init_script is
+        called."""
+        settings = Settings(stealth_enabled=True)
+        manager = BrowserManager(settings=settings)
+
+        mock_page = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+            async with manager:
+                page = await manager.create_stealth_page()
+
+            launch_kwargs = mock_instance.chromium.launch.call_args.kwargs
+            assert "--disable-blink-features=AutomationControlled" in launch_kwargs.get("args", [])
+            mock_page.add_init_script.assert_called_once()
+            assert page is mock_page
+
+    @pytest.mark.asyncio
+    async def test_stealth_enabled_asset_missing_hard_fails_before_driver(
+        self,
+    ) -> None:
+        """B15: with stealth_enabled True and the asset missing, __aenter__
+        raises ExtractionError with the new ErrorCode — before
+        async_playwright is started (the ordering proof that is the gate).
+
+        The message names the missing path, the declared-build-artifact
+        consequence, and the remedy.
+        """
+        settings = Settings(stealth_enabled=True)
+        manager = BrowserManager(settings=settings)
+        manager._stealth_path = Path("/nonexistent/stealth.min.js")
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock()
+
+            with capture_logs() as logs:
+                with pytest.raises(ExtractionError) as exc_info:
+                    await manager.__aenter__()
+
+            # Ordering proof: the Playwright driver was never started — the
+            # check ran before async_playwright().start(), so no browser was
+            # launched and no teardown is needed.
+            mock_pw.return_value.start.assert_not_called()
+
+            # ErrorCode is the new member, not EXTRACTION_ERROR
+            assert exc_info.value.error_code == ErrorCode.STEALTH_ASSET_MISSING
+
+            # The warning was emitted with the same event name
+            assert any(e.get("event") == "stealth_asset_missing" for e in logs)
+
+            # Message names the path, build-artifact consequence, and remedy
+            msg = str(exc_info.value)
+            assert str(manager._stealth_path) in msg
+            assert "broken build" in msg
+            assert "partial deployment" in msg
+            assert "VKDOWNLOADER_STEALTH_ENABLED" in msg
+            assert "pyproject.toml" in msg
+
+    @pytest.mark.asyncio
+    async def test_stealth_disabled_context_identity_not_gated(
+        self, test_settings: Settings
+    ) -> None:
+        """B15 S1h: with stealth_enabled False, new_context is still called
+        with viewport, user_agent, locale, and timezone_id — component 3
+        must NOT be gated by the flag."""
+        manager = BrowserManager(settings=test_settings)
+
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=AsyncMock())
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_instance = AsyncMock()
+        mock_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_pw:
+            mock_pw.return_value.start = AsyncMock(return_value=mock_instance)
+
+            async with manager:
+                await manager.create_stealth_page()
+
+            mock_browser.new_context.assert_called_once()
+            ctx_kwargs = mock_browser.new_context.call_args.kwargs
+            assert ctx_kwargs["viewport"] == {"width": 1920, "height": 1080}
+            assert ctx_kwargs["user_agent"] == test_settings.user_agent
+            assert ctx_kwargs["locale"] == test_settings.locale
+            assert ctx_kwargs["timezone_id"] == test_settings.timezone
 
 
 class TestNetworkMonitor:
