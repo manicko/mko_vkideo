@@ -669,7 +669,7 @@ async def _download_with_ytdlp(
         output_chunks: list[bytes] = []
 
         async def _on_shutdown() -> None:
-            if not await cancel_subprocess(process):
+            if not await cancel_subprocess(process) and process.returncode is None:
                 logger.warning(
                     "yt_dlp_cancel_not_clean",
                     pid=process.pid,
@@ -747,7 +747,7 @@ async def _download_with_ytdlp(
     except asyncio.CancelledError:
         logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
         if process is not None and process.returncode is None:
-            if not await cancel_subprocess(process):
+            if not await cancel_subprocess(process) and process.returncode is None:
                 logger.warning(
                     "yt_dlp_cancel_not_clean",
                     pid=process.pid,

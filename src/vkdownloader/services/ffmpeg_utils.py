@@ -133,7 +133,11 @@ async def cancel_subprocess(
         timeout: Seconds to wait for graceful termination before force kill.
 
     Returns:
-        True if process was cancelled, False if process was already gone.
+        ``True`` if the process was cancelled (terminated by the ladder),
+        ``False`` if the process was already gone — the clean outcome.
+        Callers must not treat ``False`` as a failure to stop the child;
+        a second ``returncode is None`` check is the correct discriminator
+        for a genuinely not-clean termination.
     """
     logger.info("cancelling_subprocess", pid=process.pid)
     try:

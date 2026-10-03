@@ -3342,6 +3342,130 @@ class TestYtDlpSubprocessShutdown:
             "process.wait() must be called before cookie file unlink"
         )
 
+    @pytest.mark.asyncio
+    async def test_no_cancel_not_clean_when_already_reaped_on_second_cancel(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """TRN-012 composition case: _on_shutdown cancels the child first,
+        then the CancelledError arm re-enters cancel_subprocess on the same
+        handle.
+
+        cancel_subprocess returns True on the first call (ladder succeeded),
+        then False on the second (the child was already reaped by the first
+        call's terminate).  The second call's side-effect sets returncode,
+        so the new ``and process.returncode is None`` guard suppresses the
+        yt_dlp_cancel_not_clean record the old code would have emitted.
+
+        Asserts on log records, not on return values.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        output_file = tmp_path / "video.mp4"
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            get_shutdown_event().set()
+
+            mock_process = AsyncMock()
+            mock_process.returncode = None
+            mock_process.pid = 12345
+            mock_process.stdout = AsyncMock()
+            mock_process.stdout.readline = AsyncMock(return_value=b"")
+            mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
+
+            cancel_call_count = 0
+
+            def mock_cancel_side_effect(proc: Any) -> bool:
+                nonlocal cancel_call_count
+                cancel_call_count += 1
+                if cancel_call_count == 1:
+                    # First call from _on_shutdown: ladder terminated the child.
+                    return True
+                # Second call from CancelledError arm: child already reaped.
+                proc.returncode = 1
+                return False
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                    new_callable=AsyncMock,
+                    side_effect=mock_cancel_side_effect,
+                ) as mock_cancel_mock:
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader.logger"
+                    ) as mock_logger:
+                        with pytest.raises(asyncio.CancelledError):
+                            await _download_with_ytdlp(
+                                "https://vkvideo.ru/video-12345_67890",
+                                output_file,
+                                "720",
+                                test_settings,
+                            )
+
+            assert mock_cancel_mock.await_count == 2
+            not_clean_calls = [
+                c
+                for c in mock_logger.warning.call_args_list
+                if c.args and c.args[0] == "yt_dlp_cancel_not_clean"
+            ]
+            assert len(not_clean_calls) == 0, (
+                f"Expected 0 yt_dlp_cancel_not_clean records, got {len(not_clean_calls)}"
+            )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_cancel_not_clean_logged_when_process_still_running(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """TRN-0013 negative case: cancel_subprocess returns False while
+        process.returncode is still None — the child is genuinely still
+        running after the ladder — so yt_dlp_cancel_not_clean MUST fire.
+
+        Without this assertion the fix is satisfied by deleting the warning,
+        which must not be a passing outcome.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader.logger"
+                ) as mock_logger:
+                    with pytest.raises(asyncio.CancelledError):
+                        await _download_with_ytdlp(
+                            "https://vkvideo.ru/video-12345_67890",
+                            output_file,
+                            "720",
+                            test_settings,
+                        )
+
+        not_clean_calls = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "yt_dlp_cancel_not_clean"
+        ]
+        assert len(not_clean_calls) == 1, (
+            f"Expected exactly 1 yt_dlp_cancel_not_clean record, got {len(not_clean_calls)}"
+        )
+        call = not_clean_calls[0]
+        assert call.kwargs["pid"] == 12345
+        assert call.kwargs["url"] == "https://vkvideo.ru/***REDACTED***"
+
 
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""
