@@ -1,6 +1,7 @@
 """Tests for browser infrastructure: BrowserManager and NetworkMonitor."""
 
 import asyncio
+import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -98,7 +99,124 @@ class TestBrowserManager:
     async def test_browser_manager_launch_failure_raises_extraction_error(
         self, test_settings: Settings
     ) -> None:
-        """Test that browser launch failure is wrapped in ExtractionError."""
+        """A browser launch failure surfaces as the application's ExtractionError.
+
+        BRW-001: the caught Playwright failure's actionable cause (the missing
+        binary and the ``playwright install`` remedy) is carried into the raised
+        message, and ``from None`` keeps the raw Playwright banner out of the
+        traceback. ``logger.error`` still records ``exc_info=True`` unchanged —
+        the encoding gap that can raise on a strict console is mechanism (a),
+        B16's subject, not this arm's.
+        """
+        manager = BrowserManager(settings=test_settings)
+        missing_binary = (
+            "Executable doesn't exist at /root/.cache/ms-playwright/"
+            "chromium_headless_shell-1164/chrome-linux/headless_shell\n"
+            "Run `playwright install` to download new browsers"
+        )
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_playwright:
+            mock_instance = AsyncMock()
+            mock_playwright.return_value.start = AsyncMock(return_value=mock_instance)
+            mock_instance.chromium.launch = AsyncMock(side_effect=PlaywrightError(missing_binary))
+            mock_instance.stop = AsyncMock()
+
+            # The match is widened from the old generic text to the new
+            # actionable text; that the application's own exception type reaches
+            # the caller — not the raw Playwright error — is the finding's real
+            # content and is not weakened away.
+            with pytest.raises(ExtractionError, match="to obtain it: playwright install"):
+                await manager.__aenter__()
+
+            # playwright.stop() must still run during cleanup.
+            mock_instance.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_launch_failure_message_carries_binary_and_remedy(
+        self, test_settings: Settings
+    ) -> None:
+        """BRW-001 cause-content: both the missing executable path and the
+        install remedy reach the ExtractionError's text, derived from the caught
+        exception.
+
+        Uses the "does not exist at" spelling to confirm the second marker is
+        matched, and a browser name in the remedy ("playwright install chromium")
+        to confirm the canonical command is surfaced without absorbing the trailing
+        backtick or the browser token into the path.
+        """
+        manager = BrowserManager(settings=test_settings)
+        launch_error = PlaywrightError(
+            "Executable does not exist at /home/u/.cache/ms-playwright/"
+            "chromium_headless_shell-1164/chrome-linux/headless_shell\n"
+            "Run `playwright install chromium` to download new browsers"
+        )
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_playwright:
+            mock_instance = AsyncMock()
+            mock_playwright.return_value.start = AsyncMock(return_value=mock_instance)
+            mock_instance.chromium.launch = AsyncMock(side_effect=launch_error)
+            mock_instance.stop = AsyncMock()
+
+            with pytest.raises(ExtractionError) as exc_info:
+                await manager.__aenter__()
+
+        message = str(exc_info.value)
+        assert (
+            "/home/u/.cache/ms-playwright/chromium_headless_shell-1164/"
+            "chrome-linux/headless_shell" in message
+        )
+        assert "playwright install" in message
+        # The application's own type reaches the caller, not the raw stand-in.
+        assert isinstance(exc_info.value, ExtractionError)
+        assert not isinstance(exc_info.value, PlaywrightError)
+        mock_instance.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_launch_failure_retains_from_none_suppression(
+        self, test_settings: Settings
+    ) -> None:
+        """BRW-001 suppression: ``from None`` is retained so the raw Playwright
+        traceback is never displayed and its box-drawing banner never reaches the user.
+
+        Dropping ``from None`` (or chaining with ``from exc``) breaks both
+        assertions, so this pins the suppression the plan mandates.
+        """
+        manager = BrowserManager(settings=test_settings)
+        banner = (
+            "Executable doesn't exist at /x/chromium\n"
+            "\u2500\u2500\u2500 Playwright error banner \u2500\u2500\u2500\n"
+            "Run `playwright install` to download new browsers"
+        )
+
+        with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_playwright:
+            mock_instance = AsyncMock()
+            mock_playwright.return_value.start = AsyncMock(return_value=mock_instance)
+            mock_instance.chromium.launch = AsyncMock(side_effect=PlaywrightError(banner))
+            mock_instance.stop = AsyncMock()
+
+            with pytest.raises(ExtractionError) as exc_info:
+                await manager.__aenter__()
+
+        # `raise ... from None` sets __cause__ to None and __suppress_context__ to
+        # True; the chained Playwright error is populated but hidden from display.
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
+        # The surfaced message carries only the extracted ASCII facts, never the
+        # banner's box-drawing characters.
+        assert "\u2500" not in str(exc_info.value)
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        # Without ``from None`` the suppressed context (the banner) would be
+        # rendered here, reintroducing the box-drawing hazard.
+        assert "Executable doesn't exist" not in rendered
+        mock_instance.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_launch_failure_uninformative_cause_is_non_empty(
+        self, test_settings: Settings
+    ) -> None:
+        """BRW-001 fallback: when the caught exception carries neither the binary
+        nor the remedy, the message stays non-empty, single-line, and preserves
+        the underlying detail rather than degrading to the old generic text alone."""
         manager = BrowserManager(settings=test_settings)
 
         with patch("vkdownloader.infrastructure.browser.async_playwright") as mock_playwright:
@@ -107,11 +225,16 @@ class TestBrowserManager:
             mock_instance.chromium.launch = AsyncMock(side_effect=RuntimeError("launch failed"))
             mock_instance.stop = AsyncMock()
 
-            with pytest.raises(ExtractionError, match="Failed to launch browser"):
+            with pytest.raises(ExtractionError) as exc_info:
                 await manager.__aenter__()
 
-            # playwright.stop() should be called during cleanup
-            mock_instance.stop.assert_called_once()
+        message = str(exc_info.value)
+        assert message.startswith("Failed to launch browser for video extraction")
+        # The uninformative underlying detail is preserved, not dropped.
+        assert "launch failed" in message
+        # Single line: no newline leakage from a multi-line Playwright banner.
+        assert "\n" not in message
+        mock_instance.stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_browser_manager_context_exit_handles_close_timeout(

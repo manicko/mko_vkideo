@@ -42,10 +42,18 @@ class BrowserManager:
                 headless=self.settings.headless,
                 args=["--disable-blink-features=AutomationControlled"],
             )
-        except Exception:
+        except Exception as exc:
+            # BRW-001: carry the actionable cause (the missing binary and the
+            # ``playwright install`` remedy) into the raised message so the
+            # caller learns how to repair the failure. ``from None`` is kept on
+            # purpose: it hides the raw Playwright traceback, whose banner
+            # carries box-drawing characters and a multi-line layout that a
+            # strict console sink can fail to encode (that encoding gap is
+            # mechanism (a), B16's subject, not this arm's). ``exc_info=True``
+            # is preserved unchanged.
             logger.error("browser_launch_failed", exc_info=True)
             await playwright_instance.stop()
-            raise ExtractionError("Failed to launch browser for video extraction") from None
+            raise ExtractionError(_describe_launch_failure(exc)) from None
 
         self.playwright = playwright_instance
         self.browser = browser
@@ -134,3 +142,76 @@ class BrowserManager:
             logger.debug("stealth_script_applied")
 
         return page
+
+
+# BRW-001 — private helpers that carry a browser launch failure's actionable
+# cause into the raised ``ExtractionError`` message. Kept module-private and
+# dependency-free so the remedy stays local to the anchor that owns it.
+
+
+def _describe_launch_failure(exc: Exception) -> str:
+    """Build a single-line, actionable message from a browser launch failure.
+
+    Extracts the missing executable path and the ``playwright install`` remedy
+    from the caught exception so the user can act without the multi-line
+    Playwright banner that ``from None`` hides in ``__aenter__``. When neither
+    element is present, falls back to an ASCII-only shadow of the underlying
+    message so the surfaced text is never empty and never carries characters
+    a strict console sink could not encode.
+    """
+    text = str(exc)
+    executable = _extract_executable_path(text)
+    remedy = _extract_install_remedy(text)
+    parts = ["Failed to launch browser for video extraction"]
+    if executable:
+        parts.append(f"browser binary not found: {executable}")
+    if remedy:
+        parts.append(f"to obtain it: {remedy}")
+    if not executable and not remedy:
+        parts.append(_underlying_error_text(exc))
+    return "; ".join(parts)
+
+
+def _extract_executable_path(text: str) -> str:
+    """Return the missing binary path from a Playwright launch error, else ``""``.
+
+    Matches the Playwright launcher's "Executable doesn't exist at <path>"
+    wording (and its "does not exist" variant), taking the path up to the end
+    of that line so an install hint on a later line is never absorbed.
+    """
+    lowered = text.lower()
+    for marker in (
+        "executable doesn't exist at ",
+        "executable does not exist at ",
+    ):
+        idx = lowered.find(marker)
+        if idx != -1:
+            start = idx + len(marker)
+            newline = text.find("\n", start)
+            end = newline if newline != -1 else len(text)
+            return text[start:end].strip()
+    return ""
+
+
+def _extract_install_remedy(text: str) -> str:
+    """Return the ``playwright install`` remedy from a launch error, else ``""``.
+
+    The user-facing fix is the canonical ``playwright install`` command; detecting
+    that phrase is sufficient to surface the actionable step, regardless of any
+    ``npx`` / ``python -m`` prefix or a trailing browser name.
+    """
+    if "playwright install" in text.lower():
+        return "playwright install"
+    return ""
+
+
+def _underlying_error_text(exc: Exception) -> str:
+    """Single-line, ASCII-only shadow of an uninformative launch error."""
+    raw = str(exc).strip()
+    if not raw:
+        return "see the 'browser_launch_failed' log record for details"
+    first_line = raw.splitlines()[0]
+    ascii_only = "".join(ch for ch in first_line if ord(ch) < 128).strip()
+    if not ascii_only:
+        return "see the 'browser_launch_failed' log record for details"
+    return f"underlying error: {ascii_only}"
