@@ -832,3 +832,133 @@ class TestMergeFreeSpaceProbe:
 
         assert result == output
         mock_exec.assert_called()
+
+
+class TestMergeFailureUrlRedaction:
+    """SEC-002: signed CDN URLs redacted at both merge-failure log sinks."""
+
+    @pytest.mark.asyncio
+    async def test_batch_merge_failed_redacts_url(self, tmp_path: Path) -> None:
+        """batch_merge_failed redacts signed URLs from stderr before logging."""
+        segment = tmp_path / "00000.ts"
+        segment.write_bytes(b"data")
+
+        signed_url = "https://cdn.example.com/seg_00000.ts?token=SECRET123&sig=ABC"
+        stderr_output = f"http error fetching {signed_url}: 403 Forbidden".encode()
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _merge_batch_segments([segment], tmp_path, 300)
+
+            assert result is None
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "batch_merge_failed"
+            logged_error = call.kwargs["error"]
+            assert "SECRET123" not in logged_error
+            assert "ABC" not in logged_error
+            assert "cdn.example.com" in logged_error
+
+    @pytest.mark.asyncio
+    async def test_batch_merge_failed_preserves_plaintext(self, tmp_path: Path) -> None:
+        """batch_merge_failed passes plaintext stderr through unchanged."""
+        segment = tmp_path / "00000.ts"
+        segment.write_bytes(b"data")
+
+        stderr_output = b"ffmpeg error: invalid data found in stream"
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _merge_batch_segments([segment], tmp_path, 300)
+
+            assert result is None
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "batch_merge_failed"
+            assert call.kwargs["error"] == "ffmpeg error: invalid data found in stream"
+
+    @pytest.mark.asyncio
+    async def test_final_merge_failed_redacts_url(self, tmp_path: Path) -> None:
+        """final_merge_failed redacts signed URLs from stderr before logging."""
+        temp_file = tmp_path / "batch_00000.ts"
+        temp_file.write_bytes(b"data")
+        output = tmp_path / "merged.ts"
+
+        signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+        stderr_output = f"Error fetching {signed_url}: 403 Forbidden".encode()
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _perform_final_merge([temp_file], output, 300)
+
+            assert result is False
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "final_merge_failed"
+            logged_error = call.kwargs["error"]
+            assert "SECRET123" not in logged_error
+            assert "ABC" not in logged_error
+            assert "cdn.example.com" in logged_error
+
+    @pytest.mark.asyncio
+    async def test_final_merge_failed_preserves_plaintext(self, tmp_path: Path) -> None:
+        """final_merge_failed passes plaintext stderr through unchanged."""
+        temp_file = tmp_path / "batch_00000.ts"
+        temp_file.write_bytes(b"data")
+        output = tmp_path / "merged.ts"
+
+        stderr_output = b"ffmpeg error: invalid data found in stream"
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _perform_final_merge([temp_file], output, 300)
+
+            assert result is False
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "final_merge_failed"
+            assert call.kwargs["error"] == "ffmpeg error: invalid data found in stream"

@@ -11,6 +11,9 @@ from structlog import get_logger
 
 from ..exceptions import DownloadError
 from ..utils.formatting import format_bytes
+from ..utils.url_sanitizer import (
+    sanitize_text_for_log,  # SEC-002: redact signed CDN URLs from merge-failure stderr before logging
+)
 
 logger = get_logger(__name__)
 
@@ -318,7 +321,7 @@ async def _merge_batch_segments(
 
     if process.returncode != 0:
         error = stderr.decode() if stderr else "Unknown error"
-        logger.error("batch_merge_failed", error=error[:200])
+        logger.error("batch_merge_failed", error=sanitize_text_for_log(error)[:200])
         return None
 
     # D-13: this stage is additive. Its input segments are removed only after
@@ -375,7 +378,10 @@ async def _perform_final_merge(
             tf.unlink()
         return True
 
-    logger.error("final_merge_failed", error=stderr.decode()[:200] if stderr else "Unknown")
+    logger.error(
+        "final_merge_failed",
+        error=sanitize_text_for_log(stderr.decode())[:200] if stderr else "Unknown",
+    )
     return False
 
 

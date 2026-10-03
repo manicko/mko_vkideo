@@ -136,3 +136,48 @@ class TestSanitizeTextForLog:
         assert "def456" not in result
         # Filesystem path is untouched -- no path-matching clause exists.
         assert cookie_path in result
+
+    def test_transform_before_truncate_proves_sanitize_order(self) -> None:
+        """SEC-002: prove sanitize-then-truncate ordering (ffmpeg_utils pattern).
+
+        ``ffmpeg_utils`` calls ``sanitize_text_for_log(error)[:200]``. When a
+        signed URL starts past the 200-char boundary, truncating first would
+        silently drop it (no host in the log); sanitizing first shrinks it to
+        ``scheme://host/***REDACTED***/`` so the host survives truncation.
+
+        The ``len(result) == 200`` assertion pins the order: the wrong order
+        (``sanitize_text_for_log(error[:200])``) would produce a string
+        *longer* than 200 chars after the short redaction expands the URL.
+        """
+        filler = "x" * 170
+        signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+        error = f"{filler}{signed_url}"
+
+        result = sanitize_text_for_log(error)[:200]
+
+        assert "cdn.example.com" in result
+        assert "SECRET123" not in result
+        assert "ABC" not in result
+        assert len(result) == 200
+
+    def test_redacts_signed_cdn_url_in_merge_failure_text(self) -> None:
+        """Merge-failure stderr with a signed CDN URL must be fully redacted."""
+        text = (
+            "ffmpeg version 6.0 Copyright (c) 2023\n"
+            "Error opening https://cdn.vkhost.com/segments/00000.ts"
+            "?token=s3cr3t&sig=deadbeef as\n"
+            "Input #0"
+        )
+        result = sanitize_text_for_log(text)
+
+        assert "s3cr3t" not in result
+        assert "deadbeef" not in result
+        assert "cdn.vkhost.com" in result
+        assert "https://cdn.vkhost.com" in result
+
+    def test_preserves_plaintext_merge_failure_text(self) -> None:
+        """Plaintext error messages without URLs pass through byte-identical."""
+        text = "Error: invalid data found when processing input stream"
+        result = sanitize_text_for_log(text)
+
+        assert result == text
