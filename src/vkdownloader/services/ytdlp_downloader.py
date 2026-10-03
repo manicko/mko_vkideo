@@ -16,7 +16,12 @@ from playwright.async_api import Cookie
 from structlog import get_logger
 
 from ..config import Settings
-from ..exceptions import ExtractionError, QualityNotAvailableError, QualityParseError
+from ..exceptions import (
+    DownloadError,
+    ExtractionError,
+    QualityNotAvailableError,
+    QualityParseError,
+)
 from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, QualityKind
 from ..models.quality import QualitySpec
@@ -696,26 +701,50 @@ async def _download_with_ytdlp(
         async def _monitor_progress() -> None:
             """Read stdout, parse yt-dlp progress, invoke callback."""
             assert process.stdout is not None
-            async for line in iter_process_lines(
-                process.stdout, shutdown_event, on_shutdown=_on_shutdown
-            ):
-                decoded = line.decode(errors="replace")
-                _echo_ytdlp_line(decoded, echo=echo)
-                output_chunks.append(line)
-                progress = _parse_ytdlp_progress(decoded)
-                if progress is not None and progress_callback is not None:
-                    downloaded, total = progress
-                    progress_callback(video_id, downloaded, total)
+            try:
+                async for line in iter_process_lines(
+                    process.stdout, shutdown_event, on_shutdown=_on_shutdown
+                ):
+                    decoded = line.decode(errors="replace")
+                    _echo_ytdlp_line(decoded, echo=echo)
+                    output_chunks.append(line)
+                    progress = _parse_ytdlp_progress(decoded)
+                    if progress is not None and progress_callback is not None:
+                        downloaded, total = progress
+                        progress_callback(video_id, downloaded, total)
+            except DownloadError as exc:
+                # The reader met a line longer than its limit. It drained the
+                # pipe first, so this task completing is what lets the child be
+                # reaped below — record which download lost its transcript, then
+                # end normally and let the returncode decide the verdict.
+                logger.error(
+                    "ytdlp_reader_line_overrun",
+                    url=_strip_auth_params(video_url),
+                    pid=process.pid,
+                    error=str(exc),
+                )
 
         async def _drain_output() -> None:
             """Drain stdout to prevent buffer deadlock when no callback."""
             assert process.stdout is not None
-            async for line in iter_process_lines(
-                process.stdout, shutdown_event, on_shutdown=_on_shutdown
-            ):
-                decoded = line.decode(errors="replace")
-                _echo_ytdlp_line(decoded, echo=echo)
-                output_chunks.append(line)
+            try:
+                async for line in iter_process_lines(
+                    process.stdout, shutdown_event, on_shutdown=_on_shutdown
+                ):
+                    decoded = line.decode(errors="replace")
+                    _echo_ytdlp_line(decoded, echo=echo)
+                    output_chunks.append(line)
+            except DownloadError as exc:
+                # The reader met a line longer than its limit. It drained the
+                # pipe first, so this task completing is what lets the child be
+                # reaped below — record which download lost its transcript, then
+                # end normally and let the returncode decide the verdict.
+                logger.error(
+                    "ytdlp_reader_line_overrun",
+                    url=_strip_auth_params(video_url),
+                    pid=process.pid,
+                    error=str(exc),
+                )
 
         if progress_callback:
             process_task = asyncio.create_task(process.wait())

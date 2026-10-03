@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vkdownloader.config import Settings
-from vkdownloader.exceptions import QualityNotAvailableError
+from vkdownloader.exceptions import DownloadError, QualityNotAvailableError
 from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.models.enums import CookieSource, QualityKind, StreamFormat
 from vkdownloader.models.quality import QualitySpec
@@ -1867,6 +1868,173 @@ class TestIterProcessLines:
         leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert leftover == []
 
+    @pytest.mark.asyncio
+    async def test_overlong_line_raises_after_draining_pipe(self) -> None:
+        """T1: an over-long line drains the pipe then surfaces DownloadError.
+
+        The reader's default limit is 65536 bytes, so a 70000-byte line (with
+        its newline) cannot be returned by ``readline()`` and raises. The
+        generator must first drain the bytes that follow it so the pipe can
+        reach EOF, then surface the overrun as a ``DownloadError`` carrying the
+        original ``ValueError`` as its cause. No fragment is ever yielded.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"head\n")
+        stream.feed_data(b"x" * 70000 + b"\n")
+        stream.feed_data(b"y" * 200000 + b"\n")
+        stream.feed_eof()
+        shutdown_event = asyncio.Event()
+        calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            calls.append("fired")
+
+        yielded: list[bytes] = []
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            with pytest.raises(DownloadError) as excinfo:
+                async for line in iter_process_lines(
+                    stream, shutdown_event, on_shutdown=on_shutdown
+                ):
+                    yielded.append(line)
+
+        assert yielded == [b"head\n"]
+        assert excinfo.value.__cause__ is not None
+        assert "Separator is found" in str(excinfo.value.__cause__)
+        # at_eof only becomes True once the 200001-byte tail has been drained.
+        assert stream.at_eof() is True
+        assert calls == []
+        overrun_records = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "subprocess_line_overrun"
+        ]
+        assert len(overrun_records) == 1, (
+            f"Expected exactly 1 subprocess_line_overrun record, got {len(overrun_records)}"
+        )
+        assert overrun_records[0].kwargs["discarded_bytes"] == 200001
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_stop_during_overlong_drain_fires_on_shutdown_once(self) -> None:
+        """T2: a stop landing while the drain is blocked fires on_shutdown once.
+
+        Only the over-long line is fed and no EOF is offered, so the drain
+        blocks on ``stream.read``. The stop is set from a task; the watcher
+        fires ``on_shutdown`` (which feeds EOF as the stand-in for killing the
+        child), the drain unblocks, and the generator ends with a
+        ``DownloadError``. ``fire()`` stays at-most-once: both the watcher and
+        the drain's own guard observe the stop, but only one invocation gets
+        through.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"x" * 70000 + b"\n")
+        # No feed_eof: the drain must block until the stop offers EOF.
+        shutdown_event = asyncio.Event()
+
+        async def _stop_soon() -> None:
+            await asyncio.sleep(0)
+            shutdown_event.set()
+
+        stopper = asyncio.create_task(_stop_soon())
+        calls: list[str] = []
+
+        async def on_shutdown() -> None:
+            calls.append("fired")
+            stream.feed_eof()  # stand-in for cancel_subprocess closing the pipe
+
+        async def _drive() -> None:
+            async for _ in iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown):
+                pass
+
+        try:
+            await asyncio.wait_for(_drive(), timeout=5.0)
+            pytest.fail(
+                "iter_process_lines raised no DownloadError when a stop landed "
+                "during the over-long drain"
+            )
+        except DownloadError:
+            pass
+        except TimeoutError:
+            pytest.fail("iter_process_lines drain ignored the stop and blocked until timeout")
+        await stopper
+
+        assert calls == ["fired"]
+        leftover = [
+            t for t in asyncio.all_tasks() if t is not asyncio.current_task() and t is not stopper
+        ]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_overlong_line_leaves_no_pending_watcher(self) -> None:
+        """T3: the over-long path leaves no pending watcher task.
+
+        The ``async for`` runs inside a task so the generator's ``finally``
+        executes as part of the task's own unwinding rather than deferring to
+        a GC-driven finalizer pass. The task's exception is retrieved by the
+        ``pytest.raises`` await — an unretrieved exception would grow the suite
+        warning count.
+        """
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"head\n")
+        stream.feed_data(b"x" * 70000 + b"\n")
+        stream.feed_data(b"y" * 200000 + b"\n")
+        stream.feed_eof()
+        shutdown_event = asyncio.Event()
+
+        async def _consume() -> list[bytes]:
+            yielded: list[bytes] = []
+            async for line in iter_process_lines(stream, shutdown_event):
+                yielded.append(line)
+            return yielded
+
+        consumer = asyncio.create_task(_consume())
+        with pytest.raises(DownloadError):
+            await consumer
+
+        assert consumer.done()
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_overlong_line_does_not_wedge_process_wait(self) -> None:
+        """T4: draining the pipe lets ``process.wait()`` return (TRN-004).
+
+        The only test in this suite that spawns a real child. The child writes
+        a 70001-byte line (above the reader limit) followed by 200001 more
+        bytes so the unconsumed remainder exceeds the transport's 131072-byte
+        window; a short tail would not wedge the wait and so would not gate
+        the fix. After the drain the pipe reaches EOF, so ``wait()`` returns the
+        child's already-known exit code instead of hanging.
+        """
+        child = (
+            "import sys; out = sys.stdout.buffer; "
+            "out.write(b'x' * 70000 + b'\\n'); out.flush(); "
+            "out.write(b'y' * 200000 + b'\\n'); out.flush()"
+        )
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            child,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        shutdown_event = asyncio.Event()
+        try:
+            with pytest.raises(DownloadError):
+                async for _ in iter_process_lines(process.stdout, shutdown_event):
+                    pass
+            returncode = await asyncio.wait_for(process.wait(), timeout=10.0)
+            assert returncode == 0
+        finally:
+            if process.returncode is None:
+                process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except TimeoutError:
+                    pass
+
 
 class TestDownloadSegmentRealExecution:
     """Tests for _download_segment with real execution logic."""
@@ -3032,6 +3200,137 @@ class TestYtDlpSubprocessShutdown:
         )
 
     @pytest.mark.asyncio
+    async def test_reader_line_overrun_recorded_when_no_progress_callback(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """T5: an over-long line is logged as ``ytdlp_reader_line_overrun``.
+
+        With no progress callback the no-callback drain path (``_drain_output``)
+        runs. The reader raises ``DownloadError`` after draining the pipe, the
+        drain catches it and logs exactly one overrun record, and the task ends
+        normally — so ``_await_first_and_cancel_others`` must NOT emit the
+        ``subprocess_reader_failed`` record that a dead reader would normally
+        produce. The pipe really was drained: ``stdout.read`` was awaited.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(
+            side_effect=[
+                progress_line,
+                ValueError("Separator is found, but chunk is longer than limit"),
+            ]
+        )
+        mock_process.stdout.read = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
+
+        assert result == output_file
+        overrun_records = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "ytdlp_reader_line_overrun"
+        ]
+        assert len(overrun_records) == 1, (
+            f"Expected exactly 1 ytdlp_reader_line_overrun record, got {len(overrun_records)}"
+        )
+        assert overrun_records[0].kwargs["pid"] == 12345
+        assert overrun_records[0].kwargs["url"] == "https://vkvideo.ru/***REDACTED***"
+        failed_records = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "subprocess_reader_failed"
+        ]
+        assert len(failed_records) == 0, (
+            f"Expected 0 subprocess_reader_failed records, got {len(failed_records)}"
+        )
+        mock_process.stdout.read.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reader_line_overrun_recorded_with_progress_callback(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """T6: an over-long line is logged with a callback in flight.
+
+        The progress-callback path (``_monitor_progress``) runs. The good
+        progress line is parsed and the callback fires exactly once for it; the
+        over-long line then stops the transcript with a ``DownloadError`` that
+        is logged as ``ytdlp_reader_line_overrun`` — no fabricated line follows,
+        and no ``subprocess_reader_failed`` record is emitted.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(
+            side_effect=[
+                progress_line,
+                ValueError("Separator is found, but chunk is longer than limit"),
+            ]
+        )
+        mock_process.stdout.read = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        progress_calls: list[tuple[str, int, int]] = []
+
+        def progress_callback(video_id: str, downloaded: int, total: int) -> None:
+            progress_calls.append((video_id, downloaded, total))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    progress_callback=progress_callback,
+                    echo=False,
+                )
+
+        assert result == output_file
+        overrun_records = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "ytdlp_reader_line_overrun"
+        ]
+        assert len(overrun_records) == 1, (
+            f"Expected exactly 1 ytdlp_reader_line_overrun record, got {len(overrun_records)}"
+        )
+        assert overrun_records[0].kwargs["pid"] == 12345
+        assert overrun_records[0].kwargs["url"] == "https://vkvideo.ru/***REDACTED***"
+        failed_records = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "subprocess_reader_failed"
+        ]
+        assert len(failed_records) == 0, (
+            f"Expected 0 subprocess_reader_failed records, got {len(failed_records)}"
+        )
+        mock_process.stdout.read.assert_awaited()
+        assert len(progress_calls) == 1, (
+            f"Expected progress_callback to fire exactly once, got {len(progress_calls)}"
+        )
+
+    @pytest.mark.asyncio
     async def test_cookie_cleanup_failure_does_not_replace_success_outcome(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
@@ -3392,9 +3691,7 @@ class TestYtDlpSubprocessShutdown:
                     new_callable=AsyncMock,
                     side_effect=mock_cancel_side_effect,
                 ) as mock_cancel_mock:
-                    with patch(
-                        "vkdownloader.services.ytdlp_downloader.logger"
-                    ) as mock_logger:
+                    with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                         with pytest.raises(asyncio.CancelledError):
                             await _download_with_ytdlp(
                                 "https://vkvideo.ru/video-12345_67890",
@@ -3443,9 +3740,7 @@ class TestYtDlpSubprocessShutdown:
                 new_callable=AsyncMock,
                 return_value=False,
             ):
-                with patch(
-                    "vkdownloader.services.ytdlp_downloader.logger"
-                ) as mock_logger:
+                with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                     with pytest.raises(asyncio.CancelledError):
                         await _download_with_ytdlp(
                             "https://vkvideo.ru/video-12345_67890",

@@ -40,14 +40,16 @@ async def iter_process_lines(
     The loop terminates when:
     - ``shutdown_event`` is set (an optional ``on_shutdown`` callback can
       cancel the subprocess so ``readline`` unblocks), or
-    - the stream is exhausted (``readline`` returns an empty bytes object).
+    - the stream is exhausted (``readline`` returns an empty bytes object), or
+    - a line arrives that the reader cannot hold in one piece — see Raises.
 
     A generator-scoped watcher task awaits ``shutdown_event.wait()`` so that
     a stop landing *while* ``readline()`` is blocked is observed without
     waiting for the child to produce more output. The watcher invokes the
     shared ``fire()`` helper — the single place ``on_shutdown`` is called —
     so the callback fires at most once whether the stop arrives mid-read or
-    between lines.
+    between lines. The same guard runs between the discard reads taken after
+    an over-long line, so a stop that lands mid-drain is honoured too.
 
     Args:
         stream: A subprocess ``StreamReader`` to read lines from.
@@ -57,6 +59,14 @@ async def iter_process_lines(
 
     Yields:
         Raw ``bytes`` lines from the stream (including trailing newline).
+        Never a fragment: a line is either yielded whole or dropped whole.
+
+    Raises:
+        DownloadError: A child output line is longer than the stream reader's
+            limit, so ``readline()`` cannot return it. The remainder of the
+            stream is consumed first — without buffering it and without
+            spinning — so the pipe reaches EOF and the caller can still reap
+            the child; child output after that line is then discarded.
     """
     fired = False
 
@@ -73,13 +83,63 @@ async def iter_process_lines(
         await shutdown_event.wait()
         await fire()
 
+    async def _discard_after_overlong_line() -> int:
+        """Consume the rest of a stream whose current line the reader cannot hold.
+
+        ``StreamReader.readline`` raises once a line does not fit the reader's
+        limit, and asyncio has already dropped that line's bytes by the time it
+        does. What is left is whatever the child writes next, and nothing reads
+        it. On this platform the exit waiter completes only once the returncode
+        is set *and* every pipe has reached EOF, so an undrained pipe makes
+        ``process.wait()`` unable to return even after ``kill()``. This consumes
+        that remainder and returns how many bytes were discarded.
+
+        Nothing is accumulated: each read is capped and dropped, so a child that
+        never emits a newline cannot grow the reader's buffer. Every iteration
+        consumes at least the bytes it just read, so the loop cannot spin. It
+        ends at EOF — the only thing ``process.wait()`` is waiting for — or at a
+        stop, where ``fire()`` turns the stop into the kill that closes the pipe.
+        """
+        # Bytes consumed per step. Any positive size works; this matches the
+        # reader's own default limit so one step cannot exceed the window the
+        # transport keeps buffered.
+        chunk_bytes = 65536
+        discarded = 0
+        while True:
+            if shutdown_event.is_set():
+                await fire()
+                return discarded
+            chunk = await stream.read(chunk_bytes)
+            if not chunk:
+                return discarded
+            discarded += len(chunk)
+
     watch_task = asyncio.create_task(_watch_shutdown())
     try:
         while True:
             if shutdown_event.is_set():
                 await fire()
                 break
-            line = await stream.readline()
+            try:
+                line = await stream.readline()
+            except ValueError as exc:
+                # A line the reader cannot hold in one piece; asyncio has already
+                # dropped it. Drain what follows so the pipe can reach EOF, then
+                # surface it as a product error. The try wraps ONLY this read: a
+                # ValueError thrown in at the yield below belongs to the consumer.
+                discarded = await _discard_after_overlong_line()
+                logger.error(
+                    "subprocess_line_overrun",
+                    discarded_bytes=discarded,
+                    error=str(exc),
+                )
+                raise DownloadError(
+                    f"A child output line exceeded the stream reader's limit and "
+                    f"could not be read; {format_bytes(discarded)} ({discarded} "
+                    f"bytes) of further child output were discarded so the pipe "
+                    f"could reach EOF. Child output after that line was not "
+                    f"captured. Reader said: {exc}"
+                ) from exc
             if not line:
                 break
             yield line
