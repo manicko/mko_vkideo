@@ -3466,6 +3466,118 @@ class TestYtDlpSubprocessShutdown:
         assert call.kwargs["pid"] == 12345
         assert call.kwargs["url"] == "https://vkvideo.ru/***REDACTED***"
 
+    @pytest.mark.asyncio
+    async def test_reader_task_failure_emits_record(self) -> None:
+        """TRN-006 sink half: a reader task that raises produces exactly one
+        ``subprocess_reader_failed`` record instead of being swallowed.
+
+        Asserts on the observable log record, not on the helper's return tuple.
+        """
+        from vkdownloader.services.ytdlp_downloader import _await_first_and_cancel_others
+
+        async def failing_reader() -> None:
+            raise RuntimeError("reader died")
+
+        async def blocker() -> None:
+            await asyncio.sleep(3600)
+
+        failed = asyncio.create_task(failing_reader())
+        blocked = asyncio.create_task(blocker())
+        try:
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                await _await_first_and_cancel_others(failed, blocked)
+
+            records = [
+                c
+                for c in mock_logger.error.call_args_list
+                if c.args and c.args[0] == "subprocess_reader_failed"
+            ]
+            assert len(records) == 1, (
+                f"Expected exactly 1 subprocess_reader_failed record, got {len(records)}"
+            )
+            assert "reader died" in records[0].kwargs["error"]
+        finally:
+            for task in (failed, blocked):
+                if not task.done():
+                    task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_normal_completion_emits_no_record(self) -> None:
+        """TRN-006 discrimination case: a task that completes normally produces
+        NO ``subprocess_reader_failed`` record.
+
+        Without this the fix is satisfiable by logging every finished task,
+        which would be noise rather than visibility.
+        """
+        from vkdownloader.services.ytdlp_downloader import _await_first_and_cancel_others
+
+        async def normal_reader() -> None:
+            return None
+
+        async def blocker() -> None:
+            await asyncio.sleep(3600)
+
+        normal = asyncio.create_task(normal_reader())
+        blocked = asyncio.create_task(blocker())
+        try:
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                await _await_first_and_cancel_others(normal, blocked)
+
+            records = [
+                c
+                for c in mock_logger.error.call_args_list
+                if c.args and c.args[0] == "subprocess_reader_failed"
+            ]
+            assert len(records) == 0, (
+                f"Expected 0 subprocess_reader_failed records, got {len(records)}"
+            )
+        finally:
+            for task in (normal, blocked):
+                if not task.done():
+                    task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_pending_task_emits_no_record(self) -> None:
+        """TRN-006 cancellation case: a pending task that is cancelled and
+        settles does NOT produce a ``subprocess_reader_failed`` record.
+
+        One task raises (proving the done-failure path logs once); the other
+        is pending and cancelled by the helper, so it must not add a second
+        record even though it would have raised had it run.  This is plan
+        08's settle-before-return contract, which this block must not break.
+        """
+        from vkdownloader.services.ytdlp_downloader import _await_first_and_cancel_others
+
+        async def failing_reader() -> None:
+            raise RuntimeError("done failure")
+
+        async def slow_failing_reader() -> None:
+            await asyncio.sleep(3600)
+            raise RuntimeError("pending failure")
+
+        failed = asyncio.create_task(failing_reader())
+        blocked = asyncio.create_task(slow_failing_reader())
+        try:
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                await _await_first_and_cancel_others(failed, blocked)
+
+            records = [
+                c
+                for c in mock_logger.error.call_args_list
+                if c.args and c.args[0] == "subprocess_reader_failed"
+            ]
+            assert len(records) == 1, (
+                f"Expected exactly 1 subprocess_reader_failed record (from the failed "
+                f"done task), got {len(records)} — the cancelled pending task "
+                f"must not produce one"
+            )
+            assert records[0].kwargs["error"] == "done failure"
+            assert blocked.cancelled()
+        finally:
+            for task in (failed, blocked):
+                if not task.done():
+                    task.cancel()
+
 
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""

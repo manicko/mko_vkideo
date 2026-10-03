@@ -94,6 +94,13 @@ async def _await_first_and_cancel_others(
 
     Returns:
         Tuple of (done_tasks, pending_tasks) after cancellation.
+
+    A task in ``done`` that raised — e.g. the reader dying mid-drain — has its
+    exception retrieved and reported via the ``subprocess_reader_failed`` event
+    so the failure is visible instead of swallowed.  The exception is never
+    re-raised: that would turn a cooperative drain into a crash.  A
+    cancelled-and-settled pending task stays in ``pending`` and produces no
+    record, preserving plan 08's settle-before-return contract.
     """
     done, pending = await asyncio.wait(
         tasks,
@@ -106,6 +113,16 @@ async def _await_first_and_cancel_others(
             await task
         except asyncio.CancelledError:
             pass
+    # Report any failed task's exception so a reader death is visible. Only
+    # the ``done`` set is inspected: cancelled-and-settled tasks remain in
+    # ``pending`` and produce no record. The exception is retrieved, not
+    # re-raised — re-raising would turn a drain into a crash (TRN-006 sink half).
+    for task in done:
+        if task.cancelled():
+            continue
+        exc = task.exception()
+        if exc is not None:
+            logger.error("subprocess_reader_failed", error=str(exc))
     return done, pending
 
 
