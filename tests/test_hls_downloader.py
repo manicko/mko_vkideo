@@ -934,6 +934,229 @@ class TestEchoYtdlpLine:
         )
 
 
+class TestBoundedYtDlpTranscript:
+    """Tests for TRN-011: the child transcript retains only a bounded tail.
+
+    The ``_download_with_ytdlp`` transcript buffer exists solely to build the
+    ``download_failed`` record, so only a tail of the child's output is
+    retained. These cases pin that behaviour through the observable
+    failure-message length rather than any private attribute.
+    """
+
+    @staticmethod
+    def _recording_logger(
+        errors: list[tuple[str, dict[str, Any]]],
+    ) -> MagicMock:
+        """Return a MagicMock logger whose ``error`` calls are recorded."""
+        logger_mock = MagicMock()
+
+        def capture_error(event: str, **kwargs: Any) -> None:
+            errors.append((event, kwargs))
+
+        logger_mock.error.side_effect = capture_error
+        return logger_mock
+
+    @pytest.mark.asyncio
+    async def test_failing_child_output_capped_to_bound(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A chatty failing child yields a failure message no larger than the bound."""
+        from vkdownloader.services.ytdlp_downloader import (
+            _MAX_CHILD_OUTPUT_BYTES,
+            _download_with_ytdlp,
+        )
+
+        output_file = tmp_path / "video_output.mp4"
+        # 200 lines of 4 KiB ≈ 800 KiB, far over the 64 KiB bound.
+        overlong_line = b"x" * 4090 + b"\n"
+        readline_lines = [overlong_line] * 200
+
+        error_records: list[tuple[str, dict[str, Any]]] = []
+        mock_logger = self._recording_logger(error_records)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline_lines + [b""])
+        mock_process.wait = AsyncMock(return_value=1)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
+
+        assert result is None
+        failed = [r for r in error_records if r[0] == "download_failed"]
+        assert len(failed) == 1
+        error_msg = failed[0][1]["error"]
+        assert len(error_msg) <= _MAX_CHILD_OUTPUT_BYTES
+
+    @pytest.mark.asyncio
+    async def test_bounded_transcript_success_returns_output(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A chatty child that succeeds still returns the output file normally."""
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video_output.mp4"
+        overlong_line = b"x" * 4090 + b"\n"
+        readline_lines = [overlong_line] * 200
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline_lines + [b""])
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
+
+        assert result == output_file
+
+    @pytest.mark.asyncio
+    async def test_bounded_transcript_retains_tail_not_head(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """The retained transcript is the tail (end), not the head (beginning)."""
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video_output.mp4"
+        # 1000 labelled lines of ~1 KiB ≈ 1 MiB, far over the 64 KiB bound.
+        readline_lines: list[bytes] = []
+        for i in range(1, 1001):
+            prefix = f"LINE_{i:04d}:".encode()
+            readline_lines.append(prefix + b"." * (1024 - len(prefix) - 1) + b"\n")
+
+        error_records: list[tuple[str, dict[str, Any]]] = []
+        mock_logger = self._recording_logger(error_records)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline_lines + [b""])
+        mock_process.wait = AsyncMock(return_value=1)
+
+        def on_progress(video_id: str, downloaded: int, total: int) -> None:
+            pass
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
+                # A callback routes through _monitor_progress so both append
+                # sites are covered by the bounding.
+                await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    progress_callback=on_progress,
+                )
+
+        failed = [r for r in error_records if r[0] == "download_failed"]
+        assert len(failed) == 1
+        error_msg = failed[0][1]["error"]
+        assert "LINE_1000" in error_msg
+        assert "LINE_0001" not in error_msg
+
+    @pytest.mark.asyncio
+    async def test_short_transcript_unaffected_by_bound(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A transcript shorter than the bound is retained in full."""
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video_output.mp4"
+        readline_lines = [
+            b"first line\n",
+            b"second line\n",
+            b"third line and final\n",
+        ]
+
+        error_records: list[tuple[str, dict[str, Any]]] = []
+        mock_logger = self._recording_logger(error_records)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline_lines + [b""])
+        mock_process.wait = AsyncMock(return_value=1)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
+
+        assert result is None
+        failed = [r for r in error_records if r[0] == "download_failed"]
+        assert len(failed) == 1
+        error_msg = failed[0][1]["error"]
+        assert "first line" in error_msg
+        assert "second line" in error_msg
+        assert "third line and final" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_echo_false_chatty_child_no_stderr_and_bounded(
+        self,
+        test_settings: Settings,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """echo=False writes nothing to stderr; the tail remains bounded."""
+        from vkdownloader.services.ytdlp_downloader import (
+            _MAX_CHILD_OUTPUT_BYTES,
+            _download_with_ytdlp,
+        )
+
+        output_file = tmp_path / "video_output.mp4"
+        overlong_line = b"x" * 4090 + b"\n"
+        readline_lines = [overlong_line] * 200
+
+        error_records: list[tuple[str, dict[str, Any]]] = []
+        mock_logger = self._recording_logger(error_records)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline_lines + [b""])
+        mock_process.wait = AsyncMock(return_value=1)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    echo=False,
+                )
+
+        assert result is None
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        failed = [r for r in error_records if r[0] == "download_failed"]
+        assert len(failed) == 1
+        error_msg = failed[0][1]["error"]
+        assert len(error_msg) <= _MAX_CHILD_OUTPUT_BYTES
+
+
 class TestParallelSegmentsDownload:
     """Tests for parallel segment download with semaphore."""
 

@@ -614,6 +614,32 @@ async def _attempt_segment_resume(
     return None
 
 
+# TRN-011: The child transcript buffer exists only to build the
+# ``download_failed`` record, so only a bounded *tail* of the child's output
+# is retained. The tail is the informative part of a failure; the head is not.
+# Sized against the reader's per-line limit (``asyncio.streams._DEFAULT_LIMIT``
+# = 64 KiB) so a full line always fits, and against the merge-error truncation
+# precedent in ffmpeg_utils.py (``error[:200]``). It is deliberately not a
+# Setting: TRN-013 was rejected upstream for adding configuration knobs to
+# this class of buffer. In batch mode a chatty child would otherwise multiply
+# this bound across ``max_concurrent_downloads`` (up to 16).
+_MAX_CHILD_OUTPUT_BYTES = 64 * 1024
+
+
+def _retain_transcript_line(output: bytearray, line: bytes) -> None:
+    """Append ``line`` to the bounded transcript, keeping only the tail.
+
+    Every byte is appended first; only the oldest bytes are trimmed from the
+    front once the running total exceeds ``_MAX_CHILD_OUTPUT_BYTES``. No line
+    is silently skipped. Retaining the tail ensures the ``download_failed``
+    record carries the end of the child's output -- the reason it failed --
+    not its beginning (TRN-011).
+    """
+    output.extend(line)
+    if len(output) > _MAX_CHILD_OUTPUT_BYTES:
+        del output[: len(output) - _MAX_CHILD_OUTPUT_BYTES]
+
+
 async def _download_with_ytdlp(
     video_url: str,
     output_file: Path,
@@ -688,7 +714,7 @@ async def _download_with_ytdlp(
             stderr=asyncio.subprocess.STDOUT,
         )
 
-        output_chunks: list[bytes] = []
+        output_chunks: bytearray = bytearray()
 
         async def _on_shutdown() -> None:
             if not await cancel_subprocess(process) and process.returncode is None:
@@ -707,7 +733,7 @@ async def _download_with_ytdlp(
                 ):
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
-                    output_chunks.append(line)
+                    _retain_transcript_line(output_chunks, line)
                     progress = _parse_ytdlp_progress(decoded)
                     if progress is not None and progress_callback is not None:
                         downloaded, total = progress
@@ -733,7 +759,7 @@ async def _download_with_ytdlp(
                 ):
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
-                    output_chunks.append(line)
+                    _retain_transcript_line(output_chunks, line)
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
@@ -759,7 +785,7 @@ async def _download_with_ytdlp(
         if process.returncode is None:
             await process.wait()
 
-        output_data = b"".join(output_chunks) if output_chunks else b""
+        output_data = bytes(output_chunks) if output_chunks else b""
 
         if shutdown_event.is_set():
             logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
