@@ -3031,6 +3031,317 @@ class TestYtDlpSubprocessShutdown:
             "No debug log events should be emitted for non-progress lines"
         )
 
+    @pytest.mark.asyncio
+    async def test_cookie_cleanup_failure_does_not_replace_success_outcome(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A destroy that raises OSError leaves the file behind; success returns output_file.
+
+        TRN-002 (outcome half): the cookie-file unlink raising ``OSError``
+        must not propagate out of the ``finally`` and replace the method's
+        return value.  Drive the failure by patching ``Path.unlink`` — no
+        real OS handle is held.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            raise PermissionError("simulated indexer lock")
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            with patch.object(Path, "unlink", new=raising_unlink):
+                with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        cookies=cookies,
+                    )
+
+        assert result == output_file
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
+        mock_logger.warning.assert_any_call(
+            "cookie_file_cleanup_failed",
+            path=str(cookie_file_path),
+            error="simulated indexer lock",
+        )
+        # The success debug record must NOT fire when cleanup failed.
+        cleanup_debug_calls = [
+            c
+            for c in mock_logger.debug.call_args_list
+            if c.args and c.args[0] == "cookie_file_cleaned_up"
+        ]
+        assert len(cleanup_debug_calls) == 0, (
+            "cookie_file_cleaned_up debug must not be logged when cleanup failed"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cookie_cleanup_failure_does_not_replace_failure_outcome(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A destroy that raises OSError leaves the file behind; non-zero returncode returns None.
+
+        TRN-002 (outcome half): the cookie-file unlink raising ``OSError``
+        must not propagate out of the ``finally`` and replace the ``None``
+        that a non-zero yt-dlp returncode already produced.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=[b"ERROR: video not found\n", b""])
+        mock_process.wait = AsyncMock(return_value=1)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            raise PermissionError("simulated indexer lock")
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            with patch.object(Path, "unlink", new=raising_unlink):
+                with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        cookies=cookies,
+                    )
+
+        assert result is None
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
+        mock_logger.warning.assert_any_call(
+            "cookie_file_cleanup_failed",
+            path=str(cookie_file_path),
+            error="simulated indexer lock",
+        )
+
+    @pytest.mark.asyncio
+    async def test_cookie_cleanup_failure_does_not_replace_shutdown_outcome(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A destroy that raises OSError leaves the file behind; shutdown returns None.
+
+        TRN-002 (outcome half): the cookie-file unlink raising ``OSError``
+        must not propagate out of the ``finally`` and replace the ``None``
+        that the shutdown path already produced.  Uses the project token
+        idiom for the shutdown event so it does not leak across tests.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            get_shutdown_event().set()
+
+            mock_process = AsyncMock()
+            mock_process.returncode = 0
+            mock_process.pid = 12345
+            mock_process.stdout = AsyncMock()
+            mock_process.stdout.readline = AsyncMock(return_value=b"")
+            mock_process.wait = AsyncMock(return_value=0)
+
+            captured_cmd: list[str] = []
+
+            async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+                captured_cmd.extend(cmd)
+                return mock_process
+
+            def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+                raise PermissionError("simulated indexer lock")
+
+            with patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=mock_create_subprocess_exec,
+            ):
+                with patch.object(Path, "unlink", new=raising_unlink):
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                        new_callable=AsyncMock,
+                        return_value=True,
+                    ):
+                        with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                            result = await _download_with_ytdlp(
+                                "https://vkvideo.ru/video-12345_67890",
+                                output_file,
+                                "720",
+                                test_settings,
+                                cookies=cookies,
+                            )
+
+            assert result is None
+            cookies_idx = captured_cmd.index("--cookies")
+            cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+            assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
+            mock_logger.warning.assert_any_call(
+                "cookie_file_cleanup_failed",
+                path=str(cookie_file_path),
+                error="simulated indexer lock",
+            )
+        finally:
+            _shutdown_event_ctx.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_cookie_file_removed_and_logged_on_success(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """The negative case: cleanup succeeds, file is removed, debug record is written.
+
+        Guards against the fix passing by deleting the cleanup entirely: the
+        file IS removed on success and ``cookie_file_cleaned_up`` IS logged.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        debug_events: list[tuple[str, dict[str, Any]]] = []
+
+        def capture_debug(event: str, **kwargs: Any) -> None:
+            debug_events.append((event, kwargs))
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.logger.debug",
+                side_effect=capture_debug,
+            ):
+                with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        cookies=cookies,
+                    )
+
+        assert result == output_file
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert not cookie_file_path.exists(), "Cookie file should be removed when cleanup succeeds"
+        cleanup_events = [
+            (event, kwargs) for event, kwargs in debug_events if event == "cookie_file_cleaned_up"
+        ]
+        assert len(cleanup_events) == 1, (
+            f"Expected exactly 1 cookie_file_cleaned_up debug call, got {len(cleanup_events)}"
+        )
+        _, kwargs = cleanup_events[0]
+        assert kwargs["path"] == str(cookie_file_path)
+
+    @pytest.mark.asyncio
+    async def test_cookie_cleanup_failure_child_reaped_before_unlink(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """On the failed-destroy path, the child is reaped before the finally runs.
+
+        TRN-002 (orphan half, mooted by D2): the residue that survives is
+        only the outcome-masking half.  This assertion makes the residue
+        honest by checking the observable effect — ``process.wait()`` was
+        called — rather than a private attribute.
+        """
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        ordering: list[str] = []
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+
+        async def recording_wait() -> int:
+            ordering.append("process_wait")
+            return 0
+
+        mock_process.wait = AsyncMock(side_effect=recording_wait)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        def recording_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            ordering.append("cookie_unlink")
+            raise PermissionError("simulated indexer lock")
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            with patch.object(Path, "unlink", new=recording_unlink):
+                with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        cookies=cookies,
+                    )
+
+        assert result == output_file
+        assert "process_wait" in ordering, "process.wait() must be called before the finally runs"
+        assert "cookie_unlink" in ordering, "cookie file unlink must be attempted in the finally"
+        assert ordering.index("process_wait") < ordering.index("cookie_unlink"), (
+            "process.wait() must be called before cookie file unlink"
+        )
+
 
 class TestAttemptSegmentResumeQuality:
     """Tests for _attempt_segment_resume quality handling with browser streams."""

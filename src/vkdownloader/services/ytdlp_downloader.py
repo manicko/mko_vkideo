@@ -756,8 +756,21 @@ async def _download_with_ytdlp(
         raise
     finally:
         if cookie_file is not None and cookie_file.exists():
-            cookie_file.unlink(missing_ok=True)
-            logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+            try:
+                cookie_file.unlink(missing_ok=True)
+            except OSError as exc:
+                # A failed destroy must never replace the download's own outcome.
+                # ``missing_ok=True`` already covers ``FileNotFoundError``; any
+                # other ``OSError`` (e.g. ``PermissionError`` from an indexer or
+                # scanner holding the file) is recorded here so the method's
+                # return value / propagated exception survives.
+                logger.warning(
+                    "cookie_file_cleanup_failed",
+                    path=str(cookie_file),
+                    error=str(exc),
+                )
+            else:
+                logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
 
 
 async def _resolve_cookies(
