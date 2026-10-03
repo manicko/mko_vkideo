@@ -116,3 +116,23 @@ class TestSanitizeTextForLog:
         assert "stream.m3u8?sig=xyz" not in result
         assert "vkvideo.ru" in result  # Host preserved for debugging
         assert "cdn.vkhost.com" in result  # Host preserved for debugging
+
+    def test_filesystem_paths_are_not_redacted(self) -> None:
+        """Filesystem paths pass through unchanged; only URLs are redacted.
+
+        ``_URL_REGEX`` matches only ``https?://`` URLs, so a bare
+        filesystem path (e.g. a yt-dlp ``--cookies`` argument) can never
+        match and is returned byte-identical. This pins the capability
+        boundary so the redaction claim cannot silently drift back.
+        """
+        cookie_path = "/tmp/vkdownloader_cookies_8u3x.txt"
+        signed_url = "https://cdn.example.com/seg.m3u8?token=abc123&sig=def456"
+        text = f"cookies: {cookie_path} - fetch: {signed_url}"
+        result = sanitize_text_for_log(text)
+
+        # Signed CDN URL is redacted to scheme + host only.
+        assert "https://cdn.example.com" in result
+        assert "abc123" not in result
+        assert "def456" not in result
+        # Filesystem path is untouched -- no path-matching clause exists.
+        assert cookie_path in result

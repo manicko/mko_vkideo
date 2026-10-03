@@ -767,8 +767,8 @@ async def _download_with_ytdlp(
 
         if process.returncode != 0:
             # SEC-002: sanitize subprocess output to redact any signed
-            # CDN URLs or cookie file paths that yt-dlp may echo in
-            # error messages before persisting to log files.
+            # CDN URLs that yt-dlp may echo in error messages before
+            # persisting to log files.
             error_msg = output_data.decode() if output_data else "Unknown yt-dlp error"
             error_msg = sanitize_text_for_log(error_msg)
             logger.error(

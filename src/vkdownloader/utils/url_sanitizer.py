@@ -35,7 +35,7 @@ def sanitize_text_for_log(text: str) -> str:
 
     Scans ``text`` for ``http(s)://`` URLs and replaces each match
     with only its scheme and host via :func:`_strip_auth_params`,
-    preventing signed CDN tokens or cookie file paths in subprocess
+    preventing signed CDN URLs with embedded tokens in subprocess
     output from leaking into log files.
 
     Args:
