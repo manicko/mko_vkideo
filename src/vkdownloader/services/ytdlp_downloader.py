@@ -659,15 +659,28 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
 def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
     """Echo a yt-dlp output line to the console.
 
-    Progress lines (e.g. ``[download]  40.3% of 649.37MiB ...``) are
-    rewritten in-place using carriage returns to restore the
-    pre-migration behavior where yt-dlp used ``\\r`` for live progress
-    updates.  Non-progress lines use newlines as-is.
+    What reaches stderr is the TRANSFORMED line: ``https?://`` URLs are reduced
+    to ``scheme://host/***REDACTED***`` and the product's own ``vk_cookies_``
+    artefact file and directory names collapse to ``***REDACTED***``, applied
+    once at the write by
+    :func:`~vkdownloader.utils.url_sanitizer.sanitize_text_for_log`.
 
-    When ``echo`` is ``False`` (batch mode), nothing is written to stderr
-    at all — progress data is emitted at DEBUG level instead and
-    non-progress lines are dropped silently, so yt-dlp output never
-    interleaves with the rich progress display.
+    Classification and byte accounting use the RAW line:
+    :func:`_is_ytdlp_progress_line` and :func:`_parse_ytdlp_progress` both read
+    untransformed text, so the ``\\r`` rewrite and the reported
+    ``downloaded`` / ``total`` figures are unaffected by the transform.
+    ``echo=False`` is evaluated BEFORE any transform, so nothing is
+    transformed, written, or logged for a non-progress line.
+
+    The transcript buffer still receives the RAW line
+    (:func:`_retain_transcript_line` / ``output_chunks``): redaction here must
+    not substitute U+FFFD for undecodable child bytes, and
+    ``download_failed`` applies the transform at its own call site.
+
+    Progress lines (e.g. ``[download]  40.3% of 649.37MiB ...``) are rewritten
+    in place using carriage returns to restore the pre-migration behavior where
+    yt-dlp used ``\\r`` for live progress updates.  Non-progress lines use
+    newlines as-is.
     """
     if not echo:
         progress = _parse_ytdlp_progress(line)
@@ -680,12 +693,12 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
             )
         return
     if _is_ytdlp_progress_line(line):
-        text = line.rstrip("\n\r")
+        text = sanitize_text_for_log(line.rstrip("\n\r"))
         width = shutil.get_terminal_size((80, 24)).columns
         sys.stderr.write("\r" + text.ljust(width)[:width] + "\r")
         sys.stderr.flush()
     else:
-        sys.stderr.write(line)
+        sys.stderr.write(sanitize_text_for_log(line))
         sys.stderr.flush()
 
 

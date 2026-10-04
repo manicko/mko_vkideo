@@ -924,7 +924,13 @@ class TestYtdlpProgressLineDetection:
 
 
 class TestEchoYtdlpLine:
-    """Tests for the console rendering of a yt-dlp line."""
+    """Tests for the console rendering of a yt-dlp line.
+
+    A non-progress line with nothing to redact is passed through unchanged,
+    while a non-progress line carrying a signed CDN URL is redacted on the
+    terminal. These two cases are siblings, not replacements: pass-through is
+    content-dependent, not unconditional.
+    """
 
     def test_progress_line_is_rewritten_in_place(self, capsys: pytest.CaptureFixture[str]) -> None:
         """A progress update must not append a newline (it would scroll)."""
@@ -946,6 +952,144 @@ class TestEchoYtdlpLine:
 
         captured = capsys.readouterr()
         assert captured.err == line
+
+    def test_non_progress_signed_cdn_url_is_redacted_on_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A non-progress line carrying a signed CDN URL is redacted on stderr.
+
+        The signed query values (``sig=``, ``token=``) and their payloads never
+        reach the terminal; only ``scheme://host/***REDACTED***`` survives. The
+        surrounding yt-dlp prose and the trailing newline are preserved. This is
+        the core SEC-005 evidence: nothing in tests/ previously passed a URL to
+        ``_echo_ytdlp_line``. Sibling of ``test_one_shot_line_keeps_its_newline``,
+        not a replacement for its benign pass-through.
+        """
+        line = (
+            "[video] abc123: Downloading webpage: "
+            "https://vk-cdn.net/video/seg1.ts?sig=A1b2C3d4e5f6&token=zzzZZZ\n"
+        )
+
+        _echo_ytdlp_line(line)
+
+        captured = capsys.readouterr()
+        assert "https://vk-cdn.net/***REDACTED***" in captured.err
+        assert "sig=" not in captured.err
+        assert "token=" not in captured.err
+        assert "A1b2C3d4e5f6" not in captured.err
+        assert "zzzZZZ" not in captured.err
+        assert "Downloading webpage:" in captured.err
+        assert captured.err.endswith("\n")
+
+    def test_non_progress_cookie_artefact_path_is_redacted_on_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A real cookie artefact path in a non-progress line is redacted on stderr.
+
+        Builds a genuine artefact via ``_create_temp_cookie_file`` (so the
+        ``vk_cookies_`` shape is real, not synthetic) and proves B4's widened
+        artefact rule reaches the terminal: ``***REDACTED***`` appears with none
+        of ``vk_cookies_``, ``AppData`` or ``Users`` present. Cleaned up in a
+        ``finally`` so no residue escapes.
+        """
+        from vkdownloader.services.ytdlp_downloader import _remove_cookie_artifact_dir
+
+        cookie_file = _create_temp_cookie_file("vk=test")
+        cookie_dir = cookie_file.parent
+        try:
+            line = f"[download] Destination: {cookie_file}\n"
+
+            _echo_ytdlp_line(line)
+
+            captured = capsys.readouterr()
+            assert "***REDACTED***" in captured.err
+            assert "vk_cookies_" not in captured.err
+            assert "AppData" not in captured.err
+            assert "Users" not in captured.err
+            assert captured.err.endswith("\n")
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)
+
+    def test_progress_branch_text_is_transformed_before_padding(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The progress write branch redacts ``text`` before width padding/truncation.
+
+        A line classified as progress (``_is_ytdlp_progress_line``) that also
+        carries a signed CDN URL in its speed field still takes the ``\\r``
+        rewrite and writes the redacted URL. Fixture constraint: the transformed
+        text is kept under 80 columns so ``ljust``/truncation at
+        ``shutil.get_terminal_size((80, 24)).columns`` cannot make the assertion
+        environment-dependent.
+        """
+        line = "[download]  40.3% of 649.37MiB at https://vk-cdn.net/v?sig=X ETA 06:43\n"
+
+        _echo_ytdlp_line(line)
+
+        captured = capsys.readouterr()
+        assert captured.err.startswith("\r")
+        assert captured.err.endswith("\r")
+        assert "\n" not in captured.err
+        assert "https://vk-cdn.net/***REDACTED***" in captured.err
+        assert "sig=" not in captured.err
+
+    def test_echo_false_url_line_writes_nothing_and_logs_nothing(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``echo=False`` on a URL-bearing line writes nothing and logs nothing.
+
+        The observable half of gate-before-transform: the ``if not echo`` gate is
+        evaluated before any transform, so a URL-bearing non-progress line
+        leaves stderr empty and emits no progress-suppressed debug record. Done
+        at ``_echo_ytdlp_line`` directly with ``capsys`` and a patched logger;
+        the existing subprocess-level ``echo=False`` test is not duplicated here.
+        """
+        line = (
+            "[video] abc123: Downloading webpage: "
+            "https://vk-cdn.net/video/seg1.ts?sig=A1b2C3d4e5f6&token=zzzZZZ\n"
+        )
+
+        with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+            _echo_ytdlp_line(line, echo=False)
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert mock_logger.debug.call_count == 0
+        assert mock_logger.warning.call_count == 0
+        assert mock_logger.error.call_count == 0
+
+    def test_progress_templates_are_transform_identically(self) -> None:
+        """D-6 evidence: all seven real yt-dlp progress templates are fixed points.
+
+        For each template: ``sanitize_text_for_log(t) == t`` (the URL rule keeps
+        ``scheme://host/`` and the artefact rules key on ``vk_cookies_…``, which
+        the ``[download] <pct>% of <size>`` region never contains); and
+        classification (``_is_ytdlp_progress_line``) and parse
+        (``_parse_ytdlp_progress``) results are identical before and after. The
+        second half pins *classification*, which the existing ``downloaded`` /
+        ``total`` assertions provably do not cover — they would stay green through
+        a transform that changed which arm a line takes. Identity holds because
+        ``_YTDLP_PROGRESS_LINE_RE`` is anchored at ``^[download]`` and none of
+        B4's three rules can match that region.
+        """
+        from vkdownloader.utils.url_sanitizer import sanitize_text_for_log
+
+        templates = [
+            "[download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43",
+            "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5/566)",
+            "[download]  12.34MiB at 1.00MiB/s (00:12)",
+            "[download]   0.0% at Unknown B/s ETA Unknown",
+            "[download]  40.3% of 649.37MiB at 983.45KiB/s ETA 06:43 (frag 1/10)",
+            "[download]  100% of 344.38MiB at 5.00MiB/s ETA 00:00",
+            "[download]   0.8% of ~   1.18GiB at    1.42MiB/s ETA 16:38 (frag 5)",
+        ]
+        for template in templates:
+            transformed = sanitize_text_for_log(template)
+            assert transformed == template, (
+                f"template must be a fixed point of the transform: {template!r}"
+            )
+            assert _is_ytdlp_progress_line(template) == _is_ytdlp_progress_line(transformed)
+            assert _parse_ytdlp_progress(template) == _parse_ytdlp_progress(transformed)
 
     def test_shorter_progress_line_clears_the_previous_one(
         self, capsys: pytest.CaptureFixture[str]
