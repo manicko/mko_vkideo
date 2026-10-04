@@ -153,6 +153,7 @@ Both commands support:
 - Opt-in browser stealth configuration (`stealth_enabled`, off by default)
 - Title sanitization for filesystem safety via `sanitize_title()`
 - **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) and passed to the yt-dlp subprocess via its configuration file. This ensures that signed CDN URLs and session tokens never appear in process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`). The temporary file is removed automatically after the download completes.
+- **Subprocess process boundary**: every subprocess spawn (yt-dlp and ffmpeg merge stages) starts a new process session/group (`start_new_session=True` on POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows). On POSIX this lets the termination ladder signal descendants via `os.killpg`; on Windows the group is console-signal routing only and descendants the child started for itself can survive — see the [limitations guide](vkdownloader-limitations.md#subprocess-process-boundary-trn-003) for the Windows residual and how to clean up manually.
 
 ## Rate Limiting & Throttling
 

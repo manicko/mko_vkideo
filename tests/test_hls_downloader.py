@@ -30,7 +30,9 @@ from vkdownloader.services.downloader import (
 )
 from vkdownloader.services.downloader_throttle import get_shutdown_event
 from vkdownloader.services.ffmpeg_utils import (
+    _SPAWN_BOUNDARY_KWARGS,
     _merge_segments_batched,
+    cancel_subprocess,
     check_ffmpeg_available,
     iter_process_lines,
 )
@@ -4095,6 +4097,128 @@ class TestYtDlpSubprocessShutdown:
             for task in (failed, blocked):
                 if not task.done():
                     task.cancel()
+
+
+class TestProcessBoundaryDescendant:
+    """Tests for TRN-003: process boundary at subprocess spawn sites.
+
+    A stand-in child spawns a grandchild process, then ``cancel_subprocess``
+    is run on the child. On POSIX the group signal (``killpg``) reaches the
+    grandchild; on Windows ``CREATE_NEW_PROCESS_GROUP`` routes console signals
+    only, so the grandchild survives — the documented residual.
+    """
+
+    # Stand-in child: spawns a grandchild (a sleeping python), prints the
+    # grandchild PID to stdout, then idles until the termination ladder kills it.
+    _CHILD_SCRIPT = (
+        "import subprocess, sys, time\n"
+        "gc = subprocess.Popen(\n"
+        "    [sys.executable, '-c', 'import time; time.sleep(60)'],\n"
+        "    stdout=subprocess.DEVNULL,\n"
+        "    stderr=subprocess.DEVNULL,\n"
+        ")\n"
+        "print(f'GPID:{gc.pid}')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n"
+    )
+
+    @staticmethod
+    def _is_alive(pid: int) -> bool:
+        """Cross-platform liveness check via ``os.kill(pid, 0)``."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Process exists but we lack permission to signal it.
+            return True
+        except OSError:
+            return False
+
+    async def _spawn_child_with_grandchild(
+        self,
+        tmp_path: Path,
+    ) -> tuple[asyncio.subprocess.Process, int]:
+        """Spawn a child that spawns a grandchild; return (process, gc_pid).
+
+        Asserts the grandchild is alive before returning — a test that
+        passes because the child never spawned is not a test.
+        """
+        child_script = tmp_path / "child_standin.py"
+        child_script.write_text(self._CHILD_SCRIPT)
+
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            str(child_script),
+            **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
+            stdout=asyncio.subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        line = await asyncio.wait_for(process.stdout.readline(), timeout=10.0)
+        assert line.startswith(b"GPID:"), f"unexpected child output: {line!r}"
+        grandchild_pid = int(line.split(b":")[1].strip())
+        assert self._is_alive(grandchild_pid), "grandchild never started"
+        return process, grandchild_pid
+
+    async def _cleanup(
+        self,
+        process: asyncio.subprocess.Process | None,
+        grandchild_pid: int | None,
+    ) -> None:
+        if process is not None and process.returncode is None:
+            process.kill()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except TimeoutError:
+                pass
+        if grandchild_pid is not None and self._is_alive(grandchild_pid):
+            try:
+                # 9 is SIGKILL on POSIX; on Windows os.kill(pid, 9) maps to
+                # TerminateProcess (signal.SIGKILL is absent at runtime there).
+                os.kill(grandchild_pid, 9)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX-only: killpg reaches descendants",
+    )
+    async def test_descendant_killed_on_posix(self, tmp_path: Path) -> None:
+        """On POSIX, cancel_subprocess kills the grandchild via killpg."""
+        process, grandchild_pid = await self._spawn_child_with_grandchild(tmp_path)
+        try:
+            result = await cancel_subprocess(process)
+            assert result is True
+            assert process.returncode is not None
+            # Give the signal time to propagate to the grandchild.
+            await asyncio.sleep(1.0)
+            assert not self._is_alive(grandchild_pid), "grandchild survived on POSIX"
+        finally:
+            await self._cleanup(process, grandchild_pid)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="Windows-only: CREATE_NEW_PROCESS_GROUP does not kill descendants",
+    )
+    async def test_descendant_survives_on_windows(self, tmp_path: Path) -> None:
+        """On Windows, the grandchild survives cancel_subprocess (TRN-003 residual)."""
+        process, grandchild_pid = await self._spawn_child_with_grandchild(tmp_path)
+        try:
+            result = await cancel_subprocess(process)
+            assert result is True
+            assert process.returncode is not None
+            # CREATE_NEW_PROCESS_GROUP routes console signals only; the
+            # grandchild survives. This is the documented Windows residual.
+            await asyncio.sleep(1.0)
+            assert self._is_alive(grandchild_pid), (
+                "grandchild died on Windows — residual not honored"
+            )
+        finally:
+            await self._cleanup(process, grandchild_pid)
 
 
 class TestYtDlpStallTimeout:

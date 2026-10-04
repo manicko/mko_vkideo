@@ -91,6 +91,23 @@ Two limits of that check, stated plainly:
 - If the free-space figure cannot be read at all — an unusual or unreadable mount — the check logs it and lets the merge proceed. An unreadable volume is not evidence of a full one, and a failed probe must not block a download that would have succeeded.
 - A volume can still fill *after* the probe, because another process may consume the space and the probe cannot predict that. The merge is also the one download step that cannot be resumed, since its input segments are still needed. When this happens ffmpeg fails on its own write and the merge returns a failure with no partial output.
 
+## Subprocess Process Boundary (TRN-003)
+
+Every subprocess the downloader spawns (yt-dlp and the ffmpeg merge stages) is started with a platform-specific boundary keyword so that the termination ladder can reach descendants:
+
+- **POSIX**: `start_new_session=True` calls `setsid()` in the child, making it a session leader whose process group ID equals its PID. `cancel_subprocess` sends `os.killpg(pid, SIGTERM)` (escalating to `SIGKILL`) alongside the direct `terminate()`/`kill()`, so a process that yt-dlp or ffmpeg started for itself is signaled and reaped.
+- **Windows**: `CREATE_NEW_PROCESS_GROUP` (0x200) is **console-signal routing only** — it disables Ctrl+C for the group. It does **not** make the process tree killable by PID. `TerminateProcess` (what `terminate()`/`kill()` maps to on Windows) terminates only the single handle, not descendants.
+
+**What this closes on POSIX**: a descendant the child started for itself is killed when the ladder runs, because it shares the child's process group.
+
+**What this does NOT close — the Windows residual**: on Windows, a process that the direct child started for itself **survives** `cancel_subprocess`. The user ends it by hand — Task Manager (the leftover `ffmpeg.exe` / `yt-dlp.exe` / `python.exe` entry), or from a shell, `taskkill /PID <pid> /T /F`. **The application never calls `taskkill`** and never shells out to it. This is acceptable because the deployment is a single-user desktop (D1): a surviving orphan holds a file open on the user's own machine, where the user can already see it, and the direct child — which holds the credential material (`--cookies`) — is killed either way.
+
+A Windows Job Object would close this residual, but it is rejected as overengineering at this project's scale (project rule 5): it requires `ctypes`/pywin32, a handle-lifecycle wrapper, and a packaging-gate relaxation for a new `src/` module. A `taskkill /T` descendant sweep is also rejected: it replaces a structural defect with a timing-dependent one.
+
+**macOS honesty**: a descendant that itself calls `setsid()`/`setpgid()` leaves the child's process group and is unreachable by `killpg`. ffmpeg and yt-dlp do not do this; the guarantee is not adversarial-proof.
+
+**Abrupt parent death**: if the application itself is killed without unwinding (Task Manager "End task", console close, `SIGKILL`), the termination ladder never runs and children survive on **both** platforms. Graceful Ctrl+C and graceful `SIGTERM`/`SIGINT` are fully covered on both.
+
 ## What Works
 
 1. **Browser automation (non-headless)** - Captures m3u8 URLs and cookies

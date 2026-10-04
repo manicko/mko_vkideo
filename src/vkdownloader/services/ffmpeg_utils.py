@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import shutil
+import signal
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
+from typing import Final
 
 from structlog import get_logger
 
@@ -16,6 +22,27 @@ from ..utils.url_sanitizer import (
 )
 
 logger = get_logger(__name__)
+
+# TRN-003: Process boundary at every asyncio subprocess spawn site.
+# On POSIX, start_new_session=True calls setsid() in the child before exec,
+# making it a session leader whose process group ID equals its PID. os.killpg
+# can then signal descendants. On Windows, CREATE_NEW_PROCESS_GROUP (0x200)
+# only disables Ctrl+C routing for the group — it does NOT make the tree
+# killable by pid. See docs/11-guides/vkdownloader-limitations.md.
+#
+# creationflags raises ValueError on POSIX (it is Windows-only), and
+# subprocess.CREATE_NEW_PROCESS_GROUP does not exist on POSIX (AttributeError),
+# so the selection is a module-level platform guard, not per call.
+_IS_WINDOWS: Final[bool] = sys.platform == "win32"
+
+# The minimum platform-appropriate boundary keyword, applied at every spawn site
+# via ** _SPAWN_BOUNDARY_KWARGS. Typed dict[str, int | bool] — not Any — and a
+# platform dispatch, not an enumerated business constant (rule 10).
+_SPAWN_BOUNDARY_KWARGS: Final[dict[str, int | bool]] = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    if _IS_WINDOWS
+    else {"start_new_session": True}
+)
 
 # Module-level cache: PATH lookup happens only once per process lifetime
 _ffmpeg_available: bool | None = None
@@ -191,24 +218,51 @@ async def cancel_subprocess(
     Works with any ``asyncio.subprocess.Process``, including both ffmpeg and
     yt-dlp subprocesses.
 
+    On POSIX, when the child was spawned with ``start_new_session=True`` (the
+    boundary keyword applied at every spawn site), the child is a session
+    leader whose process group ID equals its PID. A supplementary
+    ``os.killpg`` signal reaches any descendant the child started, closing
+    TRN-003's orphan case on Unix. On Windows, the boundary keyword is
+    ``CREATE_NEW_PROCESS_GROUP``, which only routes console Ctrl+C — the
+    group is **not** killable by pid, and descendants the child started for
+    itself survive. See ``docs/11-guides/vkdownloader-limitations.md``.
+
     Args:
         process: The asyncio subprocess to cancel.
         timeout: Seconds to wait for graceful termination before force kill.
 
     Returns:
-        ``True`` if the process was cancelled (terminated by the ladder),
+        ``True`` if the direct child was terminated (by the ladder),
         ``False`` if the process was already gone — the clean outcome.
         Callers must not treat ``False`` as a failure to stop the child;
         a second ``returncode is None`` check is the correct discriminator
         for a genuinely not-clean termination.
+
+        Note: ``True`` means the **direct child** was terminated, not that
+        the whole tree was reaped. On POSIX, descendants that share the
+        child's process group also receive the signal, but they are not
+        children of this process and are never awaited.
     """
     logger.info("cancelling_subprocess", pid=process.pid)
     try:
+        # TRN-003: On POSIX, signal the whole process group, not just the
+        # child pid. The child was spawned with start_new_session=True, so
+        # its pgid == pid (setsid guarantees this). os.getpgid is unnecessary
+        # and does not protect against PID recycling. Guarded by
+        # returncode is None to mirror asyncio's gh-127049 fix: signalling
+        # an already-reaped PID can hit an unrelated recycled process group.
+        if not _IS_WINDOWS and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGTERM)  # type: ignore[attr-defined]
         process.terminate()
         try:
             await asyncio.wait_for(process.wait(), timeout=timeout)
             return True
         except TimeoutError:
+            # Force-kill the whole group on POSIX, then the pid-only alias.
+            if not _IS_WINDOWS and process.returncode is None:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
             process.kill()
             await process.wait()
             return True
@@ -311,6 +365,7 @@ async def _merge_batch_segments(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
     )
 
     try:
@@ -363,6 +418,7 @@ async def _perform_final_merge(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
     )
 
     try:

@@ -1,6 +1,8 @@
 """Unit tests for ffmpeg_utils merge and process management functions."""
 
 import asyncio
+import signal
+import sys
 from collections import namedtuple
 from collections.abc import Callable
 from pathlib import Path
@@ -156,6 +158,51 @@ class TestCancelSubprocess:
         from vkdownloader.services import ffmpeg_utils
 
         assert ffmpeg_utils.cancel_ffmpeg_process is ffmpeg_utils.cancel_subprocess
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only: killpg path")
+    async def test_killpg_called_when_returncode_none(self) -> None:
+        """On POSIX, os.killpg is called with SIGTERM when returncode is None."""
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.terminate = MagicMock()
+        mock_process.kill = MagicMock()
+        mock_process.pid = 4242
+        mock_process.returncode = None
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+
+        with patch("vkdownloader.services.ffmpeg_utils.os.killpg") as mock_killpg:
+            result = await cancel_subprocess(mock_process)
+
+        assert result is True
+        mock_killpg.assert_called_once_with(4242, signal.SIGTERM)
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only: killpg path")
+    async def test_killpg_skipped_when_returncode_set(self) -> None:
+        """When returncode is already set, os.killpg is not called (gh-127049 guard)."""
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.terminate = MagicMock()
+        mock_process.kill = MagicMock()
+        mock_process.pid = 4242
+        mock_process.returncode = 0  # Already exited
+
+        async def mock_wait() -> int:
+            return 0
+
+        mock_process.wait = mock_wait
+
+        with patch("vkdownloader.services.ffmpeg_utils.os.killpg") as mock_killpg:
+            result = await cancel_subprocess(mock_process)
+
+        assert result is True
+        mock_killpg.assert_not_called()
+        mock_process.terminate.assert_called_once()
 
 
 class TestMergeBatchSegments:
@@ -962,3 +1009,62 @@ class TestMergeFailureUrlRedaction:
             call = mock_logger.error.call_args
             assert call.args[0] == "final_merge_failed"
             assert call.kwargs["error"] == "ffmpeg error: invalid data found in stream"
+
+
+class TestSpawnBoundaryKwargs:
+    """Tests that spawn sites apply the TRN-003 platform boundary keyword."""
+
+    @pytest.mark.asyncio
+    async def test_merge_batch_segments_passes_boundary(self, tmp_path: Path) -> None:
+        """_merge_batch_segments passes the platform boundary keyword to the spawn."""
+        from vkdownloader.services.ffmpeg_utils import _IS_WINDOWS
+
+        segment1 = tmp_path / "00000.ts"
+        segment2 = tmp_path / "00001.ts"
+        segment1.write_bytes(b"segment1 data")
+        segment2.write_bytes(b"segment2 data")
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", b""
+
+        mock_process.communicate = mock_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
+            await _merge_batch_segments([segment1, segment2], tmp_path, 300)
+
+            call_kwargs = mock_exec.call_args[1]
+            if _IS_WINDOWS:
+                assert "creationflags" in call_kwargs
+            else:
+                assert call_kwargs["start_new_session"] is True
+
+    @pytest.mark.asyncio
+    async def test_perform_final_merge_passes_boundary(self, tmp_path: Path) -> None:
+        """_perform_final_merge passes the platform boundary keyword to the spawn."""
+        from vkdownloader.services.ffmpeg_utils import _IS_WINDOWS
+
+        temp_file = tmp_path / "batch_00000.ts"
+        temp_file.write_bytes(b"data")
+        output = tmp_path / "merged.ts"
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", b""
+
+        mock_process.communicate = mock_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
+            await _perform_final_merge([temp_file], output, 300)
+
+            call_kwargs = mock_exec.call_args[1]
+            if _IS_WINDOWS:
+                assert "creationflags" in call_kwargs
+            else:
+                assert call_kwargs["start_new_session"] is True

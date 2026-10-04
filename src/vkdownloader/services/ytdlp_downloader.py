@@ -32,7 +32,11 @@ from ..services.downloader_throttle import (
     get_shutdown_event,
 )
 from ..services.extractor import VKVideoExtractor
-from ..services.ffmpeg_utils import cancel_subprocess, iter_process_lines
+from ..services.ffmpeg_utils import (
+    _SPAWN_BOUNDARY_KWARGS,
+    cancel_subprocess,
+    iter_process_lines,
+)
 from ..services.quality import QualitySelector
 from ..services.segment_downloader import download_hls_with_resume
 from ..utils.security import validate_output_path
@@ -763,6 +767,7 @@ async def _download_with_ytdlp(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
         )
 
         output_chunks: bytearray = bytearray()
