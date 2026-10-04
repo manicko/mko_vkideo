@@ -337,21 +337,43 @@ class TestCreateTempCookieFile:
         finally:
             result.unlink(missing_ok=True)
 
-    def test_file_created_in_system_temp_dir(self) -> None:
-        """Test that the cookie file is created in the system temp directory,
-        not in the download output directory."""
+    def test_file_created_in_private_cookie_subdir(self) -> None:
+        """The cookie file must be created in a private subdirectory of the
+        system temp dir, not directly in the shared temp root.
+
+        This is the Windows-executable oracle for SEC-001's confinement:
+        the artefact's parent is a directory this process created, not the
+        shared temp root. The original assertion ``result.parent == temp_dir``
+        is intentionally reversed to ``result.parent != temp_dir``.
+        """
         import tempfile as _tempfile
 
-        temp_dir = _tempfile.gettempdir()
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _remove_cookie_artifact_dir,
+        )
+
+        temp_dir = Path(_tempfile.gettempdir())
         cookies = "vk=test"
         result = _create_temp_cookie_file(cookies)
 
         try:
-            assert str(result).startswith(temp_dir)
-            # Ensure file is NOT in a typical download output directory
-            assert result.parent == Path(temp_dir)
+            # The cookie file must NOT sit directly in the shared system temp root.
+            assert result.parent != temp_dir, (
+                "cookie file must not sit directly in the shared system temp root"
+            )
+            # The cookie file's parent must be a strict descendant of the temp dir.
+            assert temp_dir in result.parent.parents, (
+                "cookie file directory must be a strict descendant of the system temp dir"
+            )
+            # The containing directory must be one this process created.
+            assert result.parent in _COOKIE_ARTIFACT_DIRS
         finally:
             result.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(result.parent)
+            with _COOKIE_LIFECYCLE_LOCK:
+                _COOKIE_ARTIFACT_DIRS.discard(result.parent)
 
     @pytest.mark.skipif(
         os.name == "nt",
@@ -5077,3 +5099,170 @@ class TestDownloadVideoTitleCallback:
         assert mock_perform.call_count == 1
         # Default echo=True should be forwarded to perform_download
         assert mock_perform.call_args.kwargs["echo"] is True
+
+
+class TestCookieArtefactLifecycle:
+    """Tests for the cookie artefact lifecycle (SEC-001, SEC-002, VAL-602).
+
+    Covers directory confinement, owner-PID liveness probing, stale-dir sweep,
+    and atexit hook registration.
+    """
+
+    def test_create_cookie_artifact_dir_creates_private_subdir_in_temp(
+        self,
+    ) -> None:
+        """_create_cookie_artifact_dir creates a private subdir within the system temp.
+
+        The directory is a direct child of the system temp root (mkdtemp's parent)
+        and is tracked in ``_COOKIE_ARTIFACT_DIRS`` so the atexit handler can purge it.
+        """
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        temp_dir = Path(_tempfile.gettempdir())
+        cookie_dir = _create_cookie_artifact_dir()
+
+        try:
+            assert cookie_dir.parent == temp_dir, (
+                "cookie artefact directory must be a direct child of the system temp root"
+            )
+            with _COOKIE_LIFECYCLE_LOCK:
+                assert cookie_dir in _COOKIE_ARTIFACT_DIRS, (
+                    "cookie artefact directory must be tracked for atexit cleanup"
+                )
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)
+            with _COOKIE_LIFECYCLE_LOCK:
+                _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
+
+    def test_create_cookie_artifact_dir_writes_owner_pid(self) -> None:
+        """_create_cookie_artifact_dir records the current process PID in owner.pid.
+
+        The recorded PID is what the sweep uses to identify live-owned directories
+        and reclaim residues from hard-killed prior runs (SEC-002).
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _OWNER_PID_FILENAME,
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        cookie_dir = _create_cookie_artifact_dir()
+
+        try:
+            owner_file = cookie_dir / _OWNER_PID_FILENAME
+            assert owner_file.exists(), "owner.pid must exist in the artefact directory"
+            assert int(owner_file.read_text().strip()) == os.getpid()
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)
+            with _COOKIE_LIFECYCLE_LOCK:
+                _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
+
+    def test_is_pid_alive_current_process(self) -> None:
+        """_is_pid_alive returns True for the current process PID."""
+        from vkdownloader.services.ytdlp_downloader import _is_pid_alive
+
+        assert _is_pid_alive(os.getpid()) is True
+
+    def test_is_pid_alive_dead_pid(self) -> None:
+        """_is_pid_alive returns False for a PID that cannot exist."""
+        from vkdownloader.services.ytdlp_downloader import _is_pid_alive
+
+        # 999999 is well beyond any real PID on common platforms.
+        assert _is_pid_alive(999999) is False
+
+    def test_sweep_stale_cookie_dirs_removes_dead_owner(self) -> None:
+        """_sweep_stale_cookie_dirs removes directories whose owner PID is dead.
+
+        A directory with ``owner.pid`` pointing at a non-existent PID is residue
+        from a hard-killed prior run and must be purged by the liveness-gated
+        sweep (VAL-602 / SEC-002).
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            _OWNER_PID_FILENAME,
+            _sweep_stale_cookie_dirs,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        stale_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+
+        try:
+            (stale_dir / _OWNER_PID_FILENAME).write_text("999999")
+            _sweep_stale_cookie_dirs()
+            assert not stale_dir.exists(), "stale dir with dead owner PID should be swept"
+        finally:
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir, ignore_errors=True)
+
+    def test_sweep_stale_cookie_dirs_preserves_live_owner(self) -> None:
+        """_sweep_stale_cookie_dirs preserves directories owned by a live PID.
+
+        The current process is live, so a directory whose ``owner.pid`` records
+        it must survive the sweep — proving the guard is PID-based, not blanket
+        time-based (VAL-602).
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            _OWNER_PID_FILENAME,
+            _sweep_stale_cookie_dirs,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        live_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+
+        try:
+            (live_dir / _OWNER_PID_FILENAME).write_text(str(os.getpid()))
+            _sweep_stale_cookie_dirs()
+            assert live_dir.exists(), "live-owned directory must be preserved by the sweep"
+        finally:
+            if live_dir.exists():
+                shutil.rmtree(live_dir, ignore_errors=True)
+
+    def test_ensure_cookie_lifecycle_started_registers_atexit_once(self) -> None:
+        """_ensure_cookie_lifecycle_started registers the atexit handler exactly once.
+
+        Resets the module-level ``_cookie_lifecycle_started`` flag so the
+        registration branch is observable, then restores it for isolation.
+        """
+        import vkdownloader.services.ytdlp_downloader as mod
+        from vkdownloader.services.ytdlp_downloader import _ensure_cookie_lifecycle_started
+
+        original = mod._cookie_lifecycle_started
+        try:
+            mod._cookie_lifecycle_started = False
+            with patch("vkdownloader.services.ytdlp_downloader.atexit.register") as mock_register:
+                _ensure_cookie_lifecycle_started()
+                _ensure_cookie_lifecycle_started()
+            assert mock_register.call_count == 1, (
+                "atexit.register must be called exactly once across repeated invocations"
+            )
+        finally:
+            mod._cookie_lifecycle_started = original
+
+    def test_read_owner_pid_missing_file_returns_none(self, tmp_path: Path) -> None:
+        """_read_owner_pid returns None when owner.pid does not exist.
+
+        A directory without ``owner.pid`` is treated as having no recorded owner;
+        the sweep sees ``None`` from this function and treats the directory as
+        stale, removing it (SEC-002).
+        """
+        from vkdownloader.services.ytdlp_downloader import _read_owner_pid
+
+        assert _read_owner_pid(tmp_path) is None

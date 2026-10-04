@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
 import re
 import shutil
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,13 +50,183 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602).
+# These strings are frozen by B2: the prefix ``vk_cookies_`` is what the
+# sweep is keyed on, and the suffix ``.cookies.txt`` is what ``.gitignore``
+# matches. Renaming either breaks coverage silently.
+_COOKIE_ARTIFACT_PREFIX = "vk_cookies_"
+_COOKIE_ARTIFACT_SUFFIX = ".cookies.txt"
+_ARTEFACT_DIR_SUFFIX = "_dir"
+_OWNER_PID_FILENAME = "owner.pid"
+
+# Tracks every artefact directory this process created, so the atexit
+# handler can purge them on orderly exit.
+_COOKIE_ARTIFACT_DIRS: set[Path] = set()
+_cookie_lifecycle_started: bool = False
+_COOKIE_LIFECYCLE_LOCK = threading.Lock()
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Report whether a process with ``pid`` is currently alive.
+
+    On POSIX, uses ``os.kill(pid, 0)`` — signal 0 tests process existence
+    without delivering a signal. On Windows, ``os.kill`` is **prohibited**
+    because CPython maps non-console signal values to ``TerminateProcess``
+    (confirmed: signal 0 is not in the console-control set), so a ctypes
+    probe via ``OpenProcess`` + ``GetExitCodeProcess`` is used instead
+    (D-1). ``STILL_ACTIVE`` (259) means the process has not exited yet.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        # GetExitCodeProcess requires PROCESS_QUERY_INFORMATION (0x0400), not
+        # SYNCHRONIZE — SYNCHRONIZE only permits WaitForSingleObject. Using the
+        # wrong right makes GetExitCodeProcess fail with access denied, so
+        # _is_pid_alive incorrectly returns False for the current process (D-1).
+        PROCESS_QUERY_INFORMATION = 0x0400
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
+        if handle == 0:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == 259  # STILL_ACTIVE
+            return False
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _read_owner_pid(cookie_dir: Path) -> int | None:
+    """Read the owning PID recorded in ``owner.pid`` within ``cookie_dir``."""
+    owner_file = cookie_dir / _OWNER_PID_FILENAME
+    try:
+        return int(owner_file.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _purge_cookie_artifact_dir(cookie_dir: Path) -> None:
+    """Forcefully remove a stale cookie artefact directory and its contents.
+
+    Used by the sweep (prior-run residue) and the atexit handler. Errors
+    are swallowed so a leftover directory never blocks the current run.
+    """
+    shutil.rmtree(cookie_dir, ignore_errors=True)
+
+
+def _remove_cookie_artifact_dir(cookie_dir: Path) -> None:
+    """Remove a cookie artefact directory when it is empty.
+
+    Called from the ``finally`` block after the cookie file has been
+    unlinked. Successful removal emits no record. If the file could not be
+    deleted (the ``OSError`` arm already logged ``cookie_file_cleanup_failed``),
+    ``rmdir`` will fail because the directory is not empty — that failure
+    is also logged as ``cookie_file_cleanup_failed`` so the cleanup attempt
+    is visible, then the directory is left for the atexit sweep to reclaim.
+    """
+    try:
+        cookie_dir.rmdir()
+    except OSError as exc:
+        logger.warning(
+            "cookie_file_cleanup_failed",
+            path=str(cookie_dir),
+            error=str(exc),
+        )
+
+
+def _sweep_stale_cookie_dirs() -> None:
+    """Remove cookie artefact directories whose owner PID is no longer live.
+
+    Scans the system temp directory for directories whose names start with
+    the product prefix (``vk_cookies_dir``). A directory is removed only
+    when its recorded owner PID — read from ``owner.pid`` — is not a live
+    process. Directories owned by a live process (including the current one)
+    are left untouched. This is the liveness-gated sweep that makes residue
+    reclaimable by the *next* run rather than only by the operator (SEC-002),
+    and is PID-based rather than age-based to avoid the concurrency hazard
+    VAL-002 rules out (VAL-602).
+    """
+    temp_dir = Path(tempfile.gettempdir())
+    dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+    stale: list[Path] = []
+    try:
+        for entry in temp_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            if not entry.name.startswith(dir_prefix):
+                continue
+            owner_pid = _read_owner_pid(entry)
+            if owner_pid is None or not _is_pid_alive(owner_pid):
+                stale.append(entry)
+    except OSError:
+        return
+    for cookie_dir in stale:
+        _purge_cookie_artifact_dir(cookie_dir)
+        with _COOKIE_LIFECYCLE_LOCK:
+            _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
+
+
+def _create_cookie_artifact_dir() -> Path:
+    """Create a private per-run directory for cookie artefacts.
+
+    The directory is created within the system temp directory and records
+    the current process's PID in ``owner.pid`` so the sweep can identify
+    orphans after a hard kill. The directory is tracked in
+    ``_COOKIE_ARTIFACT_DIRS`` for atexit cleanup.
+    """
+    _ensure_cookie_lifecycle_started()
+    dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+    cookie_dir = Path(tempfile.mkdtemp(prefix=dir_prefix))
+    owner_file = cookie_dir / _OWNER_PID_FILENAME
+    owner_file.write_text(str(os.getpid()))
+    with _COOKIE_LIFECYCLE_LOCK:
+        _COOKIE_ARTIFACT_DIRS.add(cookie_dir)
+    return cookie_dir
+
+
+def _ensure_cookie_lifecycle_started() -> None:
+    """Register the atexit sweep handler (idempotent).
+
+    On the first call, sweeps stale directories from prior runs and
+    registers ``_cleanup_cookie_artifact_dirs`` with ``atexit``. Subsequent
+    calls are no-ops, so repeat artefact creation registers only one hook.
+    """
+    global _cookie_lifecycle_started
+    with _COOKIE_LIFECYCLE_LOCK:
+        if _cookie_lifecycle_started:
+            return
+        _cookie_lifecycle_started = True
+    _sweep_stale_cookie_dirs()
+    atexit.register(_cleanup_cookie_artifact_dirs)
+
+
+def _cleanup_cookie_artifact_dirs() -> None:
+    """atexit handler: purge every cookie artefact directory this process created."""
+    with _COOKIE_LIFECYCLE_LOCK:
+        tracked = list(_COOKIE_ARTIFACT_DIRS)
+    for cookie_dir in tracked:
+        _purge_cookie_artifact_dir(cookie_dir)
+    with _COOKIE_LIFECYCLE_LOCK:
+        _COOKIE_ARTIFACT_DIRS.clear()
+
 
 def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
-    """Create a temporary Netscape cookie file in the system temp directory.
+    """Create a temporary Netscape cookie file in a per-run private directory.
 
-    Unlike writing to the download output directory (which may be cloud-synced),
-    the system temp directory is private and not synced, reducing the risk of
-    live session-cookie leakage on abnormal termination.
+    The file is written inside a private subdirectory of the system temp
+    directory (created by :func:`_create_cookie_artifact_dir`) with mode 0o600
+    on POSIX. The private directory records the owning process's PID so the
+    sweep can reclaim it on the next run if this process is hard-killed
+    (SEC-002).
 
     Args:
         cookies: Either a raw cookie string (Netscape format) or a list of
@@ -62,10 +234,16 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
 
     Returns:
         Path to the temporary cookie file (mode 0o600, applied on POSIX; see
-        D-11). The caller is responsible for cleanup.
+        D-11). The caller is responsible for cleanup of both the file and
+        its containing directory.
     """
     content = _cookies_to_netscape(cookies)
-    fd, path = tempfile.mkstemp(suffix=".cookies.txt", prefix="vk_cookies_")
+    cookie_dir = _create_cookie_artifact_dir()
+    fd, path = tempfile.mkstemp(
+        suffix=_COOKIE_ARTIFACT_SUFFIX,
+        prefix=_COOKIE_ARTIFACT_PREFIX,
+        dir=str(cookie_dir),
+    )
     # QLT-004: Always close the fd in `finally` BEFORE unlinking the file.
     # On Windows, an open fd locks the file and unlink will silently fail.
     # Suppressing close errors prevents masking the original write error.
@@ -81,14 +259,15 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
             pass
     if write_error is not None:
         Path(path).unlink(missing_ok=True)
+        _remove_cookie_artifact_dir(cookie_dir)
         raise write_error
-    # DF-007: Explicitly set 0o600 permissions. tempfile.mkstemp creates
-    # files subject to the process umask (typically 0o644 on Unix),
-    # exposing live session cookies to other local users if the process
-    # crashes before cleanup. 0o600 sets POSIX permission bits: on Windows
-    # os.chmod toggles only the read-only attribute, so the owner-only
-    # guarantee is not offered there (D-11) and the mode is requested for
-    # its POSIX effect only.
+    # DF-007: Confine the artefact by location, not just by mode.
+    # _create_cookie_artifact_dir created a private directory (mkdtemp uses
+    # 0o700 on POSIX), so only the owning user can reach the file inside.
+    # This os.chmod(0o600) is kept as defence-in-depth for the file's POSIX
+    # permission bits; on Windows os.chmod toggles only the read-only
+    # attribute, so the owner-only guarantee is not offered there (D-11) and
+    # the mode is requested for its POSIX effect only.
     os.chmod(path, 0o600)
     return Path(path)
 
@@ -919,6 +1098,7 @@ async def _download_with_ytdlp(
                 )
             else:
                 logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+            _remove_cookie_artifact_dir(cookie_file.parent)
 
 
 async def _resolve_cookies(
