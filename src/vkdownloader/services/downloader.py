@@ -95,6 +95,16 @@ def _semaphore_context(
 #   * ffmpeg_utils.py:
 #       cancel_subprocess, _build_ffmpeg_concat_command,
 #       _merge_segments_batched, check_ffmpeg_available
+#   * segment_downloader.py:
+#       download_hls_with_resume, _cleanup_segments, _download_segment,
+#       _download_segment_parallel, _download_segment_sequential,
+#       _fetch_playlist_with_retry, _parse_m3u8_segments
+#   * downloader_throttle.py:
+#       _retry_429_with_backoff
+#   * cookies.py:
+#       _cookies_to_netscape
+#   * signal_handlers.py:
+#       setup_signal_handlers
 __all__ = [
     "cancel_subprocess",
     "check_ffmpeg_available",

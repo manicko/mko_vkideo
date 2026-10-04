@@ -566,10 +566,14 @@ async def _merge_segments_batched(
             A precondition failure like the missing-segment one above, not a
             merge failure — which is why it raises rather than returning None.
             It is deliberately not an ``OSError`` subclass: the yt-dlp resume
-            path wraps this call in ``except (ExtractionError, OSError)``
-            (ytdlp_downloader.py), which would swallow a FileNotFoundError
-            here, relabel it "failed_to_refresh_token" and return None, losing
-            the message.
+            path wraps this call in ``except ExtractionError``
+            (ytdlp_downloader.py). A missing muxer raises ``FileNotFoundError``
+            — an ``OSError`` but **not** an ``ExtractionError`` subclass — so the
+            resume handler does not swallow it; the merge sinks catch it at
+            their own ``except OSError`` arm instead. A ``DownloadError``
+            likewise survives: it is neither class, so the resume path cannot
+            relabel it "failed_to_refresh_token" and return None, losing the
+            message.
     """
     batch_size = 100
     temp_files: list[Path] = []
