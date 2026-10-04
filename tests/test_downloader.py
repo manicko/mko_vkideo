@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -251,17 +251,36 @@ class TestPerformDownload:
         assert result == output_file
 
     @pytest.mark.asyncio
-    async def test_semaphore_forwarded_to_ytdlp_and_segment_paths_without_leak(
+    async def test_semaphore_forwarded_to_yt_dlp_and_segment_paths_without_leak(
         self,
         tmp_path: Path,
     ) -> None:
-        """D-12 case 8: shared semaphore forwarded to both AUTO ladders and fully released (no permit leak)."""
+        """D-12: video_semaphore forwarded to the yt-dlp ladder and the segment
+        path; fully released (no permit leak).
+
+        ``perform_download`` (AUTO arm) forwards the semaphore to
+        ``download_with_ytdlp_with_resume_fallback`` — the yt-dlp ladder, pinned
+        through the full ``perform_download`` entry point here.
+
+        The segment path (``download_hls_with_resume``) is only reached from
+        ``_attempt_segment_resume``, which is reached from inside
+        ``download_with_ytdlp_with_resume_fallback`` after a yt-dlp failure when a
+        partial file exists. Since this unit test mocks the outer
+        ``download_with_ytdlp_with_resume_fallback`` entry point, that inner path
+        is unreachable through ``perform_download`` here. The segment-path
+        semaphore assertion is therefore re-anchored at
+        ``_attempt_segment_resume`` — the layer that actually passes
+        ``video_semaphore`` to ``download_hls_with_resume`` — rather than left
+        as a second redundant yt-dlp assertion.
+        """
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
+
         settings = _make_settings(tmp_path, CookieSource.NONE)
-        settings_browser = _make_settings(tmp_path, CookieSource.BROWSER)
         output_file = tmp_path / "video_output.mp4"
         semaphore = asyncio.Semaphore(2)
         initial = semaphore._value
 
+        # --- yt-dlp ladder: perform_download forwards the semaphore ---
         with (
             patch(
                 "vkdownloader.services.downloader.check_ffmpeg_available",
@@ -273,7 +292,7 @@ class TestPerformDownload:
                 return_value=output_file,
             ) as mock_ytdlp,
         ):
-            await perform_download(
+            result = await perform_download(
                 _URL,
                 _QUALITY,
                 output_file,
@@ -283,36 +302,43 @@ class TestPerformDownload:
                 selected_stream=_STREAM,
                 semaphore=semaphore,
             )
+
+        assert result == output_file
         assert mock_ytdlp.call_args.kwargs["video_semaphore"] is semaphore
         assert semaphore._value == initial
 
-        with (
-            patch(
-                "vkdownloader.services.downloader.check_ffmpeg_available",
-                return_value=True,
-            ),
-            patch(
-                "vkdownloader.services.downloader._resolve_cookies",
-                new_callable=AsyncMock,
-                return_value=(_M3U8, "ck", None),
-            ),
-            patch(
-                "vkdownloader.services.downloader.download_with_ytdlp_with_resume_fallback",
-                new_callable=AsyncMock,
-                return_value=output_file,
-            ) as mock_ytdlp_browser,
-        ):
-            await perform_download(
+        # --- segment path: _attempt_segment_resume forwards to download_hls_with_resume ---
+        seg_output = tmp_path / "segment_output.mp4"
+        seg_output.write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
+            new_callable=AsyncMock,
+            return_value=seg_output,
+        ) as mock_seg:
+            seg_result = await _attempt_segment_resume(
                 _URL,
-                _QUALITY,
-                output_file,
-                DownloadMethod.AUTO,
-                settings=settings_browser,
-                video_data=_VIDEO,
-                selected_stream=_STREAM,
-                semaphore=semaphore,
+                _M3U8,
+                seg_output,
+                "1080",
+                retry_count=1,
+                extractor=mock_extractor,
+                settings=settings,
+                backoff_coordinator=None,
+                video_semaphore=semaphore,
             )
-        assert mock_ytdlp_browser.call_args.kwargs["video_semaphore"] is semaphore
+
+        assert seg_result == seg_output
+        assert mock_seg.call_args.kwargs["video_semaphore"] is semaphore
         assert semaphore._value == initial
 
     @pytest.mark.asyncio

@@ -6,10 +6,11 @@ import sys
 from collections import namedtuple
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from vkdownloader.config import Settings
 from vkdownloader.exceptions import DownloadError
 from vkdownloader.services.ffmpeg_utils import (
     _MERGE_SPACE_MARGIN_BYTES,
@@ -1010,6 +1011,89 @@ class TestMergeFailureUrlRedaction:
             assert call.args[0] == "final_merge_failed"
             assert call.kwargs["error"] == "ffmpeg error: invalid data found in stream"
 
+    @pytest.mark.asyncio
+    async def test_batch_merge_failed_host_survives_when_url_extends_past_200(
+        self, tmp_path: Path
+    ) -> None:
+        """SEC-002/B14: the batch_merge_failed sink applies sanitize-then-truncate.
+
+        The stderr is >200 chars and the signed URL's token starts past the
+        200-char truncation point. With the correct order (sanitize → truncate)
+        the URL shrinks to ``scheme://host/***REDACTED***/`` so the host survives
+        the ``[:200]`` slice. Inverting to truncate → sanitize yields a 209-char
+        string (the partial URL at [:200] still matches the redaction regex and
+        expands to 39 chars), caught by the ``len == 200`` assertion.
+        """
+        segment = tmp_path / "00000.ts"
+        segment.write_bytes(b"data")
+
+        filler = "x" * 170
+        signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+        stderr_output = (filler + signed_url).encode()
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _merge_batch_segments([segment], tmp_path, 300)
+
+            assert result is None
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "batch_merge_failed"
+            logged_error = call.kwargs["error"]
+            assert "cdn.example.com" in logged_error
+            assert "SECRET123" not in logged_error
+            assert "ABC" not in logged_error
+            assert len(logged_error) == 200
+
+    @pytest.mark.asyncio
+    async def test_final_merge_failed_host_survives_when_url_extends_past_200(
+        self, tmp_path: Path
+    ) -> None:
+        """SEC-002/B14: the final_merge_failed sink applies sanitize-then-truncate."""
+        temp_file = tmp_path / "batch_00000.ts"
+        temp_file.write_bytes(b"data")
+        output = tmp_path / "merged.ts"
+
+        filler = "x" * 170
+        signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+        stderr_output = (filler + signed_url).encode()
+
+        mock_process = MagicMock(spec=asyncio.subprocess.Process)
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+
+        async def mock_communicate() -> tuple[bytes, bytes]:
+            return b"", stderr_output
+
+        mock_process.communicate = mock_communicate
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger,
+        ):
+            result = await _perform_final_merge([temp_file], output, 300)
+
+            assert result is False
+            mock_logger.error.assert_called_once()
+            call = mock_logger.error.call_args
+            assert call.args[0] == "final_merge_failed"
+            logged_error = call.kwargs["error"]
+            assert "cdn.example.com" in logged_error
+            assert "SECRET123" not in logged_error
+            assert "ABC" not in logged_error
+            assert len(logged_error) == 200
+
 
 class TestSpawnBoundaryKwargs:
     """Tests that spawn sites apply the TRN-003 platform boundary keyword."""
@@ -1062,6 +1146,37 @@ class TestSpawnBoundaryKwargs:
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
             await _perform_final_merge([temp_file], output, 300)
+
+            call_kwargs = mock_exec.call_args[1]
+            if _IS_WINDOWS:
+                assert "creationflags" in call_kwargs
+            else:
+                assert call_kwargs["start_new_session"] is True
+
+    @pytest.mark.asyncio
+    async def test_download_with_ytdlp_passes_boundary(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """_download_with_ytdlp passes the platform boundary keyword to the spawn."""
+        from vkdownloader.services.ffmpeg_utils import _IS_WINDOWS
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                output_file,
+                "720",
+                test_settings,
+            )
 
             call_kwargs = mock_exec.call_args[1]
             if _IS_WINDOWS:

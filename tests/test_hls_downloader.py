@@ -3942,35 +3942,42 @@ class TestYtDlpSubprocessShutdown:
             _shutdown_event_ctx.reset(token)
 
     @pytest.mark.asyncio
-    async def test_cancel_not_clean_logged_when_process_still_running(
+    async def test_no_cancel_not_clean_when_process_already_reaped(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """TRN-0013 negative case: cancel_subprocess returns False while
-        process.returncode is still None — the child is genuinely still
-        running after the ladder — so yt_dlp_cancel_not_clean MUST fire.
+        """B5: cancel_subprocess returns False with returncode already set —
+        the reachable "already gone ⇒ clean" state — emits no warning.
 
-        Without this assertion the fix is satisfied by deleting the warning,
-        which must not be a passing outcome.
+        cancel_subprocess returns False only via the ProcessLookupError arm,
+        which fires when the handle is already gone — a state in which returncode
+        is already set. The ``and process.returncode is None`` guard suppresses
+        the yt_dlp_cancel_not_clean record in that reachable case. This test must
+        fail if anyone reverts to the pre-B5
+        ``if not await cancel_subprocess(process):`` warning.
         """
         from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
 
         output_file = tmp_path / "video.mp4"
 
-        mock_process = AsyncMock()
-        mock_process.returncode = None
-        mock_process.pid = 12345
-        mock_process.stdout = AsyncMock()
-        mock_process.stdout.readline = AsyncMock(return_value=b"")
-        mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
+        token = _shutdown_event_ctx.set(asyncio.Event())
+        try:
+            get_shutdown_event().set()
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            with patch(
-                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
-                new_callable=AsyncMock,
-                return_value=False,
-            ):
-                with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
-                    with pytest.raises(asyncio.CancelledError):
+            mock_process = AsyncMock()
+            mock_process.returncode = 1  # already gone — reachable state
+            mock_process.pid = 12345
+            mock_process.stdout = AsyncMock()
+            mock_process.stdout.readline = AsyncMock(return_value=b"")
+            mock_process.wait = AsyncMock(return_value=1)
+
+            with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                    new_callable=AsyncMock,
+                    return_value=False,
+                ) as mock_cancel:
+                    with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                         await _download_with_ytdlp(
                             "https://vkvideo.ru/video-12345_67890",
                             output_file,
@@ -3978,17 +3985,18 @@ class TestYtDlpSubprocessShutdown:
                             test_settings,
                         )
 
-        not_clean_calls = [
-            c
-            for c in mock_logger.warning.call_args_list
-            if c.args and c.args[0] == "yt_dlp_cancel_not_clean"
-        ]
-        assert len(not_clean_calls) == 1, (
-            f"Expected exactly 1 yt_dlp_cancel_not_clean record, got {len(not_clean_calls)}"
-        )
-        call = not_clean_calls[0]
-        assert call.kwargs["pid"] == 12345
-        assert call.kwargs["url"] == "https://vkvideo.ru/***REDACTED***"
+            mock_cancel.assert_awaited()
+            not_clean_calls = [
+                c
+                for c in mock_logger.warning.call_args_list
+                if c.args and c.args[0] == "yt_dlp_cancel_not_clean"
+            ]
+            assert len(not_clean_calls) == 0, (
+                f"Expected 0 yt_dlp_cancel_not_clean records (process already reaped), "
+                f"got {len(not_clean_calls)}"
+            )
+        finally:
+            _shutdown_event_ctx.reset(token)
 
     @pytest.mark.asyncio
     async def test_reader_task_failure_emits_record(self) -> None:
