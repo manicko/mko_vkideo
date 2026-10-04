@@ -5544,9 +5544,11 @@ class TestCookieArtefactLifecycle:
     def test_read_owner_pid_missing_file_returns_none(self, tmp_path: Path) -> None:
         """_read_owner_pid returns None when owner.pid does not exist.
 
-        A directory without ``owner.pid`` is treated as having no recorded owner;
-        the sweep sees ``None`` from this function and treats the directory as
-        stale, removing it (SEC-002).
+        A missing ``owner.pid`` is a statement about this pure parser: it means
+        "no readable record", never "the owner is dead". What the sweep may
+        conclude from ``None`` is ``_sweep_stale_cookie_dirs``' business, and
+        the default-deny rule there declines to destroy on ``None`` -- "cannot
+        determine the owner" is not a positive demonstration of death (VAL-602).
         """
         from vkdownloader.services.ytdlp_downloader import _read_owner_pid
 
@@ -5637,3 +5639,406 @@ class TestCookieArtefactLifecycle:
             f"_COOKIE_ARTIFACT_DIRS grew from {size_before} to {size_after} "
             f"across 3 create/teardown cycles"
         )
+
+    # --- R2: VAL-602 creation-race closure (default-deny sweep) ---
+
+    def test_created_cookie_dir_matches_the_sweep_filter(self) -> None:
+        """R2-A3 guard: a freshly created artefact dir matches the sweep's filter.
+
+        Nothing asserted this before, so an edit that broke the prefix would turn
+        the sweep into a silent no-op. _create_cookie_artifact_dir's result must
+        be matched by startswith(_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX).
+        Written FIRST, before any rule is exercised, so it goes green immediately.
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        cookie_dir = _create_cookie_artifact_dir()
+        try:
+            assert cookie_dir.name.startswith(dir_prefix), (
+                "the sweep's startswith filter must match a freshly created "
+                "cookie artefact directory"
+            )
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)
+
+    def test_pidless_new_dir_survives_sweep(self) -> None:
+        """AC-1 / R2-A1: a fresh PID-less directory survives the sweep.
+
+        Built with tempfile.mkdtemp(prefix=_COOKIE_ARTIFACT_PREFIX +
+        _ARTEFACT_DIR_SUFFIX) and no owner.pid -- the exact on-disk shape
+        observable between mkdtemp returning and write_text completing. It is
+        fresh (well under the grace), so it is retained.
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            _sweep_stale_cookie_dirs,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        pidless_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            assert not (pidless_dir / "owner.pid").exists()
+            _sweep_stale_cookie_dirs()
+            assert pidless_dir.exists(), (
+                "a fresh PID-less directory must survive the sweep (VAL-602 race)"
+            )
+        finally:
+            if pidless_dir.exists():
+                shutil.rmtree(pidless_dir, ignore_errors=True)
+
+    def test_pidless_dir_aged_past_grace_is_swept(self) -> None:
+        """AC-1: a PID-less directory provably older than the grace is reclaimed.
+
+        Deterministic ageing goes through the clock seam
+        (_cookie_artifact_dir_age_seconds), NOT os.utime: verified on this
+        platform that os.utime moves only st_mtime and leaves st_birthtime
+        (and therefore st_ctime, equal to it) untouched, so a birth-time rule
+        cannot be aged from the filesystem on either Windows or POSIX.
+        """
+        import shutil
+        import tempfile as _tempfile
+        from unittest.mock import patch
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        dir_prefix = yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+        pidless_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            assert not (pidless_dir / yd._OWNER_PID_FILENAME).exists()
+            aged = yd._COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS + 1.0
+            with patch.object(yd, "_cookie_artifact_dir_age_seconds", return_value=aged):
+                yd._sweep_stale_cookie_dirs()
+            assert not pidless_dir.exists(), (
+                "a PID-less directory provably older than the grace must be swept"
+            )
+        finally:
+            if pidless_dir.exists():
+                shutil.rmtree(pidless_dir, ignore_errors=True)
+
+    def test_pidless_dir_with_unknown_age_survives_sweep(self) -> None:
+        """AC-1: a PID-less directory whose age cannot be established is retained.
+
+        Default-deny's third state: an unestablishable age degrades to retain,
+        which is what keeps the rule safe on a filesystem with unusable
+        timestamps.
+        """
+        import shutil
+        import tempfile as _tempfile
+        from unittest.mock import patch
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        dir_prefix = yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+        pidless_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            assert not (pidless_dir / yd._OWNER_PID_FILENAME).exists()
+            with patch.object(yd, "_cookie_artifact_dir_age_seconds", return_value=None):
+                yd._sweep_stale_cookie_dirs()
+            assert pidless_dir.exists(), "a PID-less directory with an unknown age must be retained"
+        finally:
+            if pidless_dir.exists():
+                shutil.rmtree(pidless_dir, ignore_errors=True)
+
+    def test_zero_length_owner_pid_survives_sweep(self) -> None:
+        """R2-A1 widest sub-window: open(mode='w') creates owner.pid before any byte lands.
+
+        A zero-length owner.pid makes _read_owner_pid return None
+        (int("".strip()) raises ValueError), so the directory enters the
+        PID-less branch and -- being fresh -- is retained by the grace. This is
+        the on-disk shape most exposed to the creation race.
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        dir_prefix = yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+        cookie_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            (cookie_dir / yd._OWNER_PID_FILENAME).write_text("")
+            assert yd._read_owner_pid(cookie_dir) is None
+            yd._sweep_stale_cookie_dirs()
+            assert cookie_dir.exists(), (
+                "a zero-length owner.pid leaves the directory PID-less and fresh, "
+                "so it must be retained"
+            )
+        finally:
+            if cookie_dir.exists():
+                shutil.rmtree(cookie_dir, ignore_errors=True)
+
+    def test_unparseable_owner_pid_survives_sweep(self) -> None:
+        """R2-A2 state 3: an unparseable owner.pid is retained.
+
+        owner.pid containing a NUL suffix ("14920\\x00") is not a valid int --
+        int() rejects the trailing NUL -- so _read_owner_pid returns None and
+        the fresh directory is retained by the grace.
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        dir_prefix = yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+        cookie_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            (cookie_dir / yd._OWNER_PID_FILENAME).write_text("14920\x00")
+            assert yd._read_owner_pid(cookie_dir) is None
+            yd._sweep_stale_cookie_dirs()
+            assert cookie_dir.exists(), (
+                "an unparseable owner.pid leaves the directory PID-less and fresh, "
+                "so it must be retained"
+            )
+        finally:
+            if cookie_dir.exists():
+                shutil.rmtree(cookie_dir, ignore_errors=True)
+
+    def test_owner_pid_is_a_directory_survives_sweep(self) -> None:
+        """R2-A2 state 4: owner.pid that is itself a directory is retained.
+
+        _read_owner_pid's read_text() raises IsADirectoryError (an OSError), so
+        it returns None and the directory is not reclaimed. Keeps the A-3 path
+        reachable (R1-A3).
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        dir_prefix = yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+        cookie_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            (cookie_dir / yd._OWNER_PID_FILENAME).mkdir()
+            assert yd._read_owner_pid(cookie_dir) is None
+            yd._sweep_stale_cookie_dirs()
+            assert cookie_dir.exists(), (
+                "owner.pid being a directory is unreadable and must be retained"
+            )
+        finally:
+            if cookie_dir.exists():
+                shutil.rmtree(cookie_dir, ignore_errors=True)
+
+    def test_torn_digit_prefix_owner_pid_behaviour_is_explicit(self) -> None:
+        """R2-A1 wrong-int channel: a torn digit prefix yields 14, not None.
+
+        owner.pid containing "14" (a torn prefix of "14920") makes _read_owner_pid
+        return the int 14, not None -- int() accepts the ASCII-digit prefix and
+        stops at the file end. The sweep then treats 14 as a PID; since 14 is not
+        the current process, the probe reports not-alive, and reclamation depends
+        on conclusiveness. This pins that explicit outcome (rather than leaving it
+        incidental) and documents that this channel yields a plausible-but-wrong
+        PID -- a recycled/real low PID is retained, a provably absent one is swept.
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            _OWNER_PID_FILENAME,
+            _is_pid_alive,
+            _is_pid_probe_conclusive,
+            _read_owner_pid,
+            _sweep_stale_cookie_dirs,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        cookie_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            (cookie_dir / _OWNER_PID_FILENAME).write_text("14")
+            pid = _read_owner_pid(cookie_dir)
+            assert pid == 14, "_read_owner_pid must return the torn int 14, not None"
+            assert pid is not None
+            assert pid != os.getpid()
+            # The sweep reclaims a not-live PID only when the probe is conclusive;
+            # assert the directory's fate tracks that rule exactly -- deterministic
+            # and platform-independent (we do not assume whether 14 is a live
+            # system PID on a given machine).
+            reclaim = (not _is_pid_alive(pid)) and _is_pid_probe_conclusive(pid)
+            _sweep_stale_cookie_dirs()
+            assert cookie_dir.exists() != reclaim, (
+                "sweep treatment of a torn PID must match the conclusive-death rule"
+            )
+        finally:
+            if cookie_dir.exists():
+                shutil.rmtree(cookie_dir, ignore_errors=True)
+
+    def test_cookie_artifact_dir_age_seconds_reports_a_fresh_directory_as_fresh(
+        self,
+    ) -> None:
+        """T11 (smoke, un-patched): a just-created matching directory has a small, non-None age.
+
+        No monkeypatching, so the clock seam cannot hide a broken helper: the real
+        _cookie_artifact_dir_age_seconds must read a real timestamp and return a
+        non-negative float below the grace.
+        """
+        import shutil
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS,
+            _COOKIE_ARTIFACT_PREFIX,
+            _cookie_artifact_dir_age_seconds,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        fresh_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix))
+        try:
+            age = _cookie_artifact_dir_age_seconds(fresh_dir)
+            assert age is not None
+            assert age >= 0.0
+            assert age < _COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS
+        finally:
+            shutil.rmtree(fresh_dir, ignore_errors=True)
+
+    def test_cookie_artifact_dir_age_seconds_returns_none_when_unstattable(
+        self,
+    ) -> None:
+        """T12: a path that cannot be stat'd yields None, not an exception."""
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _cookie_artifact_dir_age_seconds,
+        )
+
+        ghost = Path(_tempfile.gettempdir()) / "vk_test_ghost_that_does_not_exist"
+        assert not ghost.exists()
+        assert _cookie_artifact_dir_age_seconds(ghost) is None
+
+
+class TestCookieArtefactCreationRaceAcrossProcesses:
+    """Two-process proof of the VAL-602 creation-race closure.
+
+    The child parks its single ``owner.pid`` write between ``mkdtemp`` and the
+    real ``write_text`` using a two-marker-file barrier, so the parent can run the
+    full sweep against a PID-less directory with no timing dependency. Against
+    pre-fix source the sweep purges it and the discriminating assertion fails;
+    with the default-deny grace it is retained. The child is a ``-c`` script on
+    ``sys.executable`` and never touches ``msvcrt``/``fcntl``, so the test runs on
+    Windows.
+    """
+
+    def test_pidless_dir_survives_concurrent_creation_sweep(self, tmp_path: Path) -> None:
+        """A directory observed mid-creation (no owner.pid) survives the sweep."""
+        import shutil
+        import subprocess
+        import time
+
+        import vkdownloader.services.ytdlp_downloader as yd
+        from vkdownloader.services.ytdlp_downloader import _sweep_stale_cookie_dirs
+
+        # Both sync markers live in pytest's tmp_path, which is OUTSIDE the
+        # system temp root the sweep scans, so they can never widen the sweep's
+        # match set and are auto-cleaned by pytest. They carry non-matching names.
+        created_marker = tmp_path / "created.marker"
+        release_marker = tmp_path / "release.marker"
+
+        original_started = yd._cookie_lifecycle_started
+        cookie_dir: Path | None = None
+        child: subprocess.Popen[bytes] | None = None
+        try:
+            child_code = (
+                "import atexit, os, pathlib, sys, time\n"
+                "import vkdownloader.services.ytdlp_downloader as yd\n"
+                "created, release = sys.argv[1], sys.argv[2]\n"
+                "real_write_text = pathlib.Path.write_text\n"
+                "def patched_write_text(self, data, *a, **k):\n"
+                "    if self.name == yd._OWNER_PID_FILENAME:\n"
+                "        pathlib.Path(created).write_text(str(self.parent))\n"
+                "        deadline = time.time() + 60.0\n"
+                "        while not pathlib.Path(release).exists():\n"
+                "            if time.time() >= deadline:\n"
+                "                break\n"
+                "            time.sleep(0.05)\n"
+                "        return real_write_text(self, data, *a, **k)\n"
+                "    return real_write_text(self, data, *a, **k)\n"
+                "pathlib.Path.write_text = patched_write_text\n"
+                "cookie_dir = yd._create_cookie_artifact_dir()\n"
+                "atexit.unregister(yd._cleanup_cookie_artifact_dirs)\n"
+                "print(str(os.getpid()), flush=True)\n"
+                "print(str(cookie_dir), flush=True)\n"
+            )
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(created_marker),
+                    str(release_marker),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            # Wait for the child to signal "directory created, owner.pid not yet written".
+            deadline = time.time() + 30.0
+            while not created_marker.exists() and time.time() < deadline:
+                if child.poll() is not None:
+                    break
+                time.sleep(0.05)
+            assert created_marker.exists(), "child did not signal directory creation within 30s"
+            cookie_dir = Path(created_marker.read_text().strip())
+
+            assert cookie_dir.exists(), "child's cookie directory must exist"
+            assert not (cookie_dir / yd._OWNER_PID_FILENAME).exists(), (
+                "owner.pid must NOT exist while the child is parked (pre-write state)"
+            )
+
+            # The sweep must not destroy a PID-less directory mid-creation.
+            # Pre-fix this purges it and the next assertion fails; post-fix the
+            # grace retains it. No timing dependency: the child is parked for the
+            # whole sweep.
+            _sweep_stale_cookie_dirs()
+            assert cookie_dir.exists(), (
+                "mid-creation (PID-less) directory must survive the sweep (VAL-602 race closure)"
+            )
+
+            # Release the child so it completes the write_text and exits.
+            release_marker.write_text("release")
+            stdout, stderr = child.communicate(timeout=30.0)
+            assert child.returncode == 0, (
+                f"child exited {child.returncode}: {stderr.decode(errors='replace')}"
+            )
+            # owner.pid now holds the child's own PID -- confirming the write_text
+            # past the barrier completed. Compare against the PID the child reports
+            # on its own stdout (os.getpid()), not child.pid: the venv python.exe
+            # spawns a launcher whose PID differs from the interpreter running code.
+            out_lines = stdout.decode().strip().splitlines()
+            assert len(out_lines) >= 2, f"unexpected child output: {stdout!r}"
+            child_pid_reported = int(out_lines[0])
+            owner_pid_text = (cookie_dir / yd._OWNER_PID_FILENAME).read_text().strip()
+            assert int(owner_pid_text) == child_pid_reported, (
+                "owner.pid must record the child process PID after release"
+            )
+            assert Path(out_lines[1]) == cookie_dir, (
+                "child must report the same directory the marker named"
+            )
+        finally:
+            # Safety: always release a parked child so it can finish or fail fast,
+            # then let it exit before resorting to a kill (avoids orphaned grandchild).
+            release_marker.write_text("release")
+            if child is not None:
+                try:
+                    child.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    try:
+                        child.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+            created_marker.unlink(missing_ok=True)
+            if cookie_dir is not None and cookie_dir.name.startswith(
+                yd._COOKIE_ARTIFACT_PREFIX + yd._ARTEFACT_DIR_SUFFIX
+            ):
+                shutil.rmtree(cookie_dir, ignore_errors=True)
+            yd._cookie_lifecycle_started = original_started

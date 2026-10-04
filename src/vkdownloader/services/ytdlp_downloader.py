@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -62,6 +63,15 @@ _COOKIE_ARTIFACT_PREFIX = "vk_cookies_"
 _COOKIE_ARTIFACT_SUFFIX = ".cookies.txt"
 _ARTEFACT_DIR_SUFFIX = "_dir"
 _OWNER_PID_FILENAME = "owner.pid"
+
+# Grace window applied ONLY to a PID-less directory (owner.pid absent or
+# unreadable): such a directory is reclaimed once it is provably older than
+# this duration, and retained otherwise. It is never a deletion criterion for
+# a directory carrying a readable record (VAL-602). Derived from the measured
+# creation window (median 0.236 ms / p95 0.546 ms / max 1.482 ms on an idle
+# machine) plus loaded-machine headroom; see the _sweep_stale_cookie_dirs
+# docstring and commit body. Not a frozen artefact string; not a key for R3.
+_COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS: float = 30.0
 
 # Tracks every artefact directory this process created, so the atexit
 # handler can purge them on orderly exit.
@@ -118,8 +128,64 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _is_pid_probe_conclusive(pid: int) -> bool:
+    """Report whether ``_is_pid_alive``'s ``False`` for ``pid`` proves death.
+
+    Answers one question only: was a negative liveness result a *positive
+    demonstration of death* (the PID is absent), or an *inconclusive* denial
+    that could hide a live owner (e.g. a privilege boundary)? It never re-implements
+    ``_is_pid_alive``: that function is the sole liveness oracle and is left
+    untouched.
+
+    On POSIX the answer is always ``True``: ``_is_pid_alive`` already maps
+    ``PermissionError`` to alive, so its ``False`` can only come from
+    ``ProcessLookupError`` — a definitive "no such process".
+
+    On Windows a ``False`` can also come from ``OpenProcess`` failing with
+    ``ERROR_ACCESS_DENIED`` (5): an elevated, SYSTEM, or other-account owner
+    like live PID 4 opens with access denied and is misreported dead. This
+    function re-issues ``OpenProcess(PROCESS_QUERY_INFORMATION)`` and treats
+    **only** ``ERROR_INVALID_PARAMETER`` (87) — "no process object for this PID"
+    — as conclusive; ``ERROR_ACCESS_DENIED`` (5) and any other failure are
+    inconclusive and the directory is retained.
+
+    Trap honoured: the DLL is loaded with
+    ``ctypes.WinDLL("kernel32", use_last_error=True)`` and consulted via
+    ``ctypes.get_last_error()``. ``ctypes.windll.kernel32`` does not arm the
+    last-error slot and can report a stale code, which would make a denied
+    owner look conclusively dead — re-opening the very hazard this closes.
+    When the handle is non-zero (a process object exists) the handle is closed
+    and the result is inconclusive, for a handle that opens proves nothing
+    about liveness once ``_is_pid_alive`` has already answered ``False``.
+    """
+    if os.name != "nt":
+        return True
+    import ctypes
+
+    # PROCESS_QUERY_INFORMATION (0x0400) is the right to query exit status;
+    # it is the same right _is_pid_alive uses, so this is not an ACL reader
+    # and adds no dependency.
+    process_query_information = 0x0400
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(process_query_information, False, pid)
+    if handle == 0:
+        last_error = ctypes.get_last_error()
+        # ERROR_INVALID_PARAMETER (87): the PID is not allocated — death proven.
+        # Any other code, notably ERROR_ACCESS_DENIED (5), is inconclusive.
+        return last_error == 87
+    kernel32.CloseHandle(handle)
+    return False
+
+
 def _read_owner_pid(cookie_dir: Path) -> int | None:
-    """Read the owning PID recorded in ``owner.pid`` within ``cookie_dir``."""
+    """Read the owning PID recorded in ``owner.pid`` within ``cookie_dir``.
+
+    Returns ``None`` to mean "no readable record" — the file is absent, empty,
+    unparseable, or is not a regular file — never "the owner is dead". What the
+    sweep may conclude from ``None`` is :func:`_sweep_stale_cookie_dirs`'
+    business; this function is a pure parser and its return value and except
+    clause are left unchanged.
+    """
     owner_file = cookie_dir / _OWNER_PID_FILENAME
     try:
         return int(owner_file.read_text().strip())
@@ -175,17 +241,79 @@ def _remove_cookie_artifact_dir(cookie_dir: Path) -> None:
         )
 
 
+def _cookie_artifact_dir_age_seconds(cookie_dir: Path) -> float | None:
+    """Age in seconds of a cookie artefact directory, or ``None`` if unknown.
+
+    Reads ``st_birthtime`` where the platform exposes it and falls back to
+    ``st_ctime`` (which on Windows *is* the creation time; on POSIX it is the
+    inode-change time, equal to creation time for a freshly made directory).
+    Returns ``None`` when the age cannot be established — ``stat`` raises, or
+    neither attribute exists — so the caller degrades to *retain*. Uses
+    ``time.time()``, never ``time.monotonic()``: the value is compared against a
+    filesystem timestamp written by another process, so only the wall clock is
+    comparable. ``max(0.0, ...)`` absorbs a clock that steps backwards.
+    """
+    try:
+        info = cookie_dir.stat()
+    except OSError:
+        return None
+    created = getattr(info, "st_birthtime", None)
+    if created is None:
+        created = getattr(info, "st_ctime", None)
+    if created is None:
+        return None
+    return max(0.0, time.time() - float(created))
+
+
 def _sweep_stale_cookie_dirs() -> None:
-    """Remove cookie artefact directories whose owner PID is no longer live.
+    """Remove cookie artefact directories whose owner is positively dead.
 
     Scans the system temp directory for directories whose names start with
-    the product prefix (``vk_cookies_dir``). A directory is removed only
-    when its recorded owner PID — read from ``owner.pid`` — is not a live
-    process. Directories owned by a live process (including the current one)
-    are left untouched. This is the liveness-gated sweep that makes residue
-    reclaimable by the *next* run rather than only by the operator (SEC-002),
-    and is PID-based rather than age-based to avoid the concurrency hazard
-    VAL-002 rules out (VAL-602).
+    ``_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX`` — composed, this is
+    ``vk_cookies`` + ``_dir`` = ``vk_cookies__dir`` (the doubled underscore is
+    the join, not a separate literal). Classification is **default-deny**:
+    a directory is destroyed only on a positive demonstration that it is no
+    longer in use. Per matching directory:
+
+    1. ``owner.pid`` is readable and parses to an int PID. The sweep calls
+       ``_is_pid_alive`` exactly once: a live PID is retained; a not-live PID
+       is reclaimed only when ``_is_pid_probe_conclusive`` reports the
+       ``False`` as a positive demonstration of death (e.g.
+       ``ERROR_INVALID_PARAMETER`` on Windows); an inconclusive probe
+       (``ERROR_ACCESS_DENIED``, a PID this user cannot probe) is retained.
+    2. ``owner.pid`` is absent or unreadable — ``_read_owner_pid`` returns
+       ``None``. Such a directory is reclaimed only when its age is known and
+       is at least ``_COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS``; an age that
+       cannot be established is retained. The grace is a **skip condition on
+       this branch only** and never appears in the criterion for a directory
+       carrying a readable record, so the deletion criterion stays age-free
+       (VAL-602).
+
+    The "cannot determine the owner" states are therefore not read as "stale"
+    by default: a missing record (the mid-creation window left by
+    ``_create_cookie_artifact_dir``, which calls ``mkdtemp`` before writing
+    ``owner.pid``), an empty ``owner.pid``, an unparseable record,
+    ``owner.pid`` being a directory, a crash between ``open`` and ``write``,
+    and a record denied to this user. The PID-less class *is* reclaimed by the
+    sweep itself once provably older than the grace — and because ``R1``'s
+    teardown window (``_remove_cookie_artifact_dir`` unlinking ``owner.pid``
+    then ``rmdir``) is byte-identical on disk to a PID-less directory, that
+    window is closed by the same grace.
+
+    What the sweep cannot reclaim is **not** destroyed: an owner PID this user
+    cannot probe (inconclusive) is retained for the owning run's own ``atexit``
+    handler or the operator; ``R1``'s teardown window before it ages out is
+    likewise left for a later sweep. ``R1``'s locked-file residue —
+    ``shutil.rmtree`` with ``ignore_errors=True`` may silently fail on a
+    credential file held open by an indexer or scanner — sits in this class; it
+    is retried on later sweeps and otherwise needs the operator. PID reuse is
+    pre-existing and deliberately untouched: a recycled PID makes a dead owner
+    look live, so residue is retained, never destroyed.
+
+    This is the liveness-gated sweep that makes residue reclaimable by the
+    *next* run rather than only by the operator (SEC-002), and is PID-based
+    rather than age-based in its deletion criterion to avoid the concurrency
+    hazard VAL-602 rules out (VAL-602).
     """
     temp_dir = Path(tempfile.gettempdir())
     dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
@@ -197,7 +325,11 @@ def _sweep_stale_cookie_dirs() -> None:
             if not entry.name.startswith(dir_prefix):
                 continue
             owner_pid = _read_owner_pid(entry)
-            if owner_pid is None or not _is_pid_alive(owner_pid):
+            if owner_pid is None:
+                age = _cookie_artifact_dir_age_seconds(entry)
+                if age is not None and age >= _COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS:
+                    stale.append(entry)
+            elif not _is_pid_alive(owner_pid) and _is_pid_probe_conclusive(owner_pid):
                 stale.append(entry)
     except OSError:
         return
@@ -219,6 +351,13 @@ def _create_cookie_artifact_dir() -> Path:
     dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
     cookie_dir = Path(tempfile.mkdtemp(prefix=dir_prefix))
     owner_file = cookie_dir / _OWNER_PID_FILENAME
+    # VAL-602 race window: between mkdtemp returning and write_text completing
+    # the directory is observable with NO owner.pid (the widest sub-state is a
+    # zero-length owner.pid, since open(mode='w') creates the file before any
+    # byte lands). A concurrent sweep must not destroy it; _sweep_stale_cookie_dirs
+    # covers this PID-less window with the _COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS
+    # grace. Behaviour is unchanged: mkdtemp, the write, the lock and the set.add
+    # all stay as-is, and mkdtemp's 0o700 POSIX semantics are untouched.
     owner_file.write_text(str(os.getpid()))
     with _COOKIE_LIFECYCLE_LOCK:
         _COOKIE_ARTIFACT_DIRS.add(cookie_dir)
