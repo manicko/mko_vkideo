@@ -1,7 +1,7 @@
 """Tests for URL sanitization utilities.
 
 The sanitizer redacts two product artefact shapes (the cookie-file artefact
-``vk_cookies_<tail>.cookies.txt`` and the artfact directory
+``vk_cookies_<tail>.cookies.txt`` and the artefact directory
 ``vk_cookies__dir<tail>``) and signed ``https?://`` URLs (scheme+host only).
 These tests lock the redaction claim at both the byte-identity boundary
 (user data that *resembles* an artefact must not match) and the filesystem
@@ -153,7 +153,17 @@ class TestSanitizeTextForLog:
         ``ffmpeg_utils`` calls ``sanitize_text_for_log(error)[:200]``. When a
         signed URL starts past the 200-char boundary, truncating first would
         silently drop it (no host in the log); sanitizing first shrinks it to
-        ``scheme://host/***REDACTED***/`` so the host survives truncation.
+        ``scheme://host/***REDACTED***`` so the host survives truncation.
+
+        The ``len == 200`` assertion is the discriminator. The full input is
+        226 chars (170 filler + a 56-char signed URL); sanitization replaces
+        the URL with its 38-char redacted form, yielding 208 chars, and
+        ``[:200]`` then truncates to exactly 200. Reversing the order to
+        truncate-then-sanitize would feed ``error[:200]`` (170 filler + 30
+        chars of the URL) to the transform; the partial URL is matched and
+        replaced with the 38-char redaction, producing 208 chars with no
+        truncation applied, so ``len`` would be 208 rather than 200. The
+        assertion pins the mandatory sanitize-then-truncate sequence.
         """
         filler = "x" * 170
         signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
@@ -217,10 +227,23 @@ class TestSanitizeTextForLog:
         assert sanitize_text_for_log(text) == "GET https://cdn.example.com/***REDACTED***"
 
     def test_glued_artefact_keeps_second_name_as_literal(self) -> None:
-        """Two artefacts glued with no separator: only the first is redacted."""
-        text = r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txtvk_cookies_b.cookies.txt"
+        """Two artefacts glued with no separator: only the first is redacted.
 
-        assert sanitize_text_for_log(text) == "***REDACTED***vk_cookies_b.cookies.txt"
+        When two artefact names are concatenated with no path separator
+        between them, the second is deliberately left unredacted. That
+        non-redaction is precisely what makes the rule a fixed point:
+        ``***REDACTED***`` ends in ``*``, so a ``\\b``-guarded rule would
+        manufacture a boundary on the second pass and consume the second name,
+        breaking idempotency (measured 3 fixed-point violations in 400 000
+        for ``\\b``, 0 for the chosen lookbehind). This is a deliberate
+        accepted residual, not an oversight, and is unreachable from
+        production.
+        """
+        text = r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txtvk_cookies_b.cookies.txt"
+        once = sanitize_text_for_log(text)
+
+        assert once == "***REDACTED***vk_cookies_b.cookies.txt"
+        assert sanitize_text_for_log(once) == once
 
     def test_nested_file_inside_dir_yields_single_marker(self) -> None:
         """A file artefact inside a dir artefact collapses to one marker."""
@@ -229,13 +252,15 @@ class TestSanitizeTextForLog:
         assert sanitize_text_for_log(text) == REDACTED
 
     def test_preserves_surrounding_quotes_and_punctuation(self) -> None:
-        """Quotes are preserved; ``(`` ``(`` consumed as collateral.
+        """Quotes are preserved; ``(`` consumed as collateral.
 
-        ``'`` and ``"`` are in the left-boundary exclusion set ``[\\s'\"<>]``,
-        so an artefact directly wrapped in quotes is matched and the quotes
-        surround the marker. ``(`` is NOT excluded, so it is absorbed into the
-        artefact's greedy path-prefix lead (accepted collateral, same class as
-        ``key=path/...``) while the closing ``)`` survives.
+        ``'`` and ``"`` are in ``[\\s'\"<>]`` — the left-boundary allowance
+        set: characters whose presence before a match does NOT exclude it
+        (the complement of the lookbehind's negated class) — so an artefact
+        directly wrapped in quotes is matched and the quotes surround the
+        marker. ``(`` is NOT in this set, so it is absorbed into the
+        artefact's greedy path-prefix lead (accepted collateral, same class
+        as ``key=path/...``) while the closing ``)`` survives.
         """
         parens = r"(\C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt)"
         single = r"'C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt'"
@@ -262,7 +287,20 @@ class TestSanitizeTextForLog:
         assert sanitize_text_for_log(text) == text
 
     def test_unquoted_key_value_loses_key_as_collateral(self) -> None:
-        """``key=path/...`` is consumed by the artefact's greedy lead (accepted collateral)."""
+        """``key=path/...`` is consumed by the artefact's greedy lead (accepted collateral).
+
+        The design originally asked for a case asserting the ``path=`` key
+        survives alongside the value. That case is unimplementable as
+        designed: the greedy lead consumes ``=`` because ``=`` is not
+        whitespace, a quote, or ``<`` / ``>`` (the left-boundary allowance
+        set) and is followed by a path separator, so
+        ``path=C:\\...\\vk_cookies_x.cookies.txt`` collapses whole to
+        ``***REDACTED***`` (measured), with no key left behind. The
+        Implementor substituted this truthful collateral case instead. It is
+        bounded: the three child-output sinks receive whitespace-delimited
+        argv, never ``key=``; structlog dict values keep the key as
+        ``"path": "***REDACTED***"``.
+        """
         text = r"path=C:\Users\x\Temp\vk_cookies_x.cookies.txt"
 
         assert sanitize_text_for_log(text) == REDACTED

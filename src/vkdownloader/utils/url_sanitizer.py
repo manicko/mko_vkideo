@@ -15,8 +15,10 @@ _URL_REGEX = re.compile(r"https?://[^\s'\"<>]+")
 # Left-boundary law: a rule's left boundary must be a predicate its own
 # replacement can never satisfy. ***REDACTED*** ends in '*', a non-word char, so
 # a \b guard would manufacture a boundary on the second pass (measured 3
-# fixed-point violations in 400 000). '*' is inside the excluded set, so the
-# lookbehind below is unsatisfiable by the marker (0 violations). The parent is
+# fixed-point violations in 400 000). '*' is inside the negated class
+# `[^\s'\"<>]` — the excluded set: characters whose presence before a match
+# position EXCLUDES it — so the lookbehind below is unsatisfiable by the
+# marker (0 violations). The parent is
 # CONSUMED by the optional greedy lead, not asserted by lookbehind: a
 # variable-length lookbehind is illegal in this re module, and consuming the
 # parent is what removes the username-bearing temp root
@@ -88,6 +90,19 @@ def sanitize_text_for_log(text: str) -> str:
     This is bounded - the three child-output sinks receive whitespace-delimited
     argv, never ``key=``; structlog dict values keep the key as
     ``"path": "***REDACTED***"``.
+
+    Accepted residual: when two artefact names are concatenated with no
+    separator between them, only the first is redacted and the second is
+    deliberately left unredacted (``***REDACTED***vk_cookies_b.cookies.txt``).
+    That non-redaction is precisely what makes the rule a fixed point:
+    ``***REDACTED***`` ends in ``*``, so a ``\\b``-guarded rule would
+    manufacture a boundary on the second pass and consume the second name,
+    breaking idempotency (measured 3 fixed-point violations in 400 000 for
+    ``\\b``, 0 for the chosen lookbehind). This is a deliberate accepted
+    residual, not an oversight, and is unreachable from production: every
+    value that reaches a sink is either a ``str(Path)`` from ``mkstemp`` /
+    ``mkdtemp`` (always preceded by a separator or run start) or
+    whitespace-delimited child argv.
 
     Args:
         text: Raw text that may contain URLs or artefact paths (e.g. yt-dlp or
