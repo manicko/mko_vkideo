@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
@@ -151,8 +151,8 @@ _STRUCTURAL_KEYS: frozenset[str] = frozenset({"event", "level", "timestamp", "co
 
 
 def _sanitize_collection(
-    value: list[Any] | tuple[Any, ...] | dict[str, Any],
-) -> list[Any] | tuple[Any, ...] | dict[str, Any]:
+    value: list[object] | tuple[object, ...] | dict[str, object],
+) -> list[object] | tuple[object, ...] | dict[str, object]:
     """Apply :func:`sanitize_text_for_log` depth-1 into a container.
 
     Builds a **new** container of the same type (never mutates the input, which

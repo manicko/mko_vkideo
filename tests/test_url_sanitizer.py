@@ -823,6 +823,19 @@ class TestRedactLogEventProcessor:
         assert url_list[0] == self.SIGNED_URL
         assert "SECRET123" in url_list[0]
 
+    def test_sanitize_collection_source_has_no_any_annotation(self) -> None:
+        """House rule 9 forbids ``Any``. The ``_sanitize_collection`` helper
+        must not use it in its annotations — ``object`` plus ``isinstance``
+        narrowing is the correct ``Any``-free form.
+        """
+        from vkdownloader.utils.url_sanitizer import _sanitize_collection
+
+        source = inspect.getsource(_sanitize_collection)
+        assert ": list[Any]" not in source
+        assert ": dict[str, Any]" not in source
+        assert "tuple[Any" not in source
+        assert "list[Any]" not in source
+
 
 class TestStructuralKeysDenylist:
     """Verify the structural-key denylist matches the measured injected set."""
