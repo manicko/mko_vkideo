@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import IO
+from typing import IO, Any, cast
 
 import structlog
 from dotenv import dotenv_values
@@ -475,34 +475,74 @@ class _EncodingSafeConsoleStream(io.TextIOWrapper):
             pass
 
 
-def _encoding_safe_console_stream() -> IO[str]:
-    """Build a stderr-backed console stream that escapes, not raises, on
+class _EncodingSafeTextStream(io.TextIOBase):
+    """A text-stream wrapper that escapes unencodable characters on write.
 
-    encoding errors (B16 / D7).
+    Unlike :class:`_EncodingSafeConsoleStream` (which wraps a binary buffer via
+    ``TextIOWrapper``), this wraps an already-textual stream such as rich's
+    ``FileProxy``.  It re-encodes each ``write`` payload with
+    ``errors="backslashreplace"`` so a record carrying characters the
+    underlying stream cannot represent is escaped instead of raising
+    ``UnicodeEncodeError``.
 
-    A structlog record carrying characters the console encoding cannot
-    represent (e.g. Playwright's box-drawing characters on a cp1251 console)
-    would otherwise propagate out of ``logging.StreamHandler.emit`` as a
-    ``UnicodeEncodeError`` -- the mechanism behind BRW-001's HIGH severity.
-    Wrapping ``sys.stderr``'s raw buffer with ``errors="backslashreplace"``
-    ensures such characters are backslash-escaped into the record instead of
-    aborting the emit.  ``sys.stderr`` itself is not reconfigured (no
-    ``reconfigure``, no ``PYTHONIOENCODING``); only the handler receives a
-    stream whose error policy is encoding-safe.
+    Attribute access delegates to the wrapped stream so ``encoding``,
+    ``buffer``, etc. remain available.  Only ``write`` and ``flush`` are
+    overridden; ``close`` flushes without closing the underlying stream (the
+    same policy as :class:`_EncodingSafeConsoleStream`).
     """
-    stderr = sys.stderr or sys.__stderr__
-    if stderr is None:
-        return sys.stdout or sys.__stdout__  # type: ignore[return-value]
-    raw = getattr(stderr, "buffer", None)
-    if raw is None:
-        return stderr
-    encoding = getattr(stderr, "encoding", None) or sys.getdefaultencoding()
-    return _EncodingSafeConsoleStream(
-        raw,
-        encoding=encoding,
-        errors="backslashreplace",
-        write_through=True,
-    )
+
+    def __init__(self, stream: IO[str]) -> None:
+        self._stream = stream
+        self._encoding: str = getattr(stream, "encoding", None) or sys.getdefaultencoding()
+
+    def write(self, text: str) -> int:
+        safe_text = text.encode(self._encoding, errors="backslashreplace").decode(self._encoding)
+        return self._stream.write(safe_text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+def encoding_safe(stream: IO[str]) -> IO[str]:
+    """Return *stream* wrapped with an encoding-safe error policy.
+
+    Both :func:`setup_logging` and
+    :meth:`RichProgressReporter._repoint_log_handlers` call this so the
+    console sink applies a uniform ``backslashreplace`` policy regardless of
+    how the stream is reached — direct stderr or the ``FileProxy`` rich
+    installs during a Live display.
+
+    * A ``TextIOWrapper`` (e.g. ``sys.stderr``) is wrapped at the binary
+      buffer level with :class:`_EncodingSafeConsoleStream`, preserving the
+      original B16 behaviour.
+    * Any other text stream (e.g. rich's ``FileProxy``) is wrapped with
+      :class:`_EncodingSafeTextStream`, which re-encodes writes with
+      ``backslashreplace`` before delegating to the original stream.  This
+      keeps writes routed through the FileProxy's Live-display mediation.
+
+    Streams that are already one of our safe wrappers are returned unchanged.
+    """
+    if isinstance(stream, (_EncodingSafeConsoleStream, _EncodingSafeTextStream)):
+        return stream
+    if isinstance(stream, io.TextIOWrapper):
+        raw = stream.buffer
+        encoding = stream.encoding or sys.getdefaultencoding()
+        return _EncodingSafeConsoleStream(
+            raw,
+            encoding=encoding,
+            errors="backslashreplace",
+            write_through=True,
+        )
+    return cast(IO[str], _EncodingSafeTextStream(stream))
 
 
 def setup_logging(settings: Settings | None = None) -> None:
@@ -544,7 +584,7 @@ def setup_logging(settings: Settings | None = None) -> None:
         format="%(message)s",
         level=settings.log_level.value,
         handlers=[
-            logging.StreamHandler(_encoding_safe_console_stream())
+            logging.StreamHandler(encoding_safe(sys.stderr))
             if not settings.log_file
             else logging.FileHandler(settings.log_file)
         ],

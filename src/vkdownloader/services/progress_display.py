@@ -28,6 +28,7 @@ from rich.progress import (
 from rich.text import Text
 from structlog import get_logger
 
+from ..config import encoding_safe
 from ..models.enums import ProgressStatus
 
 logger = get_logger(__name__)
@@ -333,7 +334,15 @@ class RichProgressReporter:
         ``Progress.start()`` swaps ``sys.stderr`` for rich's ``FileProxy``, a
         handler still bound to the original stream writes straight past the Live
         display. ``setStream`` redirects it onto the wrapped stderr so log output
-        is mediated by Live (pause, print above, resume) per R6.
+        is mediated by the Live display (pause, print above, resume) per R6.
+
+        The repointed stream is passed through ``config.encoding_safe`` so the
+        handler inherits the same ``backslashreplace`` encoding-safety policy
+        that ``setup_logging`` installed on the standalone console sink (B16).
+        Without this, the batch path — which is exactly when BRW-001's browser
+        launch failure (carrying box-drawing characters) is logged — would
+        discard B16's stream and raise ``UnicodeEncodeError`` inside
+        ``StreamHandler.emit`` instead of escaping the unencodable characters.
 
         NOTE: This repoints only handlers on the *root* logger
         (``logging.getLogger().handlers``). ``config.setup_logging()`` installs
@@ -349,7 +358,7 @@ class RichProgressReporter:
                 continue
             if isinstance(handler, logging.FileHandler):
                 continue
-            old_stream = handler.setStream(current_stderr)
+            old_stream = handler.setStream(encoding_safe(current_stderr))
             self._saved_handler_streams.append((handler, old_stream))
 
     def _restore_log_handlers(self) -> None:
