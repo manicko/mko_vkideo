@@ -3945,7 +3945,7 @@ class TestYtDlpSubprocessShutdown:
     async def test_no_cancel_not_clean_when_process_already_reaped(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """B5: cancel_subprocess returns False with returncode already set —
+        """TRN-012: cancel_subprocess returns False with returncode already set —
         the reachable "already gone ⇒ clean" state — emits no warning.
 
         cancel_subprocess returns False only via the ProcessLookupError arm,

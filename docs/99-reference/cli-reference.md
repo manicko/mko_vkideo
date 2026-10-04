@@ -199,7 +199,7 @@ Available method values for `--method` option:
 | Value | Description |
 |-------|-------------|
 | `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
-| `auto` | Tries yt-dlp first, falls back to segment download on failure (default) |
+| `auto` | Downloads via yt-dlp, falls back to segment download on failure (default) |
 
 ---
 

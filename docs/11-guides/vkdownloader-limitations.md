@@ -69,7 +69,7 @@ https://vkvdXXX.okcdn.ru/?expires=1783915662438&sig=XXXXX&urls=...
 
 **Finding:** CDN segments require cookies from the browser session.
 
-**Workaround:** Extract cookies from active browser session and pass to yt-dlp. Cookies are written to a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there) and supplied to yt-dlp via its configuration file.
+**Workaround:** Extract cookies from active browser session and pass to yt-dlp. Cookies are written to a temporary Netscape cookie file (requested at `0o600`, which is owner-only on POSIX; on Windows `os.chmod` only toggles the read-only attribute, so the owner-only guarantee is not offered there) and passed to yt-dlp as `--cookies <path>` in argv. Only the file **path** is passed, not the cookie contents, so the path appears in `ps`/`/proc/<pid>/cmdline` but the contents do not. The path exposure is moot for this single-user desktop deployment (D1), but is tracked by phase 06's `SEC-006`.
 
 ## Download Methods Comparison
 
