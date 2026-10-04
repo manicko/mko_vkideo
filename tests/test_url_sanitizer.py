@@ -1,6 +1,32 @@
-"""Tests for URL sanitization utilities."""
+"""Tests for URL sanitization utilities.
 
-from vkdownloader.utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log
+The sanitizer redacts two product artefact shapes (the cookie-file artefact
+``vk_cookies_<tail>.cookies.txt`` and the artfact directory
+``vk_cookies__dir<tail>``) and signed ``https?://`` URLs (scheme+host only).
+These tests lock the redaction claim at both the byte-identity boundary
+(user data that *resembles* an artefact must not match) and the filesystem
+boundary (real artefact paths created by the cookie lifecycle must match).
+"""
+
+from __future__ import annotations
+
+import shutil
+import string
+import tempfile
+from pathlib import Path
+
+from vkdownloader.services.ytdlp_downloader import (
+    _create_cookie_artifact_dir,
+    _create_temp_cookie_file,
+    _remove_cookie_artifact_dir,
+)
+from vkdownloader.utils.url_sanitizer import (
+    _COOKIE_DIR_ARTEFACT_REGEX,
+    _strip_auth_params,
+    sanitize_text_for_log,
+)
+
+REDACTED = "***REDACTED***"
 
 
 class TestStripAuthParams:
@@ -77,6 +103,10 @@ class TestStripAuthParams:
 class TestSanitizeTextForLog:
     """Tests for sanitize_text_for_log function (SEC-002 subprocess output redaction)."""
 
+    # ------------------------------------------------------------------
+    # Legacy / capability-boundary tests (unchanged from the URL-only era).
+    # ------------------------------------------------------------------
+
     def test_redacts_url_in_text(self) -> None:
         """Test that URLs in text are redacted to scheme://host only."""
         text = "Error: cannot fetch https://cdn.example.com/seg.m3u8?token=abc123&sig=def456"
@@ -117,26 +147,6 @@ class TestSanitizeTextForLog:
         assert "vkvideo.ru" in result  # Host preserved for debugging
         assert "cdn.vkhost.com" in result  # Host preserved for debugging
 
-    def test_filesystem_paths_are_not_redacted(self) -> None:
-        """Filesystem paths pass through unchanged; only URLs are redacted.
-
-        ``_URL_REGEX`` matches only ``https?://`` URLs, so a bare
-        filesystem path (e.g. a yt-dlp ``--cookies`` argument) can never
-        match and is returned byte-identical. This pins the capability
-        boundary so the redaction claim cannot silently drift back.
-        """
-        cookie_path = "/tmp/vkdownloader_cookies_8u3x.txt"
-        signed_url = "https://cdn.example.com/seg.m3u8?token=abc123&sig=def456"
-        text = f"cookies: {cookie_path} - fetch: {signed_url}"
-        result = sanitize_text_for_log(text)
-
-        # Signed CDN URL is redacted to scheme + host only.
-        assert "https://cdn.example.com" in result
-        assert "abc123" not in result
-        assert "def456" not in result
-        # Filesystem path is untouched -- no path-matching clause exists.
-        assert cookie_path in result
-
     def test_transform_before_truncate_proves_sanitize_order(self) -> None:
         """SEC-002: prove sanitize-then-truncate ordering (ffmpeg_utils pattern).
 
@@ -144,10 +154,6 @@ class TestSanitizeTextForLog:
         signed URL starts past the 200-char boundary, truncating first would
         silently drop it (no host in the log); sanitizing first shrinks it to
         ``scheme://host/***REDACTED***/`` so the host survives truncation.
-
-        The ``len(result) == 200`` assertion pins the order: the wrong order
-        (``sanitize_text_for_log(error[:200])``) would produce a string
-        *longer* than 200 chars after the short redaction expands the URL.
         """
         filler = "x" * 170
         signed_url = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
@@ -181,3 +187,169 @@ class TestSanitizeTextForLog:
         result = sanitize_text_for_log(text)
 
         assert result == text
+
+    # ------------------------------------------------------------------
+    # Artefact-redaction tests (B4).
+    # ------------------------------------------------------------------
+
+    def test_redacts_cookie_file_artefact_backslash(self) -> None:
+        """A backslash cookie-file artefact path collapses to one redaction."""
+        text = r"C:\Temp\vk_cookies_q1w2e3r4.cookies.txt"
+
+        assert sanitize_text_for_log(text) == REDACTED
+
+    def test_redacts_cookie_file_artefact_forward_slash(self) -> None:
+        """A forward-slash cookie-file artefact path collapses to one redaction."""
+        text = r"C:/Temp/vk_cookies_q1w2e3r4.cookies.txt"
+
+        assert sanitize_text_for_log(text) == REDACTED
+
+    def test_dir_artefact_leaves_owner_pid_suffix(self) -> None:
+        """The directory rule redacts the path but leaves ``owner.pid`` intact."""
+        text = r"C:\Users\x\AppData\Local\Temp\vk_cookies__dir9lfm4h4w4\owner.pid"
+
+        assert sanitize_text_for_log(text) == r"***REDACTED***\owner.pid"
+
+    def test_url_host_survives_when_artefact_embedded_in_url(self) -> None:
+        """URL-first ordering preserves the host even when an artefact is the path."""
+        text = "GET https://cdn.example.com/proxy?p=C:/Users/x/Temp/vk_cookies_a.cookies.txt"
+
+        assert sanitize_text_for_log(text) == "GET https://cdn.example.com/***REDACTED***"
+
+    def test_glued_artefact_keeps_second_name_as_literal(self) -> None:
+        """Two artefacts glued with no separator: only the first is redacted."""
+        text = r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txtvk_cookies_b.cookies.txt"
+
+        assert sanitize_text_for_log(text) == "***REDACTED***vk_cookies_b.cookies.txt"
+
+    def test_nested_file_inside_dir_yields_single_marker(self) -> None:
+        """A file artefact inside a dir artefact collapses to one marker."""
+        text = r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt"
+
+        assert sanitize_text_for_log(text) == REDACTED
+
+    def test_preserves_surrounding_quotes_and_punctuation(self) -> None:
+        """Quotes are preserved; ``(`` ``(`` consumed as collateral.
+
+        ``'`` and ``"`` are in the left-boundary exclusion set ``[\\s'\"<>]``,
+        so an artefact directly wrapped in quotes is matched and the quotes
+        surround the marker. ``(`` is NOT excluded, so it is absorbed into the
+        artefact's greedy path-prefix lead (accepted collateral, same class as
+        ``key=path/...``) while the closing ``)`` survives.
+        """
+        parens = r"(\C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt)"
+        single = r"'C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt'"
+        double = r'"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt"'
+
+        assert sanitize_text_for_log(parens) == f"{REDACTED})"
+        assert sanitize_text_for_log(single) == f"'{REDACTED}'"
+        assert sanitize_text_for_log(double) == f'"{REDACTED}"'
+
+    def test_redacts_artefact_at_line_start_and_line_end(self) -> None:
+        """Artefacts at the start and end of separate lines are both redacted."""
+        text = (
+            r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt"
+            "\nmiddle line preserved\n"
+            r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt"
+        )
+
+        assert sanitize_text_for_log(text) == f"{REDACTED}\nmiddle line preserved\n{REDACTED}"
+
+    def test_benign_cookie_header_is_byte_identical(self) -> None:
+        """A ``Cookie:`` HTTP header is NOT matched (D-5 / Alt A) — byte-identical."""
+        text = "Cookie: a=b; c=d"
+
+        assert sanitize_text_for_log(text) == text
+
+    def test_unquoted_key_value_loses_key_as_collateral(self) -> None:
+        """``key=path/...`` is consumed by the artefact's greedy lead (accepted collateral)."""
+        text = r"path=C:\Users\x\Temp\vk_cookies_x.cookies.txt"
+
+        assert sanitize_text_for_log(text) == REDACTED
+
+    def test_is_idempotent_with_existing_redaction_marker(self) -> None:
+        """An artefact followed by an existing marker keeps the marker stable."""
+        text = r"C:\Temp\vk_cookies__dirabc12345\vk_cookies_q1w2e3r4.cookies.txt -> ***REDACTED***"
+
+        assert sanitize_text_for_log(text) == f"{REDACTED} -> {REDACTED}"
+
+    def test_redaction_marker_literal_is_not_redacted(self) -> None:
+        """The literal marker matches no rule — stays unchanged (idempotency base case)."""
+        assert sanitize_text_for_log(REDACTED) == REDACTED
+
+    def test_glued_artefact_without_separator_not_matched(self) -> None:
+        """An artefact glued to other text without a separator is not matched."""
+        text = "foovk_cookies_a.cookies.txt"
+
+        assert sanitize_text_for_log(text) == text
+
+    # ------------------------------------------------------------------
+    # Negative tests: user data that *resembles* the artefact prefix.
+    # ------------------------------------------------------------------
+
+    def test_filesystem_paths_are_not_redacted(self) -> None:
+        """User-chosen paths resembling the artefact prefix stay byte-identical.
+
+        A user folder named ``vk_cookies_videos`` or ``vk_cookies__downloads``
+        looks like it could be an artefact, but ``_COOKIE_DIR_ARTEFACT_REGEX``
+        requires the literal ``vk_cookies__dir`` stem, so these are NOT matched
+        and pass through unchanged. This pins the negative boundary so the
+        redaction claim cannot silently widen to real user data.
+        """
+        signed_url = "https://cdn.example.com/seg.m3u8?token=abc123&sig=def456"
+        clip_videos = "C:/Users/x/Videos/vk_cookies_videos/clip.mp4"
+        clip_downloads = r"C:\Users\x\Downloads\vk_cookies__downloads\clip.mp4"
+        text = f"videos={clip_videos} - downloads={clip_downloads} - fetch={signed_url}"
+        result = sanitize_text_for_log(text)
+
+        assert "https://cdn.example.com" in result
+        assert "abc123" not in result
+        assert "def456" not in result
+        assert clip_videos in result
+        assert clip_downloads in result
+
+
+class TestArtefactAlphabetOracle:
+    """Filesystem-grounded tests: real artefact paths must be redacted.
+
+    These cases create real artefact paths via the cookie lifecycle helpers
+    (which use :mod:`tempfile`) and assert the sanitizer redacts them -- the
+    counterpart to the byte-identity boundary tests above.
+    """
+
+    def test_real_artefact_dir_is_redacted(self) -> None:
+        """A directory created by ``_create_cookie_artifact_dir`` is redacted."""
+        cookie_dir = _create_cookie_artifact_dir()
+        try:
+            assert sanitize_text_for_log(str(cookie_dir)) == REDACTED
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)
+
+    def test_real_artefact_file_is_redacted(self) -> None:
+        """A cookie file created by ``_create_temp_cookie_file`` is redacted."""
+        cookie_file = _create_temp_cookie_file("session=test")
+        try:
+            assert sanitize_text_for_log(str(cookie_file)) == REDACTED
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+    def test_similarly_shaped_non_artefact_is_byte_identical(self) -> None:
+        """A ``vk_cookies_temp*`` temp dir is NOT an artefact -- byte-identical."""
+        non_artefact = Path(tempfile.mkdtemp(prefix="vk_cookies_temp"))
+        try:
+            assert sanitize_text_for_log(str(non_artefact)) == str(non_artefact)
+        finally:
+            shutil.rmtree(non_artefact, ignore_errors=True)
+
+    def test_artefact_tail_alphabet_is_subset_of_regex_charset(self) -> None:
+        """``tempfile`` tails use only ``[a-z0-9_]`` -- the regex accepts them all."""
+        cookie_dir = _create_cookie_artifact_dir()
+        try:
+            tail = cookie_dir.name[len("vk_cookies__dir") :]
+            assert set(tail) <= set(string.ascii_lowercase + string.digits + "_")
+            match = _COOKIE_DIR_ARTEFACT_REGEX.search(str(cookie_dir))
+            assert match is not None
+            assert match.group(0).endswith(cookie_dir.name)
+        finally:
+            _remove_cookie_artifact_dir(cookie_dir)

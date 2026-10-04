@@ -51,10 +51,35 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602).
-# These strings are frozen by B2: the prefix ``vk_cookies_`` is what the
-# sweep is keyed on, and the suffix ``.cookies.txt`` is what the operator-facing
-# redaction and cleanup tooling keys on. Renaming either breaks coverage silently.
+# Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602, SEC-006).
+# These literals are frozen by B2: ``vk_cookies_`` is what the sweep is keyed
+# on, and ``.cookies.txt`` is what the redaction rule in
+# utils/url_sanitizer._COOKIE_FILE_ARTEFACT_REGEX keys on. The earlier claim
+# that a separate "cleanup tooling" keys on the suffix was an over-claim - only
+# the redaction rule does - and is corrected here. Renaming either breaks
+# coverage silently.
+#
+# These literals are DUPLICATED in utils/url_sanitizer.py, where the matching
+# rules live, because utils/ must not import services/ (layer rule; it would
+# invert the import order and create a cycle). The two copies are kept in
+# lock-step by the test suite only.
+#
+# Redaction-rule design law (see the rules in utils/url_sanitizer.py):
+#  - Left boundary: a rule's left boundary must be a predicate its own
+#    replacement can never satisfy. ***REDACTED*** ends in '*', a non-word
+#    character, so a \b guard would manufacture a boundary on the second pass
+#    (measured 3 fixed-point violations in 400 000). '*' is inside the
+#    excluded set, so the chosen lookbehind is unsatisfiable by the marker
+#    (0 violations).
+#  - The parent is CONSUMED by the optional greedy lead, not asserted by
+#    lookbehind: a variable-length lookbehind is illegal in the re module,
+#    and consuming the parent is what strips the username-bearing temp root
+#    (C:\Users\<name>\AppData\Local\Temp, CWE-532).
+#  - No re.IGNORECASE: every matched string is built from a frozen lowercase
+#    literal, and IGNORECASE widens [a-z] with U+0130/U+0131/U+017F/U+212A for
+#    zero measured coverage gain.
+#  - The tail is [a-z0-9_]+, not {8}: tempfile._RandomNameSequence.characters
+#    is a CPython internal whose length is not contractual.
 # Note: neither string is matched by ``.gitignore`` - its only cookie rule is
 # ``*_cookies.txt``, which needs an underscore where the product emits a dot.
 # The artefacts live under the OS temp root, outside the working tree, so no
