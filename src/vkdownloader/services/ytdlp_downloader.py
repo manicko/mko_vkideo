@@ -270,7 +270,7 @@ def _sweep_stale_cookie_dirs() -> None:
 
     Scans the system temp directory for directories whose names start with
     ``_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX`` — composed, this is
-    ``vk_cookies`` + ``_dir`` = ``vk_cookies__dir`` (the doubled underscore is
+    ``vk_cookies_`` + ``_dir`` = ``vk_cookies__dir`` (the doubled underscore is
     the join, not a separate literal). Classification is **default-deny**:
     a directory is destroyed only on a positive demonstration that it is no
     longer in use. Per matching directory:

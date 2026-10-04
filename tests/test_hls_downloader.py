@@ -5700,10 +5700,13 @@ class TestCookieArtefactLifecycle:
         """AC-1: a PID-less directory provably older than the grace is reclaimed.
 
         Deterministic ageing goes through the clock seam
-        (_cookie_artifact_dir_age_seconds), NOT os.utime: verified on this
-        platform that os.utime moves only st_mtime and leaves st_birthtime
+        (_cookie_artifact_dir_age_seconds), NOT os.utime: the platform split
+        matters. On Windows, os.utime moves only st_mtime and leaves st_birthtime
         (and therefore st_ctime, equal to it) untouched, so a birth-time rule
-        cannot be aged from the filesystem on either Windows or POSIX.
+        cannot be aged from a test on Windows at all. On POSIX, os.stat_result
+        exposes no st_birthtime (the helper falls back to st_ctime) and os.utime
+        DOES move st_ctime because POSIX st_ctime is inode-change time. The clock
+        seam is the only portable deterministic route on both.
         """
         import shutil
         import tempfile as _tempfile
@@ -5914,6 +5917,92 @@ class TestCookieArtefactLifecycle:
         ghost = Path(_tempfile.gettempdir()) / "vk_test_ghost_that_does_not_exist"
         assert not ghost.exists()
         assert _cookie_artifact_dir_age_seconds(ghost) is None
+
+    def test_is_pid_probe_conclusive_windows_semantics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3: _is_pid_probe_conclusive has a direct, platform-independent test.
+
+        The function is a Windows-only leaf (POSIX short-circuits to True), so
+        the test drives it with a fake kernel32 and asserts the full decision
+        table:
+
+        - use_last_error=True arms the last-error slot (required so get_last_error
+          is reliable; ctypes.windll.kernel32 does NOT arm it).
+        - ERROR_INVALID_PARAMETER (87) => True  (PID provably absent).
+        - ERROR_ACCESS_DENIED (5)      => False (privilege boundary, inconclusive).
+        - any other code                => False (defensive default).
+        - non-zero handle              => False, and CloseHandle is called with
+                                          that handle so no leak.
+
+        No real DLL is loaded; ctypes is stubbed so the test runs on every
+        platform. Mutating _is_pid_probe_conclusive to always-True would fail
+        this test.
+        """
+        import ctypes as real_ctypes
+
+        import vkdownloader.services.ytdlp_downloader as yd
+
+        # Force the Windows branch so the ctypes leaf is exercised on every
+        # platform; the test never loads a real DLL.
+        monkeypatch.setattr(os, "name", "nt")
+
+        ERROR_INVALID_PARAMETER = 87
+        ERROR_ACCESS_DENIED = 5
+        ERROR_MOD_NOT_FOUND = 126  # arbitrary "other" code
+
+        captured: dict[str, object] = {}
+
+        class _FakeKernel32:
+            def __init__(self) -> None:
+                self.open_result: int = 0
+                self.last_error: int = 0
+                self.close_handle_called_with: int | None = None
+                self.close_handle_call_count: int = 0
+
+            def OpenProcess(self, _desired: int, _inherit: int, _pid: int) -> int:
+                return self.open_result
+
+            def CloseHandle(self, handle: int) -> bool:
+                self.close_handle_called_with = handle
+                self.close_handle_call_count += 1
+                return True
+
+        fake = _FakeKernel32()
+
+        def _fake_win_dll(name: str, **kwargs: object) -> _FakeKernel32:
+            captured["name"] = name
+            captured["kwargs"] = kwargs
+            return fake
+
+        def _fake_get_last_error() -> int:
+            return fake.last_error
+
+        monkeypatch.setattr(real_ctypes, "WinDLL", _fake_win_dll)
+        monkeypatch.setattr(real_ctypes, "get_last_error", _fake_get_last_error)
+
+        # --- ERROR_INVALID_PARAMETER (87) => True (conclusive death) ---
+        fake.open_result = 0
+        fake.last_error = ERROR_INVALID_PARAMETER
+        assert yd._is_pid_probe_conclusive(999) is True
+        assert captured["name"] == "kernel32"
+        assert captured["kwargs"].get("use_last_error") is True  # type: ignore[attr-defined]
+
+        # --- ERROR_ACCESS_DENIED (5) => False (inconclusive) ---
+        fake.open_result = 0
+        fake.last_error = ERROR_ACCESS_DENIED
+        assert yd._is_pid_probe_conclusive(999) is False
+
+        # --- any other code => False (defensive default) ---
+        fake.open_result = 0
+        fake.last_error = ERROR_MOD_NOT_FOUND
+        assert yd._is_pid_probe_conclusive(999) is False
+
+        # --- non-zero handle => False, CloseHandle called with that handle ---
+        fake.open_result = 0x1234
+        assert yd._is_pid_probe_conclusive(999) is False
+        assert fake.close_handle_called_with == 0x1234
+        assert fake.close_handle_call_count == 1
 
 
 class TestCookieArtefactCreationRaceAcrossProcesses:
