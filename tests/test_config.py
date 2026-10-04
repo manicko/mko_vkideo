@@ -1,10 +1,13 @@
 """Tests for configuration module."""
 
+import io
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import IO
 
 import pytest
 from pydantic import ValidationError
@@ -1244,3 +1247,158 @@ class TestDownloadTimeoutDescriptionStatesTheExitPath:
             "'this setting'/'download_timeout' in one clause); got "
             f"{description!r}"
         )
+
+
+class _StrictStream(io.TextIOWrapper):
+    """A cp1251 text stream with ``errors='strict'``.
+
+    Mirrors the real-world condition where ``sys.stderr`` is cp1251 with a
+    strict error handler -- the configuration under which a record carrying
+    box-drawing characters propagates ``UnicodeEncodeError`` out of
+    ``StreamHandler.emit`` (B16 / BRW-001).
+    """
+
+    def __init__(self, buf: io.BytesIO) -> None:
+        super().__init__(buf, encoding="cp1251", errors="strict")
+
+
+def _first_console_handler(root: logging.Logger) -> logging.StreamHandler[IO[str]]:
+    """Return the first non-File ``StreamHandler`` on the root logger."""
+    for handler in root.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
+            return handler
+    raise AssertionError("no console StreamHandler found on root logger")
+
+
+class TestSetupLoggingConsoleEncoding:
+    """B16: the console sink must not raise on records carrying characters
+    unencodable in the console's encoding; it must escape, not drop, them.
+
+    The defect had no owning finding in any phase -- phase 01 deferred
+    encoding to phase 08; phase 08 never filed it (D7 adopted it here).
+    """
+
+    def test_non_encodable_record_does_not_raise_and_reaches_handler(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B16: a record carrying box-drawing characters must not raise out
+        of the console sink when stderr is strict-encoded, and must reach the
+        handler's stream (not be silently swallowed by handleError).
+        """
+        buffer = io.BytesIO()
+        monkeypatch.setattr(sys, "stderr", _StrictStream(buffer))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        root.handlers.clear()
+        try:
+            setup_logging()
+            handler = _first_console_handler(root)
+
+            # U+2500 (BOX DRAWINGS LIGHT HORIZONTAL) is not in cp1251.
+            # A strict stream raises UnicodeEncodeError on it; the encoding-
+            # safe stream must escape it instead.
+            record = logging.LogRecord(
+                name="b16",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="browser launch failed ─━",
+                args=(),
+                exc_info=None,
+            )
+
+            handler.emit(record)  # must not raise
+
+            output = buffer.getvalue()
+            assert output, "record did not reach the console sink"
+            assert b"browser launch failed" in output
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+
+    def test_non_encodable_record_is_escaped_not_dropped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B16: the record's information must be preserved in the output,
+        backslash-escaped rather than suppressed or truncated.
+
+        A fix that merely suppresses the record (via handleError's ``except
+        OSError: pass``) would leave the buffer empty or missing content --
+        that is not a fix.
+        """
+        buffer = io.BytesIO()
+        monkeypatch.setattr(sys, "stderr", _StrictStream(buffer))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        root.handlers.clear()
+        try:
+            setup_logging()
+            handler = _first_console_handler(root)
+
+            record = logging.LogRecord(
+                name="b16",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="browser launch failed ─━ details",
+                args=(),
+                exc_info=None,
+            )
+
+            handler.emit(record)
+
+            output = buffer.getvalue()
+            # The unencodable character is backslash-escaped (\u2500), proving
+            # the record was emitted rather than dropped.
+            assert b"\\u2500" in output, (
+                f"expected backslash-escaped U+2500 in output; got {output!r}"
+            )
+            # Surrounding ASCII text is intact -- the record was not truncated.
+            assert b"browser launch failed" in output
+            assert b"details" in output
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+
+    def test_normal_record_not_swallowed_or_truncated(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B16: the encoding-safe stream must not swallow or truncate normal
+        (ASCII) records -- only non-encodable characters are escaped.
+        """
+        buffer = io.BytesIO()
+        monkeypatch.setattr(sys, "stderr", _StrictStream(buffer))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        root.handlers.clear()
+        try:
+            setup_logging()
+            handler = _first_console_handler(root)
+
+            record = logging.LogRecord(
+                name="b16",
+                level=logging.INFO,
+                pathname=__file__,
+                lineno=1,
+                msg="download complete, 1024 bytes",
+                args=(),
+                exc_info=None,
+            )
+
+            handler.emit(record)
+
+            output = buffer.getvalue()
+            assert b"download complete, 1024 bytes" in output, (
+                f"normal record was truncated or swallowed; got {output!r}"
+            )
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)

@@ -1,9 +1,12 @@
 """Configuration module for VK Video Downloader."""
 
 import difflib
+import io
 import logging
 import os
+import sys
 from pathlib import Path
+from typing import IO
 
 import structlog
 from dotenv import dotenv_values
@@ -455,6 +458,53 @@ def warn_unknown_env_vars(env_file: Path = Path(".env")) -> list[str]:
     return unknown
 
 
+class _EncodingSafeConsoleStream(io.TextIOWrapper):
+    """A ``TextIOWrapper`` whose ``close`` does not close the underlying buffer.
+
+    ``logging.StreamHandler`` captures its stream at construction time, and the
+    stream wraps ``sys.stderr``'s buffer.  A plain ``TextIOWrapper`` closes
+    that buffer on ``close`` (and on garbage collection), which would tear down
+    the real ``sys.stderr`` for the rest of the process.  This subclass flushes
+    without closing, so the buffer stays alive.
+    """
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        except Exception:
+            pass
+
+
+def _encoding_safe_console_stream() -> IO[str]:
+    """Build a stderr-backed console stream that escapes, not raises, on
+
+    encoding errors (B16 / D7).
+
+    A structlog record carrying characters the console encoding cannot
+    represent (e.g. Playwright's box-drawing characters on a cp1251 console)
+    would otherwise propagate out of ``logging.StreamHandler.emit`` as a
+    ``UnicodeEncodeError`` -- the mechanism behind BRW-001's HIGH severity.
+    Wrapping ``sys.stderr``'s raw buffer with ``errors="backslashreplace"``
+    ensures such characters are backslash-escaped into the record instead of
+    aborting the emit.  ``sys.stderr`` itself is not reconfigured (no
+    ``reconfigure``, no ``PYTHONIOENCODING``); only the handler receives a
+    stream whose error policy is encoding-safe.
+    """
+    stderr = sys.stderr or sys.__stderr__
+    if stderr is None:
+        return sys.stdout or sys.__stdout__  # type: ignore[return-value]
+    raw = getattr(stderr, "buffer", None)
+    if raw is None:
+        return stderr
+    encoding = getattr(stderr, "encoding", None) or sys.getdefaultencoding()
+    return _EncodingSafeConsoleStream(
+        raw,
+        encoding=encoding,
+        errors="backslashreplace",
+        write_through=True,
+    )
+
+
 def setup_logging(settings: Settings | None = None) -> None:
     """Configure structlog for the application.
 
@@ -494,7 +544,7 @@ def setup_logging(settings: Settings | None = None) -> None:
         format="%(message)s",
         level=settings.log_level.value,
         handlers=[
-            logging.StreamHandler()
+            logging.StreamHandler(_encoding_safe_console_stream())
             if not settings.log_file
             else logging.FileHandler(settings.log_file)
         ],
