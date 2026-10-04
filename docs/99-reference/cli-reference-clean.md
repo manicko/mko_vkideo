@@ -93,7 +93,7 @@ vkdownloader download [OPTIONS] URL
 vkdownloader download "https://vkvideo.ru/video-12345_67890"
 
 # Download with specific quality and method
-vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method ffmpeg
+vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 720 --method yt-dlp
 
 # Download the exact height the video offers, including a non-standard one
 vkdownloader download "https://vkvideo.ru/video-12345_67890" --quality 1072

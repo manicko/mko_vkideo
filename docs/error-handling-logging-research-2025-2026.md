@@ -354,7 +354,7 @@ logger.info(
 | `DEBUG` | Diagnostic, high-volume, off in prod | ✅ Used (`parsed_video_id`, `simulating_video_interaction`) |
 | `INFO` | Business milestones, request lifecycle | ✅ Used (`extracting_streams`, `download_completed`) |
 | `WARNING` | Recoverable issue, needs attention | ✅ Used (`ytdlp_extraction_error`, `ssl_verification_disabled`) |
-| `ERROR` | Failure requiring investigation | ✅ Used (`ffmpeg_download_failed`, `max_retries_exceeded`) |
+| `ERROR` | Failure requiring investigation | ✅ Used (`final_merge_failed`, `max_retries_exceeded`) |
 | `CRITICAL` | System is down | ⚠️ Not used (rarely needed in CLI) |
 
 **Rule:** If everything is `ERROR`, nothing is. Reserve `ERROR` for actual failures, not expected conditions like "quality not available."

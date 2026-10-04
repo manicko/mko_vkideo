@@ -317,7 +317,7 @@ finally:
 **Behavior:**
 - Labels are `video_{index}`, or `video_{index}: {title}` once a title is known (truncated at 60 characters)
 - Columns are status marker, label, bar, percentage, transfer speed and ETA
-- The percentage column is fed the raw `(downloaded, total)` pair from the download callback and does not label its unit, because the sources disagree: yt-dlp reports byte counts, ffmpeg reports byte counts with `total=0` since the size is unknown, and the HLS segment path reports segment counts. Under `--method auto` the method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side. This is a known, accepted limitation: rich's `DownloadColumn` would render segment counts as byte counts, which is more misleading than an unlabelled percentage
+- The percentage column is fed the raw `(downloaded, total)` pair from the download callback and does not label its unit, because the sources disagree: yt-dlp reports byte counts (`total=0` when the size is unknown) and the HLS segment path reports segment counts. Under `--method auto` the method is resolved per video, so one batch screen can show byte percentages and segment percentages side by side. This is a known, accepted limitation: rich's `DownloadColumn` would render segment counts as byte counts, which is more misleading than an unlabelled percentage
 - A finished task keeps its label and gains an outcome word, prefixed by a status marker taken from `ProgressStatus`: `SUCCESS` `[✓] done`, `FAILED` `[✗] failed`, `SKIPPED` `[⊘] skipped`, `CANCELLED` `[⊘] cancelled`
 - A successful task with a known total is completed to 100%; other terminal statuses leave the bar where it stopped
 - Root `StreamHandler` log streams are re-pointed onto the live display while it is open and restored on `stop()`, so log lines print above the display and it resumes below them. The log record format itself is unchanged — structlog's `ConsoleRenderer` is still the renderer — but the re-pointed console stream is rich's `FileProxy`, which splits writes on newlines and passes them to `Console.print`; that word-wraps at the terminal width, so a log line longer than the terminal is rendered across several rows while the display is open. Log files are unaffected: `setup_logging` attaches a `logging.FileHandler` for `VKDOWNLOADER_LOG_FILE` and the re-pointing skips `FileHandler` instances, so file output stays byte-identical
@@ -357,7 +357,7 @@ result = await perform_download(
 | `settings` | Settings \| None | None | Optional settings instance. |
 | `backoff_coordinator` | URLBackoffCoordinator \| None | None | URLBackoffCoordinator for shared rate limiting across batch URLs. |
 | `video_semaphore` | asyncio.Semaphore \| None | None | Per-video semaphore for concurrency control. One permit per video, acquired once in `perform_download` (D-01). |
-| `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
+| `progress_callback` | Callable[[str, int, int], None] \| None | None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp path (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 | `video_data` | VideoWithStreams \| None | None | Optional pre-extracted video data with streams. When provided, skips extraction. |
 | `selected_stream` | Stream \| None | None | Optional pre-selected stream. When provided, used instead of streams[0]. |
 | `echo` | bool | True | Keyword-only. When False, suppresses yt-dlp's native console echo; parsed byte counts are logged at DEBUG level as `ytdlp_progress_suppressed` and still reach `progress_callback`. Governs the yt-dlp path only. |
@@ -483,7 +483,7 @@ Request model for HLS download with segment-level resume support.
 | `output_file` | Path | Output file path. |
 | `quality` | str | Quality string (default: "best"). |
 | `cookies` | str \| None | Cookies string for CDN authentication. |
-| `progress_callback` | Callable[[str, int, int], None] \| None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp and ffmpeg paths (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
+| `progress_callback` | Callable[[str, int, int], None] \| None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp path (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 
 > **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `video_semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.
 

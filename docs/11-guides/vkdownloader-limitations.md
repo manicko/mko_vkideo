@@ -31,10 +31,10 @@ Document key findings from development: what works, what doesn't, and workaround
 
 **Finding:** VK implements multi-layer bot detection:
 - `navigator.webdriver` flag (masked by stealth.min.js when `stealth_enabled` is true)
-- WebGL fingerprinting (partially masked)
-- Canvas rendering (masked via getContext override)
+- WebGL fingerprinting (partially masked by stealth.min.js when `stealth_enabled` is true)
+- Canvas rendering (masked via getContext override in stealth.min.js when `stealth_enabled` is true)
 - Missing Chrome plugins/extensions
-- Unusual screen/window dimensions (masked)
+- Unusual screen/window dimensions (masked by stealth.min.js when `stealth_enabled` is true)
 
 **Technical limitation:** Complete browser emulation requires:
 - Consistent GPU/driver fingerprint
@@ -43,6 +43,14 @@ Document key findings from development: what works, what doesn't, and workaround
 - Real Chrome extension signatures
 
 **Workaround:** Use non-headless browser (`headless=False`). Trade-off: user must wait for browser window.
+
+On an origin with high bot protection, opt in to the stealth posture as well — it is **off by default**, so a default run reaches a bot-protected page with no anti-detection measures at all:
+
+```env
+VKDOWNLOADER_STEALTH_ENABLED=true
+```
+
+When the flag is true, the chromium launch passes `--disable-blink-features=AutomationControlled` and `stealth.min.js` is injected as an init script; the masks listed above ship in that script. Because `stealth.min.js` is a declared build artifact, enabling the flag with the asset missing fails hard before the browser starts. The browser context's viewport, user agent, locale and timezone are **not** gated by the flag — they are applied either way, as ordinary context identity.
 
 ### 2. Time-Limited m3u8 Tokens
 

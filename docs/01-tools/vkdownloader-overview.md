@@ -135,7 +135,7 @@ The CLI (`cli.py`) provides two commands:
 Both commands support:
 
 - `--quality`: Quality selection — `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`). Any other token is a usage error (exit code 2) raised while the command line is parsed. See the [Quality Selection Guide](quality-selection.md).
-- `--method`: Download method (yt-dlp, ffmpeg, auto)
+- `--method`: Download method (yt-dlp, auto)
 - `--output/-o`: Output directory (defaults to `Settings.download_dir` when not provided)
 
 ## Download Methods
@@ -283,7 +283,7 @@ services/
 ├── downloader.py          (~350 lines)  - Orchestration (perform_download, download_video)
 ├── ytdlp_downloader.py    (~722 lines)  - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
 ├── segment_downloader.py  (~901 lines) - Segment download, playlist fetching, merging
-├── ffmpeg_utils.py        (~360 lines) - FFmpeg commands, progress parsing, process management
+├── ffmpeg_utils.py        (~360 lines) - FFmpeg commands, process management
 └── downloader_throttle.py - Rate limiting, progress management, backoff coordination
 ```
 

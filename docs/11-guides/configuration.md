@@ -29,7 +29,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `browser_post_interaction_wait` | `VKDOWNLOADER_BROWSER_POST_INTERACTION_WAIT` | 8 | Seconds to wait after video interaction in browser extraction (1-30) |
 | `max_retries` | `VKDOWNLOADER_MAX_RETRIES` | 3 | Maximum retry attempts for failed segment and network requests (1-10) |
 | `download_timeout` | `VKDOWNLOADER_DOWNLOAD_TIMEOUT` | 300 | Download timeout in seconds (30-3600) |
-| `download_stall_timeout` | `VKDOWNLOADER_DOWNLOAD_STALL_TIMEOUT` | 300.0 | Inactivity bound in seconds on the yt-dlp child's one-shot re-wait after the reader drains its output stream (30-3600); a child that keeps producing output is never killed, only one that has gone silent but not yet exited |
+| `download_stall_timeout` | `VKDOWNLOADER_DOWNLOAD_STALL_TIMEOUT` | 300.0 | Inactivity bound in seconds on the one-shot re-wait that follows the yt-dlp reader consuming the download stream — `process.wait()` after EOF on the child's stdout (30-3600); a child that keeps producing output is never killed, only one that has gone silent but not yet exited, and it is then terminated through the existing cancellation ladder (`cancel_subprocess`) with the resulting `TimeoutError` re-raised. This is **not** a whole-operation budget, so a download that keeps producing output runs for as long as it needs. It does not apply to the ffmpeg merge subprocesses, which `download_timeout` already bounds |
 | `backoff_pause_seconds` | `VKDOWNLOADER_BACKOFF_PAUSE_SECONDS` | 10 | Seconds a retryable transport failure pauses the origin before retrying, shared across all segment and manifest retries for that origin (1-120) |
 | `ssl_verify` | `VKDOWNLOADER_SSL_VERIFY` | true | Verify SSL certificates |
 | `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
@@ -71,7 +71,6 @@ Controls how cookies are acquired for authenticated video downloads:
 | Method | cookie_source=NONE | cookie_source=BROWSER |
 |--------|-------------------|-------------------|
 | `yt-dlp` | Uses yt-dlp, no cookies passed | Uses yt-dlp with browser cookies |
-| `ffmpeg` | Direct download without cookies | Captures cookies for ffmpeg headers |
 | `auto` | No browser involvement | No browser involvement |
 
 **Recovery Scenarios:**
