@@ -67,6 +67,7 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
             domain = _sanitize_cookie_value(cookie_item.get("domain", ".vkvideo.ru"))
             path = _sanitize_cookie_value(cookie_item.get("path", "/"))
             secure = "TRUE" if cookie_item.get("secure", False) else "FALSE"
+            include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
             # D-02: A browser session cookie is not an expired cookie. Playwright
             # represents a session cookie with an expiry of -1, which the Netscape
             # format cannot express. Normalise every missing / None / non-positive
@@ -75,7 +76,9 @@ def _cookies_to_netscape(cookies_input: str | list[Cookie]) -> str:
             expires = _normalize_expiry(cookie_item.get("expires", 0))
 
             if name and value:
-                lines.append(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}")
+                lines.append(
+                    f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
+                )
         return "\n".join(lines)
 
     # Handle string format (backward compatible)

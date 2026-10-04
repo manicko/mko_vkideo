@@ -48,6 +48,24 @@ def _cookie_with_null_expiry(name: str, value: str) -> Cookie:
     )
 
 
+def _cookie_with_domain(name: str, value: str, domain: str, expires: float = -1) -> Cookie:
+    """Build a Playwright-shaped cookie carrying an explicit ``domain``.
+
+    Supports a **host-only** domain (no leading dot, e.g. ``vkvideo.ru``) —
+    the shape Chromium reports for a cookie set without a ``Domain`` attribute
+    and the shape SEC-009 proves defeats the Netscape consumer. The module-level
+    ``_DOMAIN`` and the three builders above are untouched; this is an *add*,
+    not a retarget.
+    """
+    return {
+        "name": name,
+        "value": value,
+        "domain": domain,
+        "path": "/",
+        "expires": expires,
+    }
+
+
 class TestCookieRoundTripThroughConsumer:
     """Cookie serialisation verified by loading it with the real yt-dlp consumer."""
 
@@ -162,5 +180,56 @@ class TestCookieRoundTripThroughConsumer:
             sent = {cookie.name for cookie in jar.get_cookies_for_url(_URL)}
             assert "far_future_expiry" in sent
             assert "past_expiry" not in sent
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_host_only_cookie_survives_consumer_round_trip(self) -> None:
+        """SEC-009: a dotless-domain (host-only) cookie survives the real consumer.
+
+        Before the fix, ``_cookies_to_netscape`` wrote the literal ``TRUE``
+        into the ``include_subdomains`` column for every entry. The consumer
+        (``MozillaCookieJar._really_load``) asserts
+        ``domain_specified == initial_dot``; a host-only domain (no leading dot)
+        makes ``initial_dot`` false while the column says ``TRUE``, so the
+        assertion fires and the **entire file** is rejected — not just the
+        offending entry.
+        """
+        cookies: list[Cookie] = [_cookie_with_domain("host_only", "live-value", "vkvideo.ru")]
+
+        path = _create_temp_cookie_file(cookies)
+        try:
+            jar = YoutubeDLCookieJar(str(path))
+            jar.load()
+
+            loaded = {cookie.name: cookie for cookie in jar}
+            assert "host_only" in loaded
+            assert loaded["host_only"].value == "live-value"
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_mixed_dotted_and_host_only_cookies_survive_consumer_round_trip(self) -> None:
+        """SEC-009: a mixed file — dotted then host-only — survives with both cookies.
+
+        This is the reproduction case for the whole-file loss: the dotless
+        entry makes the consumer refuse the file outright, discarding the
+        well-formed dotted entry that precedes it. A host-only-only test would
+        not catch it because both entries are dotless; the mixed ordering is
+        what proves the defect is all-or-nothing.
+        """
+        cookies: list[Cookie] = [
+            _cookie_with_domain("dotted_cookie", "dotted-value", ".vkvideo.ru"),
+            _cookie_with_domain("host_only_cookie", "host-only-value", "vkvideo.ru"),
+        ]
+
+        path = _create_temp_cookie_file(cookies)
+        try:
+            jar = YoutubeDLCookieJar(str(path))
+            jar.load()
+
+            loaded = {cookie.name: cookie for cookie in jar}
+            assert "dotted_cookie" in loaded
+            assert loaded["dotted_cookie"].value == "dotted-value"
+            assert "host_only_cookie" in loaded
+            assert loaded["host_only_cookie"].value == "host-only-value"
         finally:
             path.unlink(missing_ok=True)
