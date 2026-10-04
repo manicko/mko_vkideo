@@ -187,22 +187,20 @@ class ExtractionError(VKDownloadError):
     def __init__(
         self,
         message: str | None = None,
-        error_code: ErrorCode | str | None = None,
+        error_code: ErrorCode | None = None,
     ) -> None:
         """Initialize with an optional message and optional error code.
 
         Args:
             message: Optional human-readable message. Defaults to the
                 class name when not provided.
-            error_code: Optional machine-readable code. When provided as a
-                string it is resolved to its ``ErrorCode`` member so callers
-                need not import the enum directly.
+            error_code: Optional machine-readable code. When provided, it
+                overrides the class-level ``EXTRACTION_ERROR`` to distinguish
+                sub-causes (e.g. a missing stealth asset).
         """
         super().__init__(message)
         if error_code is not None:
-            self.error_code = (
-                error_code if isinstance(error_code, ErrorCode) else ErrorCode(error_code)
-            )
+            self.error_code = error_code
 
     def status_label(self) -> str:
         """Return status label for extraction errors."""

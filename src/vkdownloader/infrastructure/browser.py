@@ -9,6 +9,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import ExtractionError
+from ..models.enums import ErrorCode
 
 logger = get_logger(__name__)
 
@@ -60,7 +61,7 @@ class BrowserManager:
                 "missing, so extraction cannot proceed"
             )
             logger.warning("stealth_asset_missing", hint=msg)
-            error = ExtractionError(msg, error_code="stealth_asset_missing")
+            error = ExtractionError(msg, error_code=ErrorCode.STEALTH_ASSET_MISSING)
             raise error
 
         playwright_instance = await async_playwright().start()
