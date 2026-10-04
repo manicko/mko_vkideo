@@ -52,8 +52,12 @@ logger = get_logger(__name__)
 
 # Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602).
 # These strings are frozen by B2: the prefix ``vk_cookies_`` is what the
-# sweep is keyed on, and the suffix ``.cookies.txt`` is what ``.gitignore``
-# matches. Renaming either breaks coverage silently.
+# sweep is keyed on, and the suffix ``.cookies.txt`` is what the operator-facing
+# redaction and cleanup tooling keys on. Renaming either breaks coverage silently.
+# Note: neither string is matched by ``.gitignore`` - its only cookie rule is
+# ``*_cookies.txt``, which needs an underscore where the product emits a dot.
+# The artefacts live under the OS temp root, outside the working tree, so no
+# ignore rule is required for them to stay out of ``git status``.
 _COOKIE_ARTIFACT_PREFIX = "vk_cookies_"
 _COOKIE_ARTIFACT_SUFFIX = ".cookies.txt"
 _ARTEFACT_DIR_SUFFIX = "_dir"
@@ -70,11 +74,20 @@ def _is_pid_alive(pid: int) -> bool:
     """Report whether a process with ``pid`` is currently alive.
 
     On POSIX, uses ``os.kill(pid, 0)`` — signal 0 tests process existence
-    without delivering a signal. On Windows, ``os.kill`` is **prohibited**
-    because CPython maps non-console signal values to ``TerminateProcess``
-    (confirmed: signal 0 is not in the console-control set), so a ctypes
-    probe via ``OpenProcess`` + ``GetExitCodeProcess`` is used instead
-    (D-1). ``STILL_ACTIVE`` (259) means the process has not exited yet.
+    without delivering a signal. ``os.kill`` is **prohibited** on the Windows
+    branch, but not because it would terminate the target: on Windows
+    ``os.kill(pid, sig)`` dispatches the two console-control values first —
+    ``signal.CTRL_C_EVENT`` (0) and ``signal.CTRL_BREAK_EVENT`` (1) go to
+    ``GenerateConsoleCtrlEvent``, and only any other value reaches
+    ``TerminateProcess``. Because ``CTRL_C_EVENT == 0``, ``os.kill(pid, 0)``
+    takes the **console-control** branch, which makes it wrong as a probe twice
+    over: against a target that is not attached to a console the call fails with
+    ``OSError`` and says nothing about liveness — exactly the batch and service
+    case ``SEC-002`` targets — and against a console-attached target it delivers a
+    real CTRL_C event to that process's console group, which reaches the
+    operator's own foreground program. A ``ctypes`` probe via ``OpenProcess`` +
+    ``GetExitCodeProcess`` is used instead (D-1); ``STILL_ACTIVE`` (259) means
+    the process has not exited yet.
     """
     if os.name == "nt":
         import ctypes
@@ -124,22 +137,41 @@ def _purge_cookie_artifact_dir(cookie_dir: Path) -> None:
 
 
 def _remove_cookie_artifact_dir(cookie_dir: Path) -> None:
-    """Remove a cookie artefact directory when it is empty.
+    """Remove a cookie artefact directory and its ``owner.pid`` record.
 
-    Called from the ``finally`` block after the cookie file has been
-    unlinked. Successful removal emits no record. If the file could not be
-    deleted (the ``OSError`` arm already logged ``cookie_file_cleanup_failed``),
-    ``rmdir`` will fail because the directory is not empty — that failure
-    is also logged as ``cookie_file_cleanup_failed`` so the cleanup attempt
-    is visible, then the directory is left for the atexit sweep to reclaim.
+    The directory holds exactly two things: the credential file, which the
+    caller has already unlinked, and ``owner.pid``, written by
+    ``_create_cookie_artifact_dir``. ``Path.rmdir`` succeeds only on an EMPTY
+    directory, so ``owner.pid`` is unlinked first and the directory is then
+    removed. No glob, no recursion: the credential file is never touched here.
+
+    ``FileNotFoundError`` is success, not failure — a concurrent sweep (or an
+    earlier teardown) already removed the directory — so its arm precedes the
+    ``OSError`` arm, which it subclasses. An ``OSError`` from the ``owner.pid``
+    unlink means ``rmdir`` provably cannot succeed while that file exists, so it
+    is not attempted; one ``cookie_file_cleanup_failed`` record is emitted and
+    the directory is left tracked for the ``atexit`` handler.
+
+    A record is emitted only on genuine survival. Successful removal is silent.
     """
+    removed = False
+    failure: OSError | None = None
     try:
+        (cookie_dir / _OWNER_PID_FILENAME).unlink(missing_ok=True)
         cookie_dir.rmdir()
+        removed = True
+    except FileNotFoundError:  # must precede except OSError: it subclasses it
+        removed = True
     except OSError as exc:
+        failure = exc
+    with _COOKIE_LIFECYCLE_LOCK:
+        if removed:
+            _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
+    if failure is not None:
         logger.warning(
             "cookie_file_cleanup_failed",
             path=str(cookie_dir),
-            error=str(exc),
+            error=str(failure),
         )
 
 
@@ -1082,22 +1114,31 @@ async def _download_with_ytdlp(
                 )
         raise
     finally:
-        if cookie_file is not None and cookie_file.exists():
-            try:
-                cookie_file.unlink(missing_ok=True)
-            except OSError as exc:
-                # A failed destroy must never replace the download's own outcome.
-                # ``missing_ok=True`` already covers ``FileNotFoundError``; any
-                # other ``OSError`` (e.g. ``PermissionError`` from an indexer or
-                # scanner holding the file) is recorded here so the method's
-                # return value / propagated exception survives.
-                logger.warning(
-                    "cookie_file_cleanup_failed",
-                    path=str(cookie_file),
-                    error=str(exc),
-                )
-            else:
-                logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+        if cookie_file is not None:
+            # The inner exists() guard is kept: folding it in would make
+            # unlink(missing_ok=True) "succeed" on an absent file and emit
+            # cookie_file_cleaned_up for a file that never existed.
+            if cookie_file.exists():
+                try:
+                    cookie_file.unlink(missing_ok=True)
+                except OSError as exc:
+                    # A failed destroy must never replace the download's own outcome.
+                    # ``missing_ok=True`` already covers ``FileNotFoundError``; any
+                    # other ``OSError`` (e.g. ``PermissionError`` from an indexer or
+                    # scanner holding the file) is recorded here so the method's
+                    # return value / propagated exception survives.
+                    logger.warning(
+                        "cookie_file_cleanup_failed",
+                        path=str(cookie_file),
+                        error=str(exc),
+                    )
+                else:
+                    logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+            # LOAD-BEARING ORDER: the credential file is unlinked above, so the
+            # directory is empty apart from owner.pid and the removal below can
+            # succeed. Run this whenever a cookie file was created, even if it
+            # has already vanished or its unlink failed — otherwise the directory
+            # leaks.
             _remove_cookie_artifact_dir(cookie_file.parent)
 
 

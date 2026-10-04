@@ -350,7 +350,6 @@ class TestCreateTempCookieFile:
 
         from vkdownloader.services.ytdlp_downloader import (
             _COOKIE_ARTIFACT_DIRS,
-            _COOKIE_LIFECYCLE_LOCK,
             _remove_cookie_artifact_dir,
         )
 
@@ -369,11 +368,13 @@ class TestCreateTempCookieFile:
             )
             # The containing directory must be one this process created.
             assert result.parent in _COOKIE_ARTIFACT_DIRS
-        finally:
             result.unlink(missing_ok=True)
             _remove_cookie_artifact_dir(result.parent)
-            with _COOKIE_LIFECYCLE_LOCK:
-                _COOKIE_ARTIFACT_DIRS.discard(result.parent)
+            assert not result.parent.exists(), (
+                "cookie artefact directory must be removed after teardown"
+            )
+        finally:
+            result.unlink(missing_ok=True)
 
     @pytest.mark.skipif(
         os.name == "nt",
@@ -4132,6 +4133,245 @@ class TestYtDlpSubprocessShutdown:
                 if not task.done():
                     task.cancel()
 
+    @pytest.mark.asyncio
+    async def test_download_success_removes_dir_and_emits_no_cleanup_failure(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """On the success path the directory is removed and no cleanup failure is recorded.
+
+        Covers AC-1 and AC-2: the per-run directory is absent after a successful
+        download, and ``cookie_file_cleanup_failed`` is never emitted on the
+        success path (the log-noise regression from 36b801e) (T3).
+        """
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+            with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    cookies=cookies,
+                )
+
+        assert result == output_file
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert not cookie_file_path.exists(), "cookie file should be removed on success"
+        assert not cookie_file_path.parent.exists(), (
+            "cookie artefact directory must be removed on success"
+        )
+        cleanup_failure_calls = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "cookie_file_cleanup_failed"
+        ]
+        assert len(cleanup_failure_calls) == 0, (
+            f"no cookie_file_cleanup_failed should be emitted on success, "
+            f"got {len(cleanup_failure_calls)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_locked_cookie_file_records_one_failure_and_keeps_both(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A locked credential file emits one directory-arm failure record and
+        leaves both the file and directory behind, with the outcome unchanged (T4).
+
+        Two records are correct in production — one from the file arm (path =
+        the file) and one from the directory arm (path = the directory).
+        This test's "one failure" refers to the directory arm; it holds only
+        because this test patches Path.unlink wholesale, so owner.pid's unlink
+        raises too and rule 4 short-circuits. Do not generalise to a real lock.
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _download_with_ytdlp,
+        )
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            raise PermissionError("simulated indexer lock")
+
+        import shutil
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess_exec,
+        ):
+            with patch.object(Path, "unlink", new=raising_unlink):
+                with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+                    result = await _download_with_ytdlp(
+                        "https://vkvideo.ru/video-12345_67890",
+                        output_file,
+                        "720",
+                        test_settings,
+                        cookies=cookies,
+                    )
+
+        # Outcome is unchanged (success).
+        assert result == output_file
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        # The credential file survives (unlink raised).
+        assert cookie_file_path.exists(), "credential file must survive a locked unlink"
+        # The directory survives (rmdir cannot succeed while the file is present).
+        assert cookie_file_path.parent.exists(), "directory must survive a locked unlink"
+
+        # Exactly one cookie_file_cleanup_failed record for the directory arm.
+        dir_failures = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args
+            and c.args[0] == "cookie_file_cleanup_failed"
+            and c.kwargs.get("path") == str(cookie_file_path.parent)
+        ]
+        assert len(dir_failures) == 1, (
+            f"expected exactly 1 directory-arm cookie_file_cleanup_failed record, "
+            f"got {len(dir_failures)}"
+        )
+
+        # The directory stays tracked on failure.
+        with _COOKIE_LIFECYCLE_LOCK:
+            assert cookie_file_path.parent in _COOKIE_ARTIFACT_DIRS, (
+                "directory must remain tracked when unlink fails"
+            )
+        # Safety cleanup.
+        cookie_file_path.unlink(missing_ok=True)
+        shutil.rmtree(cookie_file_path.parent, ignore_errors=True)
+        with _COOKIE_LIFECYCLE_LOCK:
+            _COOKIE_ARTIFACT_DIRS.discard(cookie_file_path.parent)
+
+    @pytest.mark.asyncio
+    async def test_cancel_path_removes_dir(self, test_settings: Settings, tmp_path: Path) -> None:
+        """On CancelledError the per-run directory is still removed (T5).
+
+        The finally runs during unwinding and _remove_cookie_artifact_dir is
+        reached despite the CancelledError arm re-raising.
+        """
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader.cancel_subprocess",
+                new_callable=AsyncMock,
+                return_value=True,
+            ):
+                with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                    with pytest.raises(asyncio.CancelledError):
+                        await _download_with_ytdlp(
+                            "https://vkvideo.ru/video-12345_67890",
+                            output_file,
+                            "720",
+                            test_settings,
+                            cookies=cookies,
+                        )
+
+        cookies_idx = captured_cmd.index("--cookies")
+        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert not cookie_file_path.parent.exists(), (
+            "cookie artefact directory must be removed even on cancellation"
+        )
+
+    @pytest.mark.asyncio
+    async def test_teardown_runs_when_cookie_file_already_absent(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """The directory teardown runs whenever cookie_file is not None, even
+        when the credential file has already vanished (T6 / R1-A2).
+        """
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+        cookies = "vk=abc123; session=xyz789"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+        cookie_file_path: Path | None = None
+
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            captured_cmd.extend(cmd)
+            # Simulate yt-dlp consuming the cookie file so it vanishes before
+            # the finally block runs.
+            nonlocal cookie_file_path
+            if "--cookies" in cmd:
+                cookies_idx = cmd.index("--cookies")
+                cookie_file_path = Path(cmd[cookies_idx + 1])
+                cookie_file_path.unlink(missing_ok=True)
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+            with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                result = await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    output_file,
+                    "720",
+                    test_settings,
+                    cookies=cookies,
+                )
+
+        assert result == output_file
+        assert cookie_file_path is not None
+        assert not cookie_file_path.exists(), "cookie file should have been consumed"
+        assert not cookie_file_path.parent.exists(), (
+            "cookie artefact directory must be removed even when the file vanished before teardown"
+        )
+
 
 class TestProcessBoundaryDescendant:
     """Tests for TRN-003: process boundary at subprocess spawn sites.
@@ -5136,10 +5376,15 @@ class TestCookieArtefactLifecycle:
                 assert cookie_dir in _COOKIE_ARTIFACT_DIRS, (
                     "cookie artefact directory must be tracked for atexit cleanup"
                 )
+            # With Alt A, _remove_cookie_artifact_dir now succeeds: assert the
+            # directory is gone rather than discarding a tracked-but-present
+            # residue that the old finally masked.
+            _remove_cookie_artifact_dir(cookie_dir)
+            assert not cookie_dir.exists(), (
+                "cookie artefact directory must be removed after teardown"
+            )
         finally:
             _remove_cookie_artifact_dir(cookie_dir)
-            with _COOKIE_LIFECYCLE_LOCK:
-                _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
 
     def test_create_cookie_artifact_dir_writes_owner_pid(self) -> None:
         """_create_cookie_artifact_dir records the current process PID in owner.pid.
@@ -5148,8 +5393,6 @@ class TestCookieArtefactLifecycle:
         and reclaim residues from hard-killed prior runs (SEC-002).
         """
         from vkdownloader.services.ytdlp_downloader import (
-            _COOKIE_ARTIFACT_DIRS,
-            _COOKIE_LIFECYCLE_LOCK,
             _OWNER_PID_FILENAME,
             _create_cookie_artifact_dir,
             _remove_cookie_artifact_dir,
@@ -5161,10 +5404,52 @@ class TestCookieArtefactLifecycle:
             owner_file = cookie_dir / _OWNER_PID_FILENAME
             assert owner_file.exists(), "owner.pid must exist in the artefact directory"
             assert int(owner_file.read_text().strip()) == os.getpid()
+            # With Alt A, removal now succeeds: assert the directory is gone
+            # rather than discarding a tracked-but-present residue.
+            _remove_cookie_artifact_dir(cookie_dir)
+            assert not cookie_dir.exists(), (
+                "cookie artefact directory must be removed after teardown"
+            )
         finally:
             _remove_cookie_artifact_dir(cookie_dir)
-            with _COOKIE_LIFECYCLE_LOCK:
-                _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
+
+    def test_remove_cookie_artifact_dir_removes_created_dir(self) -> None:
+        """_remove_cookie_artifact_dir removes a directory created by _create_cookie_artifact_dir.
+
+        This is a REMOVED assertion, not a tracked one: it asserts the directory
+        is gone from the filesystem after teardown (R1-A1).
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        cookie_dir = _create_cookie_artifact_dir()
+        assert cookie_dir.exists()
+
+        _remove_cookie_artifact_dir(cookie_dir)
+        assert not cookie_dir.exists(), (
+            "cookie artefact directory must be removed by _remove_cookie_artifact_dir"
+        )
+
+    def test_full_round_trip_removes_parent_dir(self) -> None:
+        """The full round trip through _create_temp_cookie_file removes the parent directory.
+
+        The cookie file is unlinked first (caller responsibility), then
+        _remove_cookie_artifact_dir unlinks owner.pid and rmdir's the parent (T2).
+        """
+        from vkdownloader.services.ytdlp_downloader import _remove_cookie_artifact_dir
+
+        cookie_file = _create_temp_cookie_file("vk=test")
+        assert cookie_file.exists()
+        cookie_dir = cookie_file.parent
+        assert cookie_dir.exists()
+
+        cookie_file.unlink(missing_ok=True)
+        _remove_cookie_artifact_dir(cookie_dir)
+        assert not cookie_dir.exists(), (
+            "cookie artefact directory must be removed after the full round trip"
+        )
 
     def test_is_pid_alive_current_process(self) -> None:
         """_is_pid_alive returns True for the current process PID."""
@@ -5266,3 +5551,89 @@ class TestCookieArtefactLifecycle:
         from vkdownloader.services.ytdlp_downloader import _read_owner_pid
 
         assert _read_owner_pid(tmp_path) is None
+
+    def test_owner_pid_unlink_failure_skips_rmdir_and_records(self) -> None:
+        """A credential file left in the directory makes rmdir fail: one
+        ``cookie_file_cleanup_failed`` record with ``path=str(cookie_dir)``,
+        the directory survives, and it stays tracked.
+
+        Companion: a call on an already-gone directory emits NO record —
+        pinning the ``FileNotFoundError``-before-``OSError`` arm ordering (T7).
+        """
+        import shutil
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        # Part A: credential file occupies the directory so rmdir cannot
+        # succeed even after owner.pid is unlinked.
+        cookie_dir = _create_cookie_artifact_dir()
+        credential = cookie_dir / "credential.txt"
+        credential.write_text("locked")
+
+        with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
+            _remove_cookie_artifact_dir(cookie_dir)
+
+        failure_records = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "cookie_file_cleanup_failed"
+        ]
+        assert len(failure_records) == 1, (
+            f"expected exactly 1 cookie_file_cleanup_failed record for the "
+            f"directory arm, got {len(failure_records)}"
+        )
+        assert failure_records[0].kwargs["path"] == str(cookie_dir)
+
+        assert cookie_dir.exists(), "directory must survive a rmdir failure"
+        assert credential.exists(), "credential file must survive"
+        with _COOKIE_LIFECYCLE_LOCK:
+            assert cookie_dir in _COOKIE_ARTIFACT_DIRS, "directory must remain tracked on failure"
+
+        # Part B: companion — an already-removed directory emits NO record.
+        # This pins the FileNotFoundError-before-OSError ordering: if the arms
+        # were reversed, FileNotFoundError (a subclass of OSError) would fall
+        # into the failure arm and emit a spurious warning.
+        shutil.rmtree(cookie_dir, ignore_errors=True)
+        assert not cookie_dir.exists()
+
+        with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger2:
+            _remove_cookie_artifact_dir(cookie_dir)
+
+        any_warning = mock_logger2.warning.called
+        assert not any_warning, "no warning should be emitted for an already-removed directory"
+
+    def test_artifact_dir_set_does_not_grow_across_cycles(self) -> None:
+        """_COOKIE_ARTIFACT_DIRS does not grow after N create/teardown cycles (T8).
+
+        Each cycle creates a directory, tracks it, then removes it and prunes
+        the set. After N >= 3 cycles the set size must equal the pre-cycle size.
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_DIRS,
+            _COOKIE_LIFECYCLE_LOCK,
+            _create_cookie_artifact_dir,
+            _remove_cookie_artifact_dir,
+        )
+
+        with _COOKIE_LIFECYCLE_LOCK:
+            size_before = len(_COOKIE_ARTIFACT_DIRS)
+
+        for _ in range(3):
+            cookie_dir = _create_cookie_artifact_dir()
+            assert cookie_dir.exists()
+            with _COOKIE_LIFECYCLE_LOCK:
+                assert cookie_dir in _COOKIE_ARTIFACT_DIRS
+            _remove_cookie_artifact_dir(cookie_dir)
+            assert not cookie_dir.exists()
+
+        with _COOKIE_LIFECYCLE_LOCK:
+            size_after = len(_COOKIE_ARTIFACT_DIRS)
+        assert size_after == size_before, (
+            f"_COOKIE_ARTIFACT_DIRS grew from {size_before} to {size_after} "
+            f"across 3 create/teardown cycles"
+        )
