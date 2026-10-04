@@ -556,6 +556,8 @@ def setup_logging(settings: Settings | None = None) -> None:
     Raises:
         OSError: If log_file parent directory cannot be created.
     """
+    from vkdownloader.utils.url_sanitizer import redact_log_event
+
     if settings is None:
         settings = Settings()
 
@@ -597,6 +599,7 @@ def setup_logging(settings: Settings | None = None) -> None:
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
+            redact_log_event,
             structlog.processors.JSONRenderer()
             if settings.log_file
             else structlog.dev.ConsoleRenderer(),

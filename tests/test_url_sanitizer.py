@@ -10,11 +10,19 @@ boundary (real artefact paths created by the cookie lifecycle must match).
 
 from __future__ import annotations
 
+import inspect
+import io
+import json
+import logging
 import shutil
 import string
 import tempfile
 from pathlib import Path
+from typing import Any
 
+import structlog
+
+from vkdownloader.config import setup_logging
 from vkdownloader.services.ytdlp_downloader import (
     _create_cookie_artifact_dir,
     _create_temp_cookie_file,
@@ -22,11 +30,14 @@ from vkdownloader.services.ytdlp_downloader import (
 )
 from vkdownloader.utils.url_sanitizer import (
     _COOKIE_DIR_ARTEFACT_REGEX,
+    _STRUCTURAL_KEYS,
     _strip_auth_params,
+    redact_log_event,
     sanitize_text_for_log,
 )
 
 REDACTED = "***REDACTED***"
+_TEST_LOGGER = logging.getLogger("test.redact")
 
 
 class TestStripAuthParams:
@@ -391,3 +402,504 @@ class TestArtefactAlphabetOracle:
             assert match.group(0).endswith(cookie_dir.name)
         finally:
             _remove_cookie_artifact_dir(cookie_dir)
+
+
+class TestRedactLogEventProcessor:
+    """Tests for the ``redact_log_event`` structlog processor (B6).
+
+    Covers the acceptance criteria from plan 17 §B6:
+    - exc_info=True traceback redaction through the configured chain
+    - cookie_file_cleanup_failed (both fields) and cookie_file_cleaned_up (path)
+    - processor chain position (after format_exc_info, after UnicodeDecoder,
+      before renderer)
+    - event-name-agnosticism
+    - idempotency (processor output is a fixed point)
+    - never-raises on non-string, None, nested mapping, absent key
+    """
+
+    SIGNED_URL = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+
+    # ------------------------------------------------------------------
+    # AC-1: exc_info=True record's rendered traceback is redacted
+    # ------------------------------------------------------------------
+
+    def test_exc_info_traceback_is_redacted_through_chain(self) -> None:
+        """An exc_info=True record carrying a signed URL in the exception message
+        is redacted in the rendered ``exception`` field.
+        """
+        structlog.reset_defaults()
+        buf = io.StringIO()
+        root = logging.getLogger()
+        old_handlers = root.handlers[:]
+        root.handlers.clear()
+        root.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(buf)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root.handlers.append(handler)
+        try:
+            structlog.configure(
+                processors=[
+                    structlog.contextvars.merge_contextvars,
+                    structlog.stdlib.add_log_level,
+                    structlog.processors.TimeStamper(fmt="iso", utc=True),
+                    structlog.processors.format_exc_info,
+                    structlog.processors.UnicodeDecoder(),
+                    redact_log_event,
+                    structlog.processors.JSONRenderer(),
+                ],
+                wrapper_class=structlog.stdlib.BoundLogger,
+                logger_factory=structlog.stdlib.LoggerFactory(),
+                cache_logger_on_first_use=False,
+            )
+            logger = structlog.get_logger("test.exc_info")
+
+            url = self.SIGNED_URL
+            try:
+                raise ValueError(f"fetch failed: {url}")
+            except ValueError:
+                logger.error("download failed", exc_info=True)
+
+            output = buf.getvalue().strip()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(old_handlers)
+
+        parsed = json.loads(output)
+        assert "exception" in parsed
+        assert "Traceback" in parsed["exception"]
+        assert "SECRET123" not in parsed["exception"]
+        assert "ABC" not in parsed["exception"]
+        assert "cdn.example.com" in parsed["exception"]
+
+    # ------------------------------------------------------------------
+    # AC-3: cookie_file_cleanup_failed + cookie_file_cleaned_up
+    # ------------------------------------------------------------------
+
+    def test_cookie_file_cleanup_failed_both_fields_redacted(self) -> None:
+        """``cookie_file_cleanup_failed`` carries ``path`` and ``error``, both
+        bearing artefact tokens — both must be redacted.
+        """
+        cookie_file = _create_temp_cookie_file("session=test")
+        try:
+            cleanup_error = f"PermissionError: cannot delete {cookie_file}"
+            event_dict = {
+                "event": "cookie_file_cleanup_failed",
+                "path": str(cookie_file),
+                "error": cleanup_error,
+            }
+            result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+            assert result["path"] == REDACTED
+            assert "Cannot delete" not in result["error"] or cookie_file.name not in result["error"]
+            # Both values must lose the artefact token
+            assert cookie_file.name not in result["path"]
+            assert cookie_file.name not in result["error"]
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+    def test_cookie_file_cleaned_up_path_is_redacted(self) -> None:
+        """``cookie_file_cleaned_up`` carries ``path=str(cookie_file)`` at DEBUG —
+        the artefact path must be redacted.
+        """
+        cookie_file = _create_temp_cookie_file("session=test")
+        try:
+            event_dict = {
+                "event": "cookie_file_cleaned_up",
+                "path": str(cookie_file),
+            }
+            result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+            assert result["path"] == REDACTED
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+    # ------------------------------------------------------------------
+    # AC-4: chain position
+    # ------------------------------------------------------------------
+
+    def test_processor_positioned_after_format_exc_info_and_unicode_decoder(
+        self,
+    ) -> None:
+        """The processor sits after ``format_exc_info`` and ``UnicodeDecoder``,
+        and before the renderer.
+        """
+        from structlog.dev import ConsoleRenderer
+        from structlog.processors import (
+            ExceptionRenderer,
+            JSONRenderer,
+            UnicodeDecoder,
+        )
+
+        setup_logging()
+        processors = structlog.get_config()["processors"]
+
+        processor_idx = None
+        format_exc_idx = None
+        unicode_idx = None
+        renderer_idx = None
+        for i, proc in enumerate(processors):
+            if proc is redact_log_event:
+                processor_idx = i
+            if isinstance(proc, ExceptionRenderer):
+                format_exc_idx = i
+            if isinstance(proc, UnicodeDecoder):
+                unicode_idx = i
+            if isinstance(proc, (JSONRenderer, ConsoleRenderer)):
+                renderer_idx = i
+
+        assert processor_idx is not None, "redact_log_event not found in processors"
+        assert format_exc_idx is not None
+        assert unicode_idx is not None
+        assert renderer_idx is not None
+
+        assert processor_idx > format_exc_idx, (
+            "redact_log_event must be after format_exc_info (ExceptionRenderer)"
+        )
+        assert processor_idx > unicode_idx, (
+            "redact_log_event must be after UnicodeDecoder (values must be str)"
+        )
+        assert processor_idx < renderer_idx, "redact_log_event must be before the renderer"
+
+    # ------------------------------------------------------------------
+    # AC-5: event-name-agnosticism
+    # ------------------------------------------------------------------
+
+    def test_same_value_under_different_names_produces_identical_output(
+        self,
+    ) -> None:
+        """Two records with different ``event`` names but the same secret-bearing
+        value produce identical redaction.
+        """
+        url = self.SIGNED_URL
+        event_dict_a = {"event": "record_a", "detail": url}
+        event_dict_b = {"event": "record_b", "detail": url}
+
+        result_a = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict_a))
+        result_b = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict_b))
+
+        assert result_a["detail"] == result_b["detail"]
+        assert "SECRET123" not in result_a["detail"]
+        assert "ABC" not in result_a["detail"]
+        assert "cdn.example.com" in result_a["detail"]
+
+    def test_synthetic_novel_key_is_redacted(self) -> None:
+        """A key name not present in any of the 22 enumerated records still gets
+        redacted — the processor is key-agnostic, not allowlist-driven.
+        """
+        event_dict = {
+            "event": "novel_record",
+            "custom_payload_key": self.SIGNED_URL,
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert "SECRET123" not in result["custom_payload_key"]
+        assert "cdn.example.com" in result["custom_payload_key"]
+
+    def test_processor_source_contains_no_enumerated_record_names(self) -> None:
+        """The processor source/bytecode mentions none of the 22 enumerated
+        record names — the function is structural, not name-branched.
+        """
+        from vkdownloader.utils.url_sanitizer import redact_log_event as proc_module
+
+        module_source = inspect.getsource(proc_module)
+        # The enumerated record names from the 22-name census
+        record_names = [
+            "browser_launch_failed",
+            "browser_close_failed",
+            "playwright_stop_failed",
+            "video_player_click_failed",
+            "ytdlp_not_found",
+            "download_failed",
+            "batch_download_failed",
+            "unexpected_error_in_batch_download",
+            "cookie_file_cleanup_failed",
+            "cookie_file_cleaned_up",
+            "env_file_resolved",
+            "output_path_inside_repository",
+            "failed_to_cleanup_partial_file",
+            "download_interrupted_switching_to_segments",
+            "starting_download",
+            "starting_ytdlp_download",
+            "starting_segment_download",
+            "merge_completed",
+            "ytdlp_download_completed",
+            "primary_error",
+            "retryable_transport_error",
+        ]
+        for name in record_names:
+            assert name not in module_source, (
+                f"record name {name!r} found in processor source — "
+                "processor must be event-name-agnostic"
+            )
+
+    # ------------------------------------------------------------------
+    # AC-6: idempotency (processor output is a fixed point)
+    # ------------------------------------------------------------------
+
+    def test_processor_output_is_fixed_point(self) -> None:
+        """S(S(x)) == S(x): running the processor on its own output is a no-op.
+
+        This is the corrected idempotency claim (B6-R10). The pre-sanitised
+        call-site values (``batch_merge_failed``, ``final_merge_failed``) are
+        already-fixed-point inputs; the processor must not expand them.
+        """
+        pre_sanitised = sanitize_text_for_log(
+            f"filler {self.SIGNED_URL} more filler {self.SIGNED_URL}"
+        )
+        event_dict = {"event": "batch_merge_failed", "error": pre_sanitised}
+        once = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+        twice = redact_log_event(_TEST_LOGGER, "debug", dict(once))
+
+        assert once["error"] == twice["error"], "processor output must be a fixed point"
+        assert "SECRET123" not in once["error"]
+
+    def test_pre_sanitised_url_value_comes_out_unchanged(self) -> None:
+        """A value already reduced by sanitize_text_for_log survives the
+        processor unchanged (the B4-R7 fixed-point fixture).
+        """
+        pre = sanitize_text_for_log(self.SIGNED_URL)
+        event_dict = {"event": "download_failed", "url": pre}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["url"] == pre
+        assert result["url"] == "https://cdn.example.com/***REDACTED***"
+
+    # ------------------------------------------------------------------
+    # AC-8: never raises on non-string, None, nested mapping, absent key
+    # ------------------------------------------------------------------
+
+    def test_none_value_passes_through(self) -> None:
+        """A ``None`` value (real input: ``ytdlp_not_found``'s ``path=exc.filename``)
+        is passed through unchanged without raising.
+        """
+        event_dict: dict[str, Any] = {"event": "ytdlp_not_found", "path": None}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["path"] is None
+
+    def test_non_string_value_passes_through(self) -> None:
+        """int, bool, float values pass through unchanged without raising."""
+        event_dict: dict[str, Any] = {
+            "event": "segment_done",
+            "bytes": 1024,
+            "success": True,
+            "ratio": 0.75,
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["bytes"] == 1024
+        assert result["success"] is True
+        assert result["ratio"] == 0.75
+
+    def test_empty_event_dict_passes_through(self) -> None:
+        """An event dict with no values (only ``event``) renders without raising."""
+        event_dict = {"event": "bare_event"}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result == {"event": "bare_event"}
+
+    def test_bytes_value_passes_through(self) -> None:
+        """A ``bytes`` value (pre-UnicodeDecoder) passes through unchanged.
+        After UnicodeDecoder runs, the same processor would see a ``str`` and
+        redact — but the processor itself never raises on ``bytes``.
+        """
+        event_dict = {"event": "raw_blob", "blob": b"https://cdn.example.com/x?token=SECRET"}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["blob"] == b"https://cdn.example.com/x?token=SECRET"
+
+    def test_list_values_are_depth1_sanitised(self) -> None:
+        """A ``list`` value has its string elements redacted via depth-1 recursion,
+        but nested non-strings (int, None) pass through, and the original list is
+        not mutated in place (structlog's shallow copy would otherwise share it).
+        """
+        event_dict: dict[str, Any] = {
+            "event": "captured_m3u8_urls",
+            "urls": [self.SIGNED_URL, "https://b.example.com/y", None, 4096],
+        }
+        original_list = event_dict["urls"]
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        # Each string element redacted; non-strings preserved
+        assert "SECRET123" not in result["urls"][0]
+        assert "cdn.example.com" in result["urls"][0]
+        assert result["urls"][1] == "https://b.example.com/***REDACTED***"
+        assert result["urls"][2] is None
+        assert result["urls"][3] == 4096
+
+        # Original list unchanged (no in-place mutation)
+        assert original_list[0] == self.SIGNED_URL
+        assert "SECRET123" in original_list[0]
+
+    def test_tuple_values_are_depth1_sanitised_and_return_tuple(self) -> None:
+        """A ``tuple`` value is sanitised depth-1 and returned as a tuple."""
+        event_dict: dict[str, Any] = {
+            "event": "some_event",
+            "paths": (self.SIGNED_URL, "plain text"),
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert isinstance(result["paths"], tuple)
+        assert "SECRET123" not in result["paths"][0]
+        assert result["paths"][1] == "plain text"
+
+    def test_dict_values_are_depth1_sanitised_keys_preserved(self) -> None:
+        """A ``dict`` value has its string VALUES redacted depth-1, but its KEYS
+        are preserved byte-identical (they are data, not structlog's structural
+        keys), and the original dict is not mutated in place.
+        """
+        event_dict: dict[str, Any] = {
+            "event": "some_event",
+            "metadata": {
+                "url_key": self.SIGNED_URL,
+                "count": 42,
+            },
+        }
+        original_dict = event_dict["metadata"]
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert "SECRET123" not in result["metadata"]["url_key"]
+        assert "cdn.example.com" in result["metadata"]["url_key"]
+        assert result["metadata"]["count"] == 42
+
+        # Keys preserved byte-identical
+        assert set(result["metadata"].keys()) == {"url_key", "count"}
+
+        # Original dict unchanged (no in-place mutation)
+        assert original_dict["url_key"] == self.SIGNED_URL
+        assert "SECRET123" in original_dict["url_key"]
+
+    def test_captured_m3u8_urls_record_through_configured_chain(self) -> None:
+        """The live ``captured_m3u8_urls`` record carries ``urls=[...]`` — a list of
+        signed CDN URLs. Through the fully configured chain, each is redacted,
+        and the original list object is not mutated in place.
+        """
+        structlog.reset_defaults()
+        buf = io.StringIO()
+        root = logging.getLogger()
+        old_handlers = root.handlers[:]
+        root.handlers.clear()
+        root.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(buf)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root.handlers.append(handler)
+        try:
+            structlog.configure(
+                processors=[
+                    structlog.contextvars.merge_contextvars,
+                    structlog.stdlib.add_log_level,
+                    structlog.processors.TimeStamper(fmt="iso", utc=True),
+                    structlog.processors.format_exc_info,
+                    structlog.processors.UnicodeDecoder(),
+                    redact_log_event,
+                    structlog.processors.JSONRenderer(),
+                ],
+                wrapper_class=structlog.stdlib.BoundLogger,
+                logger_factory=structlog.stdlib.LoggerFactory(),
+                cache_logger_on_first_use=False,
+            )
+            logger = structlog.get_logger("test.m3u8")
+
+            url_list = [self.SIGNED_URL, "https://b.example.com/alt.m3u8?sig=BBB"]
+            logger.info("captured_m3u8_urls", urls=url_list)
+
+            output = buf.getvalue().strip()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(old_handlers)
+
+        parsed = json.loads(output)
+        urls = parsed["urls"]
+
+        assert "SECRET123" not in urls[0]
+        assert "ABC" not in urls[0]
+        assert "cdn.example.com" in urls[0]
+        assert "BBB" not in urls[1]
+        assert "b.example.com" in urls[1]
+
+        # Original list object must remain unchanged (no in-place mutation)
+        assert url_list[0] == self.SIGNED_URL
+        assert "SECRET123" in url_list[0]
+
+
+class TestStructuralKeysDenylist:
+    """Verify the structural-key denylist matches the measured injected set."""
+
+    def test_denylist_contains_four_structural_keys(self) -> None:
+        """The denylist is exactly {event, level, timestamp, correlation_id}."""
+        assert _STRUCTURAL_KEYS == frozenset({"event", "level", "timestamp", "correlation_id"})
+
+    def test_structural_keys_are_not_redacted(self) -> None:
+        """Values under structural keys are never redacted, even if they
+        contain a URL or artefact token.
+        """
+        event_dict: dict[str, Any] = {
+            "event": "https://cdn.example.com/x?token=SECRET",
+            "level": "https://cdn.example.com/y?token=SECRET2",
+            "timestamp": "https://cdn.example.com/z?token=SECRET3",
+            "correlation_id": "https://cdn.example.com/w?token=SECRET4",
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["event"] == event_dict["event"]
+        assert result["level"] == event_dict["level"]
+        assert result["timestamp"] == event_dict["timestamp"]
+        assert result["correlation_id"] == event_dict["correlation_id"]
+
+
+class TestRedactLogEventDirect:
+    """Direct unit tests of the ``redact_log_event`` processor without the
+    configured chain.
+    """
+
+    def test_redacts_url_value(self) -> None:
+        """A URL in any string value is redacted to scheme://host.***REDACTED***."""
+        event_dict: dict[str, Any] = {
+            "event": "some_event",
+            "url": "https://cdn.example.com/seg.m3u8?token=SECRET",
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert "SECRET" not in result["url"]
+        assert "cdn.example.com" in result["url"]
+
+    def test_redacts_artefact_path_in_value(self) -> None:
+        """An artefact path in any string value is redacted."""
+        cookie_file = _create_temp_cookie_file("session=test")
+        try:
+            event_dict: dict[str, Any] = {
+                "event": "some_event",
+                "path": str(cookie_file),
+            }
+            result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+            assert result["path"] == REDACTED
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+    def test_redacts_multiple_string_values(self) -> None:
+        """Every string value in the dict is independently redacted."""
+        event_dict: dict[str, Any] = {
+            "event": "multi_field",
+            "url_a": "https://a.example.com/x?tok=AAA",
+            "url_b": "https://b.example.com/y?tok=BBB",
+            "message": "fetch https://c.example.com/z?tok=CCC failed",
+        }
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert "AAA" not in result["url_a"]
+        assert "BBB" not in result["url_b"]
+        assert "CCC" not in result["message"]
+        assert "a.example.com" in result["url_a"]
+        assert "b.example.com" in result["url_b"]
+        assert "c.example.com" in result["message"]
+
+    def test_preserves_event_key(self) -> None:
+        """The ``event`` key value is never redacted."""
+        event_dict = {"event": "my_log_event_name"}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+
+        assert result["event"] == "my_log_event_name"
