@@ -90,9 +90,8 @@ def _semaphore_context(
 #       perform_download, download_video, _semaphore_context
 #   * ytdlp_downloader.py:
 #       download_with_ytdlp_with_resume_fallback, _build_ytdlp_cli_command,
-#       _download_with_ytdlp, _echo_ytdlp_line, _parse_ytdlp_progress,
-#       _resolve_cookies, _create_temp_cookie_file, _await_first_and_cancel_others,
-#       _attempt_segment_resume
+#       _echo_ytdlp_line, _parse_ytdlp_progress,
+#       _resolve_cookies, _create_temp_cookie_file, _await_first_and_cancel_others
 #   * ffmpeg_utils.py:
 #       cancel_subprocess, _build_ffmpeg_concat_command,
 #       _merge_segments_batched, check_ffmpeg_available
@@ -114,8 +113,6 @@ __all__ = [
     "_fetch_playlist_with_retry",
     "_merge_segments_batched",
     "_parse_m3u8_segments",
-    "_attempt_segment_resume",
-    "_download_with_ytdlp",
     "_retry_429_with_backoff",
     "setup_signal_handlers",
 ]

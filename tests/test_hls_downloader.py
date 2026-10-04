@@ -4670,7 +4670,7 @@ class TestB13ResumeErrorHandling:
     ) -> None:
         """A FileNotFoundError escaping from the merge is NOT caught as
         failed_to_refresh_token — it propagates instead."""
-        from vkdownloader.services.downloader import _attempt_segment_resume
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
         output_file.write_bytes(b"partial data")
@@ -4715,7 +4715,7 @@ class TestB13ResumeErrorHandling:
     ) -> None:
         """A genuine ExtractionError IS still caught and logged as
         failed_to_refresh_token."""
-        from vkdownloader.services.downloader import _attempt_segment_resume
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
         output_file.write_bytes(b"partial data")
@@ -4757,7 +4757,7 @@ class TestB13DownloadMissingBinary:
     ) -> None:
         """When asyncio.create_subprocess_exec raises FileNotFoundError, the
         ytdlp_not_found record includes the missing binary path."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
