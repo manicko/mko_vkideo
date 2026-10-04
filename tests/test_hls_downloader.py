@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vkdownloader.config import Settings
-from vkdownloader.exceptions import DownloadError, QualityNotAvailableError
+from vkdownloader.exceptions import (
+    DownloadError,
+    ExtractionError,
+    QualityNotAvailableError,
+)
 from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.models.enums import CookieSource, QualityKind, StreamFormat
 from vkdownloader.models.quality import QualitySpec
@@ -4518,6 +4522,263 @@ class TestFfmpegAvailabilityCheck:
             assert cached == fu._ffmpeg_available
         finally:
             fu._ffmpeg_available = original
+
+
+class TestB13AvailabilityProbe:
+    """Tests for TRN-008 / B13: cache behaviour and probe answer usage.
+
+    The write-once cache is left untouched (no invalidation path added,
+    per the Planner's choice recorded in the commit body). A second absence
+    is not silent: the cached value is returned so that the call site
+    (``perform_download``) can still react to it on every invocation.
+    """
+
+    def test_check_ffmpeg_available_write_once_when_false(self) -> None:
+        """Write-once cache: when ffmpeg is absent, False is cached and a
+        second call returns the cached value without re-probing."""
+        import vkdownloader.services.ffmpeg_utils as fu
+
+        original = fu._ffmpeg_available
+        try:
+            fu._ffmpeg_available = None
+
+            # First call discovers the absence and caches False
+            with patch("shutil.which", return_value=None):
+                result = check_ffmpeg_available()
+            assert result is False
+            assert fu._ffmpeg_available is False
+
+            # Second call returns cached False — write-once, no re-probe
+            with patch("shutil.which", return_value="/usr/bin/ffmpeg") as mock_which:
+                result2 = check_ffmpeg_available()
+            assert result2 is False  # cached, not silent
+            mock_which.assert_not_called()
+        finally:
+            fu._ffmpeg_available = original
+
+    @pytest.mark.asyncio
+    async def test_perform_download_emits_one_warning_when_ffmpeg_missing(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """The probe's answer is used: with check_ffmpeg_available forced to
+        False, perform_download emits exactly ONE warning, does NOT raise, and
+        does NOT change the exit code (D6)."""
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        output_file = tmp_path / "video.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.downloader.check_ffmpeg_available",
+                return_value=False,
+            ),
+            patch("vkdownloader.services.downloader.logger.warning") as mock_warning,
+            patch(
+                "vkdownloader.services.downloader.download_with_ytdlp_with_resume_fallback",
+                new_callable=AsyncMock,
+                return_value=output_file,
+            ),
+        ):
+            result = await perform_download(
+                "https://vkvideo.ru/video-12345_67890",
+                "720",
+                output_file,
+                DownloadMethod.YTDLP,
+                settings=test_settings,
+                video_data=MagicMock(
+                    streams=[MagicMock(url="https://example.com/v.m3u8")],
+                ),
+                selected_stream=Stream(
+                    url="https://example.com/v.m3u8",
+                    format=StreamFormat.HLS,
+                    quality="best",
+                    height=720,
+                ),
+            )
+
+        # Exactly one warning for the missing muxer
+        ffmpeg_warnings = [
+            c for c in mock_warning.call_args_list if c[0][0] == "ffmpeg_missing_for_merge"
+        ]
+        assert len(ffmpeg_warnings) == 1
+        assert ffmpeg_warnings[0].kwargs.get("hint") is not None
+
+        # Download proceeded normally — no raise, no early return
+        assert result == output_file
+
+
+class TestB13MergeMissingMuxer:
+    """TRN-008 / B13 arm (b): the merge path with no muxer produces one
+    actionable record instead of an escaping exception."""
+
+    @pytest.mark.asyncio
+    async def test_merge_batch_catches_missing_ffmpeg(self, tmp_path: Path) -> None:
+        """_merge_batch_segments returns None and logs merge_spawn_failed when
+        ffmpeg is missing, instead of letting FileNotFoundError escape."""
+        from vkdownloader.services.ffmpeg_utils import _merge_batch_segments
+
+        segment1 = tmp_path / "00000.ts"
+        segment1.write_bytes(b"segment data")
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError(2, "No such file", "ffmpeg"),
+            ),
+            patch("vkdownloader.services.ffmpeg_utils.logger.error") as mock_error,
+        ):
+            result = await _merge_batch_segments([segment1], tmp_path, 300)
+
+        assert result is None
+        mock_error.assert_called_once()
+        assert mock_error.call_args[0][0] == "merge_spawn_failed"
+        assert "ffmpeg" in mock_error.call_args[1]["hint"]
+
+    @pytest.mark.asyncio
+    async def test_final_merge_catches_missing_ffmpeg(self, tmp_path: Path) -> None:
+        """_perform_final_merge returns False and logs merge_spawn_failed when
+        the ffmpeg binary is not on PATH."""
+        from vkdownloader.services.ffmpeg_utils import _perform_final_merge
+
+        temp_file = tmp_path / "batch_00000.ts"
+        temp_file.write_bytes(b"batch data")
+        output = tmp_path / "merged.mp4"
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError(2, "No such file", "ffmpeg"),
+            ),
+            patch("vkdownloader.services.ffmpeg_utils.logger.error") as mock_error,
+        ):
+            result = await _perform_final_merge([temp_file], output, 300)
+
+        assert result is False
+        mock_error.assert_called_once()
+        assert mock_error.call_args[0][0] == "merge_spawn_failed"
+        assert "ffmpeg" in mock_error.call_args[1]["hint"]
+
+
+class TestB13ResumeErrorHandling:
+    """TRN-008 / B13 arm (d): _attempt_segment_resume must not mislabel a
+    missing muxer as a token refresh failure."""
+
+    @pytest.mark.asyncio
+    async def test_file_not_found_not_logged_as_refresh_token(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A FileNotFoundError escaping from the merge is NOT caught as
+        failed_to_refresh_token — it propagates instead."""
+        from vkdownloader.services.downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        output_file.write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
+
+        with (
+            patch(
+                "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
+                new_callable=AsyncMock,
+                side_effect=FileNotFoundError(2, "No such file", "ffmpeg"),
+            ),
+            patch("vkdownloader.services.ytdlp_downloader.logger.warning") as mock_warning,
+        ):
+            with pytest.raises(FileNotFoundError):
+                await _attempt_segment_resume(
+                    "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/stale.m3u8",
+                    output_file,
+                    "best",
+                    retry_count=1,
+                    extractor=mock_extractor,
+                    settings=test_settings,
+                    backoff_coordinator=None,
+                    video_semaphore=None,
+                )
+
+        # No failed_to_refresh_token warning emitted
+        for call in mock_warning.call_args_list:
+            assert call[0][0] != "failed_to_refresh_token"
+
+    @pytest.mark.asyncio
+    async def test_extraction_error_still_logged_as_refresh_token(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """A genuine ExtractionError IS still caught and logged as
+        failed_to_refresh_token."""
+        from vkdownloader.services.downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        output_file.write_bytes(b"partial data")
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            side_effect=ExtractionError("Token refresh failed")
+        )
+
+        with patch("vkdownloader.services.ytdlp_downloader.logger.warning") as mock_warning:
+            result = await _attempt_segment_resume(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/stale.m3u8",
+                output_file,
+                "best",
+                retry_count=1,
+                extractor=mock_extractor,
+                settings=test_settings,
+                backoff_coordinator=None,
+                video_semaphore=None,
+            )
+
+        assert result is None
+        # ExtractionError IS still caught and logged as failed_to_refresh_token
+        refresh_calls = [
+            c for c in mock_warning.call_args_list if c[0][0] == "failed_to_refresh_token"
+        ]
+        assert len(refresh_calls) == 1
+        assert refresh_calls[0].kwargs["error"] == "Token refresh failed"
+
+
+class TestB13DownloadMissingBinary:
+    """TRN-008 / B13 arm (c): the FileNotFoundError arm's record names the
+    missing binary."""
+
+    @pytest.mark.asyncio
+    async def test_ytdlp_not_found_names_binary(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """When asyncio.create_subprocess_exec raises FileNotFoundError, the
+        ytdlp_not_found record includes the missing binary path."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError(2, "No such file", "yt-dlp"),
+            ),
+            patch("vkdownloader.services.ytdlp_downloader.logger.error") as mock_error,
+        ):
+            result = await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                output_file,
+                "720",
+                test_settings,
+            )
+
+        assert result is None
+        mock_error.assert_called_once()
+        assert mock_error.call_args[0][0] == "ytdlp_not_found"
+        assert mock_error.call_args[1]["path"] == "yt-dlp"
 
 
 class TestQualitySpecParsing:

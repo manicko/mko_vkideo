@@ -28,6 +28,7 @@ from .downloader_throttle import (
     _retry_429_with_backoff,  # noqa: F401 — backward-compat re-export
 )
 from .ffmpeg_utils import (
+    _MERGE_HINT,
     _build_ffmpeg_concat_command,
     _merge_segments_batched,
     cancel_subprocess,
@@ -113,6 +114,8 @@ __all__ = [
     "_fetch_playlist_with_retry",
     "_merge_segments_batched",
     "_parse_m3u8_segments",
+    "_attempt_segment_resume",
+    "_download_with_ytdlp",
     "_retry_429_with_backoff",
     "setup_signal_handlers",
 ]
@@ -169,8 +172,14 @@ async def perform_download(
         settings = Settings()
 
     # Probe ffmpeg availability once at startup so users learn about a missing
-    # binary before a long download fails at the merge step.
-    check_ffmpeg_available()
+    # binary before a long download fails at the merge step. The probe's answer
+    # is used here — not discarded — to emit one actionable warning when the
+    # muxer is absent (D6, TRN-008).
+    if not check_ffmpeg_available():
+        logger.warning(
+            "ffmpeg_missing_for_merge",
+            hint=_MERGE_HINT,
+        )
 
     if extractor is None:
         extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)

@@ -47,6 +47,11 @@ _SPAWN_BOUNDARY_KWARGS: Final[dict[str, int | bool]] = (
 # Module-level cache: PATH lookup happens only once per process lifetime
 _ffmpeg_available: bool | None = None
 
+# Hint text naming the missing dependency and the consequence, reused by every
+# arm that reports a missing muxer so the install step is named once and
+# consistently (D6, TRN-008).
+_MERGE_HINT: Final[str] = "ffmpeg binary not found on PATH; segment merge will fail after download"
+
 # Free space kept in reserve on top of the size arithmetic below. It covers
 # what the byte figures cannot see: the batch temp file that coexists with the
 # segments it was written from, filesystem block-allocation slack, and whatever
@@ -186,10 +191,10 @@ def check_ffmpeg_available() -> bool:
     """Check whether the ``ffmpeg`` binary is present on the system PATH.
 
     Results are cached within the process so the (cheap) ``shutil.which``
-    lookup runs at most once. When ``ffmpeg`` is not found a warning is
-    emitted on the first detection, so users learn about the missing
-    dependency *before* a long download finishes and the merge step fails
-    with an opaque ``FileNotFoundError``.
+    lookup runs at most once (write-once cache — no invalidation hook).
+    The probe itself is silent: the single warning that names the install
+    step is emitted by the call site (``perform_download``) when this
+    returns ``False``, so the answer is **used**, not discarded (D6, TRN-008).
 
     Returns:
         ``True`` if ``ffmpeg`` was found on ``PATH``, ``False`` otherwise.
@@ -197,14 +202,6 @@ def check_ffmpeg_available() -> bool:
     global _ffmpeg_available
     if _ffmpeg_available is None:
         _ffmpeg_available = shutil.which("ffmpeg") is not None
-        if not _ffmpeg_available:
-            logger.warning(
-                "ffmpeg_not_found",
-                hint=(
-                    "ffmpeg binary not found on PATH; downloads using ffmpeg "
-                    "or segment merge will fail"
-                ),
-            )
     return _ffmpeg_available
 
 
@@ -361,17 +358,27 @@ async def _merge_batch_segments(
 
     cmd = _build_ffmpeg_concat_command(file_list_path, batch_output)
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
-    )
-
     try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
+        )
         stdout, stderr = await _await_ffmpeg_with_timeout(process, download_timeout)
     except TimeoutError:
         logger.error("batch_merge_timeout", timeout=download_timeout)
+        return None
+    except OSError as exc:
+        # TRN-008 / B13 arm (b): a missing ffmpeg binary surfaces here as
+        # FileNotFoundError (an OSError subclass) from create_subprocess_exec.
+        # Catch it so the merge produces a product record instead of an
+        # escaping exception that the resume layer would mislabel.
+        logger.error(
+            "merge_spawn_failed",
+            error=str(exc),
+            hint=_MERGE_HINT,
+        )
         return None
 
     if process.returncode != 0:
@@ -414,17 +421,27 @@ async def _perform_final_merge(
 
     cmd = _build_ffmpeg_concat_command(final_list_path, output_file)
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
-    )
-
     try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
+        )
         stdout, stderr = await _await_ffmpeg_with_timeout(process, download_timeout)
     except TimeoutError:
         logger.error("final_merge_timeout", timeout=download_timeout)
+        return False
+    except OSError as exc:
+        # TRN-008 / B13 arm (b): a missing ffmpeg binary surfaces here as
+        # FileNotFoundError (an OSError subclass) from create_subprocess_exec.
+        # Catch it so the merge produces a product record instead of an
+        # escaping exception that the resume layer would mislabel.
+        logger.error(
+            "merge_spawn_failed",
+            error=str(exc),
+            hint=_MERGE_HINT,
+        )
         return False
 
     if process.returncode == 0:

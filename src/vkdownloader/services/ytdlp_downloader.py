@@ -641,7 +641,12 @@ async def _attempt_segment_resume(
                 backoff_coordinator=backoff_coordinator,
                 video_semaphore=video_semaphore,
             )
-    except (ExtractionError, OSError) as e:
+    except ExtractionError as e:
+        # TRN-008 / B13 arm (d): narrowed from (ExtractionError, OSError).
+        # A FileNotFoundError from the merge is an OSError, but arm (b) now
+        # catches it at the merge level and produces a record there; it must
+        # NOT be swallowed here and relabeled as a token problem. Only a
+        # genuine ExtractionError (token refresh failure) reaches this arm.
         logger.warning(
             "failed_to_refresh_token",
             url=_strip_auth_params(video_url),
@@ -878,11 +883,12 @@ async def _download_with_ytdlp(
         logger.info("ytdlp_download_completed", output=str(output_file))
         return output_file
 
-    except FileNotFoundError:
-        # yt-dlp module / Python interpreter not found
+    except FileNotFoundError as exc:
+        # yt-dlp binary / Python interpreter not found on PATH
         logger.error(
             "ytdlp_not_found",
             url=_strip_auth_params(video_url),
+            path=exc.filename,
             exc_info=True,
         )
         return None
