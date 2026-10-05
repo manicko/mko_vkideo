@@ -219,6 +219,45 @@ class TestExtractionErrors:
         assert result.count("=") == 50  # 50 cookies
         assert "c49=v49" in result  # Last cookie should be present
 
+    def test_format_cookies_for_ffmpeg_keeps_cookies_from_every_domain(self) -> None:
+        """SEC-010 / B8: this test PINS CURRENT BEHAVIOUR, which is the point of it.
+
+        A cookie set spanning several domains is formatted into one flat header
+        with no per-domain filtering, because no consumer has been able to state
+        that the media host needs a cookie set for a domain other than its own (§9 Q3, Alt A).
+        The harvest is bounded instead: BrowserManager.create_stealth_page uses
+        new_context(...) with no storage_state / launch_persistent_context /
+        user_data_dir, so the store holds only what this run's page visit set.
+
+        If a future change filters by domain this test is SUPPOSED to fail. Do
+        not "fix" it by narrowing the fixture or relaxing the assertion: the
+        failure is the signal that a decision changed, and it must be made
+        deliberately. Two consumers already scope by domain on their own
+        (services/cookies.py::_cookies_to_netscape preserves each cookie's own
+        domain for the yt-dlp --cookies file), so narrowing the flat header
+        would change only the aiohttp segment path — and it could not be
+        validated without a live run.
+
+        See VKVideoExtractor._format_cookies_for_ffmpeg, the seam this pins.
+        """
+        extractor = VKVideoExtractor()
+        cookies: list[Cookie] = [
+            {"name": "session_id", "value": "abc123", "domain": ".vkvideo.ru"},
+            {"name": "remixdsid", "value": "xyz789", "domain": ".vkvideo.ru"},
+            {"name": "tracker", "value": "track-me", "domain": ".userapi.com"},
+            {"name": "sid", "value": "cross-site", "domain": ".example.com"},
+        ]
+
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+
+        # Every cookie survives, regardless of domain: no filter exists here.
+        assert result == ("session_id=abc123; remixdsid=xyz789; tracker=track-me; sid=cross-site")
+        # The domain never reaches the header at all - which is why the filter,
+        # if one is ever added, belongs in this function and nowhere upstream.
+        assert "vkvideo" not in result
+        assert "userapi" not in result
+        assert "example" not in result
+
     def test_cookies_to_netscape_preserves_domain(self) -> None:
         """Test that _cookies_to_netscape preserves cookie domains from Cookie objects."""
         cookies = [

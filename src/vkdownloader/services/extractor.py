@@ -349,6 +349,46 @@ class VKVideoExtractor:
                 logger.info("browser_extraction_cancelled")
                 raise asyncio.CancelledError("Browser extraction cancelled by user")
 
+            # SEC-010 / B8. The harvest is the WHOLE context store
+            # (page.context.cookies() with no argument) and is deliberately
+            # NOT filtered by domain. Recorded decision (§9 Q3, Alt A):
+            # "no consumer of this header has stated that the media host needs
+            # a cookie set for a domain other than its own, and the absence is
+            # not a licence to invent one."
+            #
+            # WHY THAT IS SAFE, bounded by evidence, not preference:
+            #   - BrowserManager.create_stealth_page builds this context with
+            #     new_context(viewport=..., user_agent=..., locale=...,
+            #     timezone_id=...) and the tree contains no storage_state, no
+            #     launch_persistent_context and no user_data_dir. The context is
+            #     ephemeral, so this store holds ONLY what this run's own page
+            #     visit set - no persisted profile, nothing carried in from the
+            #     operator's browser, no accumulation across runs.
+            #   - The origin genuinely needs whatever it set; narrowing on a
+            #     guess is the failure mode, and this header cannot be narrowed
+            #     and validated on any platform available here (no live origin).
+            #
+            # WHICH CONSUMER THIS GOVERNS (the two are not the same):
+            #   - yt-dlp: cookies.py::_cookies_to_netscape preserves each
+            #     cookie's own domain for the --cookies file, so that path
+            #     already scopes by domain.
+            #   - aiohttp segments: cookies_str reaches the wire as one flat
+            #     "name=value; ..." header via HLSDownloadRequest.cookies ->
+            #     download_hls_with_resume's headers["Cookie"], sent to whatever
+            #     host the playlist resolves to. THAT is the unscoped path.
+            #
+            # THE SEAM, if a future phase ever narrows this: the filter belongs
+            # in _format_cookies_for_ffmpeg (below) - the one pure function that
+            # sees the domain and drops it. Do not filter here instead: raw_cookies
+            # also feeds yt-dlp's domain-correct arm, so filtering here would
+            # change a consumer that is already right.
+            #
+            # REVISIT IF: storage_state / launch_persistent_context /
+            # user_data_dir appears anywhere in the tree (the store stops being
+            # ephemeral and this reasoning expires), OR an owner or a live
+            # observation states which cookie domains the media host actually
+            # requires - either one replaces this comment with the narrow set and
+            # a test that demonstrates what is kept and what is dropped.
             try:
                 raw_cookies = await page.context.cookies()
                 cookies_str = self._format_cookies_for_ffmpeg(raw_cookies)
@@ -383,7 +423,15 @@ class VKVideoExtractor:
         """Format cookies list for ffmpeg HTTP cookie header.
 
         Strips CRLF characters from cookie names and values to prevent header injection.
-        Includes all cookies to ensure proper CDN authentication.
+        Includes every cookie from the browser context store, from every domain,
+        with no per-domain filtering - see SEC-010 / B8 and the harvest site in
+        _extract_with_browser for the recorded decision, the evidence bounding
+        it, and the conditions that would invalidate it. The cookie's ``domain``
+        key is available here and is deliberately not read: this is the seam a
+        future narrowing would be inserted at, and this function is the only
+        place the domain is available to it. The method name references the
+        retired ffmpeg transport and is a known misnomer; the rename belongs to
+        the removal track and is out of scope here (§6.11).
         """
         cookie_parts = []
         for cookie in cookies:
