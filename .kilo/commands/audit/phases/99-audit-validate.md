@@ -312,7 +312,7 @@ is the question, and the finding is named as a condition to look for.
 | The retained content is present | Are the rejected and merged contents actually in the artifact? | The blocks, verified in the copy. |
 | The tally reconciles | Does the action tally equal the per-finding records? | The tally; the per-finding count; the difference, or none. |
 | No invented entries | Does the artifact contain any decision, cross-phase conflict or rollout finding that no source finding supports? | The count of each; a zero is not a reason to write a row. |
-| Pre-answered sections deleted | Does the artifact still carry a summary, appendix or placeholder section the format supplies pre-answered? | The section, the placeholder in it, and its absence from the artifact. **A section every phase must delete is a defect of the format.** |
+| No pre-answered content | Does the artifact carry a summary, appendix or placeholder that the format supplies pre-answered — a tally table with hard-coded counts, or any section that ships an answer before the audit runs? | The section and the pre-filled value. **A section that ships a pre-filled answer is a defect of the format**, as is a section every phase must delete to strip the pre-answer. The template's `## Summary` must be fillable, never pre-answered. |
 
 - Evidence: R1, R3, R4. **A count of zero is written as a tally of zero and nothing more** (binding rule 2).
 

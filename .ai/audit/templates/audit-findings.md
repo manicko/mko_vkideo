@@ -39,24 +39,37 @@ alwaysApply: false
 
 ## Summary
 
+{Tally the findings above by severity. Count the number of findings in each band **as
+recorded in this phase's own findings file**, each finding counted once under the `Severity`
+it carries after this report's own decisions; a finding that was merged or rejected is not
+counted here. A severity with no findings is written as `0`. An unexecuted or unverified
+phase is **counted, not omitted** — add a row `none (UNVERIFIED, not executed)` carrying
+the count, matching the model carried by `04-concurrency-cancellation/findings.md`. A
+severity with no findings is written as `0`. Add a row for a severity the owning phase's
+table defines and this format does not.}
+
 | Severity | Count |
 |----------|-------|
-| CRITICAL | 0 |
-| HIGH | 0 |
-| MEDIUM | 0 |
-| LOW | 0 |
+| CRITICAL | {count} |
+| HIGH | {count} |
+| MEDIUM | {count} |
+| LOW | {count} |
+| none (UNVERIFIED, not executed) | {count} |
 
 ## Mandatory Fixes
 
-{List all findings classified as mandatory}
+{Every finding classified `mandatory`, by ID, with what must change and why. If there are
+none, write "none".}
 
 ## Advisory Recommendations
 
-{List all findings classified as advisory}
+{Every finding classified `advisory`, by ID, with what to change and why. If there are
+none, write "none".}
 
 ## Doc Updates Needed
 
-{List all findings classified as DOC-UPDATE type}
+{Every finding of type `DOC-UPDATE`, by ID, with the document and the claim to correct.
+If there are none, write "none".}
 
 ---
 
