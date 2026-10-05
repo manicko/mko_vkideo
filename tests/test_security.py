@@ -150,6 +150,30 @@ class TestSanitizeTitle:
         assert not result.endswith(" ")
         assert len(result) == 100
 
+    @pytest.mark.parametrize("code", [chr(c) for c in range(32)] + [chr(127)])
+    def test_no_control_character_survives(self, code: str) -> None:
+        """No C0 control character (chr(0)-chr(31)) or DEL (chr(127)) survives."""
+        char = code
+        result = sanitize_title(f"before{char}after")
+        assert char not in result
+
+    def test_newline_and_tab_do_not_produce_multiline(self) -> None:
+        """A newline or tab in a title no longer produces a multi-line string."""
+        result = sanitize_title("line1\nline2\ttabbed")
+        assert "\n" not in result
+        assert "\t" not in result
+
+    def test_null_byte_replaced_not_stripped(self) -> None:
+        """chr(0) is replaced with underscore — the ValueError failure mode is pinned.
+
+        str.strip cannot remove a control character from the middle of a string,
+        and a null byte that reaches the filesystem layer raises
+        ValueError: embedded null byte. Replacement is the required shape.
+        """
+        result = sanitize_title("before\x00after")
+        assert result == "before_after"
+        assert "\x00" not in result
+
 
 class TestValidateOutputPathTraversal:
     """Tests for validate_output_path traversal detection (SEC-006).

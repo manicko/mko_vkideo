@@ -11,14 +11,24 @@ from ..models.video import VideoWithStreams
 
 logger = get_logger(__name__)
 
+# C0 control characters (chr(0)-chr(31)) and DEL (chr(127)) are not legal in
+# filenames on any platform and corrupt console/log output when embedded in a
+# title. They are replaced with underscores — never stripped — because str.strip
+# cannot reach control characters in the middle of a string, and a null byte
+# that survives sanitization would raise ValueError at the filesystem layer.
+_CONTROL_CHARS = "".join(chr(c) for c in range(32)) + chr(127)
+
 
 def sanitize_title(title: str) -> str:
     """Sanitize title for filesystem safety.
 
-    Replaces characters that are invalid on Windows/Unix filesystems with underscores,
-    strips whitespace, and limits length to 100 characters.
+    Replaces characters that are invalid on Windows/Unix filesystems — the nine
+    path-separator and reserved characters and the C0 control range
+    (chr(0)-chr(31)) plus DEL (chr(127)) — with underscores, strips surrounding
+    whitespace, and limits the result to 100 characters. The length bound
+    applies to this title component only, not to the full output path.
     """
-    for char in '/\\:*?"<>|':
+    for char in '/\\:*?"<>|' + _CONTROL_CHARS:
         title = title.replace(char, "_")
     return title.strip()[:100]
 
