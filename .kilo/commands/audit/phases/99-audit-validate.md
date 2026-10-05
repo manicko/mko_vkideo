@@ -372,6 +372,7 @@ sentence and then gives only the conditions that are specific to its own subject
 | HIGH | A finding whose technical correctness or current applicability failed verification; or a rejected finding whose rejection changes a conclusion the report would otherwise carry. |
 | MEDIUM | A reclassified finding (its `Type` changed) or a merged finding (its content moved under another ID). The subject survives; the framing changes. |
 | LOW | A `DOC-UPDATE` candidate; any advisory finding with no security, data-loss or correctness consequence. |
+| *composed — not fixed by the decision* | A finding whose verification **passed** and whose decision is `validated`. No band is assigned by this row: the band is composed from the finding's own consequence on the declared platform, as binding rule 1 requires. `CRITICAL` and `LOW` apply where the condition those rows already name holds; otherwise the strongest band this run's verification established for the consequence it observed — the same rule `## 11`'s `Validated` action re-derives under, cross-referenced here rather than delegated, because no row above covers a verification that passed. A consequence that was **not** observed takes the template's `verification` path instead: the structural fact under the owning phase's own severity table, never an observed severity. **This row defines no fifth severity word.** |
 
 **The per-finding decision is not a severity.** `Validated / Reclassified / Merged /
 Rejected` is a *decision about a finding*, recorded in the `Decision` field
