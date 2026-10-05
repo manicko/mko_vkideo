@@ -1226,7 +1226,13 @@ async def download_hls_with_resume(
         "Referer": "https://vkvideo.ru/",
     }
     if request.cookies:
-        headers["Cookie"] = request.cookies
+        # SEC-008 (B7): request.cookies is a SecretStr, not a str. An aiohttp
+        # headers mapping requires str values; a SecretStr raises
+        # "Cannot serialize non-str key" at the wire, so unwrap it here.
+        # DOWNSTREAM: policy.headers carries plain str values from this point,
+        # so _download_segment_concurrent and the four hops to session.get need
+        # no further change.
+        headers["Cookie"] = request.cookies.get_secret_value()
 
     success = False
     try:

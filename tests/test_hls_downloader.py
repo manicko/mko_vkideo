@@ -1,6 +1,7 @@
 """Tests for download service, ytdlp/segment download paths, and utilities."""
 
 import asyncio
+import logging
 import os
 import sys
 from os import PathLike
@@ -9,15 +10,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+from pydantic import SecretStr
 
-from vkdownloader.config import Settings
+from vkdownloader.config import Settings, setup_logging
 from vkdownloader.exceptions import (
     DownloadError,
     ExtractionError,
     QualityNotAvailableError,
 )
 from vkdownloader.models.dtos import HLSDownloadRequest
-from vkdownloader.models.enums import CookieSource, QualityKind, StreamFormat
+from vkdownloader.models.enums import CookieSource, LogLevel, QualityKind, StreamFormat
 from vkdownloader.models.quality import QualitySpec
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape, _sanitize_cookie_value
@@ -6310,3 +6315,153 @@ class TestCookieArtefactCreationRaceAcrossProcesses:
             ):
                 shutil.rmtree(cookie_dir, ignore_errors=True)
             yd._cookie_lifecycle_started = original_started
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestB7SessionCarrierProtection:
+    """SEC-008 (B7): session carrier must not leak through repr or logs."""
+
+    CANARY = "b7_probesession_cookie_value_1234567890"
+
+    def test_cookies_absent_from_repr_str_and_json_dump(self) -> None:
+        """The canary session string must not appear in any model rendering.
+
+        This test FAILS if SecretStr is replaced by Field(repr=False) alone:
+        repr=False hides the field from repr/str, but model_dump_json()
+        would then emit the raw secret in clear text. SecretStr's masked
+        str() (**********) is the only mechanism that covers every rendering.
+        """
+        request = HLSDownloadRequest(
+            video_url="https://vkvideo.ru/video-12345_67890",
+            m3u8_url="https://example.com/video.m3u8",
+            output_file=Path("out.mp4"),
+            cookies=SecretStr(self.CANARY),
+        )
+        assert self.CANARY not in repr(request)
+        assert self.CANARY not in str(request)
+        assert self.CANARY not in request.model_dump_json()
+
+    def test_session_value_not_leaked_through_configured_log_chain(self, tmp_path: Path) -> None:
+        """The session value must not surface through a rendered log record.
+
+        Driven through config.setup_logging (which wires redact_log_event as
+        B6's processor) then structlog.get_logger, this test emits the cookies
+        field as an event value. The B6 processor (redact_log_event) applies
+        sanitize_text_for_log only to str-typed values — a flat session string
+        carries no http(s):// URL and no vk_cookies_* artefact shape, so B6 is
+        the IDENTITY on it and passes it through unchanged. Protection MUST
+        therefore come from SecretStr: structlog's JSONRenderer falls back to
+        str(), SecretStr.__str__ returns '**********', and the canary never
+        reaches the log. A plain-str cookies field (Field(repr=False) alone)
+        would fail this test.
+        """
+        log_file = tmp_path / "audit.log"
+        log_settings = Settings(
+            log_file=log_file,
+            log_level=LogLevel.DEBUG,
+            max_concurrent_downloads=2,
+            max_retries=1,
+        )
+
+        # --- Save global state so we can restore it (setup_logging mutates) ---
+        original_structlog_config = structlog.get_config()
+        root_logger = logging.getLogger()
+        original_root_handlers = root_logger.handlers[:]
+        original_root_level = root_logger.level
+
+        try:
+            setup_logging(log_settings)
+
+            request = HLSDownloadRequest(
+                video_url="https://vkvideo.ru/video-12345_67890",
+                m3u8_url="https://example.com/video.m3u8",
+                output_file=Path("out.mp4"),
+                cookies=SecretStr(self.CANARY),
+            )
+
+            # Emit the SecretStr itself (not .get_secret_value()) — this is
+            # the realistic logging pattern where an operator logs the field.
+            logger = structlog.get_logger()
+            logger.debug("b7_probe", cookies=request.cookies)
+
+            log_content = log_file.read_text()
+            assert self.CANARY not in log_content, (
+                f"canary leaked through log chain; got:\n{log_content}"
+            )
+        finally:
+            root_logger.handlers = original_root_handlers
+            root_logger.setLevel(original_root_level)
+            structlog.configure(**original_structlog_config)
+
+    @pytest.mark.asyncio
+    async def test_secret_str_cookie_unwraps_to_wire_header_through_live_server(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Retrievability: SecretStr unwraps to a real Cookie header on the wire.
+
+        Starts a live local aiohttp server, drives download_hls_with_resume
+        with cookies=SecretStr(CANARY), and asserts the server received the
+        canary byte-for-byte as the Cookie header. This makes the fix
+        unsatisfiable by destruction: a change that blanks the field at
+        construction (cookies=None) would pass the repr/canary tests but
+        fail here because the server would receive no Cookie header at all.
+        """
+        captured_cookies: list[str] = []
+
+        async def handle_playlist(req: web.Request) -> web.Response:
+            captured_cookies.append(req.headers.get("Cookie", ""))
+            # seg0.ts is resolved against the playlist URL by _download_segment_concurrent
+            playlist = "#EXTM3U\nseg0.ts\n"
+            return web.Response(text=playlist, content_type="application/vnd.apple.mpegurl")
+
+        async def handle_segment(req: web.Request) -> web.Response:
+            return web.Response(body=b"fake-segment-data")
+
+        app = web.Application()
+        app.router.add_get("/playlist.m3u8", handle_playlist)
+        app.router.add_get("/{segment}", handle_segment)
+
+        # --- Mock the context-var-based shutdown event ---
+        # Both segment_downloader (6 call sites) and downloader_throttle
+        # (_retry_429_with_backoff) call get_shutdown_event, so patch both.
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.return_value = False
+        mock_shutdown.wait = AsyncMock()
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader.get_shutdown_event",
+                return_value=mock_shutdown,
+            ),
+            patch(
+                "vkdownloader.services.downloader_throttle.get_shutdown_event",
+                return_value=mock_shutdown,
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._merge_segments_batched",
+                AsyncMock(return_value=tmp_path / "video.mp4"),
+            ),
+        ):
+            async with TestServer(app) as server:
+                playlist_url = f"http://{server.host}:{server.port}/playlist.m3u8"
+
+                await download_hls_with_resume(
+                    HLSDownloadRequest(
+                        video_url="https://vkvideo.ru/video-12345_67890",
+                        m3u8_url=playlist_url,
+                        output_file=tmp_path / "video.mp4",
+                        cookies=SecretStr(self.CANARY),
+                    ),
+                    settings=test_settings,
+                )
+
+        # At least the playlist request must have carried the Cookie header.
+        assert captured_cookies, (
+            "server received no requests — cannot verify Cookie header on the wire"
+        )
+        assert self.CANARY in captured_cookies[0], (
+            f"wire Cookie header must carry the unwrapped canary value; "
+            f"got Cookie={captured_cookies[0]!r}"
+        )

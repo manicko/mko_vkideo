@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from playwright.async_api import Cookie
+from pydantic import SecretStr
 from structlog import get_logger
 
 from ..config import Settings
@@ -1021,7 +1022,7 @@ async def _attempt_segment_resume(
                     m3u8_url=m3u8_url,
                     output_file=output_file,
                     quality=quality,
-                    cookies=cookies,
+                    cookies=SecretStr(cookies) if cookies else None,
                     progress_callback=progress_callback,
                 ),
                 settings=settings,
