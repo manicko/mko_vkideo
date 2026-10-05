@@ -622,3 +622,19 @@ def test_per_task_gates_use_the_resolved_value() -> None:
     events = [event for event, _ in captured]
     assert events.count("download_progress") == 1
     assert events.count("download_finished") == 1
+
+
+def test_in_progress_status_removed() -> None:
+    """B9: ProgressStatus.IN_PROGRESS was unreachable (its case branches returned
+    an empty glyph identical to the unset-status path, and no producer ever
+    wrote the value) and has been removed with zero residue.
+
+    Removing follows the DownloadMethod.FFMPEG precedent of deletion over
+    tombstoning. Adding a producer (``status=IN_PROGRESS.value`` in ``_add_task``)
+    was rejected because it would break B12's ``_terminalise_tasks`` teardown —
+    a task whose ``fields["status"]`` is non-None is left untouched at ``stop()``,
+    so a never-finished download would lose its CANCELLED marker instead of
+    gaining one.
+    """
+    assert not hasattr(ProgressStatus, "IN_PROGRESS")
+    assert "in_progress" not in {member.value for member in ProgressStatus}

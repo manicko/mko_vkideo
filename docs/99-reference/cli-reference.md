@@ -148,7 +148,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 4. Downloads each video concurrently as `asyncio` tasks governed by a shared semaphore (up to 4 parallel downloads)
 5. Uses a per-video semaphore for video-level concurrency; segment fan-out is bounded by a separate semaphore owned by the segment layer
 6. Shows a live multi-line progress display during download, one line per active download, when the output stream is a terminal
-7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped
+7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped and any items skipped as duplicate URLs
 
 **Progress Display:**
 
@@ -161,7 +161,7 @@ The display is a `rich` live multi-line view on stderr, refreshed 10 times per s
 [✗] video_1: Night walk failed    ━━╸╸╸╸╸╸╸╸╸╸╸╸╸━   8%     ?  -:--:--
 ```
 
-Each line is labelled `video_{N}` during extraction and `video_{N}: {sanitized_title}` once the title is known, with columns for the status marker, label, bar, percentage, transfer speed and ETA. A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` or `cancelled`, with the outcome word appended to the label. The terminal returns to normal output when the batch ends.
+Each line is labelled `video_{N}` during extraction and `video_{N}: {sanitized_title}` once the title is known, with columns for the status marker, label, bar, percentage, transfer speed and ETA. A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` (a duplicate URL detected within the batch — reachable) or `cancelled`, with the outcome word appended to the label. The terminal returns to normal output when the batch ends.
 
 yt-dlp's own native progress echo is suppressed while the display is active, so it cannot interleave with the bars.
 

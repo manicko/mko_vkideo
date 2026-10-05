@@ -71,8 +71,6 @@ class _StatusColumn(ProgressColumn):
                 return Text("[⊘]", style="yellow")
             case ProgressStatus.CANCELLED:
                 return Text("[⊘]", style="cyan")
-            case ProgressStatus.IN_PROGRESS:
-                return Text("")
 
 
 def _format_outcome(status: ProgressStatus) -> str:
@@ -90,8 +88,6 @@ def _format_outcome(status: ProgressStatus) -> str:
             return "skipped"
         case ProgressStatus.CANCELLED:
             return "cancelled"
-        case ProgressStatus.IN_PROGRESS:
-            return "in_progress"
 
 
 class RichProgressReporter:

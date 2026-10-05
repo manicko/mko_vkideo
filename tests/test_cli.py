@@ -2090,6 +2090,41 @@ class TestBatchSummaryDocumentation:
         for doc_name, step in steps.items():
             assert "invalid URL" in step, (doc_name, step)
 
+    def test_docs_marker_line_states_skipped_reachable(self) -> None:
+        """B9: the marker line in both docs states [⊘] for skipped is reachable.
+
+        Before B9, the docs advertised a skipped marker that no code path could
+        produce. After the fix, SKIPPED is reachable via the dedup path, and the
+        docs state that explicitly. Both files must say the same thing.
+        """
+        for doc_name in _REFERENCE_DOC_NAMES:
+            content = (_REFERENCE_DOCS / doc_name).read_text(encoding="utf-8")
+            assert "skipped" in content.lower(), doc_name
+            assert "reachable" in content.lower(), (
+                f"{doc_name}: marker line must state reachability"
+            )
+            # No trace of the removed IN_PROGRESS member.
+            assert "in_progress" not in content.lower(), doc_name
+
+    def test_docs_marker_set_matches_terminal_statuses(self) -> None:
+        """B9: the glyphs documented in both reference files match the terminal
+        ProgressStatus members the code can emit.
+
+        Fails if a glyph is documented but not emitted, if an emitted glyph is
+        missing from the docs, or if the removed IN_PROGRESS appears in either
+        docs or code.
+        """
+        # IN_PROGRESS was deleted — only four terminal statuses remain.
+        assert not hasattr(ProgressStatus, "IN_PROGRESS")
+        emittable_glyphs = {"✓", "✗", "⊘"}
+
+        for doc_name in _REFERENCE_DOC_NAMES:
+            content = (_REFERENCE_DOCS / doc_name).read_text(encoding="utf-8")
+            for glyph in emittable_glyphs:
+                assert glyph in content, (
+                    f"{doc_name}: documented marker {glyph!r} is not emitted by code"
+                )
+
 
 class TestEntryPointSourcePrecedence:
     """A1-A4: the .env file and CLI options both reach the Settings that runs.

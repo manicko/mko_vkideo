@@ -80,9 +80,14 @@ class ErrorCode(StrEnum):
 
 
 class ProgressStatus(StrEnum):
-    """Download progress status for a single item."""
+    """Download progress status for a single item.
 
-    IN_PROGRESS = "in_progress"
+    Terminal statuses are the only values that reach ``finish_task``:
+    ``SKIPPED`` is produced by the batch-level dedup check in
+    ``_run_batch_with_progress`` when an exact-URL duplicate is detected before
+    any network call; ``CANCELLED`` by the shutdown signal during a batch run
+    or by an explicit ``CancelledError`` in single-download mode.
+    """
 
     SUCCESS = "success"
 

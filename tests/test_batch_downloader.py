@@ -934,3 +934,127 @@ class TestBatchLiveTaskBounding:
         assert acquire_count == release_count, (
             f"permits leaked: {acquire_count} acquired, {release_count} released"
         )
+
+
+class TestBatchDedupSkip:
+    """B9: an exact-URL duplicate in the batch is skipped, not re-downloaded."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_url_marked_skipped_not_downloaded(self, tmp_path: Path) -> None:
+        """B9 oracle: an exact-URL duplicate reaches finish_task(SKIPPED) and is
+        never sent to download_video.
+
+        Fails on regression if: the dedup check is removed (duplicate is
+        downloaded twice), finish_task is called with anything other than
+        SKIPPED, or the SKIPPED status never reaches results.
+        """
+        settings = _make_settings(tmp_path)
+        first_url, second_url = _batch_urls(2)
+        urls = [first_url, first_url, second_url]  # first_url duplicated
+
+        download_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path | None:
+            download_calls.append(url)
+            return tmp_path / "video.mp4"
+
+        with patch(
+            "vkdownloader.services.batch_downloader.RichProgressReporter"
+        ) as mock_reporter_cls:
+            mock_reporter = mock_reporter_cls.return_value
+            with _batch_runtime(tracking_download):
+                results, _ = await asyncio.wait_for(
+                    _run_batch_with_progress(
+                        urls,
+                        QualitySpec.parse("best"),
+                        DownloadMethod.AUTO,
+                        settings,
+                        output=tmp_path,
+                    ),
+                    timeout=30,
+                )
+
+        # download_video was called once per unique URL; the duplicate was not
+        # re-fetched (no second media download per DEC-W R1).
+        assert download_calls.count(first_url) == 1
+        assert download_calls.count(second_url) == 1
+        assert len(download_calls) == 2
+
+        # The duplicate (index 1) reached finish_task(SKIPPED) — the real
+        # producer path, not a mocked renderer call.
+        mock_reporter.finish_task.assert_any_call(1, ProgressStatus.SKIPPED)
+
+        # Results carry the SKIPPED status for the duplicate position.
+        statuses = [status for _, _, status in results]
+        assert statuses[1] == ProgressStatus.SKIPPED.value
+        assert statuses[0] == ProgressStatus.SUCCESS.value
+        assert statuses[2] == ProgressStatus.SUCCESS.value
+        assert ProgressStatus.FAILED.value not in statuses
+
+    @pytest.mark.asyncio
+    async def test_duplicate_skip_summary_reports_skipped_not_failed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A batch with a duplicate URL: the duplicate is skipped and the
+        summary reports it as Skipped, not Failed, with exit code 0.
+
+        Fails on regression if: Total videos excludes the skipped item, the
+        Skipped line is absent, or the skipped item is mis-counted as failed.
+        """
+        settings = _make_settings(tmp_path)
+        first_url = _batch_urls(1)[0]
+        urls = [first_url, first_url]
+
+        download = _make_batch_download({first_url: tmp_path / "ok.mp4"})
+
+        with _batch_runtime(download):
+            results, _ = await asyncio.wait_for(
+                _run_batch_with_progress(
+                    urls,
+                    QualitySpec.parse("best"),
+                    DownloadMethod.AUTO,
+                    settings,
+                    output=tmp_path,
+                ),
+                timeout=30,
+            )
+
+        exit_code = _print_batch_summary(results, 1, 0)
+        captured = capsys.readouterr()
+
+        # Total videos includes skipped items in len(results).
+        assert "Total videos: 2" in captured.out
+        assert "Successful: 1" in captured.out
+        assert "Failed: 0" in captured.out
+        assert "Skipped (duplicates): 1" in captured.out
+        assert exit_code == 0
+
+    def test_skipped_entry_counted_as_skipped_not_as_failed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """B9: a SKIPPED entry in results is counted under Skipped, not Failed.
+
+        Fails on regression if the subtraction rule returns
+        ``failed = len(results) - successful - cancelled`` (which would count
+        the skipped item as failed) or if the Skipped line is absent.
+        """
+        results: list[tuple[str, str, str]] = [
+            (
+                "https://vkvideo.ru/video-1_1",
+                str(Path("/tmp/video.mp4")),
+                ProgressStatus.SUCCESS.value,
+            ),
+            ("https://vkvideo.ru/video-1_2", "", ProgressStatus.SKIPPED.value),
+        ]
+
+        exit_code = _print_batch_summary(results, peak_concurrent_videos=1, skipped_count=0)
+        captured = capsys.readouterr()
+
+        # Total videos includes skipped items in len(results).
+        assert "Total videos: 2" in captured.out
+        assert "Successful: 1" in captured.out
+        assert "Failed: 0" in captured.out
+        assert "Skipped (duplicates): 1" in captured.out
+        # A skipped item is not a failure, so it never appears in Failed URLs.
+        assert "Failed URLs:" not in captured.out
+        assert exit_code == 0

@@ -310,6 +310,9 @@ async def _run_batch_with_progress(
     Returns:
         Tuple of (results, peak_concurrent_videos) where results is a list of
         (url, output_path, status) tuples.
+
+    Exact-URL duplicates within the batch are skipped (ProgressStatus.SKIPPED)
+    before any network call, never launching a second download for the same URL.
     """
     # Setup signal handlers inside async context
     setup_signal_handlers()
@@ -341,6 +344,7 @@ async def _run_batch_with_progress(
         # tasks, so the pump owns task creation and can bound the live set.
         pending: dict[asyncio.Task[tuple[str, str, str]], int] = {}
         by_index: dict[int, tuple[str, str, str]] = {}
+        seen_urls: set[str] = set()
         urls_left = iter(enumerate(urls))
 
         try:
@@ -365,6 +369,18 @@ async def _run_batch_with_progress(
             # is no break/return between the pull and the store, so no URL is
             # dropped (measured: a break there loses one URL per full window).
             for i, url in urls_left:
+                # Tier 1 dedup (DEC-W R1): exact-URL duplicates are skipped
+                # before any network call, never launching a second media
+                # download. The item is terminalised via finish_task so the
+                # progress display renders the [⊘] skipped marker, matching
+                # the contract that every batch item reaches finish_task.
+                if url in seen_urls:
+                    logger.info("duplicate_url_skipped", url=_strip_auth_params(url), index=i)
+                    reporter.start_task(i)
+                    reporter.finish_task(i, ProgressStatus.SKIPPED)
+                    by_index[i] = (url, "", ProgressStatus.SKIPPED.value)
+                    continue
+                seen_urls.add(url)
                 if len(pending) >= settings.max_concurrent_downloads:
                     done, _ = await asyncio.wait(list(pending), return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
@@ -453,7 +469,8 @@ def _print_batch_summary(
 
         * ``130`` if at least one download was cancelled by the user.
         * ``1`` if no download was cancelled and at least one failed.
-        * ``0`` if every download succeeded.
+        * ``0`` if every download succeeded (skipped items do not affect the
+          exit code — a deduplicated URL is neither a failure nor a success).
 
         Cancellation takes precedence over failure: an interrupted run did
         not complete by the user's own doing, so its remaining "failures"
@@ -464,29 +481,47 @@ def _print_batch_summary(
     for url, output_path, status in results:
         typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))
 
-    # Summary. Success, cancellation and failure are three distinct outcomes:
-    # a cancelled item is not a failed item, so the two are counted apart
-    # rather than derived from each other.
+    # Summary. Success, cancellation, skip and failure are four distinct outcomes.
+    # Each is counted explicitly so the aggregation can never misclassify one as
+    # another — the previous subtraction rule (failed = total - success - cancelled)
+    # would silently absorb a SKIPPED entry into the failed count (OUT-009).
     successful = sum(1 for _, _, status in results if status == ProgressStatus.SUCCESS.value)
     cancelled = sum(1 for _, _, status in results if status == ProgressStatus.CANCELLED.value)
-    failed = len(results) - successful - cancelled
+    skipped = sum(1 for _, _, status in results if status == ProgressStatus.SKIPPED.value)
+    failed = sum(
+        1
+        for _, _, status in results
+        if status
+        not in (
+            ProgressStatus.SUCCESS.value,
+            ProgressStatus.CANCELLED.value,
+            ProgressStatus.SKIPPED.value,
+        )
+    )
 
     typer.echo("\n\nDownload Summary:")
     typer.echo(f"  Total videos: {len(results)}")
     if skipped_count > 0:
         typer.echo(f"  Skipped (invalid URLs): {skipped_count}")
+    if skipped > 0:
+        typer.echo(f"  Skipped (duplicates): {skipped}")
     typer.echo(f"  Peak concurrent videos: {peak_concurrent_videos}")
     typer.echo(f"  Successful: {successful}")
     typer.echo(f"  Failed: {failed}")
     if cancelled > 0:
         typer.echo(f"  Cancelled: {cancelled}")
 
-    # Show failed URLs with error reasons. Cancelled items are excluded: they
-    # were not failures and must not be listed as ones.
+    # Show failed URLs with error reasons. Cancelled and skipped items are
+    # excluded: they were not failures and must not be listed as ones.
     failed_urls = [
         (url, status)
         for url, _, status in results
-        if status not in (ProgressStatus.SUCCESS.value, ProgressStatus.CANCELLED.value)
+        if status
+        not in (
+            ProgressStatus.SUCCESS.value,
+            ProgressStatus.CANCELLED.value,
+            ProgressStatus.SKIPPED.value,
+        )
     ]
     if failed_urls:
         typer.echo("  Failed URLs:")
