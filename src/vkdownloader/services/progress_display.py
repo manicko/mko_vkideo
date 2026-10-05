@@ -165,20 +165,65 @@ class RichProgressReporter:
         """Close the live display and restore captured state.
 
         Safe to call without :meth:`start` and idempotent.
+
+        Post-conditions, guaranteed even when a teardown step raises:
+          - every in-flight task is terminalised as ``CANCELLED`` so the
+            final frame is never left mid-work;
+          - the live ``Progress`` is stopped and log handlers are restored;
+          - every owned map (``_tasks``, ``_titles``, ``_last_values``,
+            ``_last_log_time``) is cleared.
+
+        Two nested ``finally`` blocks express two independent guarantees:
+        ``progress.stop()`` and ``_restore_log_handlers()`` each release a
+        *different* external resource (the Live ``FileProxy`` on ``sys.stderr``
+        vs. handler stream redirections), so a failure in one must not skip
+        the other. The four map clears are object-owned state and must
+        always reset, so they sit in the outermost ``finally``. The first
+        failure propagates; nothing is swallowed.
         """
         if not self._started:
             return
         self._started = False
         progress = self._progress
         self._progress = None
-        if progress is not None:
-            # Stop the Live first (restores sys.stderr), then restore handlers.
-            progress.stop()
-            self._restore_log_handlers()
-        self._tasks.clear()
-        self._titles.clear()
-        self._last_values.clear()
-        self._last_log_time.clear()
+
+        try:
+            # B12: terminalise in-flight tasks *before* the display closes so
+            # the last frame carries a truthful marker, not an open bar.
+            self._terminalise_tasks(progress)
+            if progress is not None:
+                # B11: progress.stop() releases the Live/FileProxy on sys.stderr.
+                progress.stop()
+        finally:
+            try:
+                self._restore_log_handlers()
+            finally:
+                self._tasks.clear()
+                self._titles.clear()
+                self._last_values.clear()
+                self._last_log_time.clear()
+
+    def _terminalise_tasks(self, progress: Progress | None) -> None:
+        """Mark every in-flight task as ``CANCELLED`` before teardown.
+
+        Tasks whose status is already terminal (set via :meth:`finish_task`)
+        are left untouched — ``stop()`` never overwrites a real outcome. Only
+        tasks that began work but never finished receive a terminal state, and
+        ``CANCELLED`` is the only truthful one: the batch is over, not successful.
+        """
+        if progress is None:
+            return
+        for index, task_id in self._tasks.items():
+            task = progress.tasks[task_id]
+            if task.fields.get("status") is not None:
+                continue
+            outcome = _format_outcome(ProgressStatus.CANCELLED)
+            label = self._format_label(index)
+            progress.update(
+                task_id,
+                description=f"{label} {outcome}",
+                status=ProgressStatus.CANCELLED.value,
+            )
 
     def start_task(self, index: int, title: str | None = None) -> None:
         """Register a new download line for ``index``.

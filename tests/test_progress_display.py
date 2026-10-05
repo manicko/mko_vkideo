@@ -436,3 +436,105 @@ class TestRichProgressReporter:
             reporter.finish_task(0, ProgressStatus.SUCCESS)
         assert buffer.getvalue() == ""
         assert reporter._tasks == {}
+
+    def test_stop_restores_handlers_when_progress_stop_raises(
+        self, preserve_root_handlers: Iterator[None]
+    ) -> None:
+        """B11 AC1 — if Progress.stop() raises, handlers restore and maps clear.
+
+        Synthetic substitute for an unverified trigger: Progress.stop() raising
+        in production was never observed. Drives the ordering — the original
+        exception must propagate, _restore_log_handlers() must still run, and
+        the four owned maps must still clear.
+        """
+        console = Console(file=io.StringIO(), force_terminal=True)
+        reporter = RichProgressReporter(console=console)
+        assert reporter.is_enabled is True
+
+        sentinel = io.StringIO()
+        stream_handler = logging.StreamHandler(sentinel)
+        root = logging.getLogger()
+        root.addHandler(stream_handler)
+
+        saved_progress = reporter._progress
+        try:
+            reporter.start()
+            # After start(): handler repointed onto the FileProxy-wrapped stderr.
+            assert stream_handler.stream is not sentinel
+            assert len(reporter._saved_handler_streams) >= 1
+            saved_progress = reporter._progress
+            assert saved_progress is not None
+
+            # Substitute a Progress whose stop() raises — the unverified trigger.
+            with patch.object(
+                saved_progress,
+                "stop",
+                side_effect=RuntimeError("progress.stop blew up"),
+            ):
+                with pytest.raises(RuntimeError, match="progress.stop blew up"):
+                    reporter.stop()
+
+            # (b) _restore_log_handlers() still ran despite progress.stop()
+            #     raising: handler back on original stream, saved list drained.
+            assert stream_handler.stream is sentinel
+            assert reporter._saved_handler_streams == []
+            # The four owned maps must still be cleared.
+            assert reporter._tasks == {}
+            assert reporter._titles == {}
+            assert reporter._last_values == {}
+            assert reporter._last_log_time == {}
+        finally:
+            # progress.stop() was patched to raise, so the real Live.stop()
+            # never ran inside reporter.stop(). Restore sys.stderr here.
+            if saved_progress is not None:
+                saved_progress.stop()
+            root.removeHandler(stream_handler)
+
+    def test_stop_clears_maps_when_restore_handlers_raises(
+        self, preserve_root_handlers: Iterator[None]
+    ) -> None:
+        """B11 AC2 — if _restore_log_handlers() raises, the four owned maps still clear.
+
+        Verifies that a failure during handler restoration cannot leak the
+        reporter's own state — the task/title/value/log-time dicts must reset
+        regardless of whether the restore step succeeds or fails.
+        """
+        reporter, _ = _make_reporter(enabled=True)
+        reporter.start()
+        reporter.start_task(0, title="In-Flight")
+        reporter.update(0, 50, 100)
+
+        with patch.object(
+            reporter,
+            "_restore_log_handlers",
+            side_effect=RuntimeError("restore blew up"),
+        ):
+            with pytest.raises(RuntimeError, match="restore blew up"):
+                reporter.stop()
+
+        # Maps cleared even though _restore_log_handlers() raised.
+        assert reporter._tasks == {}
+        assert reporter._titles == {}
+        assert reporter._last_values == {}
+        assert reporter._last_log_time == {}
+
+    def test_stop_terminalises_in_flight_task(self) -> None:
+        """B12 AC1 — a task begun but not finished gets a CANCELLED marker at teardown.
+
+        The reachable-in-product claim is 'no': all _finish call sites in
+        _download_single call finish_task before returning or re-raising. This
+        test pins stop()'s teardown behaviour, not an observed product failure.
+        """
+        reporter, buffer = _make_reporter(enabled=True)
+        reporter.start()
+        reporter.start_task(0, title="Some Video")
+        reporter.update(0, 50, 100)
+        # Deliberately do NOT call finish_task — the task is in-flight at teardown.
+        reporter.stop()
+        content = buffer.getvalue()
+        # The surviving frame carries the CANCELLED marker [⊘] and the
+        # outcome word "cancelled".
+        assert "[⊘]" in content
+        assert "cancelled" in content
+        # The task was begun, not finished; it must not show a success glyph.
+        assert "[✓]" not in content
