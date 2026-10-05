@@ -376,24 +376,59 @@ class TestCreateTempCookieFile:
         finally:
             result.unlink(missing_ok=True)
 
-    @pytest.mark.skipif(
-        os.name == "nt",
-        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
-        "only the read-only attribute, so the measured mode is 0o666 rather than the "
-        "requested 0o600 (D-11).",
-    )
     def test_file_permissions_are_0600(self) -> None:
-        """Test that the temp cookie file is created with 0o600 permissions (DF-007)."""
-        cookies = "vk=sensitive_session_token"
-        result = _create_temp_cookie_file(cookies)
+        """Test that the temp cookie file has 0o600 permissions (DF-007).
 
-        try:
-            stat_info = os.stat(result)
-            # DF-007: permissions should be 0o600 (owner read/write only)
-            actual_mode = stat_info.st_mode & 0o777
-            assert actual_mode == 0o600, f"Expected 0o600 permissions, got 0o{actual_mode:o}"
-        finally:
-            result.unlink(missing_ok=True)
+        POSIX: ``_create_temp_cookie_file`` calls ``os.chmod(path, 0o600)`` and
+        ``st_mode & 0o777 == 0o600`` is asserted.
+
+        Windows: ``tempfile.mkstemp`` is wrapped so the file is pre-marked
+        read-only (0o444) after the descriptor opens, then the read-only
+        attribute is asserted clear after ``os.chmod(path, 0o600)`` runs.
+        Owner-only confinement is not guaranteed on Windows (D-11): the
+        assertion targets the cleared attribute, not POSIX permission bits.
+
+        R1/R2 confinement properties are already covered by the following
+        tests, not duplicated here: ``test_file_created_in_private_cookie_subdir``,
+        ``test_remove_cookie_artifact_dir_removes_created_dir``,
+        ``test_full_round_trip_removes_parent_dir``, the nine
+        ``TestCookieArtefactLifecycle`` tests, and
+        ``TestCookieArtefactCreationRaceAcrossProcesses``.
+        """
+        from vkdownloader.services.ytdlp_downloader import _remove_cookie_artifact_dir
+
+        cookies = "vk=sensitive_session_token"
+
+        if os.name != "nt":
+            result = _create_temp_cookie_file(cookies)
+            try:
+                stat_info = os.stat(result)
+                # DF-007: permissions should be 0o600 (owner read/write only)
+                actual_mode = stat_info.st_mode & 0o777
+                assert actual_mode == 0o600, f"Expected 0o600 permissions, got 0o{actual_mode:o}"
+            finally:
+                result.unlink(missing_ok=True)
+        else:
+            # Alt B: pre-mark the file read-only after mkstemp opens the fd.
+            import tempfile as _tempfile
+
+            _original_mkstemp = _tempfile.mkstemp
+
+            def _ro_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+                fd, path = _original_mkstemp(*args, **kwargs)
+                os.chmod(path, 0o444)
+                return fd, path
+
+            with patch("vkdownloader.services.ytdlp_downloader.tempfile.mkstemp", _ro_mkstemp):
+                result = _create_temp_cookie_file(cookies)
+
+            try:
+                assert getattr(os.stat(result), "st_file_attributes", 0) & 0x1 == 0, (
+                    "read-only attribute should be cleared after chmod(0o600)"
+                )
+            finally:
+                os.chmod(result, 0o600)
+                _remove_cookie_artifact_dir(result.parent)
 
     def test_cleanup_on_write_error(self) -> None:
         """Test that temp file is cleaned up when os.write fails."""

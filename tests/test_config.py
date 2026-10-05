@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import pytest
 from pydantic import ValidationError
@@ -977,40 +977,98 @@ class TestEnvFileValidationRendering:
 
         assert log_file.exists()
 
-    @pytest.mark.skipif(
-        os.name == "nt",
-        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
-        "only the read-only attribute, so the measured mode is 0o666 rather than the "
-        "requested 0o600 (D-11).",
-    )
     def test_log_file_created_with_owner_only_permissions(self, tmp_path: Path) -> None:
-        """SEC-003: log file should be created with 0o600 permissions."""
+        """SEC-003: log file creation requests 0o600 and clears the read-only attribute.
+
+        POSIX: ``setup_logging`` creates the log file via ``Path.touch(mode=0o600)``
+        and ``st_mode & 0o777 == 0o600`` is asserted.
+
+        Windows: ``touch`` and ``chmod`` are intercepted with a local recorder
+        (Alt A) to confirm exactly one ``touch(mode=0o600)`` call and no
+        ``chmod`` call in the creation branch, then the read-only attribute is
+        asserted clear. Owner-only confinement is not guaranteed on Windows
+        (D-11): the assertion targets the requested branch and the cleared
+        attribute, not POSIX-style permission bits.
+        """
         log_file = tmp_path / "app.log"
         settings = Settings(log_file=str(log_file), log_level="DEBUG")
 
-        setup_logging(settings)
+        if os.name != "nt":
+            setup_logging(settings)
 
-        mode = os.stat(log_file).st_mode & 0o777
-        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+            mode = os.stat(log_file).st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+        else:
+            # Alt A: spy on the creation branch with a local recorder (no mock import).
+            touch_calls: list[Any] = []
+            chmod_calls: list[Any] = []
+            original_touch = Path.touch
+            original_chmod = Path.chmod
 
-    @pytest.mark.skipif(
-        os.name == "nt",
-        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
-        "only the read-only attribute, so the measured mode is 0o666 rather than the "
-        "requested 0o600 (D-11).",
-    )
+            def _recording_touch(self: Path, *args: Any, **kwargs: Any) -> None:
+                touch_calls.append((self, args, kwargs))
+                return original_touch(self, *args, **kwargs)
+
+            def _recording_chmod(self: Path, *args: Any, **kwargs: Any) -> None:
+                chmod_calls.append((self, args, kwargs))
+                return original_chmod(self, *args, **kwargs)
+
+            Path.touch = _recording_touch  # type: ignore[method-assign]
+            Path.chmod = _recording_chmod  # type: ignore[method-assign]
+            try:
+                setup_logging(settings)
+            finally:
+                Path.touch = original_touch  # type: ignore[method-assign]
+                Path.chmod = original_chmod  # type: ignore[method-assign]
+
+            # Assert the creation branch was taken as expected.
+            assert len(touch_calls) == 1, f"Expected exactly one touch call, got {len(touch_calls)}"
+            touch_kwargs = touch_calls[0][2]
+            assert touch_kwargs.get("mode") == 0o600, (
+                f"Expected touch(mode=0o600), got mode={touch_kwargs.get('mode')!r}"
+            )
+            assert len(chmod_calls) == 0, (
+                f"Expected no chmod in creation branch, got {len(chmod_calls)}"
+            )
+
+            # Assert the read-only attribute is clear on the created file.
+            assert getattr(os.stat(log_file), "st_file_attributes", 0) & 0x1 == 0, (
+                "read-only attribute should be clear on a freshly created file"
+            )
+
     def test_existing_log_file_permissions_updated(self, tmp_path: Path) -> None:
-        """SEC-003: existing log file should have permissions corrected to 0o600."""
+        """SEC-003: existing log file permissions are corrected to 0o600.
+
+        POSIX: the file is pre-set to 0o644, setup_logging calls ``chmod(0o600)``,
+        and ``st_mode & 0o777 == 0o600`` is asserted.
+
+        Windows: the file is pre-set to 0o444 (read-only). setup_logging calls
+        ``chmod(0o600)`` which clears the read-only attribute. If the precondition
+        were not corrected, ``FileHandler`` construction would raise
+        ``PermissionError`` when opening a read-only file, so the cleared
+        attribute is asserted. Owner-only confinement is not guaranteed on
+        Windows (D-11): the assertion targets the cleared attribute, not POSIX
+        permission bits.
+        """
         log_file = tmp_path / "existing.log"
         log_file.write_text("old content")
-        # Set insecure permissions
-        os.chmod(log_file, 0o644)
+        # Set platform-specific "insecure" precondition.
+        if os.name != "nt":
+            os.chmod(log_file, 0o644)
+        else:
+            os.chmod(log_file, 0o444)
 
         settings = Settings(log_file=str(log_file), log_level="DEBUG")
         setup_logging(settings)
 
-        mode = os.stat(log_file).st_mode & 0o777
-        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+        if os.name != "nt":
+            mode = os.stat(log_file).st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+        else:
+            # On Windows, os.chmod(0o600) clears the read-only attribute.
+            assert getattr(os.stat(log_file), "st_file_attributes", 0) & 0x1 == 0, (
+                "read-only attribute should be cleared after chmod(0o600)"
+            )
 
 
 def _launch_dir(request: pytest.FixtureRequest) -> Path:
