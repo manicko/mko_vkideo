@@ -81,9 +81,11 @@ vkdownloader download [OPTIONS] URL
 | Code | Condition |
 |------|-----------|
 | `0` | Success ? video downloaded successfully. |
-| `1` | Failure ? the command ran and failed: invalid URL, configuration error, download error, or missing streams. |
-| `2` | Usage error ? the command line was rejected by the argument parser before anything ran: unknown option, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, an invalid `--method` / `--cookie-source` value, or the missing `URL` argument. Nothing was downloaded and no file was created. |
+| `1` | Download failure ? the command ran and failed: invalid URL, download error, or missing streams. |
+| `2` | Usage error ? rejected before the command body ran: unknown option/command, `--method ffmpeg` rejection, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, or the missing `URL` argument. Nothing was attempted and no file was created. |
+| `3` | Configuration error ? the operator's setup is wrong: an out-of-range `--max-retries` (bounds 1-10, enforced by the `Settings` model), or a preamble failure (a malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |
 | `130` | Interrupted by user (Ctrl+C). |
+| `4`-`129`, `131`+ | Unallocated ? reserved for future use. |
 
 `2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed download. Every value printed in the parser's own error message (for example the accepted `--quality` values, quoted under [Quality Options](#quality-options)) is accepted when pasted back into the command line.
 
@@ -170,9 +172,11 @@ When the output stream is not a terminal (piped, redirected, or CI) the display 
 | Code | Condition |
 |------|-----------|
 | `0` | Success ? all downloads completed. |
-| `1` | Failure ? the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
-| `2` | Usage error ? the command line was rejected by the argument parser before anything ran: unknown option, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, an invalid `--method` / `--cookie-source` value, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was downloaded and no file was created. |
+| `1` | Download failure ? the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
+| `2` | Usage error ? rejected before the command body ran: unknown option/command, `--method ffmpeg` rejection, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was attempted and no file was created. |
+| `3` | Configuration error ? the operator's setup is wrong: an out-of-range `--max-retries` (bounds 1-10, enforced by the `Settings` model), or a preamble failure (a malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |
 | `130` | Interrupted by user (Ctrl+C). |
+| `4`-`129`, `131`+ | Unallocated ? reserved for future use. |
 
 `2` is a terminal outcome in its own right, deliberately separate from `1`: on `2` nothing was attempted, so a script must not treat it as a failed batch. It is also the outcome of invoking `vkdownloader` with no command, an unknown command, or an unknown option.
 

@@ -30,6 +30,7 @@ _REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-referenc
 _REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
 _COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
+_EXIT_TABLE_DATA_ROW = re.compile(r"^\|\s*`")
 _MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
 _BATCH_SUMMARY_STEP = re.compile(r"^\s*\d+\.\s+Prints summary of successful and failed downloads")
 
@@ -57,6 +58,36 @@ def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
         elif line.strip() and not line.startswith("|"):
             in_exit_table = False
     return codes
+
+
+def _documented_exit_code_row_count(doc_path: Path) -> dict[str, int]:
+    """Count the exit-code table data rows per command (including the unallocated row).
+
+    Unlike :func:`_documented_exit_codes`, which only extracts single-numeric-code
+    rows, this counts every data row in the exit-code table — ``_EXIT_TABLE_DATA_ROW``
+    matches any row starting with ``| ` ``, catching the ``4-129, 131+`` unallocated
+    line that ``_EXIT_CODE_ROW`` skips because it has no single code.
+    """
+    counts: dict[str, int] = {}
+    command: str | None = None
+    in_exit_table = False
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        heading = _COMMAND_HEADING.match(line)
+        if heading is not None:
+            command = heading.group(1)
+            in_exit_table = False
+            continue
+        if line.strip() == "**Exit codes:**":
+            in_exit_table = True
+            continue
+        if not in_exit_table:
+            continue
+        if _EXIT_TABLE_DATA_ROW.match(line):
+            assert command is not None, f"exit-code row outside a command section: {line}"
+            counts[command] = counts.get(command, 0) + 1
+        elif line.strip() and not line.startswith("|"):
+            in_exit_table = False
+    return counts
 
 
 def _documented_max_retries_descriptions(doc_path: Path) -> dict[str, str]:
@@ -1527,7 +1558,7 @@ class TestConfigurationErrors:
             env={"VKDOWNLOADER_MAX_RETRIES": "notanint"},
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "Configuration error" in result.output
         assert "max_retries" in result.output
         assert "Traceback" not in result.output
@@ -1727,7 +1758,7 @@ class TestExitCodeContract:
     ) -> None:
         """Every exit code the process can emit must be documented for both commands.
 
-        The four values are observed by invoking the CLI, not assumed:
+        The five values are observed by invoking the CLI, not assumed:
 
         * ``0``   — ``download`` with the download service mocked to succeed.
         * ``1``   — ``download`` with a URL that is not a VK video URL, which the
@@ -1736,17 +1767,20 @@ class TestExitCodeContract:
           parser rejects, so the command body never runs. The same value is
           produced by a missing argument, an unknown command and an unknown
           option. (``720p`` no longer belongs here: it is a valid height.)
+        * ``3``   — ``download --max-retries 0``: an out-of-range value the
+          ``Settings`` model rejects, so the command body never runs and the
+          preamble's ``ValidationError`` handler exits 3 (configuration error).
         * ``130`` — ``download`` interrupted with ``KeyboardInterrupt`` from the
           extraction layer, which the command maps to its cancellation handler.
         """
         observed = self._observe_exit_codes(tmp_path, sample_video_url)
 
-        assert set(observed) == {0, 1, 2, 130}, observed
+        assert set(observed) == {0, 1, 2, 3, 130}, observed
 
         for doc_name in _REFERENCE_DOC_NAMES:
             documented = _documented_exit_codes(_REFERENCE_DOCS / doc_name)
-            assert documented.get("download") == {0, 1, 2, 130}, doc_name
-            assert documented.get("batch") == {0, 1, 2, 130}, doc_name
+            assert documented.get("download") == {0, 1, 2, 3, 130}, doc_name
+            assert documented.get("batch") == {0, 1, 2, 3, 130}, doc_name
 
     @staticmethod
     def _observe_exit_codes(tmp_path: Path, sample_video_url: str) -> dict[int, str]:
@@ -1812,6 +1846,18 @@ class TestExitCodeContract:
                         catch_exceptions=False,
                     )
         observed.setdefault(result.exit_code, "download interrupted by KeyboardInterrupt")
+
+        # Observe code 3 outside the Settings mock: the real model rejects the
+        # out-of-range value and raises ValidationError, which download maps to 3.
+        result = runner.invoke(
+            app,
+            ["download", sample_video_url, "--max-retries", "0"],
+            catch_exceptions=False,
+        )
+        observed.setdefault(
+            result.exit_code,
+            "download with out-of-range --max-retries exits 3 (configuration error)",
+        )
 
         return observed
 
@@ -1890,6 +1936,86 @@ class TestExitCodeContract:
 
         assert result.exit_code == 130, result.output
         assert "Download Summary:" not in result.output
+
+    def test_exit_code_table_has_six_rows_including_130(self) -> None:
+        """Both reference docs must carry exactly six exit-code rows per command.
+
+        The six-row contract (DEC-X) is: 0, 1, 2, 3, 130, and the unallocated
+        ``4-129, 131+`` row.  Membership is checked separately by
+        ``test_every_observable_exit_code_is_documented``; this oracle checks the
+        *shape* — the row count — so a future edit that drops the unallocated
+        row or merges two rows cannot pass silently.
+        """
+        for doc_name in _REFERENCE_DOC_NAMES:
+            doc_path = _REFERENCE_DOCS / doc_name
+            row_counts = _documented_exit_code_row_count(doc_path)
+            documented = _documented_exit_codes(doc_path)
+            for command in ("download", "batch"):
+                assert row_counts.get(command, 0) == 6, (
+                    f"{doc_name}: {command} exit-code table has "
+                    f"{row_counts.get(command, 0)} rows, expected 6"
+                )
+                assert 130 in documented.get(command, set()), (
+                    f"{doc_name}: {command} exit-code table is missing 130"
+                )
+
+    def test_exit_code_3_distinct_from_1(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Exit 3 (configuration error) is distinct from exit 1 (download failure).
+
+        A download that runs and fails — ``perform_download`` returns ``None`` —
+        exits 1.  An out-of-range ``--max-retries`` that the ``Settings`` model
+        rejects exits 3.  Without this test, a future change that collapses 3
+        back into 1 would pass the membership oracle alone.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        # Case 1: a legitimate download failure exits 1.
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(
+                    id="12345_67890",
+                    streams=[MagicMock(url="https://example.com/1080.m3u8", quality="1080")],
+                )
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["1080"]
+            mock_selector.select.return_value = MagicMock(quality="1080")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = None  # download runs but fails
+
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
+                    result_fail = runner.invoke(
+                        app,
+                        ["download", sample_video_url],
+                        catch_exceptions=False,
+                    )
+
+        assert result_fail.exit_code == 1, "a download failure must exit 1, not 3"
+
+        # Case 2: a settings rejection exits 3 (configuration error).
+        result_config = runner.invoke(
+            app,
+            ["download", sample_video_url, "--max-retries", "0"],
+            catch_exceptions=False,
+        )
+        assert result_config.exit_code == 3, (
+            "an out-of-range --max-retries must exit 3 (configuration error), not 1"
+        )
 
 
 class TestMaxRetriesOptionDocumentation:
@@ -2208,7 +2334,7 @@ class TestEntryPointSourcePrecedence:
                     ["download", sample_video_url, "--max-retries", str(invalid_value)],
                 )
 
-            assert result.exit_code == 1, f"max_retries={invalid_value} should fail"
+            assert result.exit_code == 3, f"max_retries={invalid_value} should fail"
             assert "max_retries" in result.output
             assert "Traceback" not in result.output
             assert mock_download.call_count == 0
@@ -2232,7 +2358,7 @@ class TestEntryPointSourcePrecedence:
                     ["batch", str(urls_file), "--max-retries", str(invalid_value)],
                 )
 
-            assert result.exit_code == 1, f"max_retries={invalid_value} should fail"
+            assert result.exit_code == 3, f"max_retries={invalid_value} should fail"
             assert "max_retries" in result.output
             assert "Traceback" not in result.output
             assert mock_dv.call_count == 0
@@ -2620,8 +2746,8 @@ class TestPreambleFailureRendering:
         return str(Path(__file__).resolve().parent.parent)
 
     def _assert_clean_preamble_failure_output(self, result: Result) -> None:
-        """Assert exit 1, single-line stderr message, no traceback/path/settings."""
-        assert result.exit_code == 1
+        """Assert exit 3, single-line stderr message, no traceback/path/settings."""
+        assert result.exit_code == 3
         stderr = result.stderr
         assert "Logging configuration failed" in stderr
         # Single line — only the trailing newline from typer.echo.
@@ -2684,6 +2810,6 @@ class TestPreambleFailureRendering:
             ["batch", str(urls_file)],
             catch_exceptions=False,
         )
-        assert download_result.exit_code == 1
-        assert batch_result.exit_code == 1
+        assert download_result.exit_code == 3
+        assert batch_result.exit_code == 3
         assert download_result.stderr == batch_result.stderr

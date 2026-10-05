@@ -424,7 +424,7 @@ def download(
 
     except ValidationError as e:
         typer.echo(format_validation_error(e), err=True)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=3) from None
     except InvalidVideoUrlError:
         typer.echo(
             "Invalid URL format. Expected format: https://vkvideo.ru/video-{owner_id}_{video_id}",
@@ -458,7 +458,7 @@ def download(
         raise typer.Exit(code=1) from None
     except _PreambleFailure as exc:
         _render_preamble_failure(exc)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=3) from None
     except typer.Exit:
         raise
     except Exception:
@@ -567,10 +567,10 @@ def batch_download(
 
     except ValidationError as e:
         typer.echo(format_validation_error(e), err=True)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=3) from None
     except _PreambleFailure as exc:
         _render_preamble_failure(exc)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=3) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
         typer.echo("\nDownload cancelled by user", err=True)
         raise typer.Exit(code=130) from None
