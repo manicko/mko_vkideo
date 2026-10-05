@@ -30,6 +30,7 @@ _REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-referenc
 _REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
 _COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
+_MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
 
 
 def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
@@ -55,6 +56,36 @@ def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
         elif line.strip() and not line.startswith("|"):
             in_exit_table = False
     return codes
+
+
+def _documented_max_retries_descriptions(doc_path: Path) -> dict[str, str]:
+    """Extract the ``--max-retries`` option-table description per command.
+
+    Returns a mapping of command name to the Description column of the
+    ``--max-retries`` row in that command's Options table. A command whose
+    option table omits the row is absent from the mapping, so the caller can
+    detect a row missing from a single table.
+    """
+    descriptions: dict[str, str] = {}
+    command: str | None = None
+    in_options_table = False
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        heading = _COMMAND_HEADING.match(line)
+        if heading is not None:
+            command = heading.group(1)
+            in_options_table = False
+            continue
+        if line.strip() == "**Options:**":
+            in_options_table = True
+            continue
+        if not in_options_table:
+            continue
+        if _MAX_RETRIES_OPTION_ROW.match(line):
+            assert command is not None, "option-table row outside a command section"
+            descriptions[command] = line.split("|")[-2].strip()
+        elif line.strip() and not line.startswith("|"):
+            in_options_table = False
+    return descriptions
 
 
 def _is_undecodable(payload: bytes, encoding: str) -> bool:
@@ -1699,6 +1730,53 @@ class TestExitCodeContract:
 
         assert result.exit_code == 130, result.output
         assert "Download Summary:" not in result.output
+
+
+class TestMaxRetriesOptionDocumentation:
+    """B5 (doc half of OUT-005): the ``--max-retries`` option-table row must exist
+    for every command and state the range that ``Settings.max_retries`` enforces.
+
+    The option deliberately carries no ``min``/``max`` (prohibited by R3b), so the
+    reference row is the only place the bound is stated. This oracle derives floor
+    and ceiling from the model field's metadata, never from a literal, so the prose
+    can only drift as far as the test is rewritten.
+    """
+
+    @staticmethod
+    def _documented_retry_range() -> str:
+        """Build the expected ``floor-ceiling`` string from the model field.
+
+        Mirrors ``TestConditionalOverridesConstruction`` in ``test_config.py``:
+        floor/ceiling are read from the ``Ge``/``Le`` metadata on
+        ``Settings.model_fields["max_retries"]`` so the test cannot drift from
+        the field that enforces the bound.
+        """
+        from annotated_types import Ge, Le
+
+        from vkdownloader.config import Settings
+
+        field = Settings.model_fields["max_retries"]
+        floor = next(m.ge for m in field.metadata if isinstance(m, Ge))
+        ceiling = next(m.le for m in field.metadata if isinstance(m, Le))
+        return f"{floor}-{ceiling}"
+
+    def test_max_retries_row_exists_and_states_model_range(self) -> None:
+        documented_range = self._documented_retry_range()
+
+        for doc_name in _REFERENCE_DOC_NAMES:
+            descriptions = _documented_max_retries_descriptions(_REFERENCE_DOCS / doc_name)
+
+            # Per command: a row absent from either table must fail this test.
+            assert set(descriptions) == {"download", "batch"}, (
+                f"{doc_name}: --max-retries row missing from at least one command "
+                f"(present for: {set(descriptions)})"
+            )
+
+            for command, description in descriptions.items():
+                assert documented_range in description, (
+                    f"{doc_name}: `{command}` --max-retries row does not state the "
+                    f"model range {documented_range!r}: {description!r}"
+                )
 
 
 class TestEntryPointSourcePrecedence:
