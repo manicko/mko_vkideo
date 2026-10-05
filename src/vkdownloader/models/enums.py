@@ -82,12 +82,19 @@ class ErrorCode(StrEnum):
 class ProgressStatus(StrEnum):
     """Download progress status for a single item.
 
-    Terminal statuses are the only values that reach ``finish_task``:
-    ``SKIPPED`` is produced by the batch-level dedup check in
-    ``_run_batch_with_progress`` when an exact-URL duplicate is detected before
-    any network call; ``CANCELLED`` by the shutdown signal during a batch run
-    or by an explicit ``CancelledError`` in single-download mode.
+    ``IN_PROGRESS`` is the non-terminal state set when a task is created;
+    it is the only status that does not reach ``finish_task``. Every other
+    member is terminal:
+
+    ``SUCCESS`` is the normal completion of a download. ``SKIPPED`` is
+    produced by the batch-level dedup check in ``_run_batch_with_progress``
+    when an exact-URL duplicate is detected before any network call;
+    ``CANCELLED`` by the shutdown signal during a batch run or by an
+    explicit ``CancelledError`` in single-download mode. ``FAILED`` covers
+    every other outcome.
     """
+
+    IN_PROGRESS = "in_progress"
 
     SUCCESS = "success"
 
@@ -96,3 +103,12 @@ class ProgressStatus(StrEnum):
     SKIPPED = "skipped"
 
     CANCELLED = "cancelled"
+
+
+# Terminal statuses: every member except IN_PROGRESS. Derived from the enum
+# so a newly added status is automatically terminal unless it is the
+# in-progress state, preventing this set from drifting out of sync with the
+# enum definition.
+TERMINAL_STATUSES: frozenset[ProgressStatus] = frozenset(
+    member for member in ProgressStatus if member != ProgressStatus.IN_PROGRESS
+)

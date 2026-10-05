@@ -1029,6 +1029,15 @@ class TestBatchDedupSkip:
         assert "Skipped (duplicates): 1" in captured.out
         assert exit_code == 0
 
+
+class TestBatchSummarySkippedAggregation:
+    """Aggregation of a SKIPPED entry in the batch summary.
+
+    Distinct from ``TestBatchDedupSkip``: these tests assert how the summary
+    *counts* a skipped entry, feeding a hand-built ``results`` list and
+    exercising no dedup logic at all.
+    """
+
     def test_skipped_entry_counted_as_skipped_not_as_failed(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -24,7 +24,7 @@ from unittest.mock import PropertyMock, patch
 import pytest
 from rich.console import Console
 
-from vkdownloader.models.enums import ProgressStatus
+from vkdownloader.models.enums import TERMINAL_STATUSES, ProgressStatus
 from vkdownloader.services.progress_display import RichProgressReporter
 
 
@@ -624,17 +624,58 @@ def test_per_task_gates_use_the_resolved_value() -> None:
     assert events.count("download_finished") == 1
 
 
-def test_in_progress_status_removed() -> None:
-    """B9: ProgressStatus.IN_PROGRESS was unreachable (its case branches returned
-    an empty glyph identical to the unset-status path, and no producer ever
-    wrote the value) and has been removed with zero residue.
+def test_in_progress_status_produced_and_terminalised() -> None:
+    """IN_PROGRESS is restored as the producer state for newly added tasks.
 
-    Removing follows the DownloadMethod.FFMPEG precedent of deletion over
-    tombstoning. Adding a producer (``status=IN_PROGRESS.value`` in ``_add_task``)
-    was rejected because it would break B12's ``_terminalise_tasks`` teardown —
-    a task whose ``fields["status"]`` is non-None is left untouched at ``stop()``,
-    so a never-finished download would lose its CANCELLED marker instead of
-    gaining one.
+    (a) ``_add_task`` writes ``IN_PROGRESS.value`` so every task has a real
+        producer; the status carries through to the rich task's ``fields``.
+    (b) ``stop()`` still terminalises an in-flight task holding IN_PROGRESS:
+        the terminal-membership test in ``_terminalise_tasks`` recognises
+        IN_PROGRESS as non-terminal and overwrites it with CANCELLED.
+    (c) A task that was finished with a terminal status keeps that status
+        through ``stop()`` — ``_terminalise_tasks`` skips terminal tasks.
     """
-    assert not hasattr(ProgressStatus, "IN_PROGRESS")
-    assert "in_progress" not in {member.value for member in ProgressStatus}
+    # IN_PROGRESS is restored, not removed — it is the producer state for
+    # newly added tasks, not a terminal status.
+    assert hasattr(ProgressStatus, "IN_PROGRESS")
+    assert ProgressStatus.IN_PROGRESS.value == "in_progress"
+    assert ProgressStatus.IN_PROGRESS not in TERMINAL_STATUSES
+
+    # (a): a newly added task carries the in-progress state.
+    reporter, _ = _make_reporter(enabled=True)
+    reporter.start()
+    reporter.start_task(0, title="In-Flight")
+    progress = reporter._progress
+    assert progress is not None
+    task = progress.tasks[reporter._tasks[0]]
+    assert task.fields["status"] == ProgressStatus.IN_PROGRESS.value
+    reporter.stop()
+
+    # (b): after stop(), an in-flight task holding IN_PROGRESS still gets a
+    # terminal marker (CANCELLED), not the in-progress empty glyph.
+    reporter, buffer = _make_reporter(enabled=True)
+    reporter.start()
+    reporter.start_task(0, title="Unfinished")
+    reporter.update(0, 50, 100)
+    # Deliberately do NOT call finish_task — the task is in-flight at teardown.
+    reporter.stop()
+    content = buffer.getvalue()
+    assert "[⊘]" in content
+    assert "cancelled" in content
+    assert "[✓]" not in content  # not falsely marked successful
+
+    # (c): a task already finished keeps the status it was given —
+    # the terminal-status membership test skips it at teardown.
+    reporter, buffer = _make_reporter(enabled=True)
+    reporter.start()
+    reporter.start_task(0, title="Finished")
+    reporter.update(0, 50, 100)
+    reporter.finish_task(0, ProgressStatus.SUCCESS)
+    reporter.stop()
+    content = buffer.getvalue()
+    assert "[✓]" in content
+    assert "done" in content
+    # The SUCCESS status is preserved; the teardown CANCELLED marker must not
+    # overwrite it.
+    assert "[⊘]" not in content
+    assert "cancelled" not in content

@@ -29,7 +29,7 @@ from rich.text import Text
 from structlog import get_logger
 
 from ..config import encoding_safe
-from ..models.enums import ProgressStatus
+from ..models.enums import TERMINAL_STATUSES, ProgressStatus
 
 logger = get_logger(__name__)
 
@@ -71,6 +71,8 @@ class _StatusColumn(ProgressColumn):
                 return Text("[⊘]", style="yellow")
             case ProgressStatus.CANCELLED:
                 return Text("[⊘]", style="cyan")
+            case ProgressStatus.IN_PROGRESS:
+                return Text("")
 
 
 def _format_outcome(status: ProgressStatus) -> str:
@@ -88,6 +90,8 @@ def _format_outcome(status: ProgressStatus) -> str:
             return "skipped"
         case ProgressStatus.CANCELLED:
             return "cancelled"
+        case ProgressStatus.IN_PROGRESS:
+            return "in_progress"
 
 
 class RichProgressReporter:
@@ -223,8 +227,14 @@ class RichProgressReporter:
             return
         for index, task_id in self._tasks.items():
             task = progress.tasks[task_id]
-            if task.fields.get("status") is not None:
-                continue
+            raw = task.fields.get("status")
+            if raw is not None:
+                try:
+                    status = ProgressStatus(str(raw))
+                except ValueError:
+                    status = None
+                if status in TERMINAL_STATUSES:
+                    continue
             outcome = _format_outcome(ProgressStatus.CANCELLED)
             label = self._format_label(index)
             progress.update(
@@ -335,7 +345,11 @@ class RichProgressReporter:
         """Create a rich task for ``index`` and remember its id."""
         progress = self._progress
         assert progress is not None, "start() must be called before adding tasks"
-        task_id = progress.add_task(description=self._format_label(index), total=None)
+        task_id = progress.add_task(
+            description=self._format_label(index),
+            total=None,
+            status=ProgressStatus.IN_PROGRESS.value,
+        )
         self._tasks[index] = task_id
         return task_id
 

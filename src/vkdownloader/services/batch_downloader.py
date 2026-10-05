@@ -363,11 +363,14 @@ async def _run_batch_with_progress(
             # finally's stop() still runs if start() raises.
             reporter.start()
 
-            # Fill phase: consume the lazy source, spinning up one task per URL
-            # and pumping (draining completed tasks) only once the live window
-            # is full. Each pulled item is stored on the next statement; there
-            # is no break/return between the pull and the store, so no URL is
-            # dropped (measured: a break there loses one URL per full window).
+            # Fill phase: consume the lazy source, spinning up one task per
+            # non-duplicate URL and pumping (draining completed tasks) only
+            # once the live window is full. Every pulled item is stored in
+            # by_index: duplicates are stored directly (with the dedup
+            # ``continue`` placed *after* the store, never before), and
+            # non-duplicates are stored via their task's eventual result.
+            # No break/return drops a pulled URL before it is stored
+            # (measured: a drop there loses one URL per full window).
             for i, url in urls_left:
                 # Tier 1 dedup (DEC-W R1): exact-URL duplicates are skipped
                 # before any network call, never launching a second media

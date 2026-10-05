@@ -171,7 +171,7 @@ When the output stream is not a terminal (piped, redirected, or CI) the display 
 
 | Code | Condition |
 |------|-----------|
-| `0` | Success ? all downloads completed. |
+| `0` | Success ? no failures or cancellations; skipped duplicate items do not affect the exit code. |
 | `1` | Download failure ? the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
 | `2` | Usage error ? rejected before the command body ran: unknown option/command, `--method ffmpeg` rejection, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was attempted and no file was created. |
 | `3` | Configuration error ? the operator's setup is wrong: an out-of-range `--max-retries` (bounds 1-10, enforced by the `Settings` model), or a preamble failure (a malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |

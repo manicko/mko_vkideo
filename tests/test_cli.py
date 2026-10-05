@@ -18,7 +18,7 @@ from vkdownloader.exceptions import (
     QualityNotAvailableError,
     VideoNotFoundError,
 )
-from vkdownloader.models.enums import CookieSource, ProgressStatus
+from vkdownloader.models.enums import TERMINAL_STATUSES, CookieSource, ProgressStatus
 from vkdownloader.models.quality import QualitySpec
 from vkdownloader.services import batch_downloader
 from vkdownloader.services.downloader import download_video as _real_download_video
@@ -2103,7 +2103,8 @@ class TestBatchSummaryDocumentation:
             assert "reachable" in content.lower(), (
                 f"{doc_name}: marker line must state reachability"
             )
-            # No trace of the removed IN_PROGRESS member.
+            # IN_PROGRESS is non-terminal: it emits no glyph, so it must
+            # not appear in the docs.
             assert "in_progress" not in content.lower(), doc_name
 
     def test_docs_marker_set_matches_terminal_statuses(self) -> None:
@@ -2111,12 +2112,26 @@ class TestBatchSummaryDocumentation:
         ProgressStatus members the code can emit.
 
         Fails if a glyph is documented but not emitted, if an emitted glyph is
-        missing from the docs, or if the removed IN_PROGRESS appears in either
-        docs or code.
+        missing from the docs, or if IN_PROGRESS (a non-terminal status) leaks
+        into the documented terminal glyph set.
         """
-        # IN_PROGRESS was deleted — only four terminal statuses remain.
-        assert not hasattr(ProgressStatus, "IN_PROGRESS")
-        emittable_glyphs = {"✓", "✗", "⊘"}
+        # IN_PROGRESS is the non-terminal producer state: it is present in
+        # the enum but excluded from TERMINAL_STATUSES.
+        assert hasattr(ProgressStatus, "IN_PROGRESS")
+        assert ProgressStatus.IN_PROGRESS not in TERMINAL_STATUSES
+
+        # Glyphs are derived from the terminal ProgressStatus members, mirroring
+        # _StatusColumn.render. SKIPPED and CANCELLED share ⊘. Every terminal
+        # status must carry a glyph — a new terminal status without a documented
+        # glyph fails the coverage assertion below rather than silent drift.
+        terminal_glyphs: dict[ProgressStatus, str] = {
+            ProgressStatus.SUCCESS: "✓",
+            ProgressStatus.FAILED: "✗",
+            ProgressStatus.SKIPPED: "⊘",
+            ProgressStatus.CANCELLED: "⊘",
+        }
+        assert set(terminal_glyphs) == set(TERMINAL_STATUSES)
+        emittable_glyphs = set(terminal_glyphs.values())
 
         for doc_name in _REFERENCE_DOC_NAMES:
             content = (_REFERENCE_DOCS / doc_name).read_text(encoding="utf-8")
