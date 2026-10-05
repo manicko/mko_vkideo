@@ -1301,6 +1301,76 @@ class TestMethodFfmpegRemoved:
         assert result.exit_code == 0
         assert "ffmpeg" not in result.output.lower()
 
+    def test_method_option_still_present_in_download_help(self) -> None:
+        """``--method`` still appears in ``download --help`` with both valid values.
+
+        Distinguishes “value rejected by the parser” from “flag removed
+        outright”: if ``--method`` were deleted entirely the option would not
+        appear in ``--help`` (exit code would be 2, not 0).  The two valid
+        values are asserted individually so the test pins the list, not just
+        the flag’s existence.
+        """
+        result = runner.invoke(app, ["download", "--help"])
+
+        assert result.exit_code == 0
+        assert "--method" in result.output
+        assert "yt-dlp" in result.output
+        assert "auto" in result.output
+
+    def test_method_option_still_present_in_batch_help(self) -> None:
+        """``--method`` still appears in ``batch --help`` with both valid values.
+
+        Mirrors the download counterpart so the two commands’ identical
+        ``--method`` help text is pinned in *both*, as required.
+        """
+        result = runner.invoke(app, ["batch", "--help"])
+
+        assert result.exit_code == 0
+        assert "--method" in result.output
+        assert "yt-dlp" in result.output
+        assert "auto" in result.output
+
+    def test_download_ffmpeg_rejection_carries_migration_note(self) -> None:
+        """The ``--method ffmpeg`` rejection carries a migration note, not a bare error.
+
+        Unlike ``test_download_method_ffmpeg_rejected`` — which asserts only
+        ``exit_code == 2`` and would pass even if the flag were deleted
+        outright — this asserts the substantive substring ``was removed``.
+        That substring distinguishes a deliberate removal explanation from a
+        bare invalid-choice error and pins the note’s presence against its
+        absence.  The substring is not the bare token ``ffmpeg`` (whose
+        absence from ``--help`` is already pinned by
+        ``test_method_help_text_excludes_ffmpeg``).
+        """
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890", "--method", "ffmpeg"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 2
+        assert "was removed" in result.output.lower()
+
+    def test_batch_ffmpeg_rejection_carries_migration_note(self, tmp_path: Path) -> None:
+        """The ``--method ffmpeg`` rejection for batch carries a migration note.
+
+        Same honest witness as the download counterpart: asserts the
+        substantive substring ``was removed`` appears in the rejection
+        output, distinguishing a deliberate removal explanation from a bare
+        invalid-choice error.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+
+        result = runner.invoke(
+            app,
+            ["batch", str(urls_file), "--method", "ffmpeg"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 2
+        assert "was removed" in result.output.lower()
+
 
 class TestSslVerifyOption:
     """Tests for SSL verify option in CLI."""

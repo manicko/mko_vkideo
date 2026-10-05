@@ -64,7 +64,7 @@ vkdownloader download [OPTIONS] URL
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto` |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -128,7 +128,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto` |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -201,6 +201,8 @@ Available method values for `--method` option:
 |-------|-------------|
 | `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
 | `auto` | Downloads via yt-dlp, falls back to segment download on failure (default) |
+
+The `ffmpeg` download method was removed. yt-dlp is the only download transport; `ffmpeg` is still required to merge downloaded segments.
 
 ---
 

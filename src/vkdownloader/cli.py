@@ -291,6 +291,48 @@ def _validate_quality(ctx: typer.Context, param: typer.CallbackParam, value: str
     return value
 
 
+# The --method option accepts the values of DownloadMethod (yt-dlp and
+# auto). The help text lists the valid values but cannot name ffmpeg —
+# test_method_help_text_excludes_ffmpeg pins ffmpeg's absence from --help —
+# so the migration note that names the retired loader lives in the rejection
+# message, rendered from the constant below so it cannot drift from the
+# --method help text and the reference docs.
+_METHOD_OPTION_HELP = "Download method: yt-dlp or auto"
+_METHOD_REJECTION_MESSAGE = (
+    "Choose from 'yt-dlp' or 'auto'. "
+    "The ffmpeg download method was removed; "
+    "ffmpeg is still required to merge downloaded segments."
+)
+
+
+def _validate_method(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:
+    """Validate ``--method`` during argument parsing.
+
+    Mirrors the ``--quality`` callback: the option is typed ``str`` so that
+    the callback — not a closed enum coercion — performs validation, allowing
+    a tailorised message for the retired ``ffmpeg`` value. An invalid token
+    is a usage error (exit code 2) carrying a migration note that names the
+    valid choices, explains that the ffmpeg *loader* was removed, and states
+    that ffmpeg *as the segment-merge engine* is still required.
+
+    Args:
+        ctx: Click context (unused).
+        param: The parameter being parsed (unused).
+        value: Raw token supplied by the user.
+
+    Returns:
+        The unchanged token, one of the ``DownloadMethod`` values.
+
+    Raises:
+        typer.BadParameter: If the token is not a valid ``DownloadMethod``.
+    """
+    try:
+        DownloadMethod(value)
+    except ValueError:
+        raise typer.BadParameter(_METHOD_REJECTION_MESSAGE) from None
+    return value
+
+
 app = typer.Typer(
     name="vkdownloader",
     help="Download videos from vkvideo.ru with quality selection support",
@@ -307,11 +349,12 @@ def download(
         "-o",
         help="Output directory for downloaded video",
     ),
-    method: DownloadMethod = typer.Option(
-        DownloadMethod.AUTO,
+    method: str = typer.Option(
+        "auto",
         "--method",
         "-m",
-        help="Download method: yt-dlp or auto",
+        callback=_validate_method,
+        help=_METHOD_OPTION_HELP,
     ),
     cookie_source: CookieSource | None = typer.Option(
         None,
@@ -348,7 +391,7 @@ def download(
                 url,
                 quality_spec,
                 output,
-                method,
+                DownloadMethod(method),
                 settings,
                 log_available_qualities=True,
             )
@@ -439,11 +482,12 @@ def batch_download(
         "-o",
         help="Output directory for downloaded videos",
     ),
-    method: DownloadMethod = typer.Option(
-        DownloadMethod.AUTO,
+    method: str = typer.Option(
+        "auto",
         "--method",
         "-m",
-        help="Download method: yt-dlp or auto",
+        callback=_validate_method,
+        help=_METHOD_OPTION_HELP,
     ),
     cookie_source: CookieSource | None = typer.Option(
         None,
@@ -513,7 +557,7 @@ def batch_download(
             run_batch(
                 valid_urls,
                 quality_spec,
-                method,
+                DownloadMethod(method),
                 settings,
                 output,
                 skipped_count,
