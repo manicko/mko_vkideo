@@ -20,9 +20,22 @@ class HLSDownloadRequest(BaseModel):
     m3u8_url: str
     output_file: Path
     quality: str = "best"
-    # SEC-008 (B7): this is the only in-process session carrier. It carries a
-    # flat session string ("name=value; name=value") produced by
-    # extractor._format_cookies_for_ffmpeg. Both markers are needed:
+    # SEC-008 (B7): this is the only session carrier held in a model. It
+    # carries a flat session string ("name=value; name=value") produced by
+    # extractor._format_cookies_for_ffmpeg.
+    #
+    # Hand-off — a second, unmarked flat-session carrier exists outside any
+    # model: services/segment_downloader.py::_handle_token_refresh delegates
+    # to ::_refresh_token_and_retry, whose tuple[str, str] return writes its
+    # second element as a plain str to headers["Cookie"] (see
+    # _fetch_playlist_with_retry, line "headers['Cookie'] = new_cookies").
+    # That path never logs headers and every record it emits is pre-sanitised
+    # via _strip_auth_params, so there is no live leak today. Do NOT mark it
+    # (behaviour change, out of scope); it is recorded here so a future
+    # maintainer cannot reintroduce the B7 failure mode by assuming this
+    # field is the sole carrier.
+    #
+    # Both markers are needed:
     # Field(repr=False) hides the field from repr()/str() entirely, and
     # SecretStr masks the value inside any rendering that does reach it.
     # repr=False alone leaves the value a plain str, so model_dump() and

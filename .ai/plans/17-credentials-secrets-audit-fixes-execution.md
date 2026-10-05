@@ -3434,6 +3434,349 @@ acceptance_criteria:
     verified_by: §7 gates
 ```
 
+#### `B3-AUDIT` — block-`B3` audit findings (Auditor; read-only at `bccf8b9`)
+
+Windows, CPython 3.12.1, `os.name == "nt"`. Every number below was executed, not reasoned.
+No production file, no test file, no existing audit-phase file and nothing in the staging
+area was touched; this section is the only edit.
+
+Baseline re-measured and **identical to the block's**: `884 passed, 6 skipped, 1 warning in
+41.09s` · `mypy src` `Success: no issues found in 31 source files` · `ruff check src tests`
+`All checks passed!` · `ruff format --check src tests` `54 files already formatted` ·
+`mypy src tests` `Found 93 errors in 8 files`.
+
+##### `B3-A1` — the skip set: **confirmed**, 6 skips, **3 D-11 + 3 phase-05, no fourth D-11**
+
+`uv run pytest -q -rs -p no:randomly`, complete `SKIPPED` output:
+
+| # | Site | Reason | Class |
+|---|---|---|---|
+| 1 | `tests/test_config.py:980` `test_log_file_created_with_owner_only_permissions` | `Owner-only confinement is not offered on Windows: os.chmod there toggles only the read-only attribute, so the measured mode is 0o666 rather than the requested 0o600 (D-11).` | **D-11** |
+| 2 | `tests/test_config.py:996` `test_existing_log_file_permissions_updated` | same string | **D-11** |
+| 3 | `tests/test_hls_downloader.py:379` `TestCreateTempCookieFile::test_file_permissions_are_0600` | same string | **D-11** |
+| 4 | `tests/test_ffmpeg_utils.py:163` `test_killpg_called_when_returncode_none` | `POSIX-only: killpg path` | not D-11 |
+| 5 | `tests/test_ffmpeg_utils.py:186` `test_killpg_skipped_when_returncode_set` | `POSIX-only: killpg path` | not D-11 |
+| 6 | `tests/test_hls_downloader.py:4602` `test_descendant_killed_on_posix` | `POSIX-only: killpg reaches descendants` | not D-11 |
+
+`git show d572d96` confirms 4–6 came in with `TRN-001`/phase 05 and are unrelated. A grep for
+`skipif` across `tests/` returns **7** guards: these six plus
+`tests/test_hls_downloader.py:4621` `test_descendant_survives_on_windows`, which is
+`skipif(sys.platform != "win32")` and therefore **runs** here. **Nothing is review-blocking.**
+`T-B3` step 1 and `AC-3` are satisfied as written.
+
+##### `B3-A2` — the three oracles, read exactly; none of their claims is expressible on Windows
+
+**`O1` — `tests/test_config.py::TestEnvFileValidationRendering::test_log_file_created_with_owner_only_permissions`**
+
+```python
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
+    def test_log_file_created_with_owner_only_permissions(self, tmp_path: Path) -> None:
+        """SEC-003: log file should be created with 0o600 permissions."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+
+        setup_logging(settings)
+
+        mode = os.stat(log_file).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+```
+
+**`O2` — `tests/test_config.py::TestEnvFileValidationRendering::test_existing_log_file_permissions_updated`**
+
+```python
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
+    def test_existing_log_file_permissions_updated(self, tmp_path: Path) -> None:
+        """SEC-003: existing log file should have permissions corrected to 0o600."""
+        log_file = tmp_path / "existing.log"
+        log_file.write_text("old content")
+        # Set insecure permissions
+        os.chmod(log_file, 0o644)
+
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+        setup_logging(settings)
+
+        mode = os.stat(log_file).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+```
+
+**`O3` — `tests/test_hls_downloader.py::TestCreateTempCookieFile::test_file_permissions_are_0600`**
+
+```python
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Owner-only confinement is not offered on Windows: os.chmod there toggles "
+        "only the read-only attribute, so the measured mode is 0o666 rather than the "
+        "requested 0o600 (D-11).",
+    )
+    def test_file_permissions_are_0600(self) -> None:
+        """Test that the temp cookie file is created with 0o600 permissions (DF-007)."""
+        cookies = "vk=sensitive_session_token"
+        result = _create_temp_cookie_file(cookies)
+
+        try:
+            stat_info = os.stat(result)
+            # DF-007: permissions should be 0o600 (owner read/write only)
+            actual_mode = stat_info.st_mode & 0o777
+            assert actual_mode == 0o600, f"Expected 0o600 permissions, got 0o{actual_mode:o}"
+        finally:
+            result.unlink(missing_ok=True)
+```
+
+| Oracle | Property it currently claims | Expressible on Windows? |
+|---|---|---|
+| `O1` | the **granted** mode of a file `setup_logging` created is `0o600` | **No.** Measured: `0o666`, always. `Path.touch(mode=0o600)` reaches `os.open(path, flags, 0o600)` and Windows discards everything but the writable bit. |
+| `O2` | an **existing** log file's mode is **corrected to** `0o600` | **No**, as written: `chmod(0o644)` then `chmod(0o600)` both land on `0o666`, so the two calls are indistinguishable. See `B3-A4`. |
+| `O3` | the yt-dlp cookie artefact's **granted** mode is `0o600` | **No.** Measured `0o666`. |
+
+`O2`'s word "updated" is the only claim with a Windows analogue, and only if the starting
+state is chosen so that `0o600` and `0o444` differ on this platform. `B3-A4` does that.
+
+##### `B3-A3` — `D-4` resolved **per oracle**, not globally. Measurement first.
+
+Raw `os.stat(...)` on this platform. `FILE_ATTRIBUTE_READONLY == 0x1`; a fresh file reports
+`32` (`0x20`, `FILE_ATTRIBUTE_ARCHIVE`), a read-only file `33`, a directory `16`.
+
+| # | State | `st_mode & 0o777` | `st_file_attributes` | `READONLY` bit | write after |
+|---|---|---|---|---|---|
+| A1 | fresh, `Path.touch(mode=0o600)` — `setup_logging`'s **absent** branch | `0o666` | `32` | clear | ok |
+| A2 | `write_text` — the **exists** branch, pre-state | `0o666` | `32` | clear | ok |
+| A3 | after `os.chmod(p, 0o644)` | `0o666` | `32` | clear | ok |
+| A4 | after `os.chmod(p, 0o600)` — `setup_logging`'s **exists** branch | `0o666` | `32` | clear | ok |
+| A5 | fresh `tempfile.mkstemp()` — the artefact path | `0o666` | `32` | clear | ok |
+| A6 | after `os.chmod(p, 0o600)` on the artefact | `0o666` | `32` | clear | ok |
+| A7 | control, `os.chmod(p, 0o444)` — **positive control** | `0o444` | `33` | **set** | **`PermissionError`** |
+| A8 | back to `os.chmod(p, 0o600)` | `0o666` | `32` | clear | ok |
+| A9 | fresh `mkdtemp` directory | `0o777` | `16` | clear | — |
+
+Branch spy over a real `setup_logging` call, three preconditions:
+
+| Precondition | Calls observed | Post-state |
+|---|---|---|
+| absent | `[Path.touch(mode=0o600), os.open(path, 0o600)]` | `0o666` / `32` / clear |
+| exists, `0o666` | `[Path.chmod(p, 0o600)]` | `0o666` / `32` / clear — **identical to doing nothing** |
+| exists, `0o444` | `[Path.chmod(p, 0o600)]` | `0o666` / `32` / **clear** — the attribute was flipped |
+
+**Two facts decide `D-4`.** (i) On the **absent** branch a fresh file already has the
+read-only bit clear, so `Alt B` is **vacuous** there — a file with neither `touch` nor `chmod`
+reports byte-identical state (`B3-A4` counterfactual 1). (ii) On the **exists** branch a
+`0o444` precondition is **flipped to clear** by `chmod(0o600)`, so `Alt B` is real and
+**discriminating** there.
+
+**Recommendation, with the criterion stated: `Alt B` where it is both satisfiable *and*
+discriminating; `Alt A` only where `B` is vacuous. Criterion = "delete the property the
+oracle names and the test must go red".** `Alt C` stays prohibited (§1.3.4 / `D-2`; `pywin32`,
+`win32security`, `icacls` are all absent from `src/` and `pyproject.toml` — plan 12 `ART-007`
+row 8 re-confirms no compensating control exists). `Alt B` here **claims no confinement**: it
+asserts the file is not marked read-only, which is what `os.chmod(…, 0o600)` computes to on
+Windows and is strictly weaker than "other principals cannot read it". Note also, measured:
+Windows `st_mode` is a **synthetic projection of that single bit** (`0o444` vs `0o666`), not
+a permissions record — so `Alt B` asserts the attribute, never the mode field.
+
+##### `B3-A4` — falsification: which conversions actually discriminate
+
+Each proposal was run three ways: intact, property removed, property changed. A conversion
+is admissible only if the latter two go red.
+
+| Proposal | Intact | Property removed | Property changed | Verdict |
+|---|---|---|---|---|
+| **`O1` → `Alt B`** (assert `READONLY` clear after `setup_logging`) | passes | **passes** — a file with no `touch`/`chmod` at all reports `0o666` / `32` / clear | passes | **VACUOUS — inadmissible.** `Alt A` is the only honest option for `O1`. |
+| **`O1` → `Alt A`** (spy the absent branch) | `[Path.touch(0o600), os.open(0o600)]` | **no `touch` call recorded** → red | `mode` ≠ `0o600` → red | **discriminating.** Not the degenerate constant-equals-constant shape: it pins *that the absent branch is the one taken* and *that the 0o600 literal reaches `os.open`*. |
+| **`O2` → `Alt B`, precondition reversed to `0o444`** | `0o444`/`33`/set → `0o666`/`32`/**clear** → passes | `Path.chmod` no-op ⇒ file stays `0o444`/`33`/set, and `logging.FileHandler` raises `PermissionError: [Errno 13]` → red | `chmod(0o444)` ⇒ same `PermissionError` → red | **discriminating, twice over.** |
+| **`O3` → `Alt B`, `mkstemp` wrapper pre-marks `0o444`** | `0o666`/`32`/clear → passes (88 B written through the still-open fd) | file stays `0o444`/`33`/**set** → assertion red | same → red | **discriminating.** |
+
+`O2`'s sabotaged runs fail with `PermissionError` from `logging.FileHandler`, not from the
+oracle's own assertion. That is still red, and it is itself a fact worth recording: **on
+Windows, `log_path.chmod(0o600)` is the only thing that lets `FileHandler` open a
+pre-existing read-only log file.** The Implementor must say so in the docstring rather than
+let a reader read the `PermissionError` as an unrelated flake.
+
+##### `B3-A5` — the `R1`/`R2` coupling: **already covered. Do not duplicate.**
+
+`R1` (`72c8283`) and `R2` (`6b18060`, `01325b4`) changed what the artefact's confinement *is*.
+What is now assertable, and where it already lives:
+
+| Property `R1`/`R2` deliver | Already asserted by | Windows-executable? |
+|---|---|---|
+| artefact's parent is a per-run private dir **this process created** | `TestCreateTempCookieFile::test_file_created_in_private_cookie_subdir` (`parent != temp_dir`, `temp_dir in parent.parents`, `parent in _COOKIE_ARTIFACT_DIRS`); `TestCookieArtefactLifecycle::test_create_cookie_artifact_dir_creates_private_subdir_in_temp` | yes |
+| that directory is **removable** | `test_file_created_in_private_cookie_subdir` (`assert not result.parent.exists()`); `TestCookieArtefactLifecycle::test_remove_cookie_artifact_dir_removes_created_dir`, `::test_full_round_trip_removes_parent_dir`, and the two rewritten `finally` blocks | yes |
+| sweep is **liveness-gated** | `test_sweep_stale_cookie_dirs_removes_dead_owner`, `::test_sweep_stale_cookie_dirs_preserves_live_owner` | yes |
+| sweep is **default-deny** | `test_read_owner_pid_missing_file_returns_none`, `test_zero_length_owner_pid_survives_sweep`, `test_unparseable_owner_pid_survives_sweep`, `test_owner_pid_is_a_directory_survives_sweep`, `test_torn_digit_prefix_owner_pid_behaviour_is_explicit`, `test_pidless_new_dir_survives_sweep`, `test_pidless_dir_with_unknown_age_survives_sweep`, `test_pidless_dir_aged_past_grace_is_swept`, `test_created_cookie_dir_matches_the_sweep_filter`, plus `TestCookieArtefactCreationRaceAcrossProcesses` | yes |
+
+**Stated plainly: the block's scope item 2 is already satisfied by landed coverage.** The two
+classes measure **28 passed, 1 skipped** — the skip being `O3`. §`B3`'s instruction to "convert
+it to assert what `R1` delivers" therefore **reduces to removing `O3`'s guard and giving it the
+Windows-meaningful assertion**; re-asserting removability inside `O3` would be a fourth copy
+of an existing oracle. `O3`'s docstring must **name** the tests that own the `R1`/`R2` property
+instead. The POSIX mode check stays, as an **additive** `os.name != "nt"` half — never a
+replacement (`T-B3` step 6).
+
+`O3` does have one defect of its own: its `finally` unlinks the file but never removes the
+directory `_create_temp_cookie_file` created, so it leaks a tracked `vk_cookies__dir<rand>/`
+for the rest of the session. Measured: **delta 0 in `%TEMP%`** after a run of both classes —
+`atexit` `_cleanup_cookie_artifact_dirs` reclaims it — so this is in-session accumulation
+only, not permanent residue. `LOW`. `B3` is rewriting this exact test, so it should remove its
+own directory (`_remove_cookie_artifact_dir(result.parent)`), which is what
+`test_file_created_in_private_cookie_subdir` already does. The same one-line omission exists
+in four sibling tests; that is a suite-wide cleanup and **not** `B3`'s.
+
+##### `B3-A6` — the phantom requirement: **confirmed**. The `SEC-003:` comment is already correct.
+
+- `argfile` — **zero** occurrences anywhere in `src/` (grep over `src/vkdownloader`).
+- `git log -S "argfile" -- src/vkdownloader/config.py` — **empty**. It never appeared in that file.
+- `git log -S "argfile" -- src/` returns only `d572d96` and `665c6ac`, both touching
+  `src/vkdownloader/services/downloader.py` — the ffmpeg loader, not `config.py`.
+- `git log -S "SEC-003" -- src/vkdownloader/config.py` returns exactly one commit, `665c6ac`,
+  and its text is *"SEC-003: Create log file with owner-only permissions (0o600) before
+  FileHandler opens it, so subprocess output sanitized for SEC-002 is not readable by other
+  local users."* — **no argfile, ever**. Plan 11 §3.3 criterion 7's argfile clause and plan 11
+  `T-B3` step 8's identical clause are **phantom**; `§2.6`'s strike is confirmed. Do not
+  "fix" a clause that has no referent.
+
+The comment as it reads today, above `config.setup_logging`'s log-file branch:
+
+```python
+        # SEC-003: Create the log file before FileHandler opens it, so subprocess
+        # output sanitized for SEC-002 is not readable by other local users.
+        # 0o600 sets POSIX permission bits, and that is the only place the
+        # owner-only confinement is delivered: on Windows `touch(mode=...)` ignores
+        # the mode and `chmod` toggles only the read-only attribute, so both
+        # branches leave the file readable by any local user. Confinement is not
+        # offered there (D-11); the mode is requested for its POSIX effect only,
+        # and no access control list is applied.
+```
+
+Claim-by-claim against measurement: *"create the file before `FileHandler` opens it"* —
+**true**, the `touch`/`chmod` block precedes `logging.basicConfig(handlers=[FileHandler(…)])`.
+*"`touch(mode=...)` ignores the mode"* — **true**, `B3-A3` A1 (`os.open` receives `0o600`,
+the file reports `0o666`/`32`/clear). *"`chmod` toggles only the read-only attribute"* —
+**true**, A3/A4/A7/A8 flip `32↔33` and nothing else. *"both branches leave the file readable
+by any local user"* — **true**, both end at `0o666`/`32`/clear. *"no access control list is
+applied"* — **true**, no ACL API is imported or called anywhere in `src/`. *D-11 named* —
+**true**. **Its substantive half is satisfied: the comment does not imply a confinement
+Windows does not deliver**, because the very next sentence states that it does not.
+
+**One residual, and it is not `B3`'s.** Sentence 1 states the *purpose* — "so subprocess
+output … is not readable by other local users" — as an unqualified claim; the scoping arrives
+one sentence later, with no in-line pointer. `LOW`, stylistic. `B3` must not touch it: doing so
+would violate `AC-4`/`AC-6` ("no production file"), and `config.py`'s documentation is already
+owned downstream by `B4` (§2.7) and `B6`. **Record it there; do not absorb it here.** An
+undisclosed inaccuracy is the failure mode this plan warns about in §`R1-A14` C1/C2.
+
+##### `B3-A7` — `B3` writes **no production file**. Confirmed and consequential.
+
+| Candidate | Verdict |
+|---|---|
+| `src/vkdownloader/config.py` | **untouched.** `B3-A6`: the comment is accurate; the only residual is out of scope and owned by `B4`/`B6`. `T-B6` step 11's "do not touch `setup_logging`'s log-file `touch`/`chmod` branch or the `SEC-003:` comment — `B3` owns those" is therefore a **no-op**, which is the correct outcome, not an omission. |
+| `src/vkdownloader/services/ytdlp_downloader.py` | **untouched.** `_create_temp_cookie_file` already calls `os.chmod(path, 0o600)` and its `DF-007:` comment already states the real property — *"Confine the artefact by location, not just by mode"*, "on Windows `os.chmod` toggles only the read-only attribute, so the owner-only guarantee is not offered there (D-11)". Nothing in `R1`/`R2` left a production gap for `B3` to fill. |
+| `.gitignore`, `docs/STRUCT.md` | **untouched.** No duty (`R1-A6`, `R1-A13`). |
+
+**File set: `tests/test_config.py`, `tests/test_hls_downloader.py`. Two test files, zero
+production files.** `AC-4` is satisfied by construction, `git status` needs no gate, the
+`B3`→`B6` `config.py` lock stays void, and the remaining `B3`→`B6` dependency is purely
+*content* — the oracles exercise `setup_logging`'s final shape. Risk profile: **the lowest in
+the plan.** No production behaviour can regress; the only failure modes are a weakened oracle
+and the mypy delta.
+
+`T-B3` step 4's "other gate" is also settled: plan 12's `ART-007` records `config.setup_logging`
+as **`unchanged`**, and its remedy part (2) is `OUT` → `TST-013` (phase 10). Nothing has
+changed the log-file branch, so `O1`/`O2` need no re-evaluation.
+
+##### `B3-A8` — precise edits required, by symbol. This is the complete list.
+
+1. **`tests/test_config.py` · `test_log_file_created_with_owner_only_permissions`** — delete the
+   `skipif`; keep the POSIX half verbatim (`st_mode & 0o777 == 0o600`) under `if os.name != "nt"`;
+   add a Windows half that monkeypatches `Path.touch` and `Path.chmod` with annotated spies,
+   runs `setup_logging`, and asserts exactly one `Path.touch` recorded with `mode == 0o600`,
+   no `Path.chmod`, and `getattr(os.stat(log_file), "st_file_attributes", 0) & 0x1 == 0` as a
+   companion. Rewrite the docstring to state: *POSIX — granted mode is `0o600`, owner-only;
+   Windows — only that the `0o600` request reached `os.open` on the absent branch and the file
+   is not marked read-only; no ACL is applied and other local principals may read it (D-11).*
+2. **`tests/test_config.py` · `test_existing_log_file_permissions_updated`** — delete the
+   `skipif`; make the **precondition platform-opposite**: POSIX `os.chmod(log_file, 0o644)`,
+   Windows `os.chmod(log_file, 0o444)` (read-only **set**, `attr == 33`); POSIX half asserts
+   `st_mode & 0o777 == 0o600`, Windows half asserts
+   `getattr(os.stat(log_file), "st_file_attributes", 0) & 0x1 == 0`, i.e. `setup_logging`
+   **cleared** it. Docstring must add the measured Windows-only fact: this `chmod(0o600)` is
+   what lets `logging.FileHandler` open a pre-existing read-only log file, and if it is
+   removed the call raises `PermissionError` rather than failing an assertion. Name the
+   property: *not* confinement.
+3. **`tests/test_hls_downloader.py` · `test_file_permissions_are_0600`** — delete the `skipif`;
+   keep the POSIX half verbatim; add a Windows half that wraps
+   `vkdownloader.services.ytdlp_downloader.tempfile.mkstemp` (the file's existing pattern) so
+   the returned path is `os.chmod(…, 0o444)`-marked **after** the fd is open, then asserts
+   `getattr(os.stat(result), "st_file_attributes", 0) & 0x1 == 0` — proving
+   `_create_temp_cookie_file`'s `os.chmod(path, 0o600)` reached the platform. Extend `finally`
+   with `os.chmod(result, 0o600)` (so a sabotaged run does not fail in teardown with a
+   `PermissionError` that masks the real assertion) and
+   `_remove_cookie_artifact_dir(result.parent)` per `B3-A5`. Rewrite the docstring to state
+   what is asserted on which platform **and to name by symbol**
+   `test_file_created_in_private_cookie_subdir`, `test_full_round_trip_removes_parent_dir`
+   and `test_remove_cookie_artifact_dir_removes_created_dir` as the owners of the `R1`
+   removability / private-parent property, so `B3-A5` is traceable from the test itself.
+4. **Commit message** — name all three conversions, state that the resulting total skip count
+   is **3** and that all three are the pre-existing `killpg` skips from `12d97d4`, unrelated to
+   this block; state `D-4` resolved **A for `O1`, B for `O2`, B for `O3`**, with `B3-A3`'s
+   vacuity measurement as the reason `O1` could not take `B`; state that `test_temp_argfile_permissions_are_0600`
+   and `_temp_argfile` are **absent by `d572d96` (`TRN-001`), not by this commit** (`T-B3`
+   step 2 / §3.3 criterion 6); state that the `SEC-003:` argfile clause is **phantom** and no
+   `config.py` line was touched (`AC-6`); record `B3-A6`'s residual comment inaccuracy as
+   handed to `B4`/`B6`.
+5. **Do not** add a fourth D-11 guard, weaken any POSIX assertion, fold a reformat in
+   (`ruff format --check` is green — §2.3), or change any node ID (see `B3-A9`).
+
+**Resulting skip count: 6 → 3. D-11 count 3 → 0.**
+
+##### `B3-A9` — two mechanical hazards the Implementor will hit
+
+- **`mypy src tests` is the binding gate** (`93 errors in 8 files`, delta must not rise).
+  `tests/test_config.py` is one of the eight and `strict = true`. Consequences: the spy
+  closures need explicit parameter annotations **and** return types (`disallow_untyped_defs`);
+  `getattr(os.stat(p), "st_file_attributes", 0)` returns `Any` on the POSIX typeshed stub and
+  `int` on the Windows one, so bind it to an annotated local (`attrs: int = …`) rather than
+  comparing inline. `unittest.mock` is **not** imported in `tests/test_config.py`; the file's
+  convention is `pytest.MonkeyPatch`, and `monkeypatch.setattr(Path, "touch", spy)` needs no
+  new import — prefer it over adding `from unittest import mock`.
+- **`tests/test_config.py`'s three SEC-003 log-file tests are in the wrong class.** All three
+  sit in `TestEnvFileValidationRendering` (`class` at 866, next class at 1023), and the string
+  at 969 — *"Tests for setup_logging log file creation and permissions (SEC-003)."* — is a
+  **bare no-op expression between methods**, not a class docstring: `TestEnvFileValidationRendering`'s
+  real docstring is at 867. Moving `O1`/`O2`/`test_log_file_created_when_absent` into a
+  correctly named `TestSetupLoggingLogFilePermissions` would give the platform-scoped docstrings
+  `AC-5` demands a real home. **Not required by any criterion** and it changes three node IDs
+  (so `AC`'s "named conversion" must list the old names), but `B3` is rewriting all three
+  bodies anyway and this is the cheapest moment. **[BEST-PRACTICE] — recommended, effort
+  trivial.** Leaving them in place is acceptable if the Planner prefers a minimal diff; either
+  way the dead string at 969 must not be left as if it were documentation.
+
+##### `B3-A10` — no existing expectation has to change
+
+Checked every oracle `B3` touches and every one it neighbours. **Nothing weakens, nothing
+inverts, no rename is required.** The POSIX halves of `O1`/`O2`/`O3` survive verbatim as
+additive branches; the four `TestCreateTempCookieFile` and fifteen
+`TestCookieArtefactLifecycle` tests are untouched; `R1`'s `test_file_created_in_private_cookie_subdir`
+is untouched. **No design failure to report** — which is the outcome `AC`-5 requires, because
+the only expectation that *would* have had to move is the `SEC-003:` comment's argfile clause,
+and there is none to move.
+
+**Advisories carried (none is a `B3` defect):** `B3-A6`'s comment sentence 1 → `B4`/`B6` ·
+`B3-A5`'s four sibling tests that leak their artefact directory in-session → suite cleanup ·
+`B3-A9`'s class mislocation → this block, optional.
+
+**Audit footprint: this section only.** No code, no test, no plan 11 edit, no staging, no
+commit. Three `vk_cookies__dir*` directories left in `%TEMP%` by the falsification harness's
+sabotaged cases (read-only files; removal was denied by tooling) are outside the repository and
+are reclaimed by the OS temp cleaner.
+
 ---
 
 ### `B4` — Widen the transform so the redaction claim is true (`SEC-006`)
@@ -3575,6 +3918,887 @@ acceptance_criteria:
     verified_by: §7 gates
 ```
 
+#### `B4-AUDIT` — block-`B4` audit findings (Auditor)
+
+Read-only inspection at `01325b4`. Nothing in `src/`, `tests/`, or any audit-phase file was
+touched; the only edit is this subsection. Claims are marked **[read]** (verified by reading),
+**[exec]** (verified by running code on this machine, Windows/CPython 3.12), **[uncertain]**.
+
+##### `B4-A1` — `utils/url_sanitizer.py` defines exactly five symbols; `_URL_REGEX` is the whole of the matching surface
+
+| Symbol | Current behaviour **[read]** | Docstring/comment claim **[read]** |
+|---|---|---|
+| `_URL_REGEX` | `re.compile(r"https?://[^\s'\"<>]+")` — one literal-gated pattern; excluded set is whitespace, `'`, `"`, `<`, `>` and **not** `*`, `/`, `\`, `=` | line 6-7: "Matches http/https URLs in text (including query strings with signed tokens). Used to redact URLs found in subprocess stdout/stderr before logging." — **accurate, URL-only** |
+| `_strip_auth_params` | `urlsplit` → `f"{scheme}://{netloc}/***REDACTED***"`; bare `***REDACTED***` when scheme or netloc is missing or `urlsplit` raises | "preventing signed CDN URLs with embedded tokens from leaking into log files" — **accurate; corrected by `09f1b10`, do not revisit** |
+| `sanitize_text_for_log` | one `_URL_REGEX.sub(lambda m: _strip_auth_params(m.group(0)), text)`. **No alternative branch, no rule table, no ordering decision.** | "preventing signed CDN URLs with embedded tokens in subprocess output" — **accurate**; `Returns:` claims `scheme://host/***REDACTED***/` (a trailing `/` the code does not emit — cosmetic, see `B4-A10`) |
+| `sanitize_url_for_log` | `return _strip_auth_params(url)` — a pure public alias, adds nothing | duplicates `_strip_auth_params`'s accurate claim |
+| `__all__` (module) | `["_strip_auth_params", "sanitize_text_for_log", "sanitize_url_for_log"]` — **differs from the package's** (below) |
+
+Measured by AST over `src/` **[exec]**: `_strip_auth_params` has **63** call sites, of which
+**2 are internal** (inside `sanitize_url_for_log` and `sanitize_text_for_log`), leaving **61**
+external — `ytdlp_downloader` 20, `extractor` 12, `segment_downloader` 12, `network_monitor` 10,
+`downloader` 3, `batch_downloader` 2, `exceptions` 1, `downloader_throttle` 1 — plus the
+`utils/__init__.py` re-export. `sanitize_url_for_log` has **2** (`cli.py` `download_failed`,
+`invalid_url_in_batch`). `sanitize_text_for_log` has **3** (`ffmpeg_utils` 2, `ytdlp_downloader` 1)
+— all three listed in `B4-A3`. `B4` touches none of the 61; `sanitize_url_for_log` and
+`_strip_auth_params` behaviour are out of scope.
+
+##### `B4-A2` — `utils/__init__.py` `__all__` confirmed; the package's own convention is inconsistent **[read]**
+
+`["validate_output_path", "sanitize_title", "_resolve_output_file", "sanitize_url_for_log",
+"_strip_auth_params"]` — exactly as plan 17 §2.8 states. `sanitize_text_for_log` is deliberately
+absent and must stay absent (`T-B4` step 9). The convention is inconsistent in two directions at
+once: `_strip_auth_params` and `_resolve_output_file` are underscore-named yet exported, while
+`sanitize_text_for_log` — the function `B4` widens — is not. **Recommendation: do not touch this
+file in `B4`** (`targets: no-change`). The inconsistency is pre-existing and plan 11 §4.3 already
+records that "`must be a public name`" for `B6`'s processor is a plan-level decision, not a
+package consequence. Fixing it here would widen the diff for no `SEC-006` benefit.
+
+##### `B4-A3` — the call-site set is **three sites / three call classes**; `T-B4` step 1's "a fourth is a finding" does **not** trigger **[read + exec]**
+
+Exhaustive AST sweep of `src/` — 3 `Call` nodes, `ffmpeg_utils` 2 and `ytdlp_downloader` 1
+(the only other `src/` hits are two import lines). All three pass **raw child output**, never a
+`Path` and never a header:
+
+| # | File | Enclosing symbol | Passes | Lands in |
+|---|---|---|---|---|
+| 1 | `services/ytdlp_downloader.py` | `_download_with_ytdlp` | `sanitize_text_for_log(error_msg)` where `error_msg = output_data.decode() if output_data else "Unknown yt-dlp error"` — the **joined yt-dlp stdout transcript** | `download_failed.error` |
+| 2 | `services/ffmpeg_utils.py` | `_merge_batch_segments` | `sanitize_text_for_log(error)[:200]` where `error = stderr.decode() if stderr else "Unknown error"` | `batch_merge_failed.error` |
+| 3 | `services/ffmpeg_utils.py` | `_perform_final_merge` | `sanitize_text_for_log(stderr.decode())[:200] if stderr else "Unknown"` | `final_merge_failed.error` |
+
+**`batch_merge_failed` and `final_merge_failed` confirmed** — both already pass
+`error=sanitize_text_for_log(...)`, landed by `486bfd9`. **Not modified by this audit; they are
+plan-10 `B14`'s.** Consequence for `B4`: idempotency is load-bearing in production **today**, at
+sites 2 and 3, before `B5`/`B6` land — and site 2/3's transform is applied to bytes that then get
+truncated to 200 chars, so any rule that *expands* text can silently move the truncation boundary.
+
+##### `B4-A4` — live instances: two `SEC-006` paths, three `SEC-007` exception texts; full `path=str(...)` inventory **[read]**
+
+**`SEC-006` instances (a path the transform provably cannot match — measured byte-identical in `B4-A9`):**
+
+| Record | File / symbol | Field |
+|---|---|---|
+| `cookie_file_cleaned_up` (**DEBUG**, on **every successful download** — larger exposure than the warning, because it fires on the success path) | `ytdlp_downloader.py::_download_with_ytdlp`, the `finally:` else-arm | `path=str(cookie_file)` |
+| `cookie_file_cleanup_failed` (**WARNING**) | `ytdlp_downloader.py::_download_with_ytdlp`, `finally:` except-arm | `path=str(cookie_file)` |
+| `cookie_file_cleanup_failed` (**WARNING**) | `ytdlp_downloader.py::_remove_cookie_artifact_dir` | `path=str(cookie_dir)` |
+
+All three confirmed at `01325b4` with those exact field names. `R1` removes the third from the
+success path but it survives on genuine survival; `B4` makes all three matchable, `B6` owns the
+pipeline. **`SEC-007` instances (untransformed exception text, owned by `B6`):** the sibling
+`error=str(exc)` / `error=str(failure)` on all three records above.
+
+**Every record carrying `path=str(...)` in `src/` — complete, for `D-7`'s key allowlist:**
+`cli.py::_log_env_file_path` `env_file_resolved`; `utils/security.py::validate_output_path`
+`output_path_inside_repository`; `ytdlp_downloader.py::_download_with_ytdlp`
+`cookie_file_cleanup_failed` + `cookie_file_cleaned_up` + `ytdlp_not_found` (the last uses
+`path=exc.filename`, not `str(...)` — a binary path, still a path);
+`ytdlp_downloader.py::_remove_cookie_artifact_dir` `cookie_file_cleanup_failed`;
+`ytdlp_downloader.py::_download_with_ytdlp` `failed_to_cleanup_partial_file`;
+`ytdlp_downloader.py::_attempt_segment_resume` `download_interrupted_switching_to_segments`.
+**Only the three cookie-artefact records are `SEC-006`.** The rest carry **user-chosen output
+paths** (the operator's own download directory) and are explicitly *not* credential artefacts —
+redacting them would destroy the field operators triage with, and they are out of `B4`'s scope.
+
+##### `B4-A5` — documentation sites: §2.7's two corrections confirmed; a **third, un-enumerated over-claim survives** **[read + exec]**
+
+Confirmed via `git show 09f1b10` (body names both, diff touches exactly the two sites):
+`sanitize_text_for_log`'s docstring now reads "preventing signed CDN URLs with embedded tokens"
+and `ytdlp_downloader.py`'s `# SEC-002:` comment above `error_msg = sanitize_text_for_log(error_msg)`
+now reads "redact any signed CDN URLs that yt-dlp may echo in error messages". **Do not re-litigate
+either.** `ffmpeg_utils.py`'s import-site comment ("SEC-002: redact signed CDN URLs from
+merge-failure stderr before logging") and `config.py`'s `SEC-003:` comment (about log-file
+permissions, not the transform) are both **accurate**. `url_sanitizer.py`'s module docstring and
+line 6-7 comment are URL-only and **accurate**.
+
+**`B4-A6` — the surviving over-claim is on `_COOKIE_ARTIFACT_SUFFIX`, not on any sanitizer site.**
+`ytdlp_downloader.py`'s comment above the frozen constants asserts: *"the suffix `.cookies.txt` is
+what the operator-facing **redaction and cleanup tooling keys on**."* Measured: `.cookies.txt`
+appears **only** as the value of `_COOKIE_ARTIFACT_SUFFIX` in `src/`. There is no redaction tooling,
+no cleanup tooling, and no second consumer. This is the same defect class as `SEC-006` — a coverage
+claim nothing implements — and it is **not** in plan 17's §2.7 list, so §2.7's "documentation duty
+is exactly two items" is wrong. It is also the strongest *reason* `B4`'s rule should key on the
+**suffix** as well as the prefix: doing so is what makes this comment true. Either the rule matches
+`vk_cookies_….cookies.txt` (comment becomes true, preferred) or the comment is corrected in the
+same commit. `AC` needs an eighth row for it. **[SPEC-DEVIATION]**, advisory, effort trivial.
+
+##### `B4-A7` — `vk_ffmpeg_*.args` is a phantom artefact family; only one artefact family exists **[read + exec]**
+
+Plan 11 §3.4 Alt A names two patterns, `vk_cookies_*.cookies.txt` and `vk_ffmpeg_*.args`.
+Measured: `vk_ffmpeg` has **zero** occurrences in `src/`; the argfile mechanism was deleted by
+plan-10 `B10` (`486bfd9`/`09f1b10` lineage; `argfile` is also absent — plan 17 §2.6 already
+established that for `SEC-003`). `mkstemp`/`NamedTemporaryFile`/`TemporaryDirectory` appear
+**exactly once** in `src/` — the cookie artefact. The real second shape is the artefact
+**directory** `vk_cookies__dir<8 chars>` (composed `_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX`),
+plus `owner.pid` inside it. The ffmpeg concat list files `batch_list_<n>.txt` / `final_list.txt` are
+argv paths a child could echo but are **not** prefixed artefacts and carry no credential material.
+**Alt A's rule list must be `vk_cookies_` (file) + `vk_cookies__dir` (directory), not `vk_ffmpeg_`.**
+
+##### `B4-A8` — `D-5` **measured: `Alt A`.** No sink receives a `Cookie:`/`Set-Cookie:` header from a child process
+
+The criterion is explicit and it is **not met**, on three independent measured grounds:
+
+1. **yt-dlp is never asked to print headers.** `_build_ytdlp_cli_command` passes `--no-warnings`
+   and **no `--verbose`**; its output therefore contains no request headers. The only cookie it
+   receives is a **path** via `--cookies <path>` — a `SEC-006` path instance, not a header.
+2. **ffmpeg has no header to print and is not asked to print one.** `-headers` appears **zero
+   times** in `src/`; `config.py` passes no `-loglevel`/`-v`/`-verbose`. `_build_ffmpeg_concat_command`
+   is the **only** ffmpeg command builder and it drives the concat demuxer over **local files** —
+   it makes no HTTP request at all.
+3. **The only `Cookie:` values the product builds are in-process.** `_format_cookies_for_ffmpeg`
+   builds a `"; "`-joined `name=value` string; its only consumer is `segment_downloader`'s
+   `headers["Cookie"] = …` for an **aiohttp** request. `services/downloader.py` forwards `cookies`
+   only into `download_with_ytdlp_with_resume_fallback`, which writes it to a **file**. Nothing
+   hands a `Cookie:` header to a child, and no child is configured to echo one.
+
+`Alt B` therefore adds a rule for a shape **nothing produces** — speculative, exactly as the plan
+warns. **`D-5` → `Alt A`; documentation item (b) (name `Cookie:` as uncovered) therefore applies.**
+Whether a third-party tool *could* print one remains plan 11's skip S-4 and stays declined;
+the criterion asks what a sink **is measured** to receive, and the answer is nothing. **[read + exec]**
+
+##### `B4-A9` — idempotency: the current transform holds, and two concrete double-apply constructions exist
+
+Measured **[exec]** on live artefact paths (`...\Temp\vk_cookies__dir9lfm4h4w4\vk_cookies_abc123.cookies.txt`):
+
+- Today's transform is a **fixed point on every sample tried** — signed URL, `Location:` line,
+  `Cookie:`/`Set-Cookie:` line, argv echo, benign ffmpeg text, and the already-marker string
+  `***REDACTED***` — because `_URL_REGEX` is gated on the literal `https?://`, and
+  `_strip_auth_params`'s own output always re-emits `scheme://host/`. The URL rule re-matching its
+  own output is harmless: the replacement is a fixed point, not a growth.
+- `***REDACTED***` contains only `*`, `[A-Z_]`. It matches **no** rule gated on `vk_cookies_`,
+  `_dir`, `.cookies.txt`, `owner.pid`, `Cookie:`. **But it does match `[^\s'\"]+`** (verified), so
+  idempotency is *not* free — it depends entirely on every new rule being **literal-anchored**.
+
+**Two constructible hazards, both measured:**
+
+- **`B4-A9a` — a path-shaped rule whose replacement preserves a parent directory, combined with a
+  second dir-shaped rule, double-applies.** This is realistic, because `B4-A7` shows the product has
+  **two** artefact shapes, so a two-rule Alt A is the natural implementation. With
+  `vk_cookies_[^\s'\"]+` → (parent kept) + `vk_cookies__dir[^\s'\"]*` → `***REDACTED***`: pass 1
+  yields `...\Temp\vk_cookies__dir9lfm4h4w4\***REDACTED***`; pass 2 collapses it further to
+  `...\Temp\***REDACTED***`. Measured `pass1 != pass2`. **Each rule is individually idempotent;
+  the pair is not.** This is the "path-shaped match inside an already-redacted line" case, and it
+  is the strongest argument for the plan's default: **one** prefix-anchored rule (`vk_cookies_`)
+  covering both shapes, whole-token replacement, `***REDACTED***`. That was measured idempotent.
+- **`B4-A9b` — a rule that can match `*` grows without bound.** `re.compile(r"\*+")` →
+  `***REDACTED***` measured: pass 1 `***REDACTED***REDACTED***REDACTED***`, pass 2 grows again.
+  Never reachable from `SEC-006`, but it is the concrete proof that "`***REDACTED***` must not
+  itself match any rule" (plan 11 §3.4) is a real requirement, not boilerplate. **[BEST-PRACTICE]**
+  the test must assert `sanitize_text_for_log(MARKER) == MARKER` and
+  `sanitize_text_for_log(sanitize_text_for_log(t)) == sanitize_text_for_log(t)` for **each** rule.
+
+Ordering measured **[exec]**: applying an artefact rule **before** or **after** the URL rule leaves
+`test_transform_before_truncate_proves_sanitize_order` intact in both orders (`len == 200`,
+`cdn.example.com` retained). Ordering is therefore not a hazard for the existing oracles — but the
+200-char truncation at sites 2-3 means a rule that *expands* text does move that boundary.
+
+##### `B4-A10` — tests: `TestSanitizeTextForLog` holds **8** cases, not 4, and **one is path-shaped and asserts the opposite of `B4`**
+
+`uv run pytest tests/test_url_sanitizer.py --collect-only -q` → **16 collected** = 8
+`TestStripAuthParams` + **8** `TestSanitizeTextForLog` **[exec]**. Provenance **[read]**:
+`TestStripAuthParams`'s 8 are original; `TestSanitizeTextForLog`'s are 4 original
+(`test_redacts_url_in_text`, `test_redacts_multiple_urls_in_text`,
+`test_preserves_text_without_urls`, `test_redacts_url_in_yt_dlp_output`) + 3 added by `486bfd9`
+(`test_transform_before_truncate_proves_sanitize_order`,
+`test_redacts_signed_cdn_url_in_merge_failure_text`, `test_preserves_plaintext_merge_failure_text`)
++ 1 added by `09f1b10`. Plan 11's "four existing cases" and `T-B4` step 6's "**there are none
+today**" are both stale. **`[SPEC-DEVIATION]`.**
+
+**The path-shaped input does exist today, and it is an inverse tripwire.**
+`test_filesystem_paths_are_not_redacted` asserts `cookie_path in result` — i.e. it **pins the
+non-coverage** and will **fail** under any rule broad enough to match its input. Its docstring says
+it "pins the capability boundary so the redaction claim cannot silently drift back". It also uses
+`/tmp/vkdownloader_cookies_8u3x.txt` — a **fictional** prefix; the product emits `vk_cookies_`, and
+`"vk_cookies_"` is not a substring of `"vkdownloader_cookies_8u3x.txt"`. Measured **[exec]**: that
+input therefore **passes unchanged** under a `vk_cookies_`-anchored rule and **is redacted** under
+a broad one. So the oracle does not test what it claims and its outcome depends on rule width.
+**`B4` must touch it** — it is the reason the "four existing cases pass unchanged" evidence is not
+sufficient, and house rule 2 (production code is king) makes the choice explicit, not silent.
+Recommend: **re-aim** it at the real artefact shape and the new behaviour (name, reason, in-commit),
+keeping a byte-identical negative case with a *benign* path. All **7** other cases must pass
+**unchanged** — that, not 4, is the evidence the rule is additive. **[SPEC-DEVIATION]**, mandatory.
+
+To add: (a) the real `cookie_file_cleanup_failed` `path=` shape and the `cookie_file_cleaned_up`
+`path=` shape, as separate named cases; (b) the artefact **directory** shape `vk_cookies__dir…`;
+(c) byte-identical on text with no artefact token; (d) host still visible;
+(e) double-application equals single, per rule; (f) `MARKER` is a fixed point; (g) the re-aimed
+negative case. Header-shaped: **no input needed** — under `Alt A` a `Cookie:` case asserts it is
+**not** covered, which is documentation-as-test (`B4-A8`).
+
+##### `B4-A11` — replacement shape: what the artefacts look like, and what each choice costs **[read + exec]**
+
+Measured real artefacts: file `C:\Users\<user>\AppData\Local\Temp\vk_cookies__dir<8 chars>\vk_cookies_<8 chars>.cookies.txt`;
+directory `…\Temp\vk_cookies__dir<8 chars>`; plus `owner.pid` inside. The temp root on this machine
+is `C:\Users\NMATVE~1\AppData\Local\Temp` **[exec]** — a **username-bearing** parent.
+
+- **Whole token → `***REDACTED***`** (plan's default). Costs: the operator loses the fact that the
+  *artefact* was involved — but the record name (`cookie_file_cleanup_failed`) already says that,
+  and it removes the username, the temp root and the random tails in one step. Idempotent by
+  measurement (`B4-A9`).
+- **Preserve basename.** Costs more than it buys: the basename is `vk_cookies_<8 random chars>`,
+  i.e. **zero triage value** — the discriminators live in the record name, not the filename. And
+  a `vk_cookies_`-preserving basename **re-matches its own rule** (`B4-A9a`), so it forfeits
+  idempotency for no gain. **Recommend against.**
+- **Preserve parent directory.** Strictly worse: the parent *is* the other artefact
+  (`vk_cookies__dir<rand>`) and its own parent is the **username-bearing** temp root — exactly the
+  `C:\Users\<name>\AppData\…` case plan 11 §3.4 names as identifying. Measured to double-apply.
+  **Recommend against.**
+- **[BEST-PRACTICE] the suffix is the one fragment with real triage value** — `.cookies.txt`
+  confirms *which* artefact. It costs nothing (it is not itself an anchor, so it cannot re-match)
+  and it is what makes the `_COOKIE_ARTIFACT_SUFFIX` comment true (`B4-A6`). Priority
+  **recommended, not mandatory**; it is a §9 Q2 product call, so surface it, do not decide it.
+
+##### `B4-A12` — corrections to the `B4` block text above
+
+| # | Correction | Class |
+|---|---|---|
+| 1 | "four existing cases" / "there are none today" → **8** cases, **one path-shaped** (`B4-A10`) | `[SPEC-DEVIATION]` |
+| 2 | `T-B4` step 1's "a fourth is a finding" → **not triggered**; 3 sites / 3 classes confirmed (`B4-A3`) | `[DOC-UPDATE]` |
+| 3 | Alt A's `vk_ffmpeg_*.args` → **phantom**; real shapes are the file **and** `vk_cookies__dir` (`B4-A7`) | `[SPEC-DEVIATION]` |
+| 4 | `D-5` → **`Alt A`**, measured on three grounds (`B4-A8`); item (b) therefore **applies** | decision input |
+| 5 | §2.7's "documentation duty is exactly two items" → **three**; `_COOKIE_ARTIFACT_SUFFIX`'s comment also over-claims (`B4-A6`) | `[SPEC-DEVIATION]` |
+| 6 | `AC` needs: a marker-is-a-fixed-point case; the re-aimed `test_filesystem_paths_are_not_redacted`; a per-rule double-application case | `[BEST-PRACTICE]` |
+| 7 | §2.5 already notes `cookie_file_cleaned_up`; **`AC-1` should name both records' exact `path=` shapes** and the **directory** shape (`B4-A4`) | `[DOC-UPDATE]` |
+
+**Not touched by this audit:** `services/ffmpeg_utils.py`'s two sinks and every merge code path
+(plan-10 `B14`'s); `_URL_REGEX`; `_strip_auth_params`; `utils/__init__.py`; all `tests/` and `src/`
+files. Gates spot-checked green at `01325b4`: `ruff check src tests` "All checks passed!",
+`ruff format --check src tests` "54 files already formatted", `mypy src` "Success: no issues found
+in 31 source files". Full-suite and `mypy src tests` counts adopted from the task brief, not
+re-derived.
+
+#### `B4-RESEARCH` — the rule set, the idempotency proof, and the replacement shape (Researcher)
+
+Read-only at `01325b4`. **No production code, no test, and no audit-phase file was touched**; the
+only edit is this subsection. Nothing staged, nothing committed. Claims are marked **[read]**
+(verified by reading the tree), **[exec]** (verified by running code on this machine,
+Windows / CPython 3.12.1), **[uncertain]**. Supersedes the `B4` block's "genuine uncertainty" on
+rule shape; `D-5` was already closed to `Alt A` by `B4-A8`. **Builds on `B4-AUDIT`; three of its
+statements are corrected below (`B4-R12`).**
+
+##### `B4-R1` — decision: **two named rules, URL rule first**, whole-token replacement
+
+```python
+_ARTEFACT_LEAD = r"(?<![^\s'\"<>])(?:[^\s'\"<>]*[\\/])?"
+_COOKIE_FILE_ARTEFACT_REGEX = re.compile(
+    _ARTEFACT_LEAD + r"vk_cookies_[a-z0-9_]+\.cookies\.txt"
+)
+_COOKIE_DIR_ARTEFACT_REGEX = re.compile(
+    _ARTEFACT_LEAD + r"vk_cookies__dir[a-z0-9_]+"
+)
+```
+
+Applied in this order, replacement the existing constant `***REDACTED***` for both:
+
+```python
+text = _URL_REGEX.sub(lambda m: _strip_auth_params(m.group(0)), text)   # 1. URL first
+text = _COOKIE_FILE_ARTEFACT_REGEX.sub("***REDACTED***", text)          # 2. file artefact
+text = _COOKIE_DIR_ARTEFACT_REGEX.sub("***REDACTED***", text)           # 3. dir artefact
+```
+
+**Anchor on prefix + suffix, not prefix alone.** The frozen literals are
+`_COOKIE_ARTIFACT_PREFIX = "vk_cookies_"`, `_COOKIE_ARTIFACT_SUFFIX = ".cookies.txt"`,
+`_ARTEFACT_DIR_SUFFIX = "_dir"` **[read]**. Keying the file rule on the **suffix** is the
+load-bearing decision, for two measured reasons:
+
+1. **It removes the false positive a prefix-only rule has.** Measured **[exec]**: a user-chosen
+   output folder `C:\Users\x\Videos\vk_cookies_videos\clip.mp4` **is** matched by a prefix-only
+   rule `vk_cookies_[a-z0-9_]+` and **is not** matched by the suffix-keyed rule. A user who names
+   a download folder with the product's own prefix would otherwise lose that path from
+   `download_failed` on every failure — the exact degradation the plan calls a regression no test
+   would catch. Suffix keying makes the collision require the literal string `.cookies.txt` or
+   `_dir`, which is not something a folder name acquires by accident.
+2. **It makes `_COOKIE_ARTIFACT_SUFFIX`'s comment true** (`B4-A6`): that comment says the suffix
+   "is what the operator-facing redaction and cleanup tooling keys on". After this change the
+   redaction tooling demonstrably keys on it. "Cleanup tooling" remains an over-claim — there is
+   none — so the comment should be **reworded to name the redaction rule only**, in this commit.
+
+**The random tail is `[a-z0-9_]+`, not `{8}`** **[exec]**: `tempfile._RandomNameSequence.characters
+== "abcdefghijklmnopqrstuvwxyz0123456789_"` and its docstring says "Each string is eight characters
+long". Hard-coding `{8}` would couple the rule to a CPython internal; `+` is length-agnostic and
+still cannot match a bare `vk_cookies_` with no name. **The drift guard must be behavioural, not
+literal**: a test that calls the product's own `_create_cookie_artifact_dir()` and
+`_create_temp_cookie_file()`, then asserts `sanitize_text_for_log(str(path))` contains no
+`vk_cookies_`. A constant-equality test is the second line of defence, not the first — and the
+constants cannot be *imported*: `utils/` imports only `config`/`exceptions`/`models`, never
+`services`, while `services/ytdlp_downloader.py` imports `utils.url_sanitizer`, so importing them
+would invert the layer order and create a cycle **[read]**. Duplicate the literals in the pattern
+and point the comment at their source.
+
+**Why file-before-dir.** The file rule's match span **subsumes** the directory's anchor in a nested
+path, so file-first collapses `…\vk_cookies__dir<rand>\vk_cookies_<rand>.cookies.txt` to a **single**
+marker, whereas dir-first yields two **[exec]**. Both orders are fixed points (below), so this is
+cosmetic determinism, not safety — but it is free, so fix the order and document it.
+
+##### `B4-R2` — `A9a` resolved: the two-rule design **is** provably idempotent, because the failure was the *replacement*, not the arity
+
+`B4-A9a` measured a parent-preserving file rule plus a directory rule double-applying. That failure
+is caused entirely by **rule 1's output containing rule 2's anchor** (`…\vk_cookies__dir<rand>\***`).
+It cannot recur here, and the general condition is short enough to state as the design law:
+
+> A set of rules applied in sequence is a fixed point if (i) every rule's replacement contains no
+> anchor of any rule, and (ii) no rule's left boundary can be satisfied by a replacement.
+
+With the constant replacement `***REDACTED***` — which contains no `vk_cookies_` — (i) holds by
+inspection. (ii) is the non-obvious half and it is where `\b` fails (`B4-R3`). Measured **[exec]**:
+both rule orders are fixed points on the nested path, and the two-rule table and a single combined
+pattern are **byte-identical over 200 000 fuzz cases** (0 differences), so the arity choice costs
+nothing functionally.
+
+**Two named patterns, not one combined.** `T-B4` step 3 requires "named, individually testable
+rules"; an alternation inside one pattern makes per-rule idempotency testable only by reading the
+source. The single combined pattern `vk_cookies_(?:[a-z0-9_]+\.cookies\.txt|_dir[a-z0-9_]+)` is
+**measured equivalent** and is the documented fallback if the Planner wants one constant instead —
+the report to the Implementor should then say per-rule idempotency is proven by the fuzz oracle
+rather than by a named test.
+
+##### `B4-R3` — the left boundary: **not `\b`**, and the general law it reveals
+
+**`\b` is wrong here, and it is wrong in the one way that matters.** Measured **[exec]**, with the
+full rule set and a 400 000-case fuzz over an alphabet of every dangerous character:
+
+| Left guard | fixed-point violations / 400 000 |
+|---|---|
+| none | **0** |
+| `\b` | **3** |
+| `(?<![^\s'\"<>])` (**chosen**) | **0** |
+
+Minimal counterexample **[exec]** — `dir\vk_cookies_a.cookies.txtvk_cookies_b.cookies.txt`:
+
+```
+\b guard :  p1 = ***REDACTED***vk_cookies_b.cookies.txt      <- left behind
+           p2 = ***REDACTED******REDACTED***                 <- CHANGED
+```
+
+Mechanism: `\b` fires on a `\w`/`\W` transition, and the replacement **ends in `*`**, a non-word
+character. A replacement therefore *manufactures* a boundary that the original bytes did not have,
+so a name that was glued to a word character in pass 1 becomes matchable in pass 2. The general
+law, worth writing into the commit message because it is easy to re-introduce:
+
+> **A rule's left boundary must be a predicate its own replacement can never satisfy.** Any guard
+> the marker satisfies is a growth path.
+
+`(?<![^\s'\"<>])` is chosen because the marker's `*` is *inside* `[^\s'\"<>]`, so it can never
+satisfy the guard **[exec]**. It is a legal pattern — the contained class has fixed length one —
+whereas a variable-length lookbehind to a path separator is impossible ("The contained pattern must
+only match strings of some fixed length, meaning that `abc` or `a|b` are allowed, but `a*` and
+`{3,4}` are not", `docs.python.org/3/library/re.html`, `(?<=...)`) **[read]**. That prohibition is
+*why* the parent must be **consumed** by the optional greedy `(?:[^\s'\"<>]*[\\/])?` group rather
+than asserted by lookbehind: consumption is the only way left, and consuming is also what removes
+the username.
+
+**The trailing boundary must not consume the terminating separator**, and the match must end at
+the end of the artefact *name*. Three reasons, all measured **[exec]**: separators are the run
+delimiters, so consuming one would fuse the marker to the following path component
+(`***REDACTED***\owner.pid` becomes `***REDACTED****owner.pid`, destroying structure); the last
+component of a path has no terminating separator to consume ("If a component of a path is a file
+name, it must be the last component", Microsoft, *Naming Files, Paths, and Namespaces*) **[read]**;
+and a left-behind `\` carries no anchor, so it is harmless and idempotent. Measured shape:
+`C:\…\vk_cookies__dir<rand>\owner.pid` → `***REDACTED***\owner.pid`.
+
+**Why the positive `[a-z0-9_]` tail rather than a "Windows-forbidden-complement" class.** The
+latter (`[^<>:"/\\|?*\s'…]`) is the set Microsoft forbids in a name **[read]**, and it is the
+natural instinct — but it widens the tail to every legal filename character, including uppercase
+and every Unicode letter, for a tail that `tempfile` draws from a **26+10+1 = 37-character ASCII
+alphabet** **[exec]**. The positive class is strictly tighter on the only inputs the product can
+produce.
+
+##### `B4-R4` — case sensitivity: **no `re.IGNORECASE`**, on two independent grounds
+
+1. **Every string this rule must match is built by this process from a frozen lowercase literal.**
+   The three sinks receive child output; the artefact path they echo arrives via `--cookies
+   <path>`, and the `path=` fields are `str(cookie_file)` — all derived from `_COOKIE_ARTIFACT_PREFIX`
+   **[read]**. No code path lets a user choose the artefact name; `mkstemp`/`mkdtemp` are the only
+   producers **[exec]**. So the case is known, exactly, and lower-case matching is complete.
+2. **`re.IGNORECASE` widens a character class in a way that is documented and non-obvious.**
+   "when the Unicode patterns `[a-z]` or `[A-Z]` are used in combination with the IGNORECASE flag,
+   they will match the 52 ASCII letters and **4 additional non-ASCII letters**: 'İ' (U+0130),
+   'ı' (U+0131), 'ſ' (U+017F) and 'K' (U+212A)" (`docs.python.org/3/library/re.html`, `re.I`)
+   **[read]**. Measured **[exec]**: `re.compile(r"[a-z0-9_]+", re.IGNORECASE).fullmatch("K")` is
+   `True` for all four. An `IGNORECASE` tail would therefore match a path component containing a
+   Kelvin sign — and `IGNORECASE` also matches `VK_COOKIES_A.cookies.txt`, which is a *broader*
+   false-positive surface bought for **zero measured coverage gain**.
+   **[uncertain]** — whether yt-dlp or ffmpeg ever echo a path with re-cased components was not
+   measured; plan 11's skip S-4. It is not reachable through the product's own argv, and the cost
+   of being wrong is a *missed* match, not a leak.
+
+##### `B4-R5` — **rule order is load-bearing**; `B4-A9`'s "ordering is not a hazard" is corrected
+
+`B4-A9` measured ordering against artefact-free oracles and concluded it is not a hazard. That is
+true only for those inputs. Measured **[exec]** with the artefact path **inside** a URL:
+
+| input | URL first (**chosen**) | artefact first |
+|---|---|---|
+| `GET https://cdn.example.com/proxy?p=C:/…/vk_cookies_x.cookies.txt` | `GET https://cdn.example.com/***REDACTED***` — **host kept** | `GET ***REDACTED***` — **host lost** |
+
+The greedy lead clause spans the whole whitespace-delimited run, so run artefact-first and the
+lead swallows `https://cdn.example.com/proxy?p=C:/Users/…`, destroying the host visibility that
+`AC-5` requires and that makes `download_failed` readable. **URL-first is mandatory and needs a
+named test** — this is a regression no existing oracle can see, because every current test input
+either has no artefact or no URL containing one.
+
+##### `B4-R6` — idempotency: proof by construction, then measurement
+
+**By construction.** (a) Every rule's replacement is the constant `***REDACTED***`, which contains
+no `vk_cookies_`, so no rule can re-match its own or a sibling's output **[read]**. (b) The
+left guard `(?<![^\s'\"<>])` is unsatisfiable by that replacement, so a substitution cannot create a
+new match start (`B4-R3`). (c) `re.sub` replaces "the leftmost non-overlapping occurrences", a
+single left-to-right pass, so a match can never straddle a replacement it just made
+(`docs.python.org/3/library/re.html`) **[read]**. (d) The URL rule's own output re-emits
+`scheme://host/`, so it reproduces itself — the property `B4-A9` already established.
+
+**By measurement [exec].** `***REDACTED***` matches **no** rule (`FILE_RULE.search(MARKER)`,
+`DIR_RULE.search(MARKER)`, `_URL_REGEX.search(MARKER)` all `None`), while
+`re.match(r"[^\s'\"]+", MARKER)` is truthy — so safety is **not** free, exactly as `B4-A9` said.
+Fixed-point violations: **0 / 400 000** random cases (alphabet includes `\ / : . _ * ' " < >` and
+the literals), **0 / 16 777 216** exhaustive 6-character strings over `v k _ . \ / : a 0 1 9 * ' " < >`,
+and **0 expansions** (`len(f(x)) > len(x)` never occurs). Adversarial corpus, `d1` = pass-1 length
+delta, `d2` = pass-2 delta; **a rule with `d2 != 0` is a failure**:
+
+| case | fp | `d1` | `d2` | unchanged vs today |
+|---|---|---|---|---|
+| signed CDN URL **and** artefact path, one line | yes | −96 | **0** | no |
+| nested `…\vk_cookies__dir<rand>\vk_cookies_<rand>.cookies.txt` | yes | −78 | **0** | no |
+| artefact path + `)` `,` `'` `"` `;` adjacency | yes | −203 | **0** | no |
+| artefact path at the very start of a line | yes | −78 | **0** | no |
+| artefact path at the very end of a line | yes | −78 | **0** | no |
+| forward-slash separators throughout | yes | −124 | **0** | no |
+| benign line mentioning "cookies", no artefact shape | yes | 0 | **0** | **yes (byte-identical)** |
+| text already containing `***REDACTED***` | yes | −78 | **0** | no |
+| artefact path immediately adjacent to a marker | yes | −92 | **0** | no |
+| `***REDACTED***` alone | yes | 0 | **0** | **yes** |
+| `…\vk_cookies__dir<rand>\owner.pid` | yes | −46 | **0** | no |
+| unquoted `key=value` (`path=…`) | yes | −83 | **0** | no |
+| URL whose query carries the artefact path | yes | −86 | **0** | **yes (URL rule already won)** |
+| user folder `vk_cookies_videos`, `vk_cookies__downloads` | yes | 0 | **0** | **yes (not matched)** |
+| bare `vk_cookies_` mention, no artefact name | yes | 0 | **0** | **yes (not matched)** |
+| mid-token substring `foovk_cookies_a.cookies.txt` | yes | 0 | **0** | **yes (not matched)** |
+
+**Every case's pass-1 output fed back in is byte-identical (`d2 = 0` everywhere).**
+
+**Accepted collateral, stated rather than hidden [exec].** An unquoted `key=value` run collapses
+whole: `path=C:\…\vk_cookies_x.cookies.txt` → `***REDACTED***`, so the `path` **key** is consumed
+along with the identifying parent. This is the price of consuming the parent, and it does **not**
+reach production: `B6` applies the transform to structlog *dict values*, and a value never
+contains `key=`; the three child-output sinks receive whitespace-delimited argv
+(`yt-dlp --cookies <path> --no-warnings …` → `yt-dlp --cookies ***REDACTED*** --no-warnings …`
+**[exec]**). Quoted and JSON renderings keep the key: `path='***REDACTED***'`,
+`{"path": "***REDACTED***", "error": "boom"}`.
+
+**Second accepted residual [exec].** The run-start guard buys idempotency with a coverage gap:
+in a *separator-less* concatenation such as `dir\vk_cookies_a.cookies.txtvk_cookies_b.cookies.txt`
+the second name is left unredacted (`***REDACTED***vk_cookies_b.cookies.txt`) — and stays
+unredacted, which is what makes it a fixed point. Unreachable from the product: every value that
+reaches a sink is either a `str(Path)` built from `mkstemp`/`mkdtemp` (always preceded by a
+separator or a run start) or whitespace-delimited child argv. What could remain is a **bare
+artefact basename with no path**, which is already inside the accepted disclosure of the default
+replacement (`B4-R8`).
+
+##### `B4-R7` — interaction with the 200-character truncation: monotone non-expansion makes it safe
+
+The replacement is 14 characters and every artefact match is at least
+`vk_cookies__dir<rand>` (18) or `vk_cookies_<rand>.cookies.txt` (25), and the lead clause only ever
+**adds characters that are then removed**. So this rule is **monotonically non-expanding**, which is
+the property the two `ffmpeg_utils` sinks need: `sanitize_text_for_log(x)[:200]` can only get
+*shorter or stay equal* **[exec]** — measured `len` today 131 → new 53 on
+`<artefact> https://cdn.example.com/s.ts?t=SECRET`, and 200 → 185 when the artefact sits inside
+the window. Consequences, all measured **[exec]**:
+
+- **No leak can be moved into view.** Sanitisation runs on the whole string before the cut, so any
+  secret inside the first 200 characters of `f(x)` was inside the sanitised region and survived
+  because *no rule matched it* — a property this rule does not change.
+- **No host can be pushed out of view.** Shrinking brings later content *earlier*, so it can only
+  add redaction coverage. An **expanding** rule (a parent-preserving replacement) would do the
+  opposite, which is the concrete reason `B4-R8`'s replacement choice is load-bearing.
+- `test_transform_before_truncate_proves_sanitize_order` still holds: input 226 chars, both today
+  and new produce `len == 200` with `cdn.example.com` retained and `SECRET123` absent **[exec]**.
+- `f(f(x))[:200] == f(x)[:200]` on all four probes **[exec]**.
+
+##### `B4-R8` — replacement shape: recommend **whole token → `***REDACTED***`**; and §9 Q2's option **B is not implementable as written**
+
+Measured **[exec]**: today's transform leaves `NMATVE~1` (the username-bearing temp root,
+`C:\Users\NMATVE~1\AppData\Local\Temp`) in the output; the recommended rule does not. CWE-532 is
+directly on point: "Logging sensitive user data, **full path names**, or system information often
+provides attackers with an additional, less-protected path to acquiring the information" **[read]**.
+
+- **Whole token → `***REDACTED***` — recommended, and it is the §9 Q2 default (option A).** Costs:
+  the operator cannot correlate the record with a run. That is cheap here, because the **record
+  name** (`cookie_file_cleanup_failed`, `cookie_file_cleaned_up`) already says which artefact was
+  involved, and the basename `vk_cookies_<8 random chars>` carries zero triage information
+  (`B4-A11`). It is the only option whose idempotency proof is immediate, and the only one that
+  removes the username, the temp root and the random tails in one step.
+- **§9 Q2's recommended option B ("keep the folder, remove the file name") is not available.** The
+  "folder" here is `C:\Users\<name>\AppData\Local\Temp` — **username-bearing** — and the product's
+  own artefact folder is `vk_cookies__dir<rand>`, i.e. the *other* artefact's anchor, which the dir
+  rule would re-match (`B4-A9a`). Keeping it either re-discloses the account name or forfeits
+  idempotency. **§9 Q2 must be re-opened on this point**; this is its most consequential input and
+  the plan's own recommendation is unimplementable without giving up the CWE-532 property.
+- **Preserve the suffix (`***REDACTED***.cookies.txt`)** — the only fragment with real triage
+  value, and it cannot re-match a prefix-anchored rule. Its cost: a second redaction-bearing token
+  in the vocabulary, which `B6` will stamp onto *every* record it processes, plus one more entry
+  in the marker-is-a-fixed-point test. Surface it as §9 Q2's revised option; do not implement it.
+- **Preserve a basename** — rejected: zero triage value, and a `vk_cookies_`-bearing basename
+  re-matches its own rule.
+- **Preserve the parent directory** — rejected: it is the other artefact, and its own parent is the
+  username-bearing root.
+
+**Implementation note [exec]:** the replacement must be the **literal constant**, not text derived
+from the match — `re.sub` processes backslash escapes in a *string* replacement
+(`docs.python.org/3/library/re.html`) **[read]**. `***REDACTED***` contains none, so a literal repl
+is safe, and a derivation bug is a `re.error` at runtime (reproduced while measuring this report).
+The URL rule's lambda form is untouched and `_strip_auth_params`'s behaviour is preserved exactly.
+
+##### `B4-R9` — sources consulted
+
+| Source | Used for | Confidence |
+|---|---|---|
+| `cwe.mitre.org/data/definitions/532.html` | "full path names" as a CWE-532 impact → redact the parent, not just the basename | HIGH **[read]** |
+| `cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet` | "Data to exclude": session identification values, access tokens — must be "removed, masked, sanitized"; de-identification "where the individual's identity is not required" → whole-token default | HIGH **[read]** |
+| `cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet` | secrets must "never be logged (must implement either an encryption or **masking** approach)" → reuse the existing marker vocabulary | HIGH **[read]** |
+| `docs.python.org/3/library/re.html` — `(?<=...)`, `\b`, `re.sub`, `re.I`, `re.escape` | lookbehind is fixed-width-only (hence consuming the parent); `\b` is a `\w`/`\W` transition; `sub` replaces leftmost non-overlapping occurrences; `IGNORECASE` adds 4 non-ASCII letters | HIGH **[read]** |
+| `learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file` | reserved characters `< > : " / \ | ? *`; "If a component of a path is a file name, it must be the last component" | HIGH **[read]** |
+| `docs.github.com/…/secret-scanning-patterns` + `…/about-push-protection` | precision-over-recall as the operating principle: patterns are gated on "low false positive rate" to avoid blocking "when a result may be a false positive"; tightening via "additional match requirements" | MEDIUM **[read]** — industry practice, not a normative spec |
+| `tempfile._RandomNameSequence` source, `inspect.getsource` | `characters = "abcdefghijklmnopqrstuvwxyz0123456789_"`, "eight characters long" | HIGH **[exec]** |
+| `src/vkdownloader/services/ytdlp_downloader.py` constants + import graph | the three frozen strings; `utils/` never imports `services/` | HIGH **[read]** |
+
+##### `B4-R10` — corrections to `B4-AUDIT` and to the `B4` block text
+
+| # | Correction | Class |
+|---|---|---|
+| 1 | `B4-A9`'s "ordering is not a hazard" holds only for artefact-free inputs. **URL-first is mandatory**: artefact-first loses the host when the path is inside a URL (`B4-R5`). Needs a named test. | **[SPEC-DEVIATION]** mandatory |
+| 2 | `B4-A10`'s "`test_filesystem_paths_are_not_redacted` … will fail under any rule broad enough to match its input" — **measured: it passes unchanged** under the recommended rule (its fictional `vkdownloader_cookies_` prefix is not a match, and the rule is suffix-keyed anyway). It must still be **re-aimed, but for truthfulness, not for green**: its docstring pins "filesystem paths pass through unchanged; only URLs are redacted", which becomes false. Recommended: re-aim at the **real** artefact shape plus the new behaviour, and keep a byte-identical negative case with a *benign* path (a user-chosen output path, e.g. `C:\Users\x\Videos\clip.mp4`). **All 16 existing cases pass unchanged — measured, not asserted** (`B4-R11`). | **[SPEC-DEVIATION]** mandatory |
+| 3 | `B4-A9a`'s recommendation of a *single prefix-anchored* rule is **superseded**: a prefix-only rule matches a user-chosen folder `vk_cookies_videos`. Two suffix-keyed named rules are both safer and individually testable (`B4-R1`, `B4-R2`). | **[SPEC-DEVIATION]** |
+| 4 | §9 **Q2's recommended option B is unimplementable** without re-disclosing the username (`B4-R8`). Q2 needs re-asking with this input. | decision input |
+| 5 | `B4-A6`'s "`_COOKIE_ARTIFACT_SUFFIX` … cleanup tooling keys on" — half the claim becomes true; the "cleanup tooling" half must be dropped in the same commit. | `[DOC-UPDATE]` |
+| 6 | `AC` needs: a marker-is-a-fixed-point case; a **real-artefact oracle** built from `_create_cookie_artifact_dir()` / `_create_temp_cookie_file()`; a URL-first-ordering case with the path inside a URL; the re-aimed `test_filesystem_paths_are_not_redacted`; a separator-less-concatenation case pinning the accepted residual; a `path=C:\…` case pinning the accepted key-consumption collateral. | `[BEST-PRACTICE]` |
+
+##### `B4-R11` — measured baseline facts the Planner and Implementor need
+
+- **All 16 cases in `tests/test_url_sanitizer.py` pass unchanged** under the recommended rule set,
+  verified by executing `TestStripAuthParams` and `TestSanitizeTextForLog` against it in-process
+  **[exec]** — 8 + 8, zero failures. This is stronger than plan 11's "four existing cases" and than
+  `B4-A10`'s claim that one of them must be re-aimed to stay green.
+- Real artefact shapes on this machine **[exec]**:
+  file `C:\Users\NMATVE~1\AppData\Local\Temp\vk_cookies__dir<8>\vk_cookies_<8>.cookies.txt`;
+  dir `C:\Users\NMATVE~1\AppData\Local\Temp\vk_cookies__dir<8>`. Both rules match the **full**
+  path span, ending exactly at the artefact name.
+- `***REDACTED***` matches `[^\s'"]+` but no rule **[exec]** — the load-bearing detail.
+- No new file, no new dependency, `utils/__init__.py` untouched, `sanitize_url_for_log` and
+  `_strip_auth_params` behaviour unchanged, `_URL_REGEX` keeps its URL-only scope.
+
+##### `B4-R12` — risks this design carries
+
+1. **Silent coverage loss if `tempfile` changes its name alphabet.** Mitigated only by the
+   behavioural oracle (`B4-R1`); a constant-equality test cannot catch it. This is the one failure
+   mode with no error and no test — the same class as `R1-R4`'s sweep-`startswith` warning.
+2. **The frozen literals are now duplicated in two modules**, and `utils/` cannot import them from
+   `services/`. The behavioural oracle is the mitigation; the comment must name both sources.
+3. **A future rule author re-introducing `\b`** would silently break idempotency for `B5` and `B6`,
+   which both apply the transform twice by design. The fuzz oracle is the mitigation, and the law
+   in `B4-R3` belongs in the module comment.
+4. **Accepted information loss**: the artefact basename, and the record key on an unquoted
+   `key=value` child line. Both measured, both bounded, neither reachable through `B6`'s dict-value
+   path.
+5. **Accepted residual**: separator-less concatenations are not redacted past the first name.
+6. **`cookie_file_cleaned_up`'s `path=` is not routed through this transform at all today** — it is
+   product-generated text, not child output, and reaches the log unsanitised. This rule makes it
+   *matchable*; `B6` is what actually routes it. `B4` alone does not close that instance, and the
+   commit message should say so rather than implying otherwise.
+
+#### `B4-DESIGN` — implementor task (Planner)
+
+The design is **settled** by `B4-RESEARCH` (`B4-R1`…`B4-R12`). Implement it as written: do not
+re-derive the rule set, do not widen it, do not "improve" the left boundary. The Research
+**supersedes three `B4-AUDIT` statements** — rule **order** (URL-first is mandatory, not cosmetic),
+the fate of `test_filesystem_paths_are_not_redacted` (**passes unchanged**; re-aim it for
+*truthfulness*, not for green), and the case count (**8**, of which **7** must stay unchanged).
+
+````yaml
+id: EB-B4
+title: "Widen sanitize_text_for_log to redact the product's own cookie-artefact paths"
+priority: medium
+depends_on: []
+
+source_reference: .ai/plans/17-credentials-secrets-audit-fixes-execution.md
+source_section: "`B4` block; `#### B4-RESEARCH` (`B4-R1`…`B4-R12`) supersedes `B4-AUDIT` on rule order, the re-aimed test, and the case count"
+source_file: .ai/plans/11-credentials-secrets-audit-fixes.md
+source_blocks: ["B4 — Widen the transform so the redaction claim is true (`SEC-006`)"]
+source_task: "`T-B4` (§6) and §3.4; the §7 `SEC-006` row"
+
+description: >
+  sanitize_text_for_log matches https?:// and nothing else, so the product's own cookie
+  artefact path - C:\Users\<name>\AppData\Local\Temp\vk_cookies__dir<rand>\
+  vk_cookies_<rand>.cookies.txt - passes through byte-identical while the module comments
+  claim the tooling keys on that suffix. D-5 is closed to Alt A (B4-A8: no sink is
+  measured to receive a Cookie: header from a child). B4-R1 settles the shape: two named,
+  suffix-keyed rules applied AFTER the URL rule, each replacing the whole matched token -
+  the parent path included - with ***REDACTED***. Idempotency is load-bearing, not
+  cosmetic: B5 and B6 both apply the transform twice by design, and two of the three
+  existing call sites already do today.
+
+goals:
+  - An artefact path in sanitised text is redacted: both the cookie_file_cleanup_failed and cookie_file_cleaned_up `path=` shapes, the artefact directory shape, and the nested file-inside-directory shape.
+  - The URL rule runs FIRST, so an artefact path inside a URL costs the path, never the host.
+  - f(f(x)) == f(x) for every rule, including text that already contains ***REDACTED***, and ***REDACTED*** matches no rule.
+  - Text with no artefact shape stays byte-identical; a user-chosen folder that merely resembles the prefix is NOT redacted.
+  - The docstring and the `_COOKIE_ARTIFACT_SUFFIX` comment claim only what is true.
+
+files:
+  - path: src/vkdownloader/utils/url_sanitizer.py
+    targets:
+      - {type: module_constant, name: _URL_REGEX, action: no-change}
+      - {type: constant, name: _ARTEFACT_LEAD, action: add}
+      - {type: constant, name: _COOKIE_FILE_ARTEFACT_REGEX, action: add}
+      - {type: constant, name: _COOKIE_DIR_ARTEFACT_REGEX, action: add}
+      - {type: function, name: sanitize_text_for_log, action: modify}
+      - {type: function, name: _strip_auth_params, action: no-change}
+      - {type: function, name: sanitize_url_for_log, action: no-change}
+      - {type: module_all, name: __all__, action: no-change}
+    semantic_anchors:
+      insert_after:
+        type: module_constant
+        value: _URL_REGEX
+      insert_before:
+        type: function
+        value: _strip_auth_params
+
+  - path: tests/test_url_sanitizer.py
+    targets:
+      - {type: class, name: TestSanitizeTextForLog, action: modify}
+      - {type: method, name: test_filesystem_paths_are_not_redacted, action: rewrite-for-truthfulness}
+      - {type: class, name: TestArtefactAlphabetOracle, action: add}
+    semantic_anchors:
+      insert_after:
+        type: method
+        value: test_preserves_plaintext_merge_failure_text
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - {type: comment, name: "the comment block above _COOKIE_ARTIFACT_PREFIX", action: reword}
+      - {type: module_constant, name: _COOKIE_ARTIFACT_PREFIX, action: no-change}
+      - {type: module_constant, name: _COOKIE_ARTIFACT_SUFFIX, action: no-change}
+      - {type: module_constant, name: _ARTEFACT_DIR_SUFFIX, action: no-change}
+      - {type: function, name: _download_with_ytdlp, action: no-change}
+    semantic_anchors:
+      insert_before:
+        type: module_constant
+        value: _COOKIE_ARTIFACT_PREFIX
+
+changes:
+
+  - action: add_code
+    description: >
+      Add three module-level constants to url_sanitizer.py after `_URL_REGEX`, plus a comment
+      block recording WHY each element exists. This step alone changes no behaviour, so the
+      tree stays green.
+    code_hint: |
+      _ARTEFACT_LEAD = r"(?<![^\s'\"<>])(?:[^\s'\"<>]*[\\/])?"
+      _COOKIE_FILE_ARTEFACT_REGEX = re.compile(
+          _ARTEFACT_LEAD + r"vk_cookies_[a-z0-9_]+\.cookies\.txt"
+      )
+      _COOKIE_DIR_ARTEFACT_REGEX = re.compile(
+          _ARTEFACT_LEAD + r"vk_cookies__dir[a-z0-9_]+"
+      )
+    comment_must_state:
+      - "The literals are duplicated from `services/ytdlp_downloader._COOKIE_ARTIFACT_PREFIX` / `_COOKIE_ARTIFACT_SUFFIX` / `_ARTEFACT_DIR_SUFFIX`; `utils/` must not import `services/` (layer rule, and it would invert the import order)."
+      - "The law: a rule's left boundary must be a predicate its own replacement can never satisfy. `***REDACTED***` ends in `*`, a non-word character, so a `\\b` guard would manufacture a boundary on the second pass (measured 3 fixed-point violations in 400 000). `*` is inside the excluded set, so `(?<![^\\s'\"<>])` is unsatisfiable by the marker and measures 0."
+      - "The parent is CONSUMED by the optional greedy lead, not asserted by lookbehind: a variable-length lookbehind is illegal, and consuming the parent is what removes the username-bearing temp root (`C:\\Users\\<name>\\AppData\\Local\\Temp`, CWE-532)."
+      - "No `re.IGNORECASE`: every matched string is built from a frozen lowercase literal, and IGNORECASE widens `[a-z]` with U+0130/U+0131/U+017F/U+212A for zero measured coverage gain."
+      - "The tail is `[a-z0-9_]+`, not `{8}`: `tempfile._RandomNameSequence.characters` is a CPython internal whose length is not contractual."
+      - "The match ends at the artefact NAME; a trailing separator is never consumed, so the marker cannot fuse to the next path component (`***REDACTED***\\owner.pid`)."
+
+  - action: update_code
+    description: >
+      Rewrite `sanitize_text_for_log`'s body as three substitutions in a fixed order: URL FIRST,
+      then the file artefact, then the directory artefact. The order is mandatory - artefact-first
+      on a URL-shaped input swallows the whole run including the host and yields `GET ***REDACTED***`.
+    code_hint: |
+      text = _URL_REGEX.sub(lambda m: _strip_auth_params(m.group(0)), text)
+      text = _COOKIE_FILE_ARTEFACT_REGEX.sub("***REDACTED***", text)
+      text = _COOKIE_DIR_ARTEFACT_REGEX.sub("***REDACTED***", text)
+      return text
+
+  - action: update_code
+    description: >
+      Correct `sanitize_text_for_log`'s docstring - the remaining documentation duty. State the
+      shapes that ARE matched (URLs; `vk_cookies_<tail>.cookies.txt`; `vk_cookies__dir<tail>`; the
+      parent path is consumed with them), the shapes that are NOT (`Cookie:` / `Set-Cookie:` header
+      values - D-5 closed to Alt A per B4-A8; bare `name=value` pairs; user-chosen output paths),
+      the URL-first ordering, and that an unquoted `key=value` run carrying an artefact collapses
+      whole because the key is consumed with the identifying parent. Also fix the pre-existing
+      inaccuracy: `Returns:` claims `scheme://host/***REDACTED***/` with a trailing slash the code
+      does not emit. Keep it concise - a claim nobody can check is the defect SEC-006 names.
+
+  - action: add_code
+    description: >
+      Rewrite `test_filesystem_paths_are_not_redacted` in place, keeping its name. Its docstring
+      ("filesystem paths pass through unchanged; only URLs are redacted") becomes FALSE, and its
+      fictional `/tmp/vkdownloader_cookies_8u3x.txt` prefix tests a name the product never emits.
+      Its new job is the negative half: user-chosen paths that must stay byte-identical - a
+      download output path, and folders that merely resemble the artefact prefix. Measured: the
+      case PASSES UNCHANGED, so do not rewrite it to chase a failure that does not occur and do not
+      delete it. The other 7 cases of the class (4 original, 3 from `486bfd9`) and
+      `TestStripAuthParams`'s 8 must pass with byte-identical bodies.
+
+  - action: add_code
+    description: >
+      Add the required cases to `TestSanitizeTextForLog` (see `required_tests`). Each case is
+      single-purpose and named for the property it pins. No new skips, no platform guards.
+
+  - action: add_code
+    description: >
+      Add a new class `TestArtefactAlphabetOracle` at module scope, AFTER `TestSanitizeTextForLog`.
+      This is the oracle that does not exist yet and it closes the only silent-failure mode in the
+      design (B4-R12.1): a literal-keyed rule whose source of truth changes stops matching and
+      nothing else fails. The literals cannot be imported from `services/` into `utils/`, so the
+      oracle must build REAL artefacts with `_create_cookie_artifact_dir()` /
+      `_create_temp_cookie_file()` and assert the transform redacts them, plus a negative case with
+      a similarly-shaped NON-artefact path that must stay byte-identical. Clean up in `finally`
+      through the product's own helpers (`path.unlink(missing_ok=True)` then
+      `_remove_cookie_artifact_dir(path.parent)`), matching the existing pattern in
+      `tests/test_cookies.py`, so nothing is left behind in the temp root on Windows.
+
+  - action: update_code
+    description: >
+      Reword ONE comment in `services/ytdlp_downloader.py`: the block above
+      `_COOKIE_ARTIFACT_PREFIX` says the suffix "is what the operator-facing redaction and cleanup
+      tooling keys on". After this block the redaction tooling demonstrably keys on it; the
+      "cleanup tooling" half never existed (B4-A6). Name the redaction rule only. No constant
+      value changes.
+
+implementation_sequence:
+  - "1. Add the three constants and the comment block. No behaviour change; the 16 existing cases stay green."
+  - "2. Rewrite `sanitize_text_for_log`'s body (URL first). All 16 existing cases still pass - measured, B4-R11. Run them; do NOT modify a test to accommodate a failure that should not occur."
+  - "3. Re-aim `test_filesystem_paths_are_not_redacted`."
+  - "4. Add the new cases in `TestSanitizeTextForLog`."
+  - "5. Add `TestArtefactAlphabetOracle`."
+  - "6. Reword the `_COOKIE_ARTIFACT_SUFFIX` comment block."
+  - "7. Run the gates; make ONE commit. Production code lands before the tests that pin it, so every test edit is green on arrival and no intermediate state needs a fix-up commit."
+
+architectural_constraints:
+  - "No new file, so `tests/test_packaging.py`'s manifests need no edit (14 passed must hold)."
+  - "`utils/__init__.py` NO change; `sanitize_text_for_log` stays deliberately unexported (`T-B4` step 9)."
+  - "Module `__all__` unchanged - the new names are private."
+  - "`_URL_REGEX` keeps its URL-only scope; `sanitize_url_for_log` stays a public alias; `_strip_auth_params`'s behaviour is byte-identical."
+  - "The replacement is the LITERAL `***REDACTED***`, never derived from the match (`re.sub` interprets backslash escapes in a string replacement). Do not introduce a second marker such as `***REDACTED***.cookies.txt`: `B6` would stamp it on every record for no security gain."
+  - "Rules stay additive and literal-anchored: no token-wise fallback, no rule that can match `*`, no `Cookie:` rule (D-5 = Alt A, B4-A8)."
+  - "Do NOT touch `services/ffmpeg_utils.py`'s two sinks - already pre-sanitised by `486bfd9` and owned by plan-10 `B14`. Their `[:200]` truncation stays safe because the new rules are monotonically non-expanding (B4-R7)."
+  - "Do NOT re-litigate the `# SEC-002:` comment above `error_msg = sanitize_text_for_log(error_msg)` - `09f1b10` already corrected it."
+  - "Three call sites exist, all passing raw child output: `_download_with_ytdlp`, `_merge_batch_segments`, `_perform_final_merge`. None needs an edit. No new dependency."
+
+required_tests:
+  unchanged_must_pass:
+    - "TestStripAuthParams - all 8 cases, bodies untouched."
+    - "TestSanitizeTextForLog::test_redacts_url_in_text, ::test_redacts_multiple_urls_in_text, ::test_preserves_text_without_urls, ::test_redacts_url_in_yt_dlp_output - the 4 original cases."
+    - "TestSanitizeTextForLog::test_transform_before_truncate_proves_sanitize_order, ::test_redacts_signed_cdn_url_in_merge_failure_text, ::test_preserves_plaintext_merge_failure_text - the 3 from `486bfd9`."
+  re_aimed:
+    - name: test_filesystem_paths_are_not_redacted
+      asserts: >
+        A user-chosen output path (`C:\Users\x\Videos\clip.mp4`) and user folders resembling the
+        artefact prefix (`...\vk_cookies_videos\clip.mp4`, `...\vk_cookies__downloads\clip.mp4`) are
+        byte-identical. Its docstring states the REAL boundary: URLs and the product's own
+        `vk_cookies_` artefact file/directory names are redacted; everything else passes through.
+  new_cases:
+    - name: test_redacts_cookie_artefact_file_path
+      asserts: "Both records' real `path=` shape, quoted: `path='C:\\Users\\x\\AppData\\Local\\Temp\\vk_cookies__dirabc12345\\vk_cookies_q1w2e3r4.cookies.txt'` - no `vk_cookies_`, no `AppData`, no `Users`; the surrounding quotes and the `path=` key survive."
+    - name: test_redacts_cookie_artefact_directory_shape
+      asserts: "`...\\vk_cookies__dir9lfm4h4w4\\owner.pid` yields exactly `***REDACTED***\\owner.pid`. The trailing separator is NOT consumed - the marker must not fuse to the next component."
+    - name: test_url_rule_runs_before_artefact_rules
+      asserts: "`GET https://cdn.example.com/proxy?p=C:/Users/x/Temp/vk_cookies_a.cookies.txt` - `cdn.example.com` retained, `vk_cookies_` absent, exactly one `***REDACTED***`. This is the mandatory URL-first oracle (artefact-first yields `GET ***REDACTED***`, losing the host)."
+    - name: test_glued_artefact_names_do_not_grow_on_a_second_pass
+      asserts: "`dir\\vk_cookies_a.cookies.txtvk_cookies_b.cookies.txt` - the first name is consumed in ONE pass, exactly one `***REDACTED***`, and `sanitize_text_for_log(result) == result`. Docstring records the accepted residual (the separator-less second name stays unredacted; that non-redaction IS the fixed point) and that a `\\b` guard fails this case."
+    - name: test_nested_directory_and_file_collapse_to_one_marker
+      asserts: "The full nested path yields exactly `***REDACTED***` - one marker, not two (the file rule runs before the dir rule)."
+    - name: test_artefact_path_with_quote_and_punctuation_adjacency
+      asserts: "`(<artefact>)`, `'<artefact>'`, `\"<artefact>\"` each collapse to `***REDACTED***` with the wrapper characters intact."
+    - name: test_artefact_path_at_line_start_and_line_end
+      asserts: "Both positions in one multi-line input are redacted; the surrounding lines are untouched."
+    - name: test_forward_slash_separators_are_matched
+      asserts: "The file and directory shapes with `/` separators are redacted identically."
+    - name: test_benign_line_mentioning_cookies_is_byte_identical
+      asserts: "A plain 'cookie file missing' line and a `Cookie: a=b` header line are byte-identical - documentation-as-test for the Alt A uncovered shape (B4-A8)."
+    - name: test_user_folder_resembling_the_prefix_is_not_redacted
+      asserts: "`vk_cookies_videos`, `vk_cookies__downloads`, a bare `vk_cookies_` mention, and the mid-token `foovk_cookies_a.cookies.txt` are byte-identical - the over-broad-redaction regression suffix keying prevents."
+    - name: test_unquoted_key_value_run_collapses_whole
+      asserts: "`path=C:\\...\\vk_cookies_x.cookies.txt` yields `***REDACTED***`. Pins the accepted collateral: the key is consumed with the identifying parent. Docstring notes it does not reach `B6`'s dict-value path."
+    - name: test_double_application_equals_single_for_every_rule
+      asserts: "Over file artefact, dir artefact, signed URL, URL containing an artefact, unquoted `key=value`, and `***REDACTED***` alone: `f(f(x)) == f(x)`."
+    - name: test_marker_matches_no_rule
+      asserts: "`sanitize_text_for_log('***REDACTED***') == '***REDACTED***'` and each new pattern's `.search('***REDACTED***')` is None. Docstring notes the marker DOES match a permissive `[^\s'\"]+` run class, which is exactly why the left boundary must be one the marker cannot satisfy."
+  new_class_TestArtefactAlphabetOracle:
+    - name: test_real_artefact_directory_is_redacted
+      asserts: "`_create_cookie_artifact_dir()` - assert `vk_cookies_` IS in `str(dir)` (non-vacuous), then `sanitize_text_for_log(str(dir)) == '***REDACTED***'`. Cleanup in `finally` via `_remove_cookie_artifact_dir`."
+    - name: test_real_artefact_file_is_redacted
+      asserts: "`_create_temp_cookie_file('vk=test')` - assert `vk_cookies_` IS in `str(path)`, then the transform yields `***REDACTED***` with no `Users` / `AppData`. Cleanup in `finally`: unlink, then `_remove_cookie_artifact_dir(path.parent)`."
+    - name: test_similarly_shaped_non_artefact_path_is_byte_identical
+      asserts: "`C:\\Users\\x\\Videos\\cookies_archive.txt`, `C:\\Users\\x\\Videos\\vk_cookies_archive.cookies.txt.bak`, and the user-folder shapes stay byte-identical. Do NOT use a `.cookies.txt` name under a `vk_cookies_` stem in this negative case - that IS an artefact match."
+    - name: test_artefact_tail_uses_lowercase_ascii_digits_underscore
+      asserts: "[optional, second line of defence] The created tail's characters are a subset of lowercase ASCII + digits + `_`, so an alphabet change fails here with a clear message as well as in the cases above."
+  windows_requirement: >
+    Every new test executes on Windows: no `pytest.mark.skipif(sys.platform...)`, no POSIX-only
+    assertions, no new skips. Artefact creation goes through `tempfile`, as existing tests already do.
+
+acceptance_criteria:
+  - id: AC-1
+    criterion: An artefact path in free text is redacted - the cookie_file_cleanup_failed file shape, the cookie_file_cleaned_up file shape, the directory shape, and the nested file-inside-directory shape.
+    verified_by: new cases in TestSanitizeTextForLog
+  - id: AC-2
+    criterion: Text with no matched shape is byte-identical, including benign lines that mention "cookies", `Cookie:` headers, user output paths, and folders resembling the artefact prefix.
+    verified_by: the new negative cases
+  - id: AC-3
+    criterion: The URL rule runs first: with an artefact path inside a URL the host survives and the path does not.
+    verified_by: test_url_rule_runs_before_artefact_rules
+  - id: AC-4
+    criterion: Double application equals single application for every rule, and `***REDACTED***` matches no rule - a hard criterion, since B5 and B6 apply the transform twice by design.
+    verified_by: test_double_application_equals_single_for_every_rule, test_marker_matches_no_rule
+  - id: AC-5
+    criterion: `test_filesystem_paths_are_not_redacted` is re-aimed for truthfulness (name kept, negative-only, real docstring); the other 7 cases of the class and TestStripAuthParams' 8 pass with byte-identical bodies.
+    verified_by: uv run pytest tests/test_url_sanitizer.py -q
+  - id: AC-6
+    criterion: The behavioural alphabet oracle builds a real artefact and asserts it is redacted, plus a similarly-shaped non-artefact path that stays byte-identical.
+    verified_by: TestArtefactAlphabetOracle
+  - id: AC-7
+    criterion: The `sanitize_text_for_log` docstring states the matched and unmatched shapes (naming `Cookie:` / `Set-Cookie:` as uncovered) and no longer claims a trailing slash the code does not emit.
+    verified_by: review
+  - id: AC-8
+    criterion: `_URL_REGEX` keeps its URL-only scope; `_strip_auth_params` and `sanitize_url_for_log` are behaviourally unchanged; `utils/__init__.py` and the module `__all__` are untouched.
+    verified_by: review
+  - id: AC-9
+    criterion: The `_COOKIE_ARTIFACT_SUFFIX` comment names the redaction rule and no longer claims cleanup tooling.
+    verified_by: review
+  - id: AC-10
+    criterion: Gates green (see `gates`).
+    verified_by: the gate commands
+
+gates:
+  - "uv run pytest -q - full suite green; total skips NOT above 6 (3 D-11 POSIX-permission + 3 pre-existing killpg)."
+  - "uv run mypy src - clean."
+  - "uv run ruff check src tests - clean."
+  - "uv run ruff format --check src tests - clean."
+  - "uv run mypy src tests - error count NOT above 93."
+  - "uv run pytest tests/test_packaging.py -q - 14 passed."
+  - "uv run pytest tests/test_url_sanitizer.py -q - green, zero skips, every new test executed."
+
+commit_shape:
+  subject: "fix(logging): redact the product's own artefact paths in sanitised child output"
+  count: 1
+  body_must_record:
+    - "The two named suffix-keyed rules and the mandatory URL-first ordering, with the `GET ***REDACTED***` host-loss counterexample."
+    - "The left-boundary law, and that `\\b` was rejected (measured 3 fixed-point violations in 400 000) in favour of `(?<![^\\s'\"<>])` (0)."
+    - "Suffix keying, and the `vk_cookies_videos` user-folder regression it avoids."
+    - "`D-5` resolved to Alt A (B4-A8, measured on three grounds)."
+    - "The re-aimed `test_filesystem_paths_are_not_redacted` and its reason; the other 7 cases are unchanged and 16/16 pass."
+    - "The accepted residuals: separator-less concatenation, and the unquoted `key=value` key consumption."
+    - "That `cookie_file_cleaned_up`'s `path=` is NOT routed through this transform today - this block makes it matchable; `B6` routes it (B4-R12.6)."
+    - "That `services/ffmpeg_utils.py`'s two sinks are untouched (plan-10 `B14`'s), and that the new rules are monotonically non-expanding so the existing `[:200]` truncation stays safe (B4-R7)."
+
+staging:
+  - "Explicit paths only. Never `git add -A`, `git add .`, or `git add -u`."
+  - "git add src/vkdownloader/utils/url_sanitizer.py tests/test_url_sanitizer.py"
+  - "git add src/vkdownloader/services/ytdlp_downloader.py - only if that comment was actually reworded."
+  - "Never amend, force-push, `git reset`, or `git checkout`."
+  - "The working tree carries unrelated modified and untracked files at baseline; none may enter this commit."
+````
+
 ---
 
 ### `B5` — Transform the terminal echo (`SEC-005`)
@@ -3699,6 +4923,407 @@ acceptance_criteria:
     criterion: Full suite green; ruff check clean; ruff format --check green; mypy src clean; mypy src tests <= 93.
     verified_by: §7 gates
 ```
+
+#### `B5-AUDIT` — block-`B5` audit findings (Auditor; at `dfcf326`, with `B4` = `ab1057e`)
+
+**`B5-A0` — `D-10`: `OUT-007` has NOT landed. The block keeps plan 11's shape.** [verified-by-reading + verified-by-execution]
+No per-line record for non-progress child output exists anywhere in `src/`: the records on this path are `ytdlp_progress_suppressed` (progress only, `echo=False`), `ytdlp_reader_line_overrun`, `subprocess_reader_failed`, `download_failed`. `_echo_ytdlp_line` still holds a live `sys.stderr.write(line)` on its non-progress branch, and its `echo=False` branch `return`s without logging a non-progress line. `OUT-007` is plan 13's `B7`, sequenced **strictly after** plan 11 `B5`. → the transform goes on **what reaches `sys.stderr`**, not on a record field; `B6`'s idempotency criterion is not exercised by `B5`.
+
+**1 · The echo path.** [verified-by-reading] `_echo_ytdlp_line(line, *, echo=True)`: gate `if not echo:` → `_parse_ytdlp_progress(line)`; on a ratio, `logger.debug("ytdlp_progress_suppressed", downloaded=…, total=…)`; then `return` — nothing written, not even a flush. Write branches: `if _is_ytdlp_progress_line(line)` → `text = line.rstrip("\n\r")`, `width = shutil.get_terminal_size((80, 24)).columns`, `sys.stderr.write("\r" + text.ljust(width)[:width] + "\r")` + `flush()`; `else` → `sys.stderr.write(line)` + `flush()`. The docstring describes the `\r` rewrite and the `echo=False` suppression, and **no transform**.
+**Predicate, stated plainly:** the write-branch predicate is **`_is_ytdlp_progress_line`**; **`_parse_ytdlp_progress` is on the `echo=False` branch** (and again inside `_monitor_progress`). Plan 11 §3.5's correction is right; this block's item 2 matches the tree.
+
+**2 · `echo` reachability — `B5-A1` (HIGH). Plan 11 §3.5's "batch mode never reaches this sink" is FALSE.** [verified-by-reading + verified-by-execution]
+Every setter of `echo` in `src/`: `batch_downloader._download_single` (`echo = not reporter.is_enabled`, passed to `download_video`); then pass-throughs `downloader.download_video(echo=True)` → `perform_download(echo=True)` → both `download_with_ytdlp_with_resume_fallback(echo=echo)` arms → `_download_with_ytdlp(echo=True)`. `_run_batch_with_progress` **always** constructs a `RichProgressReporter`, so `reporter is not None` always — but `RichProgressReporter.is_enabled` falls back to `sys.stderr.isatty()`, so **batch mode on a non-TTY stderr sets `echo=True` and reaches the sink** (CI, `> file`, pipe, `CliRunner`). Proof: live test `test_batch_echo_not_suppressed_when_reporter_disabled` asserts `call.kwargs["echo"] is True`. Live: single-download `cli.py` passes no `echo`, so `echo=True` always. Not live: batch under a TTY rich display (`echo=False`). **No undiscovered `echo=True` outside these two paths.** `[SPEC-DEVIATION]` plan 11 §3.5 reachability correction 1 is wrong and §B5 inherits it silently; correcting it **widens** the block's value, because redirected output is the capture-prone case.
+
+**3 · `output_chunks` must stay raw — `B5-A2`.** [verified-by-reading] The decoded line serves **two** purposes at both call sites in `_monitor_progress`/`_drain_output` — `_echo_ytdlp_line(decoded, echo=echo)` and `_retain_transcript_line(output_chunks, line)` — plus a **third** in `_monitor_progress`: `_parse_ytdlp_progress(decoded)` → `progress_callback`. The buffer's **only** consumer is `download_failed`, which already applies `sanitize_text_for_log` at its own call site. Transforming at the call site would (i) stop the buffer being the child's bytes: the reader decodes with `errors="replace"` and the consumer decodes strictly, so a decode/re-encode round-trip permanently substitutes U+FFFD for undecodable bytes — the fidelity TRN-011 exists for; (ii) make `_MAX_CHILD_OUTPUT_BYTES` bound redacted text rather than bytes read; (iii) duplicate `B6`'s central processor, which owns `download_failed.error`.
+
+**4 · `iter_process_lines` — contract unchanged.** [verified-by-reading] `services/ffmpeg_utils.py::iter_process_lines` is an `AsyncIterator[bytes]`, docstring "Yields: Raw ``bytes`` lines", no transform. `B5` must not touch it (plan 11 §4.3 row 14 lists it as permanent product surface).
+
+**5 · `subprocess_reader_failed` is NOT in the drain loop — `B5-A3`.** [verified-by-reading] It lives in `_await_first_and_cancel_others` (called only from `_download_with_ytdlp`, twice): level ERROR, fields `error=str(exc)`, exception retrieved and never re-raised. The drain loops' own arm is `except DownloadError` → `ytdlp_reader_line_overrun` (`url`, `pid`, `error`). `B5` touches neither; `B6` covers `subprocess_reader_failed.error` through the pipeline. Pinned by `test_reader_task_failure_emits_record` (exactly 1), `test_normal_completion_emits_no_record`, `test_cancelled_pending_task_emits_no_record`, and `test_reader_line_overrun_recorded_when_no_progress_callback` (0).
+
+**6 · `D-6` — the hazard is theoretical, not real.** [verified-by-execution] All seven real yt-dlp progress templates are returned **identical** by `sanitize_text_for_log`, and `_parse_ytdlp_progress` / `_is_ytdlp_progress_line` give identical answers before and after (e.g. `40.3% of 649.37MiB` → `(274408260, 680913797)` both ways). The URL rule keeps `scheme://host/`, and the artefact rules are keyed on `vk_cookies_…`, which cannot touch `pct` or `size`. Were it real, the existing assertions would catch it loudly: `test_ytdlp_echo_false_progress_emits_debug_log` and `test_ytdlp_echo_false_suppresses_stderr_while_callback_fires` both pin `total`/`downloaded` exactly. Caveat: they would **not** catch a transform that changed *classification* — the new tests must cover that separately.
+
+**7 · `B5-A4` (HIGH) — the declared test change is unnecessary and pre-empts plan 13 `B7`.** [verified-by-reading + verified-by-execution] Under `Alt A′` (transform inside `_echo_ytdlp_line`, after the `echo` gate) the `echo=False` path is byte-for-byte unchanged, so `test_ytdlp_echo_false_non_progress_line_no_output_no_log` **stays green untouched** (12 echo/transcript tests pass at `dfcf326`). §B5's AC-3/AC-4/AC-5 and `changes[2]` require rewriting it to assert the record-per-line ruling — that is `OUT-007`, owned by plan 13 `B7`, sequenced *after* `B5`, and plan 13 forbids weakening a clause `B5` pinned; plan 11 §3.5 itself recommends "`B5` lands the redaction only". **Recommendation:** zero existing-test changes; AC-3/AC-5 become "no existing test was changed", and AC-4 is withdrawn. If the Owner still wants the ruling, it is a **scope move into `B7`**, not a rewrite here.
+
+**8 · Tests the block needs.** [verified-by-reading] **New (core, none exists today — no test in `tests/` passes a URL to `_echo_ytdlp_line`, and no test in `tests/` contains `vk-cdn.net`):** a sibling of `test_one_shot_line_keeps_its_newline` asserting a non-progress line carrying a signed CDN address reaches stderr as `scheme://host/***REDACTED***` with `sig=`/`token=` absent. **Existing sibling kept as-is:** `TestEchoYtdlpLine::test_one_shot_line_keeps_its_newline` (`captured.err == line`, benign `Destination: /tmp/video.mp4` — verified unchanged by the transform). **Clause 1:** `test_progress_line_is_rewritten_in_place` + `test_shorter_progress_line_clears_the_previous_one`. **Clause 2:** `test_ytdlp_echo_false_no_callback_stderr_empty`, `test_echo_false_chatty_child_no_stderr_and_bounded`, `test_ytdlp_echo_false_suppresses_stderr_while_callback_fires`. **Clause 3:** `test_ytdlp_echo_false_progress_emits_debug_log`. **Also add:** (i) an `echo=False` case whose line *does* carry a URL, pinning gate-before-transform (AC-6); (ii) an artefact-path case on the non-progress branch, proving `B4`'s widened rules reach the terminal; (iii) in `test_ytdlp_echo_false_progress_emits_debug_log`, the `D-6` evidence (assert `sanitize_text_for_log(line) == line` for the template) — the exact `downloaded`/`total` pins are necessary but do not prove ordering on their own.
+
+**Baseline adopted as given** (`dfcf326`): 849 passed / 6 skipped · `mypy src` clean · `ruff check` + `ruff format --check` clean · `mypy src tests` 93 in 8 files · D-11 floor 3. `[DOC-UPDATE]` plan 11 §3.5 AC-9 / `T-B5` step 12 call `tests/test_hls_downloader.py` format-red; plan 17 §4 already corrects it. Plan 11 stays untouched.
+
+**Edits made by this audit:** this `#### B5-AUDIT` section only. No `src/`, `tests/`, or other plan file was modified; nothing staged or committed.
+
+---
+
+#### `B5-DESIGN` — implementor task (Planner)
+
+Implement `Alt A′` as designed below. Three `B5-AUDIT` findings **change the block's shape**
+and this design carries all three: `B5-A0` (`OUT-007` has not landed → the transform goes on
+what reaches `sys.stderr`, not on a record field), `B5-A4` (**zero** existing-test changes;
+the planned rewrite is dropped), and `B5-A1` (batch mode **does** reach this sink on a non-TTY
+stderr, so the blast radius is wider than plan 11 §3.5 claimed). Do not re-derive them.
+
+**Do not modify any file other than the two named below.** No new file, no new dependency,
+no `tests/test_packaging.py` edit, no change to `utils/url_sanitizer.py`.
+
+````yaml
+id: EB-B5
+title: "Apply the redaction transform inside the child-output echo"
+priority: high
+depends_on: [EB-B4]
+
+source_reference: .ai/plans/17-credentials-secrets-audit-fixes-execution.md
+source_section: "`B5` block; `#### B5-AUDIT` (`B5-A0`, `B5-A1`, `B5-A2`, `B5-A3`, `B5-A4`, `B5-A6`) supersedes the `B5` block's `changes[2]` and `AC-3`/`AC-4`/`AC-5`"
+source_file: .ai/plans/11-credentials-secrets-audit-fixes.md
+source_blocks: ["B5 — Transform the terminal echo (SEC-005)"]
+source_task: "`T-B5` (§6.7) and §3.5; the §7 `SEC-005` row. Plan 11 §3.5 itself recommends \"B5 lands the redaction only\"."
+
+description: >
+  _echo_ytdlp_line writes raw child lines to sys.stderr with nothing applied, while the same
+  bytes reach the log file through sanitize_text_for_log. Inside one run the identical input is
+  treated two ways, and the untransformed surface is the one an operator is most likely to
+  capture: B5-A1 proved batch mode reaches this sink whenever sys.stderr is not a TTY
+  (CI, `> file`, pipe, CliRunner), because batch_downloader sets
+  `echo = not reporter.is_enabled` and RichProgressReporter.is_enabled falls back to
+  sys.stderr.isatty(). Alt A' applies the transform at the two write statements inside
+  _echo_ytdlp_line, after the `if not echo:` early return, so classification and byte
+  accounting keep seeing the raw line and the echo=False path is byte-for-byte unchanged.
+
+goals:
+  - "A signed CDN address in a non-progress line reaches sys.stderr as `scheme://host/***REDACTED***`, with the query values absent."
+  - "Both write branches are transformed: the progress branch's `text` and the non-progress branch's `line`."
+  - "The `echo` gate is decided before any transform runs, structurally, not by statement ordering alone."
+  - "Classification (`_is_ytdlp_progress_line`) and parsing (`_parse_ytdlp_progress`) keep the raw line; the transformed line is written, never parsed."
+  - "The downstream transcript buffer receives the raw bytes; `output_chunks` stays raw."
+  - "Zero existing tests change. The benign pass-through case becomes a sibling of the new redaction case, never its replacement."
+
+files:
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - {type: function, name: _echo_ytdlp_line, action: modify}
+      - {type: docstring, name: "the _echo_ytdlp_line docstring", action: rewrite}
+      - {type: import, name: "the module-level `from ..utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log`", action: no-change}
+      - {type: function, name: _is_ytdlp_progress_line, action: no-change}
+      - {type: function, name: _parse_ytdlp_progress, action: no-change}
+      - {type: function, name: _monitor_progress, action: no-change}
+      - {type: function, name: _drain_output, action: no-change}
+      - {type: function, name: _retain_transcript_line, action: no-change}
+      - {type: function, name: _await_first_and_cancel_others, action: no-change}
+      - {type: module_constant, name: _YTDLP_PROGRESS_LINE_RE, action: no-change}
+      - {type: module_constant, name: _YTDLP_PROGRESS_RE, action: no-change}
+    semantic_anchors:
+      insert_after:
+        type: assignment
+        value: 'text = line.rstrip("\n\r")'
+      insert_before:
+        type: if_statement
+        value: "if _is_ytdlp_progress_line(line):"
+      gate_reference:
+        type: return_statement
+        value: "return"
+
+  - path: tests/test_hls_downloader.py
+    targets:
+      - {type: class, name: TestEchoYtdlpLine, action: add-cases-to}
+      - {type: method, name: test_one_shot_line_keeps_its_newline, action: no-change}
+      - {type: method, name: test_progress_line_is_rewritten_in_place, action: no-change}
+      - {type: method, name: test_shorter_progress_line_clears_the_previous_one, action: no-change}
+      - {type: class, name: TestBoundedYtDlpTranscript, action: no-change}
+      - {type: class, name: TestYtDlpSubprocessShutdown, action: no-change}
+      - {type: method, name: test_ytdlp_echo_false_non_progress_line_no_output_no_log, action: no-change}
+    semantic_anchors:
+      insert_after:
+        type: method
+        value: test_one_shot_line_keeps_its_newline
+
+changes:
+
+  - action: add_code
+    description: >
+      Transform at the two write statements inside _echo_ytdlp_line, after the `if not echo:`
+      early return. The progress branch transforms the value it assigns to `text`; the
+      non-progress branch transforms the argument at the `sys.stderr.write` call itself.
+      Nothing else in the module changes - sanitize_text_for_log is already imported at module
+      level, so there is no import edit.
+    code_hint: |
+      if not echo:
+          progress = _parse_ytdlp_progress(line)          # raw line, unchanged
+          if progress is not None:
+              downloaded, total = progress
+              logger.debug(
+                  "ytdlp_progress_suppressed",
+                  downloaded=downloaded,
+                  total=total,
+              )
+          return                                          # the gate; nothing below runs
+      if _is_ytdlp_progress_line(line):                   # classification on the RAW line
+          text = sanitize_text_for_log(line.rstrip("\n\r"))
+          width = shutil.get_terminal_size((80, 24)).columns
+          sys.stderr.write("\r" + text.ljust(width)[:width] + "\r")
+          sys.stderr.flush()
+      else:
+          sys.stderr.write(sanitize_text_for_log(line))
+          sys.stderr.flush()
+
+  - action: update_code
+    description: >
+      Rewrite _echo_ytdlp_line's docstring. It currently describes the `\r` rewrite and the
+      echo=False suppression and says nothing about a transform - that omission is how the gap
+      survived. It must state, in this order: (1) what reaches the console is the TRANSFORMED
+      line - `https?://` URLs reduced to `scheme://host/***REDACTED***` and the product's own
+      `vk_cookies_` artefact file/directory names collapsed to `***REDACTED***` - applied once,
+      at the write, by `sanitize_text_for_log`; (2) classification and the byte accounting run
+      on the RAW line, so `_is_ytdlp_progress_line` and `_parse_ytdlp_progress` are unaffected
+      and the `\r` rewrite and the `downloaded`/`total` figures are computed from untransformed
+      text; (3) `echo=False` is evaluated BEFORE any transform, so nothing is transformed,
+      written, or logged for a non-progress line; (4) the downstream transcript buffer
+      (`_retain_transcript_line` / `output_chunks`) still receives the RAW line, because
+      redaction here must not substitute U+FFFD for undecodable child bytes and `download_failed`
+      applies the transform at its own call site; (5) why the terminal is the surface that
+      needed it - it is the one most likely to be captured (redirect, pipe, CI log), and batch
+      mode reaches this sink whenever stderr is not a TTY (B5-A1). Keep it factual and concise;
+      a claim nobody can check is the defect SEC-006 names.
+    code_hint: |
+      """Echo a yt-dlp output line to the console.
+
+      What reaches stderr is the TRANSFORMED line: ``https?://`` URLs are reduced to
+      ``scheme://host/***REDACTED***`` and the product's own ``vk_cookies_`` artefact
+      file and directory names collapse to ``***REDACTED***``, applied once at the
+      write by :func:`~vkdownloader.utils.url_sanitizer.sanitize_text_for_log`.
+
+      Classification and byte accounting use the RAW line: ``_is_ytdlp_progress_line``
+      and ``_parse_ytdlp_progress`` both read untransformed text, so the ``\\r`` rewrite
+      and the reported ``downloaded`` / ``total`` figures are unaffected by the
+      transform. ``echo=False`` is evaluated BEFORE any transform, so nothing is
+      transformed, written, or logged for a non-progress line.
+
+      The transcript buffer still receives the RAW line (``_retain_transcript_line`` /
+      ``output_chunks``): redaction here must not substitute U+FFFD for undecodable child
+      bytes, and ``download_failed`` applies the transform at its own call site.
+
+      Progress lines (e.g. ``[download]  40.3% of 649.37MiB ...``) are rewritten in
+      place using carriage returns to restore the pre-migration behavior where yt-dlp
+      used ``\\r`` for live progress updates.  Non-progress lines use newlines as-is.
+      """
+
+  - action: add_code
+    description: >
+      Add the five cases below to TestEchoYtdlpLine, immediately after
+      test_one_shot_line_keeps_its_newline. Each is single-purpose and named for the property
+      it pins. The existing pass-through method is NOT modified, NOT renamed, and NOT replaced -
+      the benign case and the redaction case are siblings, and the class docstring should say
+      so, because "non-progress output is passed through unchanged" is true only of content
+      with nothing to redact.
+
+implementation_sequence:
+  - "1. Add the transform to both write statements in `_echo_ytdlp_line`. Production code lands first; the 12 echo/transcript tests are unaffected by construction (the `echo=False` path returns before the new lines) - run them and confirm 12 passed before touching the test file. Do NOT add the transform ahead of the gate to 'see what happens'."
+  - "2. Rewrite the docstring."
+  - "3. Add the five new cases to `TestEchoYtdlpLine`."
+  - "4. Run `git diff --stat` and prove no existing test body changed. Run the gates. Make ONE commit."
+  - "Every intermediate state is valid: step 1 is behaviour-complete for the non-progress branch with no test asserting the new behaviour yet, and step 3 only adds assertions. No fix-up commit is needed or permitted."
+
+architectural_constraints:
+  - "Apply the transform at the sink, INSIDE _echo_ytdlp_line (Alt A'). Do NOT transform at the two call sites in _monitor_progress / _drain_output - that duplicates the rule at two places and can drift from the sink."
+  - "The transform statement must never be hoisted above the `if not echo:` early return. Doing so is semantically invisible today (sanitize_text_for_log is pure) and therefore unguardable by a test - it is a review criterion, and the docstring must state the ordering so the invariant is documented at the site."
+  - "`output_chunks` stays RAW. Its only consumer is `download_failed`, which already applies `sanitize_text_for_log` at its own call site; transforming earlier would (i) replace undecodable child bytes with U+FFFD, destroying the fidelity TRN-011 exists for, (ii) make `_MAX_CHILD_OUTPUT_BYTES` bound redacted text rather than bytes read, and (iii) duplicate the processor B6 is building."
+  - "`_is_ytdlp_progress_line` and `_parse_ytdlp_progress` are unchanged. The write-branch admission predicate is `_is_ytdlp_progress_line`; `_parse_ytdlp_progress` sits on the `echo=False` branch and again in `_monitor_progress`, and is not this predicate."
+  - "`services/ffmpeg_utils.py::iter_process_lines` is untouched and its contract is unchanged: it yields raw `bytes`."
+  - "`subprocess_reader_failed` lives in `_await_first_and_cancel_others`, not in the drain loop. `B5` touches neither it nor `ytdlp_reader_line_overrun`; `B6` owns `subprocess_reader_failed.error`."
+  - "Unchanged, all of it: the `\r` rewrite; terminal-width padding and truncation; `echo=False` writing nothing to sys.stderr and nothing to the log for a non-progress line; the DEBUG `ytdlp_progress_suppressed` record with its `downloaded` / `total` fields; both `ffmpeg_utils` merge records (plan-10 B14's)."
+  - "`sanitize_text_for_log` is the control, not `sanitize_url_for_log`: the echo surface admits any non-progress line whole, so an all-or-nothing transform would destroy the operator's diagnostic text. (Closes `B5-D2`.)"
+  - "No new dependency, no new file, no `utils/url_sanitizer.py` change, no `tests/test_packaging.py` frozenset edit. structlog conventions; no `print()`; no `Any` in the new tests; English only; strict typing clean; small focused functions."
+
+required_tests:
+  unchanged_must_pass_all_12:
+    note: "Measured at dfcf326 - 12 passed. Every body byte-identical; `git diff` on this file must show additions only."
+    names:
+      - "TestEchoYtdlpLine::test_progress_line_is_rewritten_in_place"
+      - "TestEchoYtdlpLine::test_one_shot_line_keeps_its_newline"
+      - "TestEchoYtdlpLine::test_shorter_progress_line_clears_the_previous_one"
+      - "TestBoundedYtDlpTranscript::test_failing_child_output_capped_to_bound"
+      - "TestBoundedYtDlpTranscript::test_bounded_transcript_success_returns_output"
+      - "TestBoundedYtDlpTranscript::test_bounded_transcript_retains_tail_not_head"
+      - "TestBoundedYtDlpTranscript::test_short_transcript_unaffected_by_bound"
+      - "TestBoundedYtDlpTranscript::test_echo_false_chatty_child_no_stderr_and_bounded"
+      - "TestYtDlpSubprocessShutdown::test_ytdlp_echo_false_suppresses_stderr_while_callback_fires"
+      - "TestYtDlpSubprocessShutdown::test_ytdlp_echo_false_no_callback_stderr_empty"
+      - "TestYtDlpSubprocessShutdown::test_ytdlp_echo_false_progress_emits_debug_log"
+      - "TestYtDlpSubprocessShutdown::test_ytdlp_echo_false_non_progress_line_no_output_no_log"
+  new_cases:
+    - name: test_non_progress_signed_cdn_url_is_redacted_on_stderr
+      asserts: >
+        THE CORE ASSERTION - nothing in tests/ covers it (no test passes a URL to
+        _echo_ytdlp_line and none contains the CDN host). A non-progress line carrying a signed
+        CDN address (`[video] abc123: Downloading webpage: https://vk-cdn.net/video/seg1.ts?sig=A1b2C3d4e5f6&token=zzzZZZ\n`)
+        leaves `captured.err` containing `https://vk-cdn.net/***REDACTED***`, and containing
+        neither `sig=`, `token=`, `A1b2C3d4e5f6`, nor `zzzZZZ`. The surrounding yt-dlp prose and
+        the trailing newline survive. Sibling of test_one_shot_line_keeps_its_newline, not a
+        replacement for it.
+    - name: test_non_progress_cookie_artefact_path_is_redacted_on_stderr
+      asserts: >
+        Proves B4's widened artefact rules reach the terminal, which the URL case alone does not.
+        A non-progress `Destination:` line carrying a real artefact path (build it with
+        `_create_cookie_artifact_dir()` / `_create_temp_cookie_file()` so the shape is genuine;
+        clean up in `finally` the way `tests/test_cookies.py` does) leaves `***REDACTED***` in
+        `captured.err` with none of `vk_cookies_`, `AppData`, or `Users` present.
+    - name: test_progress_branch_text_is_transformed_before_padding
+      asserts: >
+        The second write branch has no coverage otherwise. A line that `_is_ytdlp_progress_line`
+        classifies as progress AND that carries a signed CDN URL in its speed field
+        (`[download]  40.3% of 649.37MiB at https://vk-cdn.net/v?sig=X ETA 06:43\n`) still
+        takes the `\r` rewrite - `captured.err` starts with `\r`, ends with `\r`, contains no
+        `\n` - while carrying `https://vk-cdn.net/***REDACTED***` and no `sig=`. FIXTURE
+        CONSTRAINT: the transformed text must stay under 80 columns, because the branch pads and
+        truncates at `shutil.get_terminal_size((80, 24)).columns`; a narrower terminal would cut
+        the assertion target and make the test environment-dependent. State that in the docstring.
+    - name: test_echo_false_url_line_writes_nothing_and_logs_nothing
+      asserts: >
+        The observable half of gate-before-transform. An `echo=False` call whose line DOES carry
+        a signed CDN URL produces `captured.err == ""` and zero logger calls, proving the gate is
+        evaluated before anything is transformed. Do this at `_echo_ytdlp_line` directly with
+        `capsys` and a patched `logger` - do NOT modify the existing subprocess-level
+        test_ytdlp_echo_false_non_progress_line_no_output_no_log, and do not duplicate it there.
+    - name: test_progress_templates_are_transform_identically
+      asserts: >
+        The D-6 EVIDENCE, and the only honest form of it. Over all seven real yt-dlp progress
+        templates (the anchored-prefix percent/estimated/byte-count/N-A forms, with and without
+        the `(frag i/n)` suffix): `sanitize_text_for_log(template) == template`; and
+        `_is_ytdlp_progress_line(template)` equals `_is_ytdlp_progress_line(sanitize_text_for_log(template))`;
+        and `_parse_ytdlp_progress(template)` equals `_parse_ytdlp_progress(sanitize_text_for_log(template))`.
+        Call the second half out in the docstring: it pins CLASSIFICATION, which the existing
+        `downloaded`/`total` assertions provably do NOT cover - they would stay green through a
+        transform that changed which branch a line takes. Also record WHY the identity holds, so
+        a future rule author sees that the anchor is load-bearing: `_YTDLP_PROGRESS_LINE_RE` is
+        anchored at `^\[download\]`, and none of B4's three rules can match the
+        `[download] <pct>% of <size>` region, because the artefact lead requires a `/` or `\`
+        separator that region never contains and the URL rule requires `https?://`.
+  sibling_requirement: >
+    test_one_shot_line_keeps_its_newline stays green with a byte-identical body and its current
+    name. Its assertion `captured.err == line` is now conditional on the content having nothing
+    to redact, and the new redaction case is what makes that conditionality explicit - so the two
+    must sit adjacent in the class, and TestEchoYtdlpLine's docstring should say the pair proves
+    the pass-through is content-dependent, not that pass-through was replaced. Editing or removing
+    the existing method would violate the "zero existing-test changes" ruling of B5-A4.
+  windows_requirement: >
+    Every new test runs on Windows: no `pytest.mark.skipif(sys.platform...)`, no POSIX-only
+    assertion, no new skip. `_echo_ytdlp_line` writes to `sys.stderr` and `capsys` captures it
+    on this platform exactly as the existing three cases already do.
+
+acceptance_criteria:
+  - id: AC-1
+    criterion: A non-progress line carrying a signed CDN URL reaches sys.stderr as `scheme://host/***REDACTED***` with every query value absent.
+    verified_by: test_non_progress_signed_cdn_url_is_redacted_on_stderr
+  - id: AC-2
+    criterion: The progress write branch transforms `text` before padding and truncation, and the `\r` rewrite shape is intact.
+    verified_by: test_progress_branch_text_is_transformed_before_padding
+  - id: AC-3
+    criterion: A real cookie-artefact path in a non-progress line is redacted on stderr, proving B4's rules reach the terminal.
+    verified_by: test_non_progress_cookie_artefact_path_is_redacted_on_stderr
+  - id: AC-4
+    criterion: "Withdrawn by B5-A4: the planned rewrite of the non-progress echo test does not happen. Its replacement is `no existing test was changed` - and `git diff` on tests/test_hls_downloader.py shows additions only."
+    verified_by: git diff
+  - id: AC-5
+    criterion: "`echo=False` on a URL-bearing line writes nothing to stderr and logs nothing, and the DEBUG `ytdlp_progress_suppressed` record still carries exact `downloaded`/`total`."
+    verified_by: test_echo_false_url_line_writes_nothing_and_logs_nothing; the 12 unchanged tests
+  - id: AC-6
+    criterion: "Classification and parsing run on the raw line - all seven real progress templates are transform-identical, and classification plus parse results are identical before and after."
+    verified_by: test_progress_templates_are_transform_identically
+  - id: AC-7
+    criterion: All 12 existing echo/transcript tests pass unchanged, 12 passed / 0 failed.
+    verified_by: uv run pytest tests/test_hls_downloader.py -q -k "echo or Echo or transcript or Transcript"
+  - id: AC-8
+    criterion: "The `_echo_ytdlp_line` docstring states the transform, the raw-line parsing, the gate ordering, the raw transcript buffer, and the non-TTY stderr reachability."
+    verified_by: review
+  - id: AC-9
+    criterion: "`_is_ytdlp_progress_line`, `_parse_ytdlp_progress`, `iter_process_lines`, `output_chunks`, `_retain_transcript_line`, `_monitor_progress`, `_drain_output` and `_await_first_and_cancel_others` are all unchanged; `subprocess_reader_failed` and `ytdlp_reader_line_overrun` are untouched."
+    verified_by: review
+  - id: AC-10
+    criterion: Gates green (see `gates`).
+    verified_by: the gate commands
+
+gates:
+  - "uv run pytest -q - full suite green; total skips NOT above 6 (3 D-11 POSIX-permission + 3 pre-existing killpg)."
+  - "uv run mypy src - clean."
+  - "uv run ruff check src tests - clean."
+  - "uv run ruff format --check src tests - clean, no exception clause."
+  - "uv run mypy src tests - error count NOT above 93."
+  - "uv run pytest tests/test_packaging.py -q - 14 passed."
+  - "uv run pytest tests/test_hls_downloader.py -q -k \"echo or Echo or transcript or Transcript\" - 12 passed, 0 failed, plus every new case executed."
+  - "Every new test executed on Windows: no platform guard, no new skip."
+
+commit_shape:
+  subject: "fix(download): redact child output before it reaches the console"
+  count: 1
+  body_must_record:
+    - "`OUT-007` had NOT landed when this was written: no per-line record for non-progress child output exists anywhere in src/ (`_echo_ytdlp_line` still held a live `sys.stderr.write(line)` and its `echo=False` branch returns without logging). That is what decided the transform goes on what reaches sys.stderr rather than on a record field; it is plan 13's `B7`, sequenced strictly after `B5`."
+    - "The planned test rewrite was DROPPED as unnecessary. Under `Alt A'` the `echo=False` path is byte-for-byte unchanged, so `test_ytdlp_echo_false_non_progress_line_no_output_no_log` stays green untouched (12 echo/transcript tests pass at dfcf326). Rewriting it to assert the record-per-line ruling would have implemented `OUT-007` here, pre-empting plan 13 `B7`, and weakened a clause `B5` had pinned. Plan 11 §3.5 itself recommends \"B5 lands the redaction only\". **Zero existing-test changes; the benign pass-through case survives as a sibling of the new redaction case.**"
+    - "Batch mode DOES reach this sink, contradicting plan 11 §3.5's \"batch mode never reaches this sink\". `batch_downloader._download_single` sets `echo = not reporter.is_enabled`, and `RichProgressReporter.is_enabled` falls back to `sys.stderr.isatty()`, so batch on a non-TTY stderr (CI, `> file`, pipe, CliRunner) sets `echo=True`. Proven by the live `test_batch_echo_not_suppressed_when_reporter_disabled` (`echo is True`). The setter enumeration is complete - single-download CLI (no `echo`, so always True) and non-TTY batch are the only routes - so the blast radius is WIDER than plan 11 claimed: redirected output is exactly the capture-prone case."
+    - "`D-6`'s resolution: classification and parsing run on the RAW line; the transform is applied only to what is written. Its hazard was proven THEORETICAL, not real - all 7 real yt-dlp progress templates transform to identical text with identical parse and classification results. The test therefore pins the INVARIANT (identity + unchanged classification), not a failure that cannot occur, and records why it holds: `_YTDLP_PROGRESS_LINE_RE` is anchored at `^[download]` and none of B4's three rules can match that region."
+    - "`output_chunks` stays RAW, and why: it is the child's bytes, its only consumer (`download_failed`) already applies `sanitize_text_for_log` at its own call site, and transforming earlier would substitute U+FFFD for undecodable bytes (destroying the fidelity TRN-011 exists for), make `_MAX_CHILD_OUTPUT_BYTES` bound redacted text rather than bytes read, and duplicate the processor `B6` is building."
+    - "The write-branch admission predicate is `_is_ytdlp_progress_line`, NOT `_parse_ytdlp_progress` - the latter is on the `echo=False` branch and again in `_monitor_progress`."
+    - "The transform is applied at the sink, inside `_echo_ytdlp_line`, not at the two call sites in `_monitor_progress` / `_drain_output` - one rule, one place, no drift."
+    - "The `echo` gate is evaluated before any transform, by control flow; a hoisted transform would be semantically invisible today (the transform is pure) and is therefore a review constraint, not a test."
+
+staging:
+  - "Explicit paths only. Never `git add -A`, `git add .`, or `git add -u`."
+  - "git add src/vkdownloader/services/ytdlp_downloader.py"
+  - "git add tests/test_hls_downloader.py"
+  - "Never amend, force-push, `git reset`, or `git checkout`."
+  - "The working tree carries unrelated modified and untracked entries at baseline (deleted `.ai/plans/*`, a modified `17-…execution.md`, `tmp/`). None may enter this commit."
+````
+
+##### `B5-DESIGN` — the five decisions this task rests on, and why
+
+**1 · `D-6` placement — classify and parse on the RAW line; transform only what is written.**
+Confirmed. `_is_ytdlp_progress_line(line)` and `_parse_ytdlp_progress(line)` both receive raw
+text; `sanitize_text_for_log` is applied to the derived value at each write. Three reasons.
+The `echo=False` branch parses **before** any write and the parse feeds only the DEBUG record's
+`downloaded`/`total`; feeding a transformed string to a pure numeric extractor could only lose
+precision, never gain it. `_monitor_progress` uses the same decoded line a third time for
+`progress_callback`, and `B5` does not touch that call site — so transforming at the call sites
+would double-apply. And the identity is *structural*, not lucky: `_YTDLP_PROGRESS_LINE_RE` is
+anchored at `^\[download\]`, and none of `B4`'s three rules can reach the `[download] <pct>% of
+<size>` region — the artefact lead requires a `/` or `\` separator that region never contains,
+and the URL rule requires `https?://`.
+
+**The evidence test pins the invariant, not a failure that cannot occur.**
+`test_progress_templates_are_transform_identically` asserts, over all seven real templates,
+`f(t) == t` **and** that classification and parse results are identical before and after. That
+second half is the part that matters: `B5-A6` measured that the existing `downloaded`/`total`
+assertions would stay green through a transform that changed which branch a line takes. The test
+must therefore assert classification explicitly, and its docstring must record the `^[download]`
+anchor as the reason — so the next rule author sees that the anchor is load-bearing.
+
+**2 · Both write branches, at exactly these two places.** The progress branch transforms the
+value it assigns to `text`, immediately after the `rstrip` and **before** `width`/`ljust` — so
+the padded, truncated text is the redacted one (the transform-before-truncate order plan 10
+already pinned). The non-progress branch transforms the argument **at the `sys.stderr.write`
+call itself**, so there is no named local that a later edit could write to instead.
+
+**3 · The gate is structural, not incidental.** `sanitize_text_for_log` is pure, so hoisting the
+transform above the `if not echo: … return` would change **nothing observable** — it cannot be
+guarded by a test, and a test that claims to guard it would be theatre. The guarantee is
+therefore made structural: the transform appears **only** inside the two write arms, `text` is
+assigned inside the progress arm, and the docstring states the ordering so the invariant is
+written down at the site. The observable half *is* tested
+(`test_echo_false_url_line_writes_nothing_and_logs_nothing`), and it is the half that would break
+if `B6`'s central processor later made the transform impure or logging.
+
+**4 · The docstring** states, in order: the console receives the transformed line; classification
+and byte accounting use the raw line; `echo=False` is evaluated before any transform; the
+transcript buffer still receives the raw line and why; and that a non-TTY stderr routes batch
+mode here (`B5-A1`). Its current omission of any mention of a transform is the reason this defect
+survived, so the omission is the defect.
+
+**5 · Sibling, never replacement.** `test_one_shot_line_keeps_its_newline` keeps its name and its
+byte-identical body. Its assertion `captured.err == line` is now conditional on the content
+having nothing to redact; `test_non_progress_signed_cdn_url_is_redacted_on_stderr` is what makes
+that conditionality explicit. The two sit adjacent in `TestEchoYtdlpLine`, and the class
+docstring says the pair proves pass-through is content-dependent — not that pass-through was
+replaced. Editing or removing the existing method would violate `B5-A4`.
+
+**No existing test is modified anywhere in this block.** That is `B5-A4`'s recommendation and
+this design adopts it: the rewrite plan 11 required would have implemented `OUT-007`, which
+belongs to plan 13's `B7` and is sequenced strictly after `B5`. If the Owner still wants the
+record-per-line ruling, it is a scope move into `B7`, not a rewrite here.
 
 ---
 
@@ -3933,6 +5558,128 @@ acceptance_criteria:
 
 ---
 
+#### `B6-AUDIT` — block-`B6` audit findings (Auditor; read-only at `48d0efa`)
+
+**Baseline re-measured at `48d0efa`, adopted as given:** 854 passed, 6 skipped · `mypy src` clean (31 files) · `ruff check src tests` clean · `ruff format --check src tests` clean (54 files) · `mypy src tests` 93 errors in 8 files · `tests/test_packaging.py` 14 passed. [verified-by-execution] Nothing was staged or committed; no `src/`, `tests/`, or audit-phase file was touched.
+
+**`B6-A1` (MANDATORY, `[SPEC-DEVIATION]`) — the enumeration is 27 sites / 22 names, not 21 / 24. The count differs, so the closure claim changes.** Per plan 11 §3.6's own rule this is a finding, not implementer discretion. Census method: AST walk of every `logger.*` call in `src/`, keeping any call with an `error=`, `path=`, `exc_info=` keyword or an `.exception()` receiver. [verified-by-execution]
+
+- **31 sites / 26 names** carry exception text. **4 sites / 4 names are excluded** as plan 11 directs: `infrastructure/network_monitor.py`'s `playlist_body_read_error`, `hls_select_error`, `response_body_error`, `response_json_error` — all `error=str(e.__class__.__name__)`, confirmed class-name-only. ⇒ **27 sites / 22 record names in scope.**
+- Of those 27: **2 sites** are pre-sanitised and owned by plan-10 `B14` (`batch_merge_failed`, `final_merge_failed`, both `error=sanitize_text_for_log(...)[:200]`) — **do not touch**; **1 further site** is pre-sanitised and owned by **nobody**: `ytdlp_downloader.py`'s `download_failed` sets `error=sanitize_text_for_log(error_msg)` on the assignment line immediately above the record. ⇒ **24 sites / 19 names carry untransformed exception text.**
+- **`download_failed` is a name collision across two files and two carriers** — `cli.py` (`logger.exception`, `url=sanitize_url_for_log(url)`, guarded by `_logging_configured`) and `ytdlp_downloader.py` (`error=error_msg`, pre-sanitised). Any test or count that treats "the 21 records" as one-to-one with call sites is wrong here. This single collision is the most likely source of the prior counts' drift.
+- **Plan 11's `yt_dlp_not_found` does not exist.** The emitted name is **`ytdlp_not_found`** [verified-by-reading]. A test written from plan 11's table would assert on a record the product never emits.
+- **`cookie_file_cleaned_up` sits outside the exception-text boundary**: it carries `path=str(cookie_file)` at DEBUG and **no** exception text [verified-by-reading]. It is in scope for `D-7`'s key choice and for AC-3, but it must be added to the enumeration explicitly or the closure claim silently omits a record that fires on **every successful download**.
+
+**`B6-A2` — the eight traceback-carrying records: confirmed, 8 / 8, and the decisive argument survives.** Five `exc_info=True` — `browser_launch_failed` (`browser.py`), `browser_close_failed` (`browser.py`, also `error=str(exc)`), `playwright_stop_failed` (`browser.py`, also `error=str(exc)`), `video_player_click_failed` (`extractor.py`, DEBUG), `ytdlp_not_found` (`ytdlp_downloader.py`, also `path=exc.filename`) — plus three `logger.exception` — `download_failed` (`cli.py`), `batch_download_failed` (`cli.py`), `unexpected_error_in_batch_download` (`batch_downloader.py`). [verified-by-reading] `exc_info` takes an exception or traceback object, not text, so **there is no text to wrap at a call site**; a call-site-only remedy is structurally incapable of closing `SEC-007`. The five `exc_info` records and the three `.exception` records are **eight distinct call sites**, one per record.
+
+**`B6-A3` (MANDATORY, `[SPEC-DEVIATION]`) — the `path=` inventory is 8 sites / 7 names, and one of plan 17's cited `path=` sites is not a log record.** [verified-by-execution]
+
+| Set | Record | File | Carrier | Classification |
+|---|---|---|---|---|
+| artefact (3 sites / 2 names) | `cookie_file_cleanup_failed` (dir) | `ytdlp_downloader.py` | `path=str(cookie_dir)` + `error=str(failure)` | **redact** |
+| artefact | `cookie_file_cleanup_failed` (file) | `ytdlp_downloader.py` | `path=str(cookie_file)` + `error=str(exc)` | **redact** |
+| artefact | `cookie_file_cleaned_up` | `ytdlp_downloader.py` | `path=str(cookie_file)`, DEBUG, every success | **redact** |
+| benign (5 sites / 5 names) | `env_file_resolved` | `cli.py` | `path=str(env_file.resolve())` | do not redact |
+| benign | `output_path_inside_repository` | `utils/security.py` | `path=str(resolved)` (also `repo_root=str(...)`) | do not redact |
+| benign | `failed_to_cleanup_partial_file` | `ytdlp_downloader.py` | `path=str(validated_output)` | do not redact |
+| benign | `download_interrupted_switching_to_segments` | `ytdlp_downloader.py` | `path=str(output_file)` | do not redact |
+| benign | `ytdlp_not_found` | `ytdlp_downloader.py` | **`path=exc.filename`** | do not redact |
+
+Two corrections. (a) `ytdlp_not_found`'s carrier is `exc.filename`, **not** `str(...)`, and `FileNotFoundError.filename` is `str | None` — so `path` can legitimately arrive as **`None`**, which is exactly AC-8's non-string case and must not be a special path in the processor. (b) Plan 17's `D-7` criterion list names "`infrastructure/browser.py`'s `add_init_script`" as a `path=` site: that is **`await page.add_init_script(path=str(self._stealth_path))`, a Playwright API call, not a log record** [verified-by-reading]. It must be struck from the `D-7` input. Four further records carry output paths under a **different key**, `output=str(...)` (`starting_download`, `starting_ytdlp_download`, `starting_segment_download`, `merge_completed`) [verified-by-execution] — outside plan 17's `path` set, and they decide the `D-7` question below.
+
+**`B6-A4` — the processor chain, measured and confirmed.** `config.setup_logging`'s `structlog.configure(processors=[...])` at `48d0efa`, in order: `structlog.contextvars.merge_contextvars` → `structlog.stdlib.add_log_level` → `structlog.processors.TimeStamper(fmt="iso", utc=True)` → **`structlog.processors.format_exc_info`** → `structlog.processors.UnicodeDecoder()` → `structlog.processors.JSONRenderer() if settings.log_file else structlog.dev.ConsoleRenderer()`. [verified-by-reading + verified-by-execution] `wrapper_class=structlog.stdlib.BoundLogger`, `logger_factory=structlog.stdlib.LoggerFactory()`, `cache_logger_on_first_use=True`. **structlog 26.1.0**, Python 3.12.1 [verified-by-execution].
+
+- **`format_exc_info` confirmed to consume `exc_info` and write the rendered traceback into the `exception` key.** Driving the configured chain with `exc_info=True` produced `{"path": …, "event": …, "level": …, "timestamp": …, "exception": "Traceback (most recent call last):\n  File …\nValueError: sig=…"}` — `exc_info` **absent**, `exception` a **single `str`** with embedded newlines [verified-by-execution]. `D-7`'s candidate allowlist `error` + `exception` (+ `path`) is therefore correct.
+- **Refinement to "exactly one free slot, position 5".** There are **two** insertion points after `format_exc_info` and before the renderer — before or after `UnicodeDecoder()`. "Position 5" (before `UnicodeDecoder`) is the correct choice and the safe one; `UnicodeDecoder` only decodes `bytes` values, so the two orders are behaviourally equivalent for redaction, but last-before-renderer is what AC-4 should pin.
+- **A stdlib `logging` record bypasses the processor entirely.** Driving a plain `logging.getLogger(...)` record with `exc_info=True` through the same configuration emitted raw stdlib output (`'plain_event\nTraceback (most recent call last):\n … ValueError: sig=…\n'`) — no structlog renderer, no processor [verified-by-execution]. `config.py` does call `logging.basicConfig(format="%(message)s", …)` with a `StreamHandler`/`FileHandler`, and installs **no** `structlog.stdlib.ProcessorFormatter`, so stdlib records are rendered by stdlib, not structlog. **Measured mitigation: `src/` contains zero `logging.getLogger(...)` module loggers** — every one of the 16 module loggers is `structlog.get_logger(__name__)` [verified-by-execution]; only `services/progress_display.py` touches the *root* logger, to repoint handler streams. **Residual, `[BEST-PRACTICE]`, advisory:** third-party libraries (`playwright`, `yt_dlp`, `aiohttp`, `urllib3`) log through stdlib to that same root handler and are **not** covered by a structlog processor. If a future library logs a signed URL or an artefact path, the central control does not see it. Effort: small; value: one `structlog.stdlib.ProcessorFormatter` (or a root-level filter) closes it. Not this block's scope — record it and hand onward.
+- **There is exactly one `structlog.configure` in `src/`** [verified-by-execution].
+
+**`B6-A5` (MANDATORY, `[SPEC-DEVIATION]`) — `cli.py` has no pre-`setup_logging` console path, so plan 17's instruction 2 is unexecutable and must be struck.** Plan 17 §`B6` item 2 says "`cli.py` gets the same wiring for its own pre-`setup_logging` console path". Measured: the preamble calls `setup_logging(settings)` and sets `_logging_configured = True`; both `cli.py` records are wrapped in `if _logging_configured:`; `_render_preamble_failure`'s `preamble_failed` record is likewise gated. **There is no logging path in `cli.py` that exists before `setup_logging` returns** [verified-by-reading]. `cli.py` needs **zero** wiring, and plan 11 `T-B6` step 5's "`cli.py` is not edited" is the correct instruction. Recommend deleting plan 17's clause rather than implementing a stub.
+
+**`B6-A6` — the layer constraint, stated precisely.** `docs/STRUCT.md` lists `config.py` in the package tree ("Settings model, logging, env validation") but names it in **no** layer bullet: the Entry layer is `cli.py`, `__main__.py` ("No business logic or **private-symbol imports** from service/utils layers"), the Service layer is `services/` ("Imports private symbols from `utils/` internally"), and `config.py` is in neither [verified-by-reading]. So plan 11's "entry-adjacent must be a public name" is an **inference, not a documented rule**, exactly as plan 17 §2.8 states. Confirmed: `config.py` imports only `vkdownloader.models.enums` (`CookieSource`, `LogLevel`) and has **zero** `logger.` calls [verified-by-execution]. And "public" is **not** the package's own convention — `utils/__init__.py::__all__` exports `_strip_auth_params` and `_resolve_output_file`, both underscore-named [verified-by-reading]. **What it requires:** the processor must be reachable under a public name **only if** the project adopts "entry-adjacent means public" as a rule. That is `B6-D3`, a plan-level decision, and it is not forced by `STRUCT.md` as written.
+
+**`B6-A7` (`D-7`) — the criterion is answered by measurement, and it points at `Alt B`.** Criterion: *can the rule set match a field the product logs for benign purposes?* `sanitize_text_for_log` matches exactly two shapes: any `https?://` run, and the two `vk_cookies_*` artefact literals [verified-by-reading]. I enumerated every record keyword in `src/` (56 distinct keys, `url` × 53, `path` × 8, `error` × 25, …) and every URL-bearing field's expression [verified-by-execution]:
+
+- **No benign field matches.** A path never matches: the URL rule needs `https?://`, the artefact rules need the frozen literals. `output`, `url_file`, `repo_root`, `working_dir`, `hint`, `reason`, `next_action`, `quality` are all unmatched.
+- **Every `url=` field in every record is already `_strip_auth_params`'d** — all 53 sites inspected; the two apparent exceptions (`downloader_throttle.py`'s `download_cancelled | url = url`, `browser.py`'s `stealth_asset_missing | hint = msg`) are a parameter documented "Sanitized URL for logging" whose only caller passes `sanitized_url`, and a package-relative asset path [verified-by-reading].
+- **The one benign value that *does* match is a verified fixed point.** `sanitize_text_for_log("https://host/***REDACTED***")` → unchanged, and unchanged again on pass 2. I ran two passes over 9 measured shapes (already-redacted url, bare marker, `str(aiohttp.ClientResponseError)` carrying a signed CDN url, `path=C:\…\vk_cookies_*.cookies.txt`, a directory artefact, a mixed child line, `Unknown yt-dlp error`, `_MERGE_HINT`): **every one a fixed point** [verified-by-execution].
+
+⇒ **On the measured facts, `Alt B` (every string value) is the safe and complete choice**, and its cost is lower than plan 11 assumed. **Residual of `Alt B`:** it is not literally key-agnostic — `event`, `level`, `timestamp` are string values, and transforming `event` would rename records and break log queries, so `Alt B` needs a small **denylist** of structural keys. Under the measured rule set the denylist is never *needed* to prevent a false redaction (no record's `event` name contains `http` or `vk_cookies_`), but it is needed to prevent a *semantic* corruption. Plan 17's claim that `Alt B` "will eventually redact a legitimate operator-facing message" is **not supported by any measured instance** — worth softening. **Residual of `Alt A` (allowlist `error`/`exception`/`path`):** every text-bearing key outside the three, i.e. `url_file` (cli.py's `batch_download_failed`, a user-chosen urls-file path), `output` × 4, `repo_root`, `working_dir`, `hint` × 5, `reason` × 8, `urls` (a **list**, `captured_m3u8_urls`) — plus, decisively, **any future record that names its payload something else**. `Alt A` buys today's completeness and gives up the property that makes this block worth its risk. Recommend `Alt B` with an explicit structural-key denylist, and record the residual as "a future record whose payload is a **list** or **mapping** is not transformed" (the `urls` list is covered today only because its elements are pre-sanitised at the call site).
+
+**`B6-A8` — the `B4` gap: measured, it does NOT materialise. `D-5`'s justification holds, and `B6` should record that rather than close it.** The concern is right in principle — a structlog event dict is not a child sink, and `_format_cookies_for_ffmpeg` returns a flat session string (`"; ".join(f"{name}={value}")`) that becomes an in-process `headers["Cookie"]` (`segment_downloader.py`, two sites). I checked every record field in `src/` for a `Cookie:` header, a flat session string, `headers`, `cookies`, or `policy` [verified-by-execution]: **the only cookie-adjacent record fields in the whole product are the three artefact `path` values.** `headers` is never logged; `request.cookies` (`B7`'s carrier) never reaches a record; `DownloadPolicy` is never logged. **Answer: no record in the measured enumeration carries a `Cookie:` header value or a flat session string, so the processor alone will redact nothing here and `D-5`'s "no child emits a `Cookie:` header to a sink" reasoning is not what protects the event dict — the protection is "the product never logs one".** That is a *different* and *stronger* claim, and it is the one `B6` should record. **Do not widen `B4`'s rule set.** Options, in order of cost: (1) record the structural fact and pin it with a test that asserts no log record field name is `headers`/`cookies`/`policy` and no value contains `Cookie:` — cheap, and it makes the residual self-checking; (2) hand the residual to `B7`, whose `SecretStr`/`repr=False` work makes a future `logger.debug(policy)` unable to render the session at all — that is the durable fix and needs no processor change; (3) add a `Cookie:` rule to `B4`'s set — **not recommended**, it is the broadening `D-5` declined and no instance justifies it.
+
+**`B6-A9` — alternatives, characterised (no choice made).**
+
+- **Central processor after `format_exc_info`** — covers all 27 in-scope sites, all 8 traceback records, and every future record; no call site edited. Cost: one global transform on every record, which is why `AC-4` (chain position) and `AC-5` (event-name-agnosticism) are mandatory.
+- **Wrapping `error=str(e)` at every site** — **structurally incomplete.** It cannot reach the eight traceback records: `exc_info` takes an exception or traceback object, not text. Reporting `SEC-007` closed on this basis leaves the largest leak open. Rejected; it survives only as the idempotency fixture `486bfd9` already created.
+- **Central processor *plus* per-site wrapping** — redundant, and two transforms in the path must then be idempotent. `sanitize_text_for_log` **is** a verified fixed point on every measured shape (`B6-A7`), so this is survivable today — but it buys nothing and adds a second place to forget. Rejected.
+- **A stdlib `logging.Filter`** — **plan 11 §3.6's stated reason is factually wrong.** Measured: a handler-level filter *does* run for structlog's own records, and it sees `record.msg` = the **already-rendered JSON string**, with `record.args == ()` and **zero** extra record attributes [verified-by-execution]. So it is not that structlog "bypasses handler-level filters"; it is that the filter sees the **rendered wire format**, not the event dict. It therefore cannot be key-aware, cannot distinguish `error` from `path` from `event`, needs a *different* regex per renderer (`JSONRenderer` vs `ConsoleRenderer`'s box-drawing output), and would break the moment the product adopts `ProcessorFormatter` (where the handler receives an unrendered `LogRecord`). **Recommend correcting the reason, not the verdict** — `[SPEC-DEVIATION]`, one sentence in plan 11 §3.6 and one in plan 17's `changes` block.
+- **A further option, better than the filter and worth naming:** wrap the renderer instead of inserting a sibling processor — i.e. subclass `JSONRenderer`/`ConsoleRenderer`. **Rejected by measurement:** the renderer is chosen by a conditional expression *inside* the same list, so wrapping it means two renderer classes and the chain-position assertion becomes "is the wrapper last", which no longer distinguishes before/after `format_exc_info`. A sibling processor before the renderer is strictly more assertable.
+
+**`B6-A10` — `B5` did land, and its output never reaches a record, so `B5` is not a live pipeline input.** Confirmed at `48d0efa`: `_echo_ytdlp_line` applies `sanitize_text_for_log` and writes the result with `sys.stderr.write(...)` — **no logger call on either write branch**; its only record is `ytdlp_progress_suppressed`, carrying `downloaded`/`total` integers and no line text; and its `echo=False` branch returns before either write [verified-by-reading]. **The redacted echo text is written to `sys.stderr` and nowhere else, so `B5`'s call site is not a processor input and the double-transform concern it raises is theoretical, not live.** The *live* idempotency exposure is a different one neither plan names: `ytdlp_downloader.py`'s `download_failed` sanitises `error_msg` at the call site, so a value **does** reach the record pre-sanitised — alongside `B14`'s two. **The idempotency fixture set is three records, not two** (`batch_merge_failed`, `final_merge_failed`, `download_failed`), and the third is the one that exercises the pipeline path a `B6` test can drive end-to-end.
+
+**`B6-A11` — the tests this block needs.** All against the **configured** chain (call `config.setup_logging`, then `structlog.get_logger`), never a hand-built dict. Beware `cache_logger_on_first_use=True`: `structlog.get_config()["processors"]` is the correct assertion target for position, but a logger bound before a reconfigure keeps its cached chain.
+
+1. **Enumeration oracle.** Assert the measured set — 22 record names / 27 sites — by AST-scanning `src/` for `error=`/`path=`/`exc_info=`/`.exception(` calls, minus the four `network_monitor` names, plus `cookie_file_cleaned_up`. This is the AC-7 re-count as an executable oracle, and it is the only thing that stops the count drifting a fourth time.
+2. **Rendered-traceback test (the criterion that distinguishes this block from the rejected call-site alternative).** Drive an `exc_info=True` record through the chain with a signed CDN url in the exception message; assert `exception` contains `***REDACTED***` and the original signature is absent.
+3. **`cookie_file_cleanup_failed`, both fields.** One test, `path=` a real artefact built via `_create_cookie_artifact_dir()`/`_create_temp_cookie_file()` and `error=` carrying the same shape; assert **both** are redacted. (Behavioural, not literal: `B4` duplicated the artefact literals in `utils/`, so a literal in the test is the only drift guard.)
+4. **`cookie_file_cleaned_up`'s `path`** — the success-path instance; assert redacted.
+5. **Chain-position test.** Read `structlog.get_config()["processors"]`; assert the processor's index is **strictly greater** than the index of the `structlog.processors.ExceptionRenderer` instance and **strictly less** than the renderer's. Identify members by **type or identity, not `__name__`** — measured: `TimeStamper` and `format_exc_info` are instances (`ExceptionRenderer`), and only the plain functions expose `__name__`. A reorder that moves the processor before `format_exc_info` must fail here.
+6. **Event-name-agnosticism.** Two records with **different** names and the **same** value; assert identical redaction and that no branch keys on a name. Also assert the processor source/bytecode contains none of the enumerated record names — the Decision B constraint made mechanical, so plan 13's `code=1`→`code=3` re-coding of `cli.py`'s configuration arm cannot change which record is covered.
+7. **Idempotency against all three pre-sanitised sites.** `batch_merge_failed`, `final_merge_failed`, **and** `ytdlp_downloader`'s `download_failed`: a value passed through `sanitize_text_for_log` then the processor must equal the value passed through the processor alone.
+8. **Never-raises.** `None` (the real `ytdlp_not_found` `path=exc.filename` case), an `int`, a nested `dict`, a `list` of strings, and an absent key — assert the record renders and no exception escapes.
+9. **`D-7` scope oracle.** Whichever scope is chosen, assert it explicitly: for `Alt B`, that `event`/`level`/`timestamp` come out **byte-identical**; for `Alt A`, that a novel key is left untouched **and that this residual is written down**.
+
+**Edits made by this audit: one.** `#### B6-AUDIT` inserted into this file, in the `B6` region immediately before `### `B7``. No code, test, plan-11, or other audit-phase file was read-modified; nothing staged or committed; `tmp/`, `tmp_old_sec*.md`, `.ai/plans/00_*`…`07_*`, `.ai/problems/PROBLEM.md`, `.kilo/commands/implement/implement-plan-multiagent.md`, untracked plans 05–08, `.gitignore`, and every `src/`/`tests/` file are untouched.
+
+---
+
+#### `B6-RESEARCH` — block-`B6` research findings (Researcher; read-only at `48d0efa`)
+
+Sources (all authoritative, all read): structlog **26.1.0** installed source — `_base.py::_process_event`, `processors.py::{ExceptionRenderer, UnicodeDecoder, _figure_out_exc_info}`, `stdlib.py::ProcessorFormatter`, `typing.py::{Processor, EventDict}`; structlog 26.1.0 narrative docs `processors.html` / `standard-library.html`; the product's `config.py::setup_logging`, `utils/url_sanitizer.py`, `utils/__init__.py`, and an AST census of all `logger.*` calls in `src/`.
+
+**`B6-R1` — a fresh event dict per record is contractual; only its *values* are shared. In place, assign — never mutate a value. [verified-by-reading + verified-by-execution]**
+`BoundLoggerBase._process_event` does `event_dict = self._context.copy(); event_dict.update(**event_kw)` **per call**, then threads that one dict through the chain. The 26.1.0 docs state it outright: *"You're explicitly allowed to modify the `event_dict` parameter, because a copy has been created before calling the first processor."* Measured through the configured chain with a probe holding a strong reference to each dict: two records from one bound logger get **distinct dict objects**; dict-level mutation (add/replace keys) does **not** leak back into `bound._context`; **but the bound `list` value is the same object in every record**, and appending to it inside the processor leaked straight into the bound context *and* into later records. ⇒ **the copy is shallow, so in-place mutation of the dict is safe and in-place mutation of a value is a real bug.** `cache_logger_on_first_use=True` caches the *proxy logger and the processor tuple*, not the dict — it does not change this. **Shape:** iterate `event_dict.items()`, and only ever **rebind** `event_dict[key] = ...`; never `.append`, never `value[k] = …`, never insert into a collection. This is also structlog's own idiom — `UnicodeDecoder`, `TimeStamper`, `add_log_level`, `merge_contextvars` and `ExceptionRenderer` all mutate in place and return the same dict, and `UnicodeDecoder.__call__` is the exact shape (iterate, rebind `str` values, return `event_dict`). A new-dict comprehension is equally legal (`Processor` allows `Mapping`) and would also be safe; in place is preferred for idiom-matching, and the typing cost is nil either way.
+
+**`B6-R2` — `format_exc_info` removes `exc_info` **by key** and writes a `str`; it is an `ExceptionRenderer` **instance**, not a function. [verified-by-reading]** `ExceptionRenderer.__call__` is `event_dict.pop("exc_info", None)` → `_figure_out_exc_info(...)` → `event_dict["exception"] = self.format_exception(exc_info)`. So: the key is **removed from the dict** (by key, not by reference — nothing downstream can see `exc_info`); `exc_info=False` is popped too; `_figure_out_exc_info` accepts a `BaseException`, a 3-tuple, or truthy (→ `sys.exc_info()`); the default `_format_exception` returns **one `str`** with embedded `\n`. `structlog.processors.format_exc_info` is the module-level singleton `ExceptionRenderer()` — so a chain-position test must identify it by `type(...) is ExceptionRenderer` or identity, never `__name__` (confirmed: instances expose no `__name__`; `merge_contextvars` / `add_log_level` / `format_exc_info` are the only plain functions).
+
+**`B6-R3` (MANDATORY, `[SPEC-DEVIATION]`) — the slot is **after `UnicodeDecoder()`**, not before it. The audit's recommendation is refuted by measurement; "last before the renderer" is the load-bearing slot, not a cosmetic one.** The audit calls the two orders "behaviourally equivalent for redaction" and pins position 5. **They are not equivalent.** `UnicodeDecoder` turns `bytes` → `str`. A processor placed **before** it sees `bytes`, is not a `str`, and is skipped — so a `bytes` secret passes through **unredacted**. Measured on the configured chain with `blob=("https://cdn/x.ts?sig=SUPERSECRET").encode()`: **pre-`UnicodeDecoder` → secret present in output, `***REDACTED***` absent; post-`UnicodeDecoder` → secret absent, marker present.** ⇒ **Insert last, immediately before the conditional renderer.** Three reasons, in order: (1) it is the only slot in which every value has reached its final textual form, which is the slot the redaction rule is defined over; (2) it makes the position assertion maximally informative — three inequalities (`> ExceptionRenderer`, `> UnicodeDecoder`, `< renderer`) distinguish *all three* possible mis-orderings, whereas a pre-`UnicodeDecoder` assertion cannot distinguish "before `UnicodeDecoder`" from "before `format_exc_info`" unless it also pins `UnicodeDecoder`; (3) there is no cost — `UnicodeDecoder` has no ordering interaction with the redaction rule. **Update AC-4 to assert all three inequalities**, and correct plan 17's "exactly one free slot, position 5".
+
+**`B6-R4` — the conditional-expression renderer has no consequence. [verified-by-reading + verified-by-execution]** `structlog.configure(processors=[…, JSONRenderer() if settings.log_file else ConsoleRenderer()])` evaluates the conditional **once, at `setup_logging` call time**, producing a plain list; `structlog.get_config()["processors"]` is a `list` and there is exactly **one** `structlog.configure` in `src/` [measured]. A processor inserted before that element is an ordinary list element; the expression is evaluated before `configure` ever sees the list. Nothing about it constrains, reorders, or hides the insertion. (The reason it *matters* is different and is `B6-A9`'s: it is what makes renderer-subclassing strictly less assertable than a sibling processor — it forces two renderer classes and collapses AC-4 to "is it last", which cannot distinguish before/after `format_exc_info`.)
+
+**`B6-R5` — `ProcessorFormatter` is the correct remedy for the third-party gap and is **out of scope for `B6`**. Reject with reason, not by default. [verified-by-reading + verified-by-execution]** It *works*: measured, a foreign `logging.getLogger("third.party").exception(...)` carrying a signed CDN url came out `***REDACTED***` under `ProcessorFormatter(processors=[TimeStamper, format_exc_info, <redactor>, JSONRenderer()], foreign_pre_chain=[add_log_level])`. But adopting it requires **three** things, none of which is "insert one processor":
+- **It replaces the renderer.** `ProcessorFormatter.wrap_for_formatter` *must be the last processor* in the structlog chain (docstring, verbatim), so `config.py`'s `JSONRenderer()/ConsoleRenderer()` expression is **deleted** and moved into the formatter — a structural change to the renderer's identity and location, which is precisely the assertability `B6-A9` chose a sibling processor to preserve.
+- **It requires handler wiring `logging.basicConfig` does not do.** `basicConfig(format="%(message)s", …)` installs a plain `logging.Formatter`, not a `ProcessorFormatter`; `config.py` must stop relying on `basicConfig`'s formatter or call `handler.setFormatter(…)` on the root handler after the fact.
+- **It leaks `_record` unless you remember `remove_processors_meta`.** Measured with the formatter's *own* structlog record and no `remove_processors_meta`: the JSON gained `"_record": "<LogRecord: m.pf, 40, <stdin>, 24, \"{'url': 'https://a?sig=SUPERSECRET', …}\">"` and `"_from_structlog": true` — **the unredacted kwargs, verbatim, inside the serialised `LogRecord` repr.** A naive adoption would *introduce* a `SEC-007` leak.
+
+⇒ **Verdict: out of scope; hand onward.** The reason is not "it is a different block" — it is that every change it forces lands on records **this product does not emit** (foreign records) and on the **wire format of records it does** (renderer identity + schema), while `B6`'s mandate is one inserted processor and no other change. It also carries a live regression surface this plan cannot test for free (`progress_display._repoint_log_handlers` iterates root `StreamHandler`s). `B6-A4`'s residual stays open; record it with the measured `_record` leak as the cost of getting it wrong, and note that `B7` (marked carriers) already shrinks the exposure from the other side.
+
+**`B6-R6` — `D-7` confirmed at **`Alt B`** (every `str` value), and the structural-key set is **four** keys, not three. [verified-by-execution]** Census of all `logger.*` calls in `src/`: **132 calls / 60 distinct keys** (the audit's 56 has drifted by four — the re-count oracle must assert against a fresh census). The **complete** set of keys structlog itself injects into an event dict is measurable, and it is: `event` (every call), `level` (`add_log_level`), `timestamp` (`TimeStamper`), `exception` (only when `exc_info` was present, post-`format_exc_info`), and **`correlation_id`** — injected by `utils/correlation.py::bind_correlation_id` via `structlog.contextvars.bind_contextvars`, an 8-char lowercase hex `str`. There are **zero** `logger.bind()` sites and **zero** logger calls with more than one positional arg, so `positional_args` never appears. ⇒ **The denylist is `{"event", "level", "timestamp", "correlation_id"}`** — a **frozen `frozenset` module constant beside the processor.** `correlation_id` must be in it for the *same reason* as `event`: log queries group by it, and transforming it would break trace correlation — a semantic corruption, not a false redaction (an 8-hex-char string matches none of the three rules; the audit's `event`/`level`/`timestamp` entry is needed for exactly the same reason, and it is needed).
+**Deny-list vs structural exclusion:** a denylist is the **only** shape compatible with `Alt B`. Excluding those keys "by construction — never visited" is not available: a processor cannot know which keys a preceding processor added except by name, and iterating a fixed key set *is* `Alt A`. So: denylist, expressed as the comprehension/rebind guard `if key not in _STRUCTURAL_KEYS`. Make it checkable by asserting the denylist equals the measured injected set — that test fails the moment a fifth processor that adds a key lands, which is the drift alarm this block needs.
+**Keys the audit's `Alt A` allowlist (`error`/`exception`/`path`) misses that carry filesystem paths:** **`output`** × 5 (`starting_download`, `starting_ytdlp_download`, `starting_segment_download`, `merge_completed`, `ytdlp_download_completed`), **`url_file`** × 1 (`batch_download_failed`), **`repo_root`** × 1, **`working_dir`** × 1. **`output` and `url_file` are user-chosen** — a user can legitimately name an output file `vk_cookies_x.cookies.txt` or a batch file a URL-shaped string, and `Alt A` would log it verbatim. That is a *concrete present-day* argument for `Alt B`, not only the abstract "a future record may name its payload something else". `Alt B`'s cost on those keys is bounded and already accepted by `B4`: it only fires when the value literally bears an `http(s)://` run or the artefact shape. **Allowlist confirmed as complete for exception text: `error` × 25, `exc_info` × 5 → `exception`, `path` × 8 — and nothing else in the 60 keys carries exception text.** [verified-by-reading]
+
+**`B6-R7` — non-`str` values: gate on `isinstance(value, str)`, and `None` is a real input. [verified-by-execution]** Measured through the configured chain on the candidate processor shape, **never raises** on `None`, `int`, `bool`, `float`, `bytes`, or an arbitrary `object`; silently passes through `list`, `dict`, `tuple`. `None` is not hypothetical: `ytdlp_not_found::path=exc.filename` (`FileNotFoundError.filename` is `str | None`), `primary_error` (`exc_type.__name__ if … else None`, × 2), `height`, `width`. No special-casing, no `try`. One named side effect: **`isinstance` is `True` for `StrEnum` members** (`playlist_type`, `reason`, `status.value`), and `re.sub` returns a plain `str`, so the field's *type* narrows from the enum member to `str`; the rendered output is byte-identical (measured: `S(R.A) == R.A`, both render `all_addresses_non_hls`). Accepted, and name it in the docstring rather than guarding against it.
+
+**`B6-R8` — the residual: list/mapping payloads are not recursed into, and exactly one live instance exists. [verified-by-execution]** Only **one** enumerated record carries a collection: **`captured_m3u8_urls`** (`extractor.py`), `urls=[_strip_auth_params(u) for u in monitor.m3u8_urls]` — a `list[str]`, elements pre-sanitised at the call site, and each element is a verified fixed point. Other collections in the census are inert: `hosts` (netloc only), `available` / `qualities` (quality labels), `failed_indices` (ints). **There is no `dict`-valued record field anywhere in `src/`** — the mapping half of the residual has **zero** live instances. `cli.py`'s `valid_vars` is **not** a record field: it is a local list consumed by `typer.echo` in the preamble, never logged. ⇒ **Decide: close the residual by *recursion*, not by hand-on.** A depth-1 recursion that rebinds `str` elements of `list`/`tuple` and `str` values of `dict` (building **new** containers — never in place, per `B6-R1`) is ~6 lines, makes the residual empty for every shape the census can produce, and costs nothing measurable. **If the Planner declines recursion, the residual must be recorded as "a record whose payload is a list or mapping is not transformed; the one live instance is covered only because its elements are pre-sanitised at the call site" — which is a coverage claim resting on 33 call sites staying correct, i.e. exactly the per-site property this block exists to eliminate.** My recommendation is recursion, on that ground.
+
+**`B6-R9` — event-name-agnosticism is structural, and mechanically checkable. [verified-by-execution]** The candidate function's body iterates `event_dict.items()` and rebinds values; it receives `event_dict` and never reads `["event"]` (denylisted), so **there is no name to branch on** — plan 13's `code=1`→`code=3` re-coding changes *which record is emitted*, not *how any record is transformed*, so coverage is invariant by construction rather than by intent. Make it checkable three ways: (1) **behavioural** — two records with *different* names and the *same* value produce identical output; (2) **differential** — the 60-key census's names are irrelevant to the transform, so a synthetic novel key must be redacted (this is the property `Alt A` fails, and the test must exist to keep the choice honest); (3) **source/bytecode** — `inspect.getsource` of the processor plus its module contains **none** of the enumerated record names. Measured: **all 30 audited names are absent from `utils/url_sanitizer.py` today**, so the assertion passes as written. Caveat to state in the test: assert the *enumerated record names*, not the bare word `event` — `url_sanitizer.py` already contains `event` as a substring in prose, and a naive assertion would false-positive.
+
+**`B6-R10` (MANDATORY, `[SPEC-DEVIATION]`) — `[:200]` truncation is **not** a fixed point, AC-6 as written is **false**, and `sanitize_text_for_log` is **monotonically non-expanding but not truncation-stable**. [verified-by-execution]** `B4-R7` justified the `[:200]` truncation on the grounds that the rules are monotonically non-expanding. That holds for untruncated input; **it does not hold across a truncation boundary**, which is a new input shape the `B4` corpus did not contain, exactly as suspected.
+- **Measurement 1 — exhaustive:** `S(raw)[:n]` for every truncation point of 5 secret-bearing shapes × 8 fillers → **7812 cases, 3384 (43%) not fixed points.** Every single violation comes from the **URL** rule and **every one expands the value**: cutting inside a redacted run `https://host/***REDACTED***` leaves a shorter *still-valid* `https?://` run, so the next pass appends `/***REDACTED***`. **Zero artefact-rule violations** — the `***REDACTED***` marker and the artefact shapes are truncation-stable, so `B4`'s artefact reasoning survives intact and the exposure is **URL-only**.
+- **Measurement 2 — the real shape:** `error=sanitize_text_for_log(x)[:200]` on **400 randomly generated realistic ffmpeg transcripts** (artefact temp path + 1–6 signed-CDN `GET` lines + artefact dir) → **373 / 400 (93%) are changed by one processor pass, and 373 exceed 200 characters** (up to 215).
+- **Safety is not compromised; the acceptance criterion is.** The change is *strictly* in the direction of more redaction — no secret is ever revealed. And the processor output is **convergent**: a third pass changes nothing in **400 / 400**. So the pipeline is stable after one processor pass; it is simply not a **no-op** on pass 1 for a truncated URL.
+⇒ **AC-6 must be reworded, and this is a spec correction the Planner owes, not an implementation detail.** As written ("`batch_merge_failed` and `final_merge_failed` come out **unchanged**") AC-6 is **93% false** on realistic input. Replace it with the three claims that are actually true and testable: **(a)** the processor never *reduces* redaction — for any input `x`, `S(x)` contains no rule-match that `x` did not; **(b)** the processor output is a **fixed point** — `S(S(x)) == S(x)` for the processor's own output; **(c)** the value's length may exceed 200 — assert the *pre-processor* input is bounded, not the output, and state that `[:200]` is an input bound. Keep a positive idempotency fixture too, on the one pre-sanitised value that is **not** truncated — `ytdlp_downloader`'s `download_failed` (`error=sanitize_text_for_log(error_msg)`, no slice) — where AC-6 holds as written and the double-transform property is genuinely exercised.
+
+**Corrections to `B6-AUDIT` carried by this section:** `B6-A4`'s "behaviourally equivalent, position 5 is safe" → **`B6-R3`**, refuted; the slot is after `UnicodeDecoder()`. `B6-A7`'s denylist of `event`/`level`/`timestamp` → **`B6-R6`**, incomplete: `correlation_id` is a fourth structural key. `B6-A7`'s 56-key census → **60** keys, 132 logger calls. `B6-A11`'s test 7 ("idempotency against all three pre-sanitised sites") → **`B6-R10`**: the two `[:200]` records cannot be idempotency fixtures in the literal sense; reword per (a)/(b)/(c) above. `B4-R7`'s "the `[:200]` truncation stays safe" is **true for artefacts and false for URLs** and needs that qualifier wherever it is cited. Nothing in `B6-A1`–`A3`, `A5`, `A6`, `A8`–`A11` is contradicted.
+
+**Module and visibility — I concur with the constraint, with one addition. [verified-by-reading]** Extend `utils/url_sanitizer.py`: it already owns the whole redaction policy (the three regexes, the marker, the ordering law, the idempotency proof) and `sanitize_text_for_log` is the function the processor *is*; a second module splits one policy in two and forces a `tests/test_packaging.py` frozenset edit in the same commit. The "naming debt" objection is real but small, and it is answered by naming the function for what it does — `redact_log_event` / `sanitize_event_dict_for_log` — and by one docstring line stating that the module now holds both the text transform and the event-dict transform over that same policy. **On visibility: do not re-export from `utils/__init__.py`.** `config.py` imports `from vkdownloader.utils.url_sanitizer import …` by module path; `utils/__init__.py` currently re-exports only *call-site* helpers (`sanitize_url_for_log`, `validate_output_path`, …) and is not the aggregator `config.py` uses — adding a pipeline-config symbol there would put it in the package's public surface for every importer, and `utils/url_sanitizer.py::__all__` already exists as the module's own declaration point, which is where the new name belongs. So the name is **public on the module path** and simply not re-exported: `B6-D3` resolves as *public name, module-path import, no `__init__.py` change*. **"Public" here is a plan-level decision** (`B6-A6`: `config.py` is in no layer bullet; `__all__` already lists two underscore names) — recording that a non-underscore name on the module path satisfies both the entry-adjacent reading and the package's existing convention, at zero re-export cost.
+
+**Risks.** (1) **Over-redaction of an operator message** — measured zero instances across 60 keys / 132 calls, and bounded to values literally bearing a URL or the artefact shape; the accepted case is a user-chosen `output`/`url_file` name that looks like an artefact, which is the shape the control exists to hide. (2) **`StrEnum` type narrowing** (`B6-R7`) — rendered output unchanged, type of the field changes. (3) **Cost on the hot path** — three `re.sub` passes per string value on every record; the patterns are anchored and short, and the product logs at human rates, so this is a non-issue, but it is a real per-record cost that `Alt A` would have paid 25 times less often. (4) **`[:200]` growth** (`B6-R10`) — a redacted merge error can render ~215 chars; cosmetic, but it means "200" is no longer a true bound on the logged field. (5) **The third-party gap stays open** (`B6-R5`) until someone adopts `ProcessorFormatter` correctly, with `remove_processors_meta`. (6) **Test fragility from `cache_logger_on_first_use=True`** — `B6-A11`'s warning stands: assert on `structlog.get_config()["processors"]`, and bind loggers *after* `setup_logging`.
+
+**Edits made by this research: one.** `#### B6-RESEARCH` inserted into this file, in the `B6` region immediately after `#### B6-AUDIT` and before `### `B7``. No code, test, plan-11, or other audit-phase file was read-modified; nothing staged or committed; every `src/` and `tests/` file is untouched.
+
+---
+
 ### `B7` — Mark the session carriers (`SEC-008`)
 
 **Goal.** `HLSDownloadRequest.cookies` is a plain `str` on a Pydantic model and
@@ -4065,6 +5812,145 @@ acceptance_criteria:
 
 ---
 
+#### `B7-AUDIT` — block-`B7` audit findings (Auditor; read-only at `3778e13`)
+
+**Baseline re-measured at `3778e13` and adopted as given:** 887 passed, 3 skipped (all three named `killpg`) · `mypy src` clean (31 files) · `ruff check src tests` clean · `ruff format --check src tests` clean (54 files) · `mypy src tests` 93 errors in 8 files. [verified-by-execution] **The D-11 oracle floor is 0 — `B3` converted all three.** Nothing staged or committed; every `src/`, `tests/` and other audit-phase file untouched. All measurements below were made either by reading the live tree or by applying the candidate change to a **discarded copy** of `src/` under `.audit-scratch/` (since deleted; `git status` restored to its briefed state).
+
+**`B7-A1` (MANDATORY, `[SPEC-DEVIATION]`) — the site count is 1 construction, not 2, and the "second site" does not exist. `T-B7` step 1 and plan 17 §`B7` item 3 both say "two `HLSDownloadRequest` constructions".** AST census of every `ast.Call` whose callee is `HLSDownloadRequest`, across all 31 `src/` files [verified-by-execution]:
+
+| Symbol | Site | Class |
+|---|---|---|
+| `HLSDownloadRequest` | class def, `models/dtos.py` | declaration |
+| `HLSDownloadRequest` | **1** construction, `services/ytdlp_downloader.py::_attempt_segment_resume` | **construction** |
+| `HLSDownloadRequest` | 0 constructions in `services/downloader.py` | — |
+| `DownloadPolicy` | class def, `services/segment_downloader.py` | declaration |
+| `DownloadPolicy` | **1** construction, `services/segment_downloader.py::_run_download_session` | **construction** |
+
+**Cause, dated:** `d572d96` ("TRN-001: Remove FFMPEG download transport") deleted `downloader.py`'s `HLSDownloadRequest` construction — it lived inside the `case DownloadMethod.FFMPEG:` arm of `perform_download`, whose fallback path called `download_hls_with_resume(HLSDownloadRequest(...))`. `git log -S "HLSDownloadRequest(" -- src/vkdownloader/services/downloader.py` returns `d572d96`, `665c6ac`, `9d7896c` — the last of which *added* it. `downloader.py` today contains **zero** references to the class; it only re-exports `download_hls_with_resume` and `_attempt_segment_resume` as backward-compat names. ⇒ **`files` must drop `src/vkdownloader/services/downloader.py` entirely** (it is currently `targets: modify` with anchor "the `HLSDownloadRequest` construction site", which does not exist), and the four-site figure becomes **three**: one construction, one `DownloadPolicy` construction, one consumer. Per plan 11 §6.4's own rule — "a different count is an `Auditor` finding" — this is recorded as one. It also **reduces** the block's risk: the finding's stated worst case ("a missed construction site is a `TypeError` at runtime on the primary download path") is half the measured surface.
+
+**`B7-A2` (MANDATORY, `[SPEC-DEVIATION]`) — `T-B7` step 1's "the value read at **1** consumer" is wrong in a way that matters: the read is at **two** sites, and they are not the same kind of site.** [verified-by-execution] AST walk of every `ast.Attribute` named `cookies`/`headers` in `src/`:
+
+| # | Site | Kind |
+|---|---|---|
+| 1 | `segment_downloader.py::download_hls_with_resume` — `if request.cookies:` | **truthiness test** |
+| 2 | `segment_downloader.py::download_hls_with_resume` — `headers["Cookie"] = request.cookies` | **pass-through into an aiohttp headers mapping** |
+| 3 | `segment_downloader.py::_download_segment_concurrent` — `policy.headers` (positional arg to `_download_segment`) | **pass-through** |
+
+Sites 1 and 2 are adjacent lines in one function and are really one consumer, but plan 11's "1" does not distinguish the **truthiness test** from the **assignment**, and those two have different semantics under `SecretStr` (see `B7-A4`). Site 3 is a site plan 17 §`B7` item 3 omits entirely: `policy.headers` is read at `_download_segment_concurrent` and forwarded into `_download_segment(..., policy.headers, ...)`, which threads it through four further functions (`_download_segment_parallel`/`_sequential` → `_try_single_download_attempt` → `_run_parallel_download_with_backoff` → `session.get(segment_url, headers=headers, ...)`). **`DownloadPolicy.headers` is therefore not read at one place; it is read once and passed through four hops to the wire.** Under the chosen remedy (`field(repr=False)`) none of that changes — but the enumeration in `files.semantic_anchors` must name `_download_segment_concurrent` and `_download_segment`, or an Implementor will edit the wrong function.
+
+**`B7-A3` — the complete carrier enumeration, and which fields are genuinely session values.** `models/dtos.py` declares **one** model; `models/enums.py` declares **nine** enums and **none carries a session** [verified-by-reading, verified-by-execution]:
+
+| Class | Field | Current annotation / default | Genuinely a session? |
+|---|---|---|---|
+| `HLSDownloadRequest` | `video_url` | `str` (required) | **No** — page URL, and every log site already `_strip_auth_params`'s it |
+| `HLSDownloadRequest` | `m3u8_url` | `str` (required) | **No** — CDN address; signed, but a *URL*, already `B4`/`B5`/`B6`'s subject, and `SEC-006`'s |
+| `HLSDownloadRequest` | `output_file` | `Path` (required) | **No** — user-chosen filesystem path |
+| `HLSDownloadRequest` | `quality` | `str = "best"` | **No** — user selection token |
+| `HLSDownloadRequest` | **`cookies`** | **`str \| None = None`** | **YES** — a flat session string, `"; ".join(f"{name}={value}")` by `extractor.py::_format_cookies_for_ffmpeg` |
+| `HLSDownloadRequest` | `progress_callback` | `Callable[[str, int, int], None] \| None = None` | **No** |
+
+| Class | Field | Current annotation / default | Genuinely a session? |
+|---|---|---|---|
+| `DownloadPolicy` (`@dataclass`) | `session` | `aiohttp.ClientSession` | **No** — the connection pool |
+| `DownloadPolicy` | `semaphore` | `asyncio.Semaphore` | **No** |
+| `DownloadPolicy` | **`headers`** | **`dict[str, str]`** (required, no default) | **YES, conditionally** — carries `"Cookie"` *only when* `request.cookies` was set at construction; otherwise it is `{"User-Agent", "Referer"}` |
+| `DownloadPolicy` | `max_concurrent_downloads` … `progress_callback` (9 more) | see `B7-A2` | **No** — none is credential material |
+
+Two consequences the plan does not state. (a) **`headers` is a mixed-tenant field**: it holds credential material on the authenticated path and no credential material on the anonymous path, so it is not "a secret field" so much as "a field that sometimes holds one" — which is precisely the case a blanket `repr=False` handles and a blanket `SecretStr` could not (a `dict` cannot be one). (b) `models/enums.py` carries **no** session, so plan 11's enumeration is complete: there is no third carrier hiding in an enum. `CookieSource` (`NONE`/`BROWSER`) and `DownloadMethod` select *how* to acquire a session; they never hold one.
+
+**`B7-A4` — the breakage surface, measured on the installed pydantic. The headline: it is far smaller than plan 11 assumes, and one site the plan calls "a type error" is not.** Installed: **pydantic 2.13.4** (declared `pydantic>=2.0.0`), Python 3.12.1, structlog 26.1.0, aiohttp 3.14.1. [verified-by-execution]
+
+**Serialisation — the subtle class, answered plainly.** `model_dump()` (python mode) returns a **`SecretStr` object**, not a `str`:
+
+| Call | `cookies` field returns | Literal secret present? |
+|---|---|---|
+| `repr(m)` | `SecretStr('**********')` | **No** |
+| `str(m)` | `SecretStr('**********')` | **No** |
+| `m.model_dump()` | **`<class 'pydantic.types.SecretStr'>` instance** | **No** |
+| `m.model_dump(mode="json")` | `'**********'` (plain `str`) | **No** |
+| `m.model_dump_json()` | `"**********"` (plain `str`) | **No** |
+
+⇒ **Yes, a consumer that round-trips through `model_dump()` would start emitting a `SecretStr` object where it previously emitted a `str`.** And on 2.13.4 that is the *safer* direction: the object's `repr` is masked, so a CLI that printed the dumped request would print `**********`, **not** the secret. (`model_dump_json()`'s masking is version-sensitive across 2.x minors — the `SecretStr` docstring's own `model_dump_json()` example shows `"password":"IAmSensitive"` in clear — so a JSON consumer's behaviour is not guaranteed stable across the declared range. The python-mode `model_dump()` behaviour measured here is stable for `SecretStr` and is the one that matters, because it is the one that would surprise a consumer.) **Note also that pydantic's `model_dump_json()` masking is unconditional: no `field_serializer` is needed to keep the JSON clean, and `model_dump(mode="json")` is likewise masked.**
+
+**The other classes, each measured, not assumed:**
+
+| Class of breakage | Measured result |
+|---|---|
+| truthiness (`if request.cookies:`) | **Works, but the semantics change.** `bool(SecretStr(""))` is `False` (it defines `__len__`); `bool(Secret(""))` is `True` (it does **not**). `SecretStr` is therefore safe here — but note the trap: `SecretStr` gets truthiness from `__len__`, not `__bool__`, and `Secret` would have been silently always-truthy. Measured `if request.cookies:` is `False` for both `None` and `SecretStr("")`, matching today's `if request.cookies:` for both `None` and `""`. **No behaviour change.** |
+| `headers["Cookie"] = <SecretStr>` | **Assigns fine** (a `dict` is untyped at runtime) but **fails at the wire**: driving a real `aiohttp.ClientSession` against a local server, a `SecretStr` header value raises `TypeError: Cannot serialize non-str key SecretStr('**********')`. `str`-typed `dict` annotations are not enforced at runtime, so this is a **latent** failure that mypy — not the runtime — is what catches. |
+| subprocess `argv` | **Not applicable to this block.** No session value reaches `argv`: `_build_ytdlp_cli_command` passes `--cookies <path>` (a `str(cookie_file)`), never the value; the value goes into the Netscape temp file via `_cookies_to_netscape(cookies).encode()` — a `str` parameter on `_create_temp_cookie_file`, **not** a carrier this block touches. |
+| temp cookie file | **Not applicable.** Same reason: `_create_temp_cookie_file(cookies: str \| list[Cookie])` receives a plain `str` from `extractor.extract_streams_with_cookies`, upstream of the DTO. |
+| equality / hashing / set membership | **Breaks silently, and this is the real hazard.** `SecretStr("a") == "a"` → **`False`**; `hash()` works but is unrelated. No site in `src/` compares `request.cookies` to anything, so nothing breaks today — but a future `if request.cookies == expected:` would compare `False` with no error. `repr=False` has none of this. |
+| `+` / `in` / slicing / `.encode()` / `.startswith()` / `join` / `%` | All raise `TypeError` on a `SecretStr`. **Zero sites in `src/` perform any of these on `request.cookies`** — measured by AST attribute enumeration (`B7-A2`): the only two reads are a truthiness test and an assignment. |
+| **f-string / `str()` interpolation** | **Silently emits the mask.** Measured: `f"{m.cookies}"` → `**********` (via `__str__`). No site exists. |
+
+**`B7-A5` — the mypy consequence, which is the one real cost and which the plan does not anticipate at all.** Applying the change to a copy of the tree and running `mypy` produced, first pass:
+
+```
+ytdlp_downloader.py:1024: error: Argument "cookies" to "HLSDownloadRequest" has
+incompatible type "str | None"; expected "SecretStr | None"  [arg-type]
+```
+
+`mypy src` goes **clean → 1 error**, and it is at the **construction site**, not the consumer. Plan 17 §`B7`'s AC-5 and `T-B7` step 2 both assume construction is source-compatible ("`str` is coerced" — true at *runtime*, false to a *type checker*; pydantic's coercion happens inside `validate_python`, which mypy cannot see). Plan 11 §5.4 item 2 makes the same claim. **The fix is one expression, not a redesign:** `cookies=SecretStr(cookies) if cookies else None` at the single construction site. Measured: with it applied, `mypy` on the patched copy returns **`Success: no issues found in 31 source files`**, and `ruff check` / `ruff format --check` stay clean. **This is not optional** — it is the difference between AC-5 passing and failing, and it is the specific thing an Implementor will hit first.
+
+**`B7-A6` — the "no serialisation consumer" criterion is VERIFIED, not refuted.** [verified-by-execution] AST+regex scan of `src/` **and** `tests/` for `model_dump`, `model_validate`, `model_copy`, `model_json_schema`, `model_fields`, `.dict(`, `parse_obj`, `parse_raw`, `json.dumps`. Every hit is `Settings.model_fields[...]` (a class-level default lookup, 12 sites in `config.py`/`downloader_throttle.py`/`tests/`) and one `test_settings.model_copy(update=...)` in `tests/test_hls_downloader.py`. **Zero** call sites dump or serialise `HLSDownloadRequest`. Independently: the only `BaseModel`s in `src/` are `Settings`, `HLSDownloadRequest`, `QualitySpec`, `Video`, `Stream`; none is a Typer command parameter, an API response model, or a CLI-printed object (`cli.py`'s `typer.echo` calls take `str`/`Path` only). ⇒ **The criterion holds; `B7` is not blocked.** Report it as **verified**, with the caveat that it holds *today* and `B7` is what keeps it true — adding a `--debug-print-request` or a JSON diagnostic would be the first consumer, and under `SecretStr` it would emit a mask (safe) while under `repr=False` it would emit the secret in clear. **That asymmetry is the whole argument for `SecretStr`, and it is measurable, not speculative.**
+
+**`B7-A7` — RECOMMENDATION: `SecretStr` on `cookies`, `field(repr=False)` on `headers`. Keep both. Do not substitute `repr=False` for `SecretStr`.** This is the block's decision point and the recommendation is unchanged from plan 11's default — but it now rests on measurement rather than on "Pydantic-native":
+
+1. **`repr=False` alone does not close `SEC-008`'s stated scope.** Measured: `Field(repr=False)` leaves `cookies` a plain `str`, so `repr`/`str` are clean but **`model_dump()` and `model_dump_json()` both emit the secret in clear** (verified: `"SUPERSECRETVALUE" in repr(m.model_dump())` → `True`; same for `model_dump_json()`). Plan 17's own `Goal` names `model_dump_json()` as one of the three renderings that currently leak. `repr=False` closes one of the three.
+2. **`repr=False` does not survive the one careless act the finding is about.** Measured against the **real configured chain** (`B6`'s `redact_log_event` at position 6, `JSONRenderer`): `logger.debug("field_dump", cookies=<the field>)` emits `{"cookies": "remembmer_me=abc123def; sid=9876zyxw"}` under `repr=False` — the session, in clear, in the log file. Under `SecretStr` the same call emits `{"cookies": "SecretStr('**********')"}`. **`B6` cannot catch it**: measured, `sanitize_text_for_log("remembmer_me=abc123def; sid=9876zyxw")` is the **identity** — its only two rules are an `https?://` run and the two `vk_cookies_*` artefact literals, and a flat session string matches neither. So a future `logger.debug(..., cookies=request.cookies)` is leaked in full by `repr=False` and masked by `SecretStr`. **`repr=False` protects the container; `SecretStr` protects the value.** Only the value can be logged by accident.
+3. **The breakage surface does not argue the other way.** Every string operation, the `argv` path, the temp-file path, equality and hashing are **unused today** (`B7-A4`), and the full suite measured **887 passed / 3 skipped — byte-identical to baseline** against the patched copy. The only real cost is one typed `SecretStr(...)` wrapper at one construction site (`B7-A5`). That is a **trivial** effort, not a medium one.
+4. **House rule 11 (Pydantic for all models) makes `SecretStr` the idiomatic choice**, and `field(repr=False)` is the correct choice for `headers` **precisely because a `dict` cannot be a `SecretStr`** — that half of plan 11's `D-8` is right and should not be re-litigated.
+
+⇒ Verdict: **the breakage is acceptable, and the change is smaller than plan 11 estimated** (1 construction, not 2; 3 sites, not 4). Effort **trivial**. Priority **recommended** (advisory, per `SEC-008`'s own classification). Reject the plan's stated alternative `"Field(repr=False) on cookies - rejected: hides the field but leaves a plain str"` only in its *reasoning*: the reason is not "Pydantic-native", it is **"`Field(repr=False)` leaves `model_dump()`/`model_dump_json()` in clear and leaves the value loggable in full, and `B6`'s transform provably does not match a flat session string."** Record that, so the choice survives the next reader.
+
+**`B7-A8` — `B6`'s finding is confirmed independently, and it materially narrows this block's value proposition. Say so honestly.** [verified-by-execution] I re-derived `B6-A8` rather than trusting it: full census of every `logger.*` keyword in `src/` (60 distinct keys, 132 calls, matching `B6-R6`), then filtered every key **name** and every value **expression** for `cookie|session|auth|token|header|policy` and for `request.cookies`/`policy.headers`. **Total hits: 0.** The only `request`/`policy`-touching record is `starting_segment_download`, which reads `request.video_url` (already `_strip_auth_params`'d), `request.output_file` and `request.quality` — **not** `request.cookies`. **No log record anywhere in `src/` carries a session, and `B6`'s landed processor is not what prevents one: the product simply never logs one.** ⇒ **The "log line" half of `SEC-008` is already closed, and was already closed before `B6` landed.** What remains for `B7` is (i) the **repr** half, and (ii) **defence in depth for future records** — and `B7-A7` item 2 is precisely the evidence that (ii) is real and is the part `B6` cannot supply. **So the block is materially narrowed but not hollow:** it is reduced from "close a leak" to "make a leak structurally unavailable", and that is the honest framing for the commit message. Do **not** let the Implementor write a commit message claiming a log-line leak was closed.
+
+**`B7-A9` — `ProcessorFormatter`: `B7` must NOT absorb it. Leave it, and record it with its measured cost.** `B6` has **landed** (`200ae51` `fix(logging): redact secret-shaped text on the log pipeline`, plus `3f1edf5`, `3b5f517`), so the premise is live, not hypothetical: `config.setup_logging` still calls `logging.basicConfig(format="%(message)s", handlers=[StreamHandler|FileHandler])` and installs **no** `structlog.stdlib.ProcessorFormatter`; `src/` contains **zero** `logging.getLogger(...)` module loggers, so the product's own records are unaffected, while `playwright`/`yt_dlp`/`aiohttp`/`urllib3` log to that same root handler unprocessed. The remedy **works** (structlog 26.1.0's `ProcessorFormatter` accepts `foreign_pre_chain` and a processor list), but it is a **structural** change, not a one-line insertion, and `B6-R5`'s three costs are confirmed on the installed version: `ProcessorFormatter.wrap_for_formatter` must be the **final** processor (so `config.py`'s conditional `JSONRenderer()/ConsoleRenderer()` expression is deleted and relocated, changing the renderer's identity and location — the very assertability `B6` chose a sibling processor to preserve); `basicConfig` installs a plain `logging.Formatter`, so the handler must be re-wired after the fact; and **`remove_processors_meta` is not optional** — without it the JSON gains a `_record` key carrying the serialised `LogRecord` repr, **including unredacted kwargs**, which would *introduce* a `SEC-007` leak. ⇒ **Verdict: out of `B7`'s scope, for the reason `B6-R5` gave and not by default.** Blast radius: it changes the rendering of **every** third-party log line in the product and the wire format of every record the product emits, against a block whose stated scope is two field annotations in two files. It also collides with `progress_display._repoint_log_handlers`, which iterates root `StreamHandler`s. **Action: `B7` records the residual in its commit message and hands it onward as its own block.** Effort when scheduled: **medium**. Do not schedule it inside this plan without a Product decision.
+
+**`B7-A10` — the tests, specified precisely.** Three new tests, all in files that already carry `mypy src tests` errors (so the ≤ 93 delta gate applies to them).
+
+1. **The repr oracle — the property the block exists to establish, and it must fail if `repr=False`/`SecretStr` is removed.** Build an `HLSDownloadRequest` with a **literal, distinctive** secret and assert its **substring** is absent from **each** of the three renderings named in the plan's own `Goal`: `repr(request)`, `str(request)`, `request.model_dump_json()`. Use a literal like `"B7CANARY-SESSION-VALUE-DO-NOT-LOG"` and assert `assert CANARY not in repr(request)` (and the same for the other two) — **not** `assert "cookies" not in repr(...)`, which would pass vacuously if the field were merely renamed, and **not** a "no field appears" check. Add the same shape for `DownloadPolicy`, asserting the canary is absent from `repr(policy)` **and** that `policy.headers["Cookie"] == CANARY` still holds — one test, two properties, so the field cannot be satisfied by deletion.
+2. **The log-record oracle.** Through the **configured** chain (`config.setup_logging(settings)`, then `structlog.get_logger`), emit a record that carries the carrier as context — `logger.debug("b7_probe", request=request)` — and assert the canary is absent from the rendered output. This is the test that fails under `repr=False` and passes under `SecretStr` (`B7-A7` item 2), so it is what makes the choice between the two mechanisms **executable** rather than argued. Assert on the canary substring, and capture with a handler attached to the root logger (`B6-A11`'s warning applies: `cache_logger_on_first_use=True` means a logger bound before `setup_logging` keeps its cached chain — configure first).
+3. **The retrievability oracle, and it is not optional.** Assert `request.cookies.get_secret_value() == CANARY` and that the segment path still sends it: drive `download_hls_with_resume` (or its narrowest seam — the existing tests already stub `_fetch_playlist_with_retry` / `_download_segment_concurrent`) and assert the captured `headers["Cookie"]` equals the canary exactly. **This is what makes the change unsatisfiable by destruction** — a block that blanked the field would pass tests 1 and 2 and fail this one. I verified this end-to-end against a live local `aiohttp` server: with the patched copy, the server received `'sid=SUPERSECRET_WIRE; a=b'` byte-for-byte. Note the `mypy` consequence of the unwrap — `request.cookies` is `SecretStr | None`, so `mypy` requires the truthiness test to precede the unwrap or it reports `union-attr` (measured).
+
+**Existing tests that construct these models — full inventory. Measured: `B7` breaks NONE of them.** AST census of every `ast.Call` to either class in `tests/` [verified-by-execution]:
+
+| File | Line | Enclosing test | kwargs passed |
+|---|---|---|---|
+| `tests/test_batch_downloader.py` | 274 | `test_segment_layer_does_not_acquire_caller_video_semaphore` | `video_url, m3u8_url, output_file` |
+| `tests/test_hls_downloader.py` | 77 | `test_preserves_segments_on_playlist_fetch_failure` | `video_url, m3u8_url, output_file` |
+| `tests/test_hls_downloader.py` | 113 | `test_preserves_segments_on_segment_download_failure` | same |
+| `tests/test_hls_downloader.py` | 165 | `test_resume_with_all_segments_present_merges_without_download` | same |
+| `tests/test_hls_downloader.py` | 1414 | `test_semaphore_limits_concurrent_downloads` | same |
+| `tests/test_hls_downloader.py` | 1466 | `test_parallel_download_uses_gather` | same |
+| `tests/test_hls_downloader.py` | 1531 | `test_shared_semaphore_parameter` | same |
+| `tests/test_hls_downloader.py` | 1697 | `test_sequential_mode_applies_delay_after_semaphore` | same |
+| `tests/test_hls_downloader.py` | 1776 | `test_sequential_mode_triggers_backoff_on_429` | same |
+| `tests/test_hls_downloader.py` | 1855 | `test_parallel_mode_no_inter_segment_delay` | same |
+| `tests/test_hls_downloader.py` | 1975 | `test_download_hls_with_resume_logs_segment_method` | same |
+| `tests/test_hls_downloader.py` | 2793 | `test_manifest_base_url_used_for_segment_resolution` | same |
+| `tests/test_segment_downloader.py` | 1246 | `test_t7_quality_threaded_from_request` | `+ quality` |
+| `tests/test_segment_downloader.py` | 1451 | `TestBoundCheck`/`_make_policy` (**`DownloadPolicy`**) | `+ headers={}` (empty dict) |
+
+⇒ **13 `HLSDownloadRequest` constructions and 1 `DownloadPolicy` construction in `tests/`; not one passes a session value.** All 13 rely on the `cookies=None` default, and the single `DownloadPolicy` passes `headers={}`. Measured full-suite result against the patched copy: **887 passed, 3 skipped, 1 warning** — identical to `3778e13`, so the "mid-flight breakage discovery" this inventory exists to prevent **does not occur**. **Zero existing tests require updating.** `tests/test_hls_downloader.py` already carries one pre-existing mypy error class; the new tests land there and count against the ≤ 93 gate, so keep them fully annotated (`-> None`, typed params).
+
+**Edits this block needs to its own record** (all in this file; nothing else):
+1. §`B7` **item 3**: "All **four** sites" → **three**; drop `services/downloader.py` from the sentence and from `files`.
+2. §`B7` **item 1**: keep `SecretStr`, but replace the stated reason (`"hides the field but leaves the value a plain str"`) with the measured one (`B7-A7`): `repr=False` leaves `model_dump()`/`model_dump_json()` in clear **and** leaves the value fully loggable, and `B6`'s transform is the identity on a flat session string.
+3. §`B7` **item 2**: unchanged (`field(repr=False)`), plus the `headers`-is-mixed-tenant note from `B7-A3`.
+4. §`B7` **item 4**: the refresh path is `_attempt_segment_resume`'s own construction, now the **only** construction — say so.
+5. §`B7` **item 5**: add the third rendering (`model_dump_json()`) to the test list, and the retrievability oracle.
+6. §`B7` **AC-1**: add `model_dump_json()` and the "value still retrievable" clause.
+7. §`B7` **AC-4**: "All four sites" → three; add the `SecretStr(cookies) if cookies else None` requirement — **without it AC-5 fails**, measured.
+8. §`B7` **`files`**: remove `src/vkdownloader/services/downloader.py`; add `_download_segment_concurrent` and `_download_segment` to `segment_downloader.py`'s `semantic_anchors`.
+9. New open decision `B7-D2` — whether to record the `ProcessorFormatter` residual in this block's commit message (recommend: yes, one sentence, hand onward per `B7-A9`).
+10. Add to the commit-message obligations: `B7`'s value proposition is **defence in depth**, not a closed log-line leak (`B7-A8`); claiming otherwise would misreport `SEC-008`'s closure.
+
+**Edits made by this audit: one.** `#### B7-AUDIT` inserted into this file, in the `B7` region immediately before `### `B8``. No code, test, plan-11, or other audit-phase file was read-modified; nothing staged or committed; `tmp/`, `tmp_old_sec*.md`, the deleted `.ai/plans/00_*`…`07_*`, `.ai/problems/PROBLEM.md`, `.kilo/commands/implement/implement-plan-multiagent.md`, untracked plans 05–08, `.gitignore`, and every `src/`/`tests/` file are untouched. The `.audit-scratch/` measurement copy and its `.out_segments/`/`out.mp4` residue were deleted; `git status` is byte-identical to its pre-audit state.
+
+---
+
 ### `B8` — Record the cookie-harvest decision (`SEC-010`)
 
 **Goal.** The harvest takes the whole context store and nothing narrows it. A reason is
@@ -4184,6 +6070,167 @@ acceptance_criteria:
 
 ---
 
+#### `B8-AUDIT` — block-`B8` audit findings (Auditor; read-only at `209bd77`)
+
+**`B8-A1` (MANDATORY, `[SPEC-DEVIATION]`) — the brief's "handed to `aiohttp`" is half wrong, and the correction changes what the comment must say. The flat string has TWO consumers with opposite domain semantics; only one of them is `aiohttp`.** [verified-by-reading + verified-by-execution] Tracing `cookies_str` out of `_extract_with_browser` at `209bd77`:
+
+1. `_extract_with_browser` returns `(streams, cookies_str, raw_cookies)`; `extract_streams_with_cookies` forwards both; `downloader.py::perform_download` binds both and passes them as `cookies=` / `raw_cookies=` to `ytdlp_downloader.download_with_ytdlp_with_resume_fallback`.
+2. **`cookies_str` → yt-dlp.** `_download_with_ytdlp` builds the argv in `_build_cmd`: `if raw_cookies:` → `_create_temp_cookie_file(raw_cookies)`; `elif cookies:` → `_create_temp_cookie_file(cookies)`. `_create_temp_cookie_file` calls `services/cookies.py::_cookies_to_netscape`. On the **list** arm `_cookies_to_netscape` **preserves each cookie's own `domain`** and derives `include_subdomains` from the leading dot; on the **string** arm it writes the **hardcoded** `.vkvideo.ru` for every pair. ⇒ **yt-dlp already scopes by domain**: the Netscape file carries per-cookie domains, so `--cookies` sends a `.userapi.com` cookie only to `.userapi.com`. The string arm's hardcoding is a separate (real, but out-of-scope) fidelity bug, **not** an over-send.
+3. **`cookies_str` → aiohttp.** The only place the *flat, domain-less* string becomes a wire header is `ytdlp_downloader.py::_attempt_segment_resume`: `HLSDownloadRequest(cookies=SecretStr(cookies) if cookies else None)` → `segment_downloader.py::download_hls_with_resume`: `headers["Cookie"] = request.cookies.get_secret_value()` → `_run_download_session` → `DownloadPolicy.headers` → `_download_segment_concurrent` → `_download_segment` → `session.get(segment_url, headers=headers)`. Separately, `segment_downloader.py::_fetch_playlist_with_retry` does `headers["Cookie"] = new_cookies` from `_handle_token_refresh`/`_refresh_token_and_retry` (`return address, new_cookies or ""`) — a **plain `str`**, never a `SecretStr`, so the `B7` carrier is bypassed on the 403/410 refresh path [informational only; `B8` must not touch it].
+
+⇒ **Consequence for `B8`: the answer to "does the CDN need cookies for other domains?" is different per consumer.** The yt-dlp path **already filters by domain** and needs no decision. The aiohttp segment path sends the flat string to **whatever host the playlist resolves to** and is where an unscoped credential actually goes on the wire. The recorded decision must say **which** consumer it governs; a comment that says "the CDN" unqualified is the apology `B8` exists to prevent. §9 Q3's premise ("one undifferentiated header sent to whatever server the next media request resolves to") is accurate for consumer 3 only.
+
+**`B8-A2` — the bounding fact re-verified, unchanged at `209bd77`. [verified-by-execution]** Tree-wide over `**/*.py`: `storage_state` **0**, `launch_persistent_context` **0**, `user_data_dir` **0**, `new_context` **exactly 1** — `infrastructure/browser.py` in `BrowserManager.create_stealth_page`, `await self.browser.new_context(...)` with `viewport`/`user_agent`/`locale`/`timezone_id` (the `# type: ignore[union-attr]` is plan-10's, untouched). The six other `new_context` hits are `AsyncMock` assignments and one docstring in `tests/test_browser_infrastructure.py`. ⇒ **The stop condition does not fire.** The context is ephemeral: created per acquire, discarded at run end, so the harvested store is **exactly what this run's own page visit set** — no persisted profile, no operator-carried cookies, no accumulation across runs. **This, and only this, is what makes "no filtering needed" defensible** — it bounds *what can be in the store*, not *what is sent*. The comment must not conflate them.
+
+**`B8-A3` — the seam, by symbol. The harvest call cannot express a domain decision, so the only insertion point is `_format_cookies_for_ffmpeg`.** [verified-by-reading] In `services/extractor.py::VKVideoExtractor`:
+
+| Step | Symbol | What happens |
+|---|---|---|
+| harvest | `_extract_with_browser` | `raw_cookies = await page.context.cookies()` — **no argument**, whole store; then `cookies_str = self._format_cookies_for_ffmpeg(raw_cookies)` inside a `try/except Exception` that logs `failed_to_capture_cookies` and continues |
+| compose | `_format_cookies_for_ffmpeg` | iterates `cookie.get("name")`/`cookie.get("value")`, strips CR/LF from both, appends `f"{name}={value}"`, `return "; ".join(cookie_parts)`. **Reads only `name` and `value` — the `domain` key is present on every input dict and is never read.** |
+| to aiohttp | `ytdlp_downloader._attempt_segment_resume` → `segment_downloader.download_hls_with_resume` → `_run_download_session` → `_download_segment` → `session.get` | `headers["Cookie"] = request.cookies.get_secret_value()` |
+
+⇒ **The seam is `_format_cookies_for_ffmpeg`**, and it is the *only* correct one. `_extract_with_browser` receives the domain too, but inserting the filter there would split the logic across two functions and change what `raw_cookies` (the third return value, consumed by `_cookies_to_netscape` and by yt-dlp's domain-correct arm) contains — a behaviour change to a **different** consumer. `_format_cookies_for_ffmpeg` is a pure function of `list[Cookie]` → `str` with **one** caller (`_extract_with_browser`), so a filter added there is provably scoped to consumer 3. **The comment must name `VKVideoExtractor._format_cookies_for_ffmpeg` as the seam and say that `cookies_str`'s third consumer already scopes by domain.**
+
+**`B8-A4` — the three options, assessed. `Alt A` lands; `Alt B` cannot be validated here; `Alt C` is now redundant and should be recorded as such.**
+
+- **`Alt A` (the Product Owner's §9 Q3 answer — keep current behaviour, record the reason). RECOMMENDED.** Costs nothing behaviourally and closes the finding the way the store itself permits ("stating the dependency is a legitimate answer"). Its one real obligation, and the reason this audit exists: the statement must name the **seam** (`_format_cookies_for_ffmpeg`) and the **consumer** (the aiohttp segment path), or it is an apology rather than a record (`B8-A1`, `B8-A3`).
+- **`Alt B` (narrow the flat header by domain suffix). REJECTED, and the rejection is structural, not a preference.** Two independent blockers, both re-verified: (i) the platform — §2's own skip **S-6** is the live-origin skip, so there is **no way to exercise a narrowed set**; the suite cannot distinguish "correctly narrowed" from "narrowed past a cookie the CDN needed", because `tests/test_extractor.py` mocks `page.context.cookies()` and asserts only string composition. A wrong narrowing therefore **breaks authenticated downloads with no local signal** — the exact failure mode §9 Q3 warns about. (ii) the evidence — no owner statement of the CDN's cookie-domain dependency exists, and `B8-A2` bounds *what can be in the store* without saying *what is sent*. `Alt B` would additionally need a `Validator` review (`EB-B8`'s roster) and a `Researcher` pass, and it would change behaviour on the one path that cannot be tested. **Do not start it.**
+- **`Alt C` (add a `Cookie:` redaction rule). REDUNDANT — record it as redundant, do not land it.** Re-derived rather than inherited: `B6-A8` measured **zero** record fields in `src/` carrying a `Cookie:` header or a flat session string; `B7-A8` re-censused 60 distinct keys / 132 calls and got **0** hits for `cookie|session|auth|token|header|policy`; `models/dtos.py` now marks `HLSDownloadRequest.cookies` with `SecretStr` **and** `field(repr=False)`, so the single carrier cannot render in clear through `repr`, `str`, `model_dump()`, or a `logger.debug(request=…)`. My own sweep agrees: the only cookie-adjacent records are `extracting_streams_with_cookies` (`video_id` only), `failed_to_capture_cookies` (`error=str(e)`), `cookie_file_cleaned_up` (`path` only) — **no record carries a session**, and `url_sanitizer.py`'s docstring already states `Cookie:`/`Set-Cookie:` are **not matched** by rule, by design. ⇒ **There is nothing for the rule to redact.** `Alt C` would add a regex and a policy claim that no instance justifies — the broadening `D-5` declined and `B6-A9` recommended against. **Record: "`Alt C` was considered and is redundant given `B6`'s measurement and `B7`'s `SecretStr`; a `Cookie:` rule would match nothing today."**
+
+**`B8-A5` — where it must be recorded, and the forbidden-file boundary. It must not go in any of the four, and it needs none of them.** [verified-by-execution] Recording location: **`_extract_with_browser`'s harvest site** (an inline comment immediately above the `try:` that wraps `raw_cookies = await page.context.cookies()`) **plus** `_format_cookies_for_ffmpeg`'s docstring. Both are in `services/extractor.py`, which `EB-B8` already declares `modify`. Nothing goes in plan 11 (historical record), nothing goes in `.ai/audit/**` (§6.6), nothing goes in `config.py` — **the decision is not a setting; there is no flag, and adding one would create the `Alt B` behaviour change under a name that reads as a no-op.**
+
+Forbidden-file check, each verified against `209bd77` and against `B3`–`B7`'s landed commits:
+
+| Forbidden file | Would `B8` need it? | Why not |
+|---|---|---|
+| `services/ffmpeg_utils.py` | **No** | Locked read-only plan-wide (§4.3, §6.4). Contains no cookie logic; `iter_process_lines` and both merge records are other blocks'. Nothing in `B8`'s scope lives there. |
+| `infrastructure/network_monitor.py` | **No** | Its four record names are `B6`'s deliberate exclusion (class-name-only). `NetworkMonitor.select()` chooses the **stream URL**, not cookies — `B8` records which host that URL resolves to, which is a statement in `extractor.py` about a value this module produces. No edit. |
+| `services/ytdlp_downloader.py` (cookie-lifecycle section) | **No** | `_create_temp_cookie_file`/`_build_cmd`'s `--cookies` arm is **domain-correct** for the list input (`B8-A1` step 2). The only reason to write here would be to note that fact — and it belongs in `extractor.py`, where the reader arrives. Writing it here would also collide with `B2`'s confinement of the `vk_cookies_*` artefacts. **Untouched.** |
+| `config.py` | **No** | No setting is added (see above). Also already carries `B6`'s processor + `B7`'s logging work; a fourth unrelated edit there is the coupling the file-lock table exists to prevent. |
+
+⇒ **File set admitted by the evidence: `services/extractor.py`, `tests/test_extractor.py`. None of the four. The boundary holds after `B3`–`B7`.**
+
+**`B8-A6` — the test. Existing coverage does NOT construct a multi-domain set through `_format_cookies_for_ffmpeg`, and that is the whole gap.** [verified-by-execution] Inventory in `tests/test_extractor.py`:
+
+- `test_format_cookies_for_ffmpeg` — 6 sub-cases (single, multiple, empty, empty name/value, CRLF ×2). **Every input dict has `name`/`value` only — no `domain` key on any of them.**
+- `test_format_cookies_for_ffmpeg_all_cookies_included` — 50 synthetic cookies `{"name","value"}`, asserts `count("=") == 50`. Pins *count*, not *provenance*; again no `domain`.
+- `test_browser_extraction_*` (harvest path) — two cookies, **both `domain: ".vkvideo.ru"`**. Single-domain.
+- `test_cookies_to_netscape_preserves_domain` — the **only** multi-domain fixture in the file (`".vk.com"`, `".userapi.com"`, `"vkvideo.ru"`), and it tests `_cookies_to_netscape`, **not** `_format_cookies_for_ffmpeg`.
+- `_extract_with_browser` tests at the capture site — `.vkvideo.ru` only.
+
+⇒ **Missing, precisely:** no test feeds a cookie set spanning **two or more distinct domains** into `_format_cookies_for_ffmpeg`, so nothing today would fail if someone added a domain filter there — the CR/LF sanitisation and the no-truncation tests would keep passing. **`Alt B` could land today with the suite fully green**, which is the strongest available argument for the pinning test. Add exactly one, in the existing `class TestVKVideoExtractor` beside the other two:
+
+```python
+    def test_format_cookies_for_ffmpeg_keeps_cookies_from_every_domain(self) -> None:
+        """SEC-010 / B8: this test PINS CURRENT BEHAVIOUR, which is the point of it.
+
+        A cookie set spanning several domains is formatted into one flat header
+        with no per-domain filtering, because no consumer has been able to state
+        that the media host needs a cookie set for another domain (§9 Q3, Alt A).
+        The harvest is bounded instead: BrowserManager.create_stealth_page uses
+        new_context(...) with no storage_state / launch_persistent_context /
+        user_data_dir, so the store holds only what this run's page visit set.
+
+        If a future change filters by domain this test is SUPPOSED to fail. Do
+        not "fix" it by narrowing the fixture or relaxing the assertion: the
+        failure is the signal that a decision changed, and it must be made
+        deliberately. Two consumers already scope by domain on their own
+        (services/cookies.py::_cookies_to_netscape preserves each cookie's own
+        domain for the yt-dlp --cookies file), so narrowing the flat header
+        would change only the aiohttp segment path — and it could not be
+        validated without a live run.
+
+        See VKVideoExtractor._format_cookies_for_ffmpeg, the seam this pins.
+        """
+        extractor = VKVideoExtractor()
+        cookies: list[Cookie] = [
+            {"name": "session_id", "value": "abc123", "domain": ".vkvideo.ru"},
+            {"name": "remixdsid", "value": "xyz789", "domain": ".vkvideo.ru"},
+            {"name": "tracker", "value": "track-me", "domain": ".userapi.com"},
+            {"name": "sid", "value": "cross-site", "domain": ".example.com"},
+        ]
+
+        result = extractor._format_cookies_for_ffmpeg(cookies)
+
+        # Every cookie survives, regardless of domain: no filter exists here.
+        assert result == (
+            "session_id=abc123; remixdsid=xyz789; tracker=track-me; sid=cross-site"
+        )
+        # The domain never reaches the header at all - which is why the filter,
+        # if one is ever added, belongs in this function and nowhere upstream.
+        assert "vkvideo" not in result
+        assert "userapi" not in result
+        assert "example" not in result
+```
+
+The exact-equality assertion is deliberate: it pins **order and membership**, so a filter cannot pass by accident. `assert "example" not in result` is the line that fails first under `Alt B`, and it says so in the docstring.
+
+**`B8-A7` — the comment wording I would land.** Two sites, both in `services/extractor.py`; **docstring/comment only, no executable path touched.** At `_extract_with_browser`, immediately above the `try:` that wraps the harvest:
+
+```python
+            # SEC-010 / B8. The harvest is the WHOLE context store
+            # (page.context.cookies() with no argument) and is deliberately
+            # NOT filtered by domain. Recorded decision (§9 Q3, Alt A):
+            # "no consumer of this header has stated that the media host needs
+            # a cookie set for a domain other than its own, and the absence is
+            # not a licence to invent one."
+            #
+            # WHY THAT IS SAFE, bounded by evidence, not preference:
+            #   - BrowserManager.create_stealth_page builds this context with
+            #     new_context(viewport=..., user_agent=..., locale=...,
+            #     timezone_id=...) and the tree contains no storage_state, no
+            #     launch_persistent_context and no user_data_dir. The context is
+            #     ephemeral, so this store holds ONLY what this run's own page
+            #     visit set - no persisted profile, nothing carried in from the
+            #     operator's browser, no accumulation across runs.
+            #   - The origin genuinely needs whatever it set; narrowing on a
+            #     guess is the failure mode, and this header cannot be narrowed
+            #     and validated on any platform available here (no live origin).
+            #
+            # WHICH CONSUMER THIS GOVERNS (the two are not the same):
+            #   - yt-dlp: cookies.py::_cookies_to_netscape preserves each
+            #     cookie's own domain for the --cookies file, so that path
+            #     already scopes by domain.
+            #   - aiohttp segments: cookies_str reaches the wire as one flat
+            #     "name=value; ..." header via HLSDownloadRequest.cookies ->
+            #     download_hls_with_resume's headers["Cookie"], sent to whatever
+            #     host the playlist resolves to. THAT is the unscoped path.
+            #
+            # THE SEAM, if a future phase ever narrows this: the filter belongs
+            # in _format_cookies_for_ffmpeg (below) - the one pure function that
+            # sees the domain and drops it. Do not filter here instead: raw_cookies
+            # also feeds yt-dlp's domain-correct arm, so filtering here would
+            # change a consumer that is already right.
+            #
+            # REVISIT IF: storage_state / launch_persistent_context /
+            # user_data_dir appears anywhere in the tree (the store stops being
+            # ephemeral and this reasoning expires), OR an owner or a live
+            # observation states which cookie domains the media host actually
+            # requires - either one replaces this comment with the narrow set and
+            # a test that demonstrates what is kept and what is dropped.
+```
+
+And in `_format_cookies_for_ffmpeg`'s docstring, replacing the current bare sentence *"Includes all cookies to ensure proper CDN authentication."* — which names a **consumer** and not a **dependency**, and is the actual defect:
+
+```
+        Includes every cookie from the browser context store, from every domain,
+        with no per-domain filtering - see SEC-010 / B8 and the harvest site in
+        _extract_with_browser for the recorded decision, the evidence bounding
+        it, and the conditions that would invalidate it. The cookie's ``domain``
+        key is available here and is deliberately not read: this is the seam a
+        future narrowing would be inserted at, and this function is the only
+        place the domain is available to it. The method name references the
+        retired ffmpeg transport and is a known misnomer; the rename belongs to
+        the removal track and is out of scope here (§6.11).
+```
+
+**`B8-A8` — verify-afterwards checklist, each item and how `B8` satisfies it.** (1) *Answerable from code* — `B8-A7`'s comment answers it with the answer ("deliberately not filtered"), the reason (no stated dependency), and the seam (`_format_cookies_for_ffmpeg`). (2) *Names evidence* — ephemeral context, no persistence, no cross-origin requirement observed; **not** a preference, per `B8-A2`. (3) *States invalidation* — the REVISIT-IF block names both triggers. (4) *No behaviour changed* — the file set is `extractor.py` + `test_extractor.py`; the edits are two comments/docstrings and one new test; **no statement, no expression, and no call in either file moves.** Verified now: `tests/test_extractor.py` is **47 passed** and `ruff check` / `ruff format --check` are clean on both files at `209bd77`, so the delta gates hold. (5) *Test pins behaviour and says why* — `B8-A6`'s docstring states outright that the test is supposed to fail under `Alt B` and must not be "fixed". (6) *No forbidden file touched* — `B8-A5`'s table; **none of the four is needed.**
+
+**Edits made by this audit: one.** `#### B8-AUDIT` inserted into this file, in the `B8` region immediately before `### \`B9\``. No code, test, plan-11, or other audit-phase file was read-modified; nothing staged or committed; `tmp/`, `tmp_old_sec*.md`, the deleted `.ai/plans/00_*`…`07_*`, `.ai/problems/PROBLEM.md`, `.kilo/commands/implement/implement-plan-multiagent.md`, untracked plans 05–08, `.gitignore`, and every `src/`/`tests/` file are untouched.
+
+---
+
 ### `B9` — The severity row for a validated finding (`VAL-601`)
 
 **Goal.** The validation stage is told to re-derive every severity from its own verification
@@ -4275,6 +6322,39 @@ acceptance_criteria:
     criterion: Exactly one file plus confirmed siblings is touched.
     verified_by: git status
 ```
+
+#### B9-AUDIT
+
+**Severity table, verbatim** (`## 8. Severity Taxonomy`; second column is `Condition in this phase`, singular):
+
+| Severity | Condition in this phase |
+|----------|-------------------------|
+| CRITICAL | A cross-phase conflict, or a rollout-safety blocker: two phases assert incompatible facts about the same subject; or a fix that cannot be ordered safely because a prerequisite of it is itself a finding. |
+| HIGH | A finding whose technical correctness or current applicability failed verification; or a rejected finding whose rejection changes a conclusion the report would otherwise carry. |
+| MEDIUM | A reclassified finding (its `Type` changed) or a merged finding (its content moved under another ID). The subject survives; the framing changes. |
+| LOW | A `DOC-UPDATE` candidate; any advisory finding with no security, data-loss or correctness consequence. |
+
+**Decision-application row, verbatim** (`## 11. Reporting`): `| **Validated** | Keep as-is. **The severity is re-derived from this phase's own verification, and is not changed by this decision.** |`
+
+**Constraining sentences.** (a) `**The findings template is the authority.**` … the `severity` row "fixes `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` as the severity of a **defect**". (b) "**The four severity words are not redefined here**, and this file adds no fifth. Every sibling phase states the same sentence and then gives only the conditions that are specific to its own subject." (c) "**The per-finding decision is not a severity.**" (d) "**A decision never changes the severity column.** A rejected finding keeps the severity it carried, and a reclassified finding keeps it". (e) "**These conditions are a classification vocabulary, not a verdict.** Every severity is composed by this phase from its own run (binding rule 1) … the consequence must be **observed** … not observed is filed with the structural fact and an explicit **`UNVERIFIED`** marker, never with an observed severity." (f) binding rule 1: severities are "re-derived from this phase's own verification … **none is changed because of the decision recorded against it**" and nothing is "inherited".
+
+**The trap the plan did not name.** `CRITICAL` and `LOW` are keyed on what a finding **is** (a conflict/blocker; a `DOC-UPDATE` or consequence-free advisory) and are therefore already reachable by a `validated` finding today. Only `HIGH` ("verification **failed**") and `MEDIUM` ("reclassified or merged") are keyed on decision/outcome, and they *exclude* `validated`. So the uncovered case is narrow and specific: a finding whose verification **passed**, whose decision is `validated`, and which is neither a conflict/blocker nor a doc-candidate/no-consequence advisory. Its band must be **composed**, and the table has no row that says so. `VAL-601`'s own draft (`HIGH or MEDIUM | a validated finding, composed from the consequence…`) introduces no fifth *word*, but it reads as a decision→band assignment, which (d) forbids in substance, and it silently excludes `LOW`.
+
+**Sibling sweep — twelve files, one table, no copies.** All twelve carry a four-row `| Severity | … |` table and the same `Severity ∈ CRITICAL | HIGH | MEDIUM | LOW` authority sentence. The eleven auditor phases `01`–`11` use header `| Severity | Conditions |` and their rows are **product conditions in that phase's own subject** — every condition describes a defect. The strings `Validated` / `Reclassified` / `Rejected` occur **only** in `99-audit-validate.md` (0 hits across all eleven siblings), and an auditor phase cannot produce "a finding that passes verification" because every finding it files is by construction a defect it verified. **Verdict: the gap is unique to `99`; these are not copies and need no fix.** AC-3 is discharged by this report; AC-4 holds — exactly one file.
+
+**Corpus dependency (read-only, nothing changed).** The gap is load-bearing today: `.ai/audit/99-validation/06-credentials-secrets-validated-findings.md` quotes the four rows verbatim inside `VAL-601`, and its `### Severity movements recorded in place` table cites the table as `` `:369` `` for `SEC-001`/`SEC-002`, while `SEC-007`'s basis is comparative prose against `SEC-005` — because no row covers a passing verification. Nine artifacts carry `| Validated (unchanged) |` tallies totalling **98 findings that passed verification** (`06` alone: 7 of 10 — `SEC-005` and `SEC-009` sit at HIGH with no row source). `02-config-validated-findings.md` records `CFG-001` as `Action: validated` with "**Severity re-derived … CRITICAL → HIGH** … HIGH is the strongest severity the observed consequence supports" — the improvised rule, verbatim. Editing the phase doc invalidates none of these (they quote the table to argue for the fix); it gives every future run a source. Two out-of-scope observations: `08` and `10` do not carry the four-row action tally at all, and `06` duplicates the tally across `## Findings summary after validation` and `## Validation Summary`.
+
+**Recommendation: Alt A, with the row's first cell as a derivation, not a band.** Alt B is rejected as the plan states — `## 11`'s table describes an *action* ("Keep as-is"), not a band, and cannot carry the composition source. Alt C is rejected as the plan states — an unsourced prose sentence is precisely what produced `CFG-001` and `SEC-007`. Alt A is the only option that puts a band and its source in the place a reader looks. **Deviation from the finding's draft, and why:** the finding proposes the Severity cell read `HIGH or MEDIUM`. Keep a disjunction there and the row reads as *the decision picks one of two bands* — the thing (d) prohibits — and it drops `LOW`, which a validated `DOC-UPDATE` finding already earns under the existing row. Write the cell as a non-band derivation instead; it names no new severity word, so AC-2 holds.
+
+**Draft row to land** (single table row appended after `LOW`, inside the existing `## 8` table; **no prose changed — sentences (a)–(f) all remain accurate**):
+
+```markdown
+| *composed — not fixed by the decision* | A finding whose verification **passed** and whose decision is `validated`. No band is assigned here: the band is composed from the finding's own consequence on the declared platform, as binding rule 1 requires. `CRITICAL` and `LOW` where the condition that row already names holds; otherwise the strongest band this run's verification established for the consequence it observed — the same rule `## 11`'s `Validated` action re-derives under, and it is stated here because no row above covers a verification that passed. A consequence that was **not** observed takes the template's `verification` path instead: the structural fact under the owning phase's own severity table, never an observed severity. **This row defines no fifth severity word.** |
+```
+
+**Acceptance test — does Alt A alone make the question answerable from the table?** Yes, **provided the row carries the composition source in its own cell** rather than delegating. Check by three reads of the table alone, with `## 11` closed: (1) name the trigger — "verification passed and decision `validated`"; (2) name the band — *composed, not fixed*, `CRITICAL`/`LOW` by their existing conditions, otherwise the strongest band the observed consequence supports; (3) confirm no fifth word was minted — the `Severity` cell contains a derivation phrase, and `CRITICAL | HIGH | MEDIUM | LOW` still appears exactly four times in `## 8`. The row **does** cite `## 11`'s `Validated` action — as the place the band is *re-derived*, not as the place it is *set*, so the answer stands without opening it. If the row is instead shortened to the finding's `HIGH or MEDIUM | a validated finding, composed from the consequence…`, criterion (2) fails: `LOW` is unreachable and the answer requires reading `## 11` and the artifact's own improvised rule.
+
+**Edits made by this audit: one file, one insertion, no code, no test, no new file.** `.ai/plans/17-credentials-secrets-audit-fixes-execution.md` — `#### B9-AUDIT` appended at the end of the `B9` region (after the `EB-B9` yaml, before the `---`). Nothing under `.ai/audit/**`, `.kilo/**`, `src/`, or `tests/` was touched; nothing staged or committed. **The fix itself still has an unedited file set: `.kilo/commands/audit/phases/99-audit-validate.md`, one table, one row.**
 
 ---
 
@@ -4424,6 +6504,79 @@ acceptance_criteria:
     criterion: The commit message states, per section, fillable or removed.
     verified_by: git log -1
 ```
+
+#### B10-AUDIT
+
+**1. The template as it actually reads** (`.ai/audit/templates/audit-findings.md`, 86 lines, anchored by heading).
+
+`## Summary`, verbatim — **four pre-filled numbers, all zero**: `| CRITICAL | 0 |` · `| HIGH | 0 |` · `| MEDIUM | 0 |` · `| LOW | 0 |`. The three action lists, verbatim: `## Mandatory Fixes` → `{List all findings classified as mandatory}` · `## Advisory Recommendations` → `{List all findings classified as advisory}` · `## Doc Updates Needed` → `{List all findings classified as DOC-UPDATE type}`. Each gives one instruction and no rule for **what** to count, so the placeholder is both pre-answered and under-specified.
+
+**Cross-references: none exist today.** Nothing in the template points at any of the four sections — the only other occurrences of the words are `Classification | {mandatory\|advisory}` inside the per-finding field table and the two `Classification Guide` bullets, which are about the *field*, not the sections. AC-3 is therefore **vacuously satisfied now and becomes load-bearing only if a section is removed**. The nearest external near-miss is `.kilo/agents/validator.md` `### Required Fixes` / `### Advisory Recommendations`, which is the validator role file's own report skeleton, not a pointer into this template — **not in scope, not a required fix**.
+
+**Must stay untouched, confirmed present.** `## Findings` block: `### {ID}: {Title}`, the `**Decision:** {validated | reclassified | merged | rejected} · {decision_detail}` line, the nine-row field table (`ID`, `Severity`, `Type`, `Affected Modules`, `Classification`, `Verification`, `Description`, `Evidence`, `Recommendation`). Field-reference table: 12 rows including `verification` (`observed` · `unverified`), `decision`, `decision_detail`, plus `## Classification Guide`. **Both `Decision` and `verification` exist and are out of scope — they must not change.**
+
+**2. Evidence re-derived at `4207d78`. Plan 11's claim is falsified twice over, and the block's own Correction 5 is wrong on two facts.** Twelve files tracked under `.ai/audit/99-validation/`; census taken fence-aware, because `06` quotes the template **inside a ````markdown` block** and a naive heading grep reads that quote as live sections.
+
+| Artifact | Keeps / deletes | What it actually puts there |
+|---|---|---|
+| `01-entry-architecture-validated-findings.md` | `## Advisory Recommendations` kept; `## Required Fixes` kept (**renamed** Mandatory); Summary and Doc Updates deleted | Real ID-keyed tables composed from this run's decisions |
+| `02-config-validated-findings.md` | **all four kept** | Summary = re-derived `HIGH 2 / MEDIUM 4 / LOW 2` + prose naming `CFG-001` re-derived `CRITICAL → HIGH`; the three lists are real tables |
+| `03-network-resilience-validated-findings.md` | all four deleted | States the deletion and its reason in prose |
+| `04-…-CON-002-verification-record.md` | all four deleted | Not a findings report (a verification record) |
+| `04-…-validated-findings.md` | all four deleted | — |
+| `05-subprocess-browser-validated-findings.md` | all four deleted | Header states the omission |
+| **`06-credentials-secrets-validated-findings.md`** | **all four deleted** | **The block's Correction 5 is false.** `## Summary` and the three lists at `:1543-1560` sit **inside a fenced `markdown` block quoting the template as evidence** inside `VAL-603`'s Description. There is **no live zero-table and no live instance of the defect in the corpus.** |
+| `07-filesystem-artifacts-validated-findings.md` | `## Summary` kept, repurposed | A 14-row findings index (`ID · Severity · Type · Classification · One line`) — **not a tally at all** |
+| `08-cli-observability-validated-findings.md` | **all four kept** | Summary = the **source report's** `HIGH 1 / MEDIUM 9 / LOW 7` "kept as filed", with a blockquote deferring re-derived severities to `### Severity tally` (`CRITICAL 1 / HIGH 0 / MEDIUM 6 / LOW 6`, 4 not bucketed). The lists are real tables |
+| `09-code-quality-validated-findings.md` | all four deleted | — |
+| `10-test-coverage-validated-findings.md` | Summary deleted; **all three action lists kept** as `###` under `## Validation Summary` | Real content; prose states the deliberate de-duplication |
+| `11-supply-chain-validated-findings.md` | all four deleted | Prose states the deletion |
+
+So: **4 of 12 keep ≥1 section in substance** (`01`, `02`, `08`, `10`), `07` keeps the heading for a different purpose, and **no artifact keeps a pre-filled zero**. The name `13-cli-observability-validated-findings.md` cited in Correction 5 **does not exist**; the artifact is `08-cli-observability`. And "real **re-derived** tallies" is true of `02`, not of `08`, which keeps the *source's* numbers and defers its own.
+
+**The larger falsification the block missed: the template's primary consumer was never measured.** `.ai/audit/{NN}-{slug}/findings.md` — the eleven **auditor** reports the template exists for — **seven keep all four sections with genuine tallies**: `01` `0/3/10/1`, `02` `1/1/4/2`, `04` `1/3/5/0` **plus a fifth row `| none (UNVERIFIED, not executed) | 1 |`**, `08` `0/1/9/7`, `09` `0/2/7/4`, `10` `3/4/6/3`, `11` `0/3/10/3`. Only `03` and `05` omit them; `06` repurposes Summary as prose and `07` as an index. `04`'s extra row is the strongest single piece of evidence: the tally is genuinely computed, extends past the template's four rows, and needs an instruction saying what to count.
+
+**3. The decisive question: does `99`'s decision-tally requirement already carry the template's `## Summary`? No — and `99` says so in terms.** `.kilo/commands/audit/phases/99-audit-validate.md` §4 R3: *"per-finding decision tally (Validated / Reclassified / Merged / Rejected). **A decision tally, not a severity tally.**"* The §11 *Validation Summary* block is an `Action | Count | Details` table whose rows are `Validated (unchanged)`, `Reclassified`, `Merged`, `Rejected`, `VAL-` — **no severity column anywhere**. `Alt B`'s stated premise (*"require the tally to live in the validation summary the validate phase already mandates"*) is therefore **factually false**: `99` mandates a *decision* tally, not a *severity* tally. **`Alt B` deletes a section that seven of eleven producers and two validators fill, and hands it to a requirement that explicitly disclaims carrying it.**
+
+**Recommendation: `Alt A`.** Not by default, but on the measured evidence: (a) `Alt B`'s premise fails on `99`'s own words; (b) the sections are used correctly by `7/11` producers and `2/12` validators; (c) the "everyone deletes them" evidence is `7/12`, and even those deletes are partial and name-based (`01` keeps a renamed Mandatory list, `10` keeps all three action lists) — so the shape is wanted, the **pre-answering** is the defect.
+
+**One conflict `B10` cannot close, recorded not hidden.** `99` §5 (i) carries the check row *"Pre-answered sections deleted — Does the artifact still carry a summary, appendix or placeholder section the format supplies pre-answered? … **A section every phase must delete is a defect of the format.**"* Under `Alt A` that row's premise is retired, but the row itself stays in `99` and instructs the next validator to strip the now-fillable Summary. **`B10` is forbidden from touching `99`, so this cannot be fixed here.** Land `Alt A` and file `99` §5 (i) as a **required companion change for its own block**; the alternative — leaving the row and expecting `Alt A` to survive the next run — is the defect recurring with a new name. `Alt C` (optional sections) is rejected for the plan's stated reason: the summary would still ship pre-answered.
+
+**4. Is the spec store's zero-table in scope? No — and the premise does not hold.** `06` has no live zero-table; the four headings and all four zeros are a **fenced quotation of the template used as `VAL-603`'s evidence**. Editing it would delete the evidence for the very finding this block implements, and `06` is a historical judgment record. **Recommendation: record it as evidence, change nothing, and close `B10-D1` as not-required** — there is no instance to correct. Corollary worth stating plainly: **the defect is confined to the template**; no artifact in the repository is a live instance of it.
+
+**5. Draft replacement wording** — the whole `## Summary`…`## Doc Updates Needed` tail, all four sections **fillable**, nothing removed:
+
+```markdown
+## Summary
+
+{Tally the findings above by severity. Count each finding once, under the `Severity` it
+carries after this report's own decisions; a finding that was merged or rejected is not
+counted here. A severity with no findings is written as `0`. Add a row for a severity the
+owning phase's table defines and this format does not.}
+
+| Severity | Count |
+|----------|-------|
+| CRITICAL | {count} |
+| HIGH | {count} |
+| MEDIUM | {count} |
+| LOW | {count} |
+
+## Mandatory Fixes
+
+{Every finding classified `mandatory`, by ID, with what must change and why.}
+
+## Advisory Recommendations
+
+{Every finding classified `advisory`, by ID, with what to change and why.}
+
+## Doc Updates Needed
+
+{Every finding of type `DOC-UPDATE`, by ID, with the document and the claim to correct.}
+```
+
+**6. Verification to run afterwards.** (1) `git grep -n "| 0 |" -- .ai/audit/templates/audit-findings.md` returns nothing — no pre-filled count anywhere. (2) Each of the four sections stated **fillable**, per section, in the commit message: Summary, Mandatory Fixes, Advisory Recommendations, Doc Updates Needed — **none removed**, so AC-3 has nothing to check and AC-5 is satisfied by leaving `## Findings` and the field-reference table byte-identical. (3) `git status --porcelain -- .ai/audit/` → **empty**, verified at audit time and again before commit; `.ai/audit/99-validation/**` is evidence, never an edit target. (4) `git status --porcelain` shows exactly one staged path: `.ai/audit/templates/audit-findings.md`. (5) `Decision` and `verification` rows unchanged (`git diff` shows no hunk touching them).
+
+**Verdict: land `Alt A`.** Evidence supports it, `Alt B`'s premise is falsified by `99` §4 R3 and §11, and the block's Correction 5 must be corrected on three points before the Implementor starts: `13-cli-observability` does not exist (`08` does), `06` keeps **no** section (its four headings are a fenced quotation), and `08` keeps the **source's** tally rather than a re-derived one. The companion change to `99` §5 (i) is required for `Alt A` to hold across runs.
 
 ---
 

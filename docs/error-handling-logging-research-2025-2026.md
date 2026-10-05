@@ -11,7 +11,7 @@ The following recommendations have been acted on in the CLI audit (Phase 01):
 |---------|---------------|--------|
 | §3.2 | Replace dict-based dispatch `_EXCEPTION_STATUS_HANDLERS` with polymorphic `status_label()` on exceptions | ✅ Done — `_download_single` in `services/batch_downloader.py` uses `exc.status_label()` for all `VKDownloadError` subclasses; legacy `_map_exception_to_status` retained in `exceptions.py` for backward compatibility |
 | §6.4 | Remove `validate_cookie_source` validator (replaced with enum `CookieSource.FILE` removal) | ✅ Done — `CookieSource.FILE` removed from the enum; Typer rejects `file` at parsing time, no runtime `ValueError` needed |
-| §9 Priority 1 | Add `merge_contextvars` + `format_exc_info` to structlog processor chain | ⏳ Not yet — tracked in Phase 02 |
+| §9 Priority 1 | Add `merge_contextvars` + `format_exc_info` to structlog processor chain | ✅ Done — shipped at `36b801e` (see §4.1, §4.5) |
 | §9 Priority 3 | Migrate to `asyncio.TaskGroup` + `except*` | ⏳ Not yet — tracked in Phase 02 (async-migration) |
 | CLI-002 | Remove private-symbol imports from CLI entry layer | ✅ Done — `cli.py` uses public `sanitize_url_for_log()`, `is_valid_video_url()`, and `format_validation_error()` |
 | CLI-001 | Extract batch orchestration from `cli.py` into `services/batch_downloader.py` | ✅ Done — `run_batch()` is the public entry point; `_download_single`, `_run_batch_with_progress`, `_print_batch_summary` moved to service layer |
@@ -38,10 +38,10 @@ The following recommendations have been acted on in the CLI audit (Phase 01):
 The codebase already follows several modern conventions:
 
 - **Custom exception hierarchy** with a `VKDownloadError` base class and structured subclasses (`QualityNotAvailableError` carrying `requested`/`available` fields). ✅ aligns with best practice.
-- **structlog** is configured with `BoundLogger`, `LoggerFactory`, `TimeStamper`, `JSONRenderer`/`ConsoleRenderer`, and `cache_logger_on_first_use`. ✅
+- **structlog** is configured with `BoundLogger`, `LoggerFactory`, `merge_contextvars`, `add_log_level`, `TimeStamper`, `format_exc_info`, `UnicodeDecoder`, `redact_log_event`, `JSONRenderer`/`ConsoleRenderer`, and `cache_logger_on_first_use`. ✅
 - **`StrEnum`** used for all constants (`LogLevel`, `DownloadMethod`). ✅
 - **`logger.exception()` / `logger.warning(..., exc_info=...)`** used to capture tracebacks. ✅
-- Security-conscious logging: `_strip_auth_params` used to avoid leaking tokens in log messages. ✅
+- Security-conscious logging: central `redact_log_event` processor (B6) wraps `sanitize_text_for_log`, which composes `_strip_auth_params` for URL redaction and artefact-path redaction; every structlog event passes through it before rendering. ✅
 - **No `print()`** — rule explicitly enforced. ✅
 
 **Gaps identified vs. 2025–2026 best practices:**
@@ -312,12 +312,20 @@ def configure_structlog(dev_mode: bool = False, log_level: int = logging.INFO) -
     )
 ```
 
-### 4.2 What the Existing Code Is Missing
+### 4.2 What the Existing Code *Was* Missing (historical baseline, 2026-10-04)
 
-The current `setup_logging` in `config.py`:
+> **Historical baseline (measured 2026-10-04 at `36b801e`):** the chain below
+> reflects the state *before* the Phase 02 fixes were applied. The shipped chain
+> now includes `merge_contextvars`, `format_exc_info`, `UnicodeDecoder`, and
+> `redact_log_event` — see §4.1 and §4.5. This section is retained because it
+> records a real finding: the original gap was genuine and was the
+> single highest-priority logging fix. A dated baseline is preferable to
+> deletion so the regression risk is named for future readers.
+
+The `setup_logging` in `config.py` previously used:
 
 ```python
-# CURRENT — incomplete chain
+# HISTORICAL BASELINE (2026-10-04) — incomplete chain; now superseded by §4.1
 processors=[
     structlog.stdlib.add_log_level,
     structlog.processors.TimeStamper(fmt="iso"),
@@ -325,7 +333,7 @@ processors=[
 ],
 ```
 
-**Missing:** `merge_contextvars` (context propagation won't work) and `format_exc_info` (tracebacks logged via `logger.exception()` are lost in JSON mode). This is the **highest-priority fix**.
+**Was missing:** `merge_contextvars` (context propagation won't work) and `format_exc_info` (tracebacks logged via `logger.exception()` were lost in JSON mode). This was the **highest-priority fix** — now resolved.
 
 ### 4.3 Canonical Log Lines
 
@@ -378,7 +386,9 @@ The transform covers three shapes:
 
 The two artefact rules key on prefix **and** suffix and consume the leading parent path, so a user's own output folder named `vk_cookies_videos` is untouched, while the username-bearing temp root (`C:\Users\<name>\AppData\Local\Temp`, CWE-532) is removed together with the artefact name.
 
-**Two gaps, stated rather than implied.** The `Cookie:` / `Set-Cookie:` header value is **not** covered — no child sink in `src/` emits one to any destination, and the durable control for a session value in flight is the carrier, not the log: `HLSDownloadRequest.cookies` is a `SecretStr` with `repr=False`, so it cannot surface through a `repr()`, a `model_dump_json()`, or a log line. The transform is the identity on a flat `name=value; name=value` session string, which is precisely why that carrier needed marking rather than another rule. And the processor recurses one level only, so a secret nested two containers deep is passed through unchanged.
+**Two gaps, stated rather than implied.** The `Cookie:` / `Set-Cookie:` header value is **not** covered — no child sink in `src/` emits one to any destination, and the durable control for a session value held in a model is the carrier, not the log: `HLSDownloadRequest.cookies` is a `SecretStr` with `repr=False`, so it cannot surface through a `repr()`, a `model_dump_json()`, or a log line. The transform is the identity on a flat `name=value; name=value` session string, which is precisely why that carrier needed marking rather than another rule. And the processor recurses one level only, so a secret nested two containers deep is passed through unchanged.
+
+**Hand-off — a second, unmarked flat-session carrier exists outside any model.** `services/segment_downloader.py::_handle_token_refresh` delegates to `::_refresh_token_and_retry`, whose `tuple[str, str]` return writes its second element as a plain `str` to `headers["Cookie"]` (see `_fetch_playlist_with_retry`). That path never logs `headers` and every record it emits is pre-sanitised via `_strip_auth_params`, so there is no live leak today. It is not marked (a `SecretStr` field cannot live on a plain `dict[str, str]` headers mapping without a behaviour change) and is recorded here so a future maintainer does not reintroduce the leak by assuming the model field is the sole carrier.
 
 ### 4.6 Async Logging
 
