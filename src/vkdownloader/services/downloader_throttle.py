@@ -216,7 +216,7 @@ async def _retry_429_with_backoff(
 ) -> bytes | None:
     """Download segment with AWS Full Jitter exponential backoff for 429/5xx errors.
 
-    Uses full jitter exponential backoff with Retry-After header priority.
+    Uses full jitter exponential backoff, treating the Retry-After header as a floor on the computed delay.
     Reads response content inside retry loop to avoid lifecycle issues with context manager.
 
     Args:
@@ -349,7 +349,7 @@ def _compute_backoff_delay(
     """Compute backoff delay using AWS Full Jitter exponential backoff.
 
     Calculates delay with full jitter: random(0, base_delay * 2^attempt).
-    Respects Retry-After header if present.
+    Retry-After header, if present, is a floor on the computed delay.
 
     Args:
         status_code: HTTP status code.
@@ -369,7 +369,7 @@ def _compute_backoff_delay(
     # Calculate delay with full jitter: random(0, base_delay * 2^attempt)
     delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
 
-    # Prefer Retry-After header over calculated delay
+    # Retry-After header is a floor on the calculated delay
     if retry_after_seconds is not None:
         delay = max(delay, retry_after_seconds)
 
