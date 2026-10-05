@@ -167,7 +167,6 @@ def _sanitize_collection(
         return tuple(sanitize_text_for_log(v) if isinstance(v, str) else v for v in value)
     if isinstance(value, dict):
         return {k: sanitize_text_for_log(v) if isinstance(v, str) else v for k, v in value.items()}
-    return value
 
 
 def redact_log_event(

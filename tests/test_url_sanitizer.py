@@ -17,20 +17,25 @@ import logging
 import shutil
 import string
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
-from vkdownloader.config import setup_logging
+from vkdownloader.config import Settings, setup_logging
+from vkdownloader.models.enums import LogLevel
 from vkdownloader.services.ytdlp_downloader import (
     _create_cookie_artifact_dir,
     _create_temp_cookie_file,
     _remove_cookie_artifact_dir,
 )
+from vkdownloader.utils.correlation import bind_correlation_id, clear_correlation_id
 from vkdownloader.utils.url_sanitizer import (
     _COOKIE_DIR_ARTEFACT_REGEX,
     _STRUCTURAL_KEYS,
+    _sanitize_collection,
     _strip_auth_params,
     redact_log_event,
     sanitize_text_for_log,
@@ -38,6 +43,83 @@ from vkdownloader.utils.url_sanitizer import (
 
 REDACTED = "***REDACTED***"
 _TEST_LOGGER = logging.getLogger("test.redact")
+
+
+def _string_leaves(value: object) -> list[str]:
+    """Collect every ``str`` leaf, recursing one level into list/tuple/dict.
+
+    Mirrors what the redaction processor can reach (``isinstance`` gate on the
+    outer container, str leaves inside) so tests can count markers and scan for
+    secret tokens across the same values the processor inspects.
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        leaves: list[str] = []
+        for item in value:
+            leaves.extend(_string_leaves(item))
+        return leaves
+    if isinstance(value, dict):
+        leaves = []
+        for inner in value.values():
+            leaves.extend(_string_leaves(inner))
+        return leaves
+    return []
+
+
+def _non_structural_strings(event_dict: dict[str, object]) -> list[str]:
+    """All ``str`` leaves living under non-structural keys of ``event_dict``."""
+    return [
+        leaf
+        for key, value in event_dict.items()
+        if key not in _STRUCTURAL_KEYS
+        for leaf in _string_leaves(value)
+    ]
+
+
+def _redaction_marker_count(text: str) -> int:
+    return text.count(REDACTED)
+
+
+@contextmanager
+def _real_chain(log_file: Path) -> Iterator[structlog.stdlib.BoundLogger]:
+    """Drive ``config.setup_logging``'s REAL processor chain.
+
+    This exercises the production structlog configuration (placement,
+    cache_logger_on_first_use, the conditional JSONRenderer) — not a hand-rolled
+    processor list — and captures the rendered JSON to ``log_file``. Root
+    logger handlers, the structlog config, and contextvars are saved and
+    restored so no global state leaks into other tests.
+    """
+    structlog.reset_defaults()
+    root = logging.getLogger()
+    old_handlers = root.handlers[:]
+    old_level = root.level
+    root.handlers.clear()
+    # Snapshot and clear structlog contextvars so leaked bindings from other
+    # test modules (e.g. test_correlation.py binds unrelated_key without
+    # cleanup) do not pollute the measured structural-key set.
+    old_context = dict(structlog.contextvars.get_contextvars())
+    structlog.contextvars.clear_contextvars()
+    try:
+        setup_logging(Settings(log_level=LogLevel.DEBUG, log_file=log_file))
+        yield cast(structlog.stdlib.BoundLogger, structlog.get_logger("b6.real_chain"))
+    finally:
+        for handler in list(root.handlers):
+            handler.close()
+        root.handlers = old_handlers
+        root.setLevel(old_level)
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(**old_context)
+        structlog.reset_defaults()
+
+
+def _read_real_chain_records(log_file: Path) -> list[dict[str, Any]]:
+    """Read every JSON record the real chain just emitted to ``log_file``."""
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    text = log_file.read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 class TestStripAuthParams:
@@ -408,7 +490,8 @@ class TestRedactLogEventProcessor:
     """Tests for the ``redact_log_event`` structlog processor (B6).
 
     Covers the acceptance criteria from plan 17 §B6:
-    - exc_info=True traceback redaction through the configured chain
+    - exc_info=True traceback redaction (hand-rolled fast unit; the configured-chain
+      behavioural assertion lives in TestRealConfiguredChain)
     - cookie_file_cleanup_failed (both fields) and cookie_file_cleaned_up (path)
     - processor chain position (after format_exc_info, after UnicodeDecoder,
       before renderer)
@@ -420,12 +503,14 @@ class TestRedactLogEventProcessor:
     SIGNED_URL = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
 
     # ------------------------------------------------------------------
-    # AC-1: exc_info=True record's rendered traceback is redacted
+    # AC-1 (fast unit, hand-rolled copy): exc_info=True record's rendered traceback is redacted
     # ------------------------------------------------------------------
 
     def test_exc_info_traceback_is_redacted_through_chain(self) -> None:
-        """An exc_info=True record carrying a signed URL in the exception message
-        is redacted in the rendered ``exception`` field.
+        """Fast unit: a hand-rolled copy of the processor list (not
+        config.setup_logging) redacts a signed URL carried in an exc_info=True
+        record's rendered ``exception`` field. The configured-chain behavioural
+        assertion lives in ``TestRealConfiguredChain``.
         """
         structlog.reset_defaults()
         buf = io.StringIO()
@@ -490,7 +575,7 @@ class TestRedactLogEventProcessor:
             result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
             assert result["path"] == REDACTED
-            assert "Cannot delete" not in result["error"] or cookie_file.name not in result["error"]
+            assert "cannot delete" not in result["error"] or cookie_file.name not in result["error"]
             # Both values must lose the artefact token
             assert cookie_file.name not in result["path"]
             assert cookie_file.name not in result["error"]
@@ -585,7 +670,7 @@ class TestRedactLogEventProcessor:
         assert "cdn.example.com" in result_a["detail"]
 
     def test_synthetic_novel_key_is_redacted(self) -> None:
-        """A key name not present in any of the 22 enumerated records still gets
+        """A key name not present in any of the 21 enumerated records still gets
         redacted — the processor is key-agnostic, not allowlist-driven.
         """
         event_dict = {
@@ -598,13 +683,16 @@ class TestRedactLogEventProcessor:
         assert "cdn.example.com" in result["custom_payload_key"]
 
     def test_processor_source_contains_no_enumerated_record_names(self) -> None:
-        """The processor source/bytecode mentions none of the 22 enumerated
-        record names — the function is structural, not name-branched.
+        """The processor and its depth-1 helper mention none of the 21 enumerated
+        record names — the transform is structural, not name-branched.
         """
-        from vkdownloader.utils.url_sanitizer import redact_log_event as proc_module
-
-        module_source = inspect.getsource(proc_module)
-        # The enumerated record names from the 22-name census
+        # Inspect BOTH the processor and its helper: a name branch hidden in
+        # _sanitize_collection would evade this assertion if only redact_log_event
+        # were inspected (B6-A10: name-agnosticism is the security property).
+        function_source = inspect.getsource(redact_log_event) + inspect.getsource(
+            _sanitize_collection
+        )
+        # The enumerated record names from the 21-name census
         record_names = [
             "browser_launch_failed",
             "browser_close_failed",
@@ -629,7 +717,7 @@ class TestRedactLogEventProcessor:
             "retryable_transport_error",
         ]
         for name in record_names:
-            assert name not in module_source, (
+            assert name not in function_source, (
                 f"record name {name!r} found in processor source — "
                 "processor must be event-name-agnostic"
             )
@@ -665,6 +753,46 @@ class TestRedactLogEventProcessor:
 
         assert result["url"] == pre
         assert result["url"] == "https://cdn.example.com/***REDACTED***"
+
+    def test_processor_never_reduces_redaction_across_shapes(self) -> None:
+        """AC-6 leg (c): the processor never reduces redaction.
+
+        Commit 200ae51's blanket "running it on already-truncated, already-
+        redacted text is a no-op" is false (R1): only the processor's OWN
+        output is a fixed point (2025/2025), and a pre-truncated input is not.
+        This leg asserts instead the security monotonicity that matters — a
+        second pass must never un-redact a token the first pass hid — across a
+        spread of shapes, not only the single batch_merge_failed fixture pinned
+        by leg (b).
+        """
+        secret_tokens = ("SECRET123", "ABC")
+        shapes: list[dict[str, Any]] = [
+            {"event": "url_in_error", "error": f"fetch {self.SIGNED_URL} failed"},
+            {"event": "url_in_url_field", "url": self.SIGNED_URL},
+            {"event": "url_in_message", "message": f"fetch {self.SIGNED_URL}"},
+            {"event": "url_list", "urls": [self.SIGNED_URL, "https://alt.example.com/x?sig=ZZZ"]},
+            {"event": "pre_sanitised", "error": sanitize_text_for_log(self.SIGNED_URL)},
+        ]
+        for shape in shapes:
+            once = redact_log_event(_TEST_LOGGER, "debug", dict(shape))
+            once_strings = _non_structural_strings(dict(once))
+            once_markers = sum(_redaction_marker_count(s) for s in once_strings)
+            once_joined = " ".join(once_strings)
+            # first pass must hide every secret token that the shape carries
+            assert all(token not in once_joined for token in secret_tokens), (
+                f"secret leaked after first pass for {shape['event']}"
+            )
+            # second pass must never reduce the redaction that pass one applied
+            twice = redact_log_event(_TEST_LOGGER, "debug", dict(once))
+            twice_strings = _non_structural_strings(dict(twice))
+            twice_markers = sum(_redaction_marker_count(s) for s in twice_strings)
+            assert twice_markers >= once_markers, (
+                f"redaction reduced for {shape['event']}: {once_markers} -> {twice_markers}"
+            )
+            twice_joined = " ".join(twice_strings)
+            assert all(token not in twice_joined for token in secret_tokens), (
+                f"secret re-exposed after second pass for {shape['event']}"
+            )
 
     # ------------------------------------------------------------------
     # AC-8: never raises on non-string, None, nested mapping, absent key
@@ -771,10 +899,12 @@ class TestRedactLogEventProcessor:
         assert original_dict["url_key"] == self.SIGNED_URL
         assert "SECRET123" in original_dict["url_key"]
 
-    def test_captured_m3u8_urls_record_through_configured_chain(self) -> None:
-        """The live ``captured_m3u8_urls`` record carries ``urls=[...]`` — a list of
-        signed CDN URLs. Through the fully configured chain, each is redacted,
-        and the original list object is not mutated in place.
+    def test_captured_m3u8_urls_record_through_hand_rolled_chain(self) -> None:
+        """Fast unit: a hand-rolled copy of the processor list (not
+        config.setup_logging) redacts each signed CDN URL in a
+        ``captured_m3u8_urls`` ``urls=[...]`` list, and the original list object
+        is not mutated in place. The configured-chain assertion for this record
+        shape is in TestRealConfiguredChain.
         """
         structlog.reset_defaults()
         buf = io.StringIO()
@@ -840,9 +970,28 @@ class TestRedactLogEventProcessor:
 class TestStructuralKeysDenylist:
     """Verify the structural-key denylist matches the measured injected set."""
 
-    def test_denylist_contains_four_structural_keys(self) -> None:
-        """The denylist is exactly {event, level, timestamp, correlation_id}."""
-        assert _STRUCTURAL_KEYS == frozenset({"event", "level", "timestamp", "correlation_id"})
+    def test_denylist_matches_measured_injected_keys(self, tmp_path: Path) -> None:
+        """The denylist is exactly the set the configured chain injects beyond
+        the caller's own keys — measured by emission, not a hard-coded literal —
+        so a fifth structlog-injected key trips this alarm.
+        """
+        log_file = tmp_path / "denylist.log"
+        try:
+            with _real_chain(log_file) as logger:
+                bind_correlation_id("deadbeef")
+                logger.info(
+                    "denylist_probe", probe="https://cdn.example.com/x?token=SECRET123&sig=ABC"
+                )
+                records = _read_real_chain_records(log_file)
+        finally:
+            clear_correlation_id()
+
+        record = records[-1]
+        measured = set(record) - {"probe"}
+        assert _STRUCTURAL_KEYS == measured
+        # The user key's secret value WAS redacted — only structural keys are shielded.
+        assert "SECRET123" not in record["probe"]
+        assert "cdn.example.com" in record["probe"]
 
     def test_structural_keys_are_not_redacted(self) -> None:
         """Values under structural keys are never redacted, even if they
@@ -916,3 +1065,115 @@ class TestRedactLogEventDirect:
         result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
         assert result["event"] == "my_log_event_name"
+
+
+class TestRealConfiguredChain:
+    """Behavioural tests through config.setup_logging's REAL processor chain
+    (config.setup_logging + structlog.get_logger), not a hand-rolled copy.
+
+    The hand-rolled chain in ``TestRedactLogEventProcessor`` is a fast unit;
+    these tests pin the production wiring — placement, cache_logger_on_first_use,
+    and the conditional renderer — so a drift between the copy and setup_logging
+    is caught here rather than in a silent fixed point.
+    """
+
+    SIGNED_URL = "https://cdn.example.com/seg.m3u8?token=SECRET123&sig=ABC"
+
+    # AC-1: an exc_info=True record's rendered traceback is redacted.
+    def test_exc_info_traceback_redacted_through_real_chain(self, tmp_path: Path) -> None:
+        """An exc_info=True record's rendered traceback is redacted through
+        config.setup_logging's real chain.
+        """
+        log_file = tmp_path / "real.log"
+        with _real_chain(log_file) as logger:
+            url = self.SIGNED_URL
+            try:
+                raise ValueError(f"fetch failed: {url}")
+            except ValueError:
+                logger.error("download_failed", exc_info=True)
+            records = _read_real_chain_records(log_file)
+
+        record = records[-1]
+        assert "exception" in record
+        assert "Traceback" in record["exception"]
+        assert "SECRET123" not in record["exception"]
+        assert "ABC" not in record["exception"]
+        assert "cdn.example.com" in record["exception"]
+
+    # AC-3: the three named record shapes, through the real chain.
+    def test_real_chain_redacts_cookie_file_cleanup_failed_both_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """``cookie_file_cleanup_failed``'s ``path`` and ``error`` both lose the
+        artefact token through the real chain.
+        """
+        cookie_file = _create_temp_cookie_file("session=test")
+        log_file = tmp_path / "real.log"
+        try:
+            with _real_chain(log_file) as logger:
+                logger.warning(
+                    "cookie_file_cleanup_failed",
+                    path=str(cookie_file),
+                    error=f"PermissionError: cannot delete {cookie_file}",
+                )
+                records = _read_real_chain_records(log_file)
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+        record = records[-1]
+        assert record["path"] == REDACTED
+        assert "cannot delete" in record["error"]
+        assert cookie_file.name not in record["path"]
+        assert cookie_file.name not in record["error"]
+
+    def test_real_chain_redacts_cookie_file_cleaned_up_path(self, tmp_path: Path) -> None:
+        """``cookie_file_cleaned_up``'s success-path ``path`` is redacted through
+        the real chain (it fires at DEBUG, so the chain runs at DEBUG level).
+        """
+        cookie_file = _create_temp_cookie_file("session=test")
+        log_file = tmp_path / "real.log"
+        try:
+            with _real_chain(log_file) as logger:
+                logger.debug("cookie_file_cleaned_up", path=str(cookie_file))
+                records = _read_real_chain_records(log_file)
+        finally:
+            cookie_file.unlink(missing_ok=True)
+            _remove_cookie_artifact_dir(cookie_file.parent)
+
+        record = records[-1]
+        assert record["path"] == REDACTED
+        assert cookie_file.name not in record["path"]
+
+    # Record-specific traceback-field shapes: error= and path=exc.filename.
+    def test_real_chain_redacts_error_field_traceback_shape(self, tmp_path: Path) -> None:
+        """A record whose ``error=`` carries a signed URL redacts it through the
+        real chain (covers ``browser_launch_failed`` / ``browser_close_failed`` /
+        ``playwright_stop_failed`` whose ``error=str(exc)`` bears a URL).
+        """
+        log_file = tmp_path / "real.log"
+        with _real_chain(log_file) as logger:
+            logger.error("playwright_stop_failed", error=f"stopped: {self.SIGNED_URL}")
+            records = _read_real_chain_records(log_file)
+
+        record = records[-1]
+        assert "SECRET123" not in record["error"]
+        assert "ABC" not in record["error"]
+        assert "cdn.example.com" in record["error"]
+
+    def test_real_chain_redacts_path_filename_traceback_shape(self, tmp_path: Path) -> None:
+        """``ytdlp_not_found`` carries ``path=exc.filename`` (``str`` or ``None``).
+        Through the real chain a URL-bearing filename is redacted and ``None``
+        passes through unchanged.
+        """
+        log_file = tmp_path / "real.log"
+        with _real_chain(log_file) as logger:
+            logger.error("ytdlp_not_found", path=f"C:\\tools\\{self.SIGNED_URL}")
+            logger.error("ytdlp_not_found", path=None)
+            records = _read_real_chain_records(log_file)
+
+        str_record = records[-2]
+        none_record = records[-1]
+        assert "SECRET123" not in str_record["path"]
+        assert "cdn.example.com" in str_record["path"]
+        assert none_record["path"] is None

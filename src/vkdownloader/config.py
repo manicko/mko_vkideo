@@ -556,6 +556,14 @@ def setup_logging(settings: Settings | None = None) -> None:
     Raises:
         OSError: If log_file parent directory cannot be created.
     """
+    # B6 RF-1: this import is deferred to runtime to break an import cycle.
+    # Importing ``vkdownloader.utils.url_sanitizer`` at module level would run
+    # ``utils/__init__`` -> ``.security`` -> ``from ..config import Settings``
+    # while ``config`` is still mid-import, so ``Settings`` is not yet bound and
+    # the import raises ImportError. Resolving the symbol only inside
+    # setup_logging() — i.e. after config.py has finished importing — is the
+    # cycle's only safe landing point; hoisting it to module level breaks the
+    # package import.
     from vkdownloader.utils.url_sanitizer import redact_log_event
 
     if settings is None:
