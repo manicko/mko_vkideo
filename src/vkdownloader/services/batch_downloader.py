@@ -217,11 +217,10 @@ async def _download_single(
     title_cb: Callable[[str], None] | None = None
 
     if reporter is not None:
-        # is_enabled only AFTER start() has been called (done in
-        # _run_batch_with_progress). Reading it before start() would reflect the
-        # pre-start stderr state instead of the resolved Console; echo suppression
-        # (R5/AC2) keeps yt-dlp's native console output silent when the rich
-        # display owns the terminal.
+        # is_enabled is memoised per reporter instance (resolved once on first
+        # access, see RichProgressReporter.is_enabled), so it is safe to read
+        # here before start() runs. Echo suppression (R5/AC2) keeps yt-dlp's
+        # native console output silent when the rich display owns the terminal.
         echo = not reporter.is_enabled
         progress_cb = _on_progress
         title_cb = _on_title

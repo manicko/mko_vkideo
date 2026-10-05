@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import io
 import logging
+import sys
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from rich.console import Console
@@ -252,6 +253,10 @@ class TestRichProgressReporter:
         # When no console is supplied, is_enabled falls back to stderr isatty().
         assert RichProgressReporter().is_enabled is False
         with patch("vkdownloader.services.progress_display.sys.stderr") as fake_stderr:
+            # rich's Console.file unwraps `rich_proxied_file`; a MagicMock
+            # auto-creates a child mock there, so pin it to the mock itself so
+            # is_terminal reaches the configured isatty() return value.
+            fake_stderr.rich_proxied_file = fake_stderr
             fake_stderr.isatty.return_value = False
             assert RichProgressReporter().is_enabled is False
             fake_stderr.isatty.return_value = True
@@ -538,3 +543,82 @@ class TestRichProgressReporter:
         assert "cancelled" in content
         # The task was begun, not finished; it must not show a success glyph.
         assert "[✓]" not in content
+
+
+@pytest.mark.parametrize("extra_env", [{}, {"TTY_COMPATIBLE": "0"}])
+def test_is_enabled_never_disagrees_with_console_is_terminal(
+    monkeypatch: pytest.MonkeyPatch, extra_env: dict[str, str]
+) -> None:
+    """is_enabled is memoised from the same console whose is_terminal is read later.
+
+    start() swaps sys.stderr for rich's FileProxy, but Console.file unwraps
+    rich_proxied_file (FileProxy exposes the underlying stream), so the resolved
+    value and a fresh is_terminal read never disagree -- even when TTY_COMPATIBLE
+    forces is_terminal to False.
+    """
+    fake_stderr = io.StringIO()
+    fake_stderr.isatty = lambda: True  # type: ignore[method-assign]
+    monkeypatch.setattr(sys, "stderr", fake_stderr)
+    for key, value in extra_env.items():
+        monkeypatch.setenv(key, value)
+
+    reporter = RichProgressReporter()
+    reporter.start()
+    try:
+        assert reporter.is_enabled is reporter._console.is_terminal  # type: ignore[union-attr]
+    finally:
+        reporter.stop()
+
+
+def test_is_enabled_is_stable_across_start(
+    preserve_root_handlers: Iterator[None],
+) -> None:
+    """is_enabled is memoised before start() swaps sys.stderr for the FileProxy.
+
+    A force_terminal=True console reports is_terminal=True both before and after
+    Progress.start() replaces sys.stderr with rich's FileProxy; the memoised
+    is_enabled must hold that value across the swap.
+    """
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=True)
+    reporter = RichProgressReporter(console=console)
+    assert reporter.is_enabled is True
+    reporter.start()
+    try:
+        assert reporter.is_enabled is True
+    finally:
+        reporter.stop()
+
+
+def test_per_task_gates_use_the_resolved_value() -> None:
+    """Per-task gates use the memoised is_enabled, not a fresh is_terminal read.
+
+    The console resolves is_enabled to False, so start() is a cheap no-op and
+    the gates fall back to throttled structlog events. Flipping Console.is_terminal
+    to True afterwards must not pull them onto the live path -- the resolved False
+    is cached, so download_progress / download_finished still emit.
+    """
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=120, no_color=True)
+    reporter = RichProgressReporter(console=console)
+    assert reporter.is_enabled is False
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def capture(event: str, **fields: object) -> None:
+        captured.append((event, fields))
+
+    with patch(
+        "vkdownloader.services.progress_display.logger.info",
+        side_effect=capture,
+    ):
+        reporter.start()  # disabled: early-return, no stderr swap, no Progress
+        with patch.object(Console, "is_terminal", new_callable=PropertyMock, return_value=True):
+            reporter.update(0, 100, 200)
+            reporter.start_task(0)
+            reporter.finish_task(0, ProgressStatus.SUCCESS)
+        reporter.stop()
+
+    events = [event for event, _ in captured]
+    assert events.count("download_progress") == 1
+    assert events.count("download_finished") == 1

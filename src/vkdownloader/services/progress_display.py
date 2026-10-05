@@ -102,6 +102,12 @@ class RichProgressReporter:
     to tear it down. When the target console is not a terminal the reporter
     disables itself and emits throttled structlog INFO events instead, keeping
     piped/CI output free of escape codes.
+
+    The terminal question (``is_terminal``) is resolved once per instance and
+    memoised: :meth:`is_enabled` builds the console (from ``stderr`` when none is
+    supplied) and caches the result, so :meth:`start` and every per-task gate
+    observe the same value rather than re-reading a stream that :meth:`start` may
+    have swapped for rich's ``FileProxy``.
     """
 
     def __init__(
@@ -126,15 +132,18 @@ class RichProgressReporter:
 
     @property
     def is_enabled(self) -> bool:
-        """Whether the rich live display is active for this reporter."""
-        if self._enabled is not None:
-            return self._enabled
-        if self._console is not None:
-            return self._console.is_terminal
-        # No console provided yet: mirror Console(stderr=True).is_terminal
-        # without constructing one (stderr is a TTY in production, BytesIO
-        # under CliRunner). The real Console is still built lazily in start().
-        return sys.stderr.isatty()
+        """Whether the rich live display is active for this reporter.
+
+        The terminal question is resolved once per instance and memoised: if no
+        console was supplied one is built from ``stderr`` on first access, and
+        the ``is_terminal`` result is cached so :meth:`start` and the per-task
+        gates all read the same value.
+        """
+        if self._console is None:
+            self._console = Console(stderr=True)
+        if self._enabled is None:
+            self._enabled = self._console.is_terminal
+        return self._enabled
 
     def start(self) -> None:
         """Open the live display.
@@ -148,16 +157,19 @@ class RichProgressReporter:
         self._started = True
         if not self.is_enabled:
             return
-        # Resolve the console lazily — never at import or construction time, so
-        # the reporter binds to the stream that is live when display starts.
-        if self._console is None:
-            self._console = Console(stderr=True)
-        progress = self._build_progress()
+        # is_enabled() has memoised the terminal question and built the console
+        # (from stderr) when none was supplied, so self._console is set here.
+        # Read is_terminal once and reuse it for the progress builder and the
+        # handler-repointer so the two can never disagree.
+        console = self._console
+        assert console is not None, "is_enabled() must have resolved the console"
+        is_terminal = console.is_terminal
+        progress = self._build_progress(is_terminal=is_terminal)
         progress.start()
         # Progress.start() swaps sys.stderr for rich's FileProxy when the console
         # is a terminal (redirect_stderr=True). Re-point StreamHandlers onto the
         # wrapped stderr so log writes are mediated by the Live display.
-        if self._console.is_terminal:
+        if is_terminal:
             self._repoint_log_handlers()
         self._progress = progress
 
@@ -341,8 +353,13 @@ class RichProgressReporter:
             return f"{base}: {title}"
         return f"{base}: {title[: _MAX_TITLE_LENGTH - 1]}…"
 
-    def _build_progress(self) -> Progress:
-        """Construct the configured ``Progress`` with positional columns."""
+    def _build_progress(self, *, is_terminal: bool) -> Progress:
+        """Construct the configured ``Progress`` with positional columns.
+
+        ``is_terminal`` is the value resolved by :meth:`is_enabled` (and read once
+        by :meth:`start`); threading it in keeps ``auto_refresh`` consistent with
+        the gated decision instead of re-reading ``console.is_terminal`` here.
+        """
         console = self._console
         assert console is not None, "start() must be called before building progress"
         columns = (
@@ -364,7 +381,7 @@ class RichProgressReporter:
         return Progress(
             *columns,
             console=console,
-            auto_refresh=console.is_terminal,
+            auto_refresh=is_terminal,
             refresh_per_second=self._refresh_per_second,
             transient=False,
             redirect_stdout=False,
