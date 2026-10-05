@@ -142,10 +142,11 @@ vkdownloader batch [OPTIONS] URLS_FILE
 
 1. Reads video URLs from the provided file (one URL per line)
 2. Skips empty lines and lines starting with `#`
-3. Downloads each video concurrently as `asyncio` tasks governed by a shared semaphore (up to 4 parallel downloads)
-4. Uses a per-video semaphore for video-level concurrency; segment fan-out is bounded by a separate semaphore owned by the segment layer
-5. Shows a live multi-line progress display during download, one line per active download, when the output stream is a terminal
-6. Prints summary of successful and failed downloads
+3. Validates each remaining URL against the VK video URL pattern; non-matching entries are skipped with a warning and counted as invalid
+4. Downloads each video concurrently as `asyncio` tasks governed by a shared semaphore (up to 4 parallel downloads)
+5. Uses a per-video semaphore for video-level concurrency; segment fan-out is bounded by a separate semaphore owned by the segment layer
+6. Shows a live multi-line progress display during download, one line per active download, when the output stream is a terminal
+7. Prints summary of successful and failed downloads, including the number of invalid URLs skipped
 
 **Progress Display:**
 

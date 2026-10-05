@@ -31,6 +31,7 @@ _REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
 _COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
 _MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
+_BATCH_SUMMARY_STEP = re.compile(r"^\s*\d+\.\s+Prints summary of successful and failed downloads")
 
 
 def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
@@ -86,6 +87,36 @@ def _documented_max_retries_descriptions(doc_path: Path) -> dict[str, str]:
         elif line.strip() and not line.startswith("|"):
             in_options_table = False
     return descriptions
+
+
+def _documented_batch_summary_step(doc_path: Path) -> str:
+    """Return the batch command's summary step line from a reference doc.
+
+    Scans the batch command's ``**Behavior:**`` section (scoped via the
+    ``### N. command`` heading so the single download command's behavior is
+    ignored) and asserts the summary step appears exactly once. A missing or
+    duplicated step is the divergence B8's doc edit is meant to keep dead;
+    asserting uniqueness here turns it into a checked contract.
+    """
+    command: str | None = None
+    in_batch = False
+    matches: list[str] = []
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        heading = _COMMAND_HEADING.match(line)
+        if heading is not None:
+            command = heading.group(1)
+            in_batch = False
+            continue
+        if command == "batch" and line.strip() == "**Behavior:**":
+            in_batch = True
+            continue
+        if line.strip() == "**Progress Display:**":
+            in_batch = False
+            continue
+        if in_batch and _BATCH_SUMMARY_STEP.match(line):
+            matches.append(line.strip())
+    assert len(matches) == 1, f"batch summary step not exactly once in {doc_path.name}: {matches!r}"
+    return matches[0]
 
 
 def _is_undecodable(payload: bytes, encoding: str) -> bool:
@@ -302,7 +333,7 @@ class TestBatchCommand:
 
         assert result.exit_code == 1
         assert "Download Summary:" in result.output
-        assert "Total connections:" in result.output
+        assert "Total videos:" in result.output
         assert "Peak concurrent videos:" in result.output
         assert "Successful:" in result.output
         assert "Failed:" in result.output
@@ -433,7 +464,66 @@ class TestBatchCommand:
         assert result.exit_code == 0
         assert "Skipped 1 invalid URL" in result.output
         assert "Skipped (invalid URLs): 1" in result.output
-        assert "Total connections: 2" in result.output
+        assert "Total videos: 2" in result.output
+
+    def test_batch_summary_total_line_names_videos_and_counts_each_video(
+        self, tmp_path: Path
+    ) -> None:
+        """B8 oracle: the summary's total line reports a video count, not a connection count.
+
+        The label must name the unit it reports -- a video count -- and the value
+        must equal the number of videos in the batch. A regression that moves the
+        count under a connection-flavoured word, or lets the value drift from the
+        video count, fails this test rather than only pinning a literal string.
+        """
+        url_count = 3
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text(
+            "".join(f"https://vkvideo.ru/video-{i}_{i}\n" for i in range(1, url_count + 1))
+        )
+
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+            )
+            mock_extractor_cls.return_value = mock_extractor
+
+            mock_selector = MagicMock()
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
+
+            mock_download.return_value = tmp_path / "video1.mp4"
+
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        # The label must name the unit it reports: a video count.
+        assert "Total videos:" in result.output
+        total_line = next(
+            line for line in result.output.splitlines() if line.strip().startswith("Total ")
+        )
+        # Regression guard: a connection-flavoured label fails this assertion.
+        assert "video" in total_line.lower(), total_line
+        assert "connection" not in total_line.lower(), total_line
+        # The value must equal the number of videos in the batch.
+        assert int(total_line.split(":")[-1].strip()) == url_count, total_line
 
     def test_batch_start_finish_task_per_url(self, tmp_path: Path) -> None:
         """AC1/R1: each active download gets start_task and finish_task calls."""
@@ -1777,6 +1867,32 @@ class TestMaxRetriesOptionDocumentation:
                     f"{doc_name}: `{command}` --max-retries row does not state the "
                     f"model range {documented_range!r}: {description!r}"
                 )
+
+
+class TestBatchSummaryDocumentation:
+    """B8 oracle: both reference docs describe the batch summary step with
+    identical wording and both mention the skipped-invalid-URL count.
+
+    B8 reconciled a divergence where ``cli-reference.md`` numbered the step 7 and
+    mentioned the skipped count while ``cli-reference-clean.md`` numbered it 6 and
+    omitted the clause; this oracle keeps that reconciliation a checked contract
+    rather than a one-off prose edit.
+    """
+
+    def test_batch_summary_step_is_consistent_and_mentions_skipped_urls(self) -> None:
+        steps = {
+            doc_name: _documented_batch_summary_step(_REFERENCE_DOCS / doc_name)
+            for doc_name in _REFERENCE_DOC_NAMES
+        }
+
+        # Reconciled wording: the step text must be identical across both files,
+        # so the item number and the clause cannot drift apart again.
+        assert steps["cli-reference.md"] == steps["cli-reference-clean.md"], steps
+
+        # Both must mention the skipped-invalid-URL count, because that is what
+        # _print_batch_summary prints ("Skipped (invalid URLs): {skipped_count}").
+        for doc_name, step in steps.items():
+            assert "invalid URL" in step, (doc_name, step)
 
 
 class TestEntryPointSourcePrecedence:

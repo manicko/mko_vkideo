@@ -473,7 +473,7 @@ def _print_batch_summary(
     failed = len(results) - successful - cancelled
 
     typer.echo("\n\nDownload Summary:")
-    typer.echo(f"  Total connections: {len(results)}")
+    typer.echo(f"  Total videos: {len(results)}")
     if skipped_count > 0:
         typer.echo(f"  Skipped (invalid URLs): {skipped_count}")
     typer.echo(f"  Peak concurrent videos: {peak_concurrent_videos}")
