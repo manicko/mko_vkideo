@@ -482,7 +482,7 @@ Request model for HLS download with segment-level resume support.
 | `m3u8_url` | str | HLS playlist URL. |
 | `output_file` | Path | Output file path. |
 | `quality` | str | Quality string (default: "best"). |
-| `cookies` | str \| None | Cookies string for CDN authentication. |
+| `cookies` | SecretStr \| None | Session string for CDN authentication; a plain `str` is accepted and coerced. Declared `Field(repr=False)`, so the field is absent from `repr()` and masked as `**********` by `model_dump_json()` and any rendering that reaches it. `download_hls_with_resume` unwraps it with `get_secret_value()` at the single point it leaves the model, for `headers["Cookie"]`. |
 | `progress_callback` | Callable[[str, int, int], None] \| None | Callback reporting `(video_id, downloaded, total)`: byte counts on the yt-dlp path (`total` is `0` when the size is unknown) and segment counts on the HLS segment path. Drives the batch progress display. |
 
 > **Note:** Service objects (`settings`, `extractor`, `backoff_coordinator`, `video_semaphore`) are passed as function arguments to `download_hls_with_resume`, not as model attributes.

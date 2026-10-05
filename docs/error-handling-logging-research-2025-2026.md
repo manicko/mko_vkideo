@@ -366,6 +366,20 @@ The codebase already uses `_strip_auth_params(url)` before logging URLs — exte
 - Use `repr()`-free structured fields; structlog handles serialization.
 - For `ValidationError` input values: use `hide_input_in_errors` in FastAPI (see §6).
 
+**What is enforced today, as opposed to recommended.** One central structlog processor, `redact_log_event` in `utils/url_sanitizer.py`, sits in `setup_logging`'s chain immediately after `UnicodeDecoder()` and immediately before the renderer, so every record is covered regardless of which call site emitted it. It applies `sanitize_text_for_log` to every `str` value in the event dict except four structural keys — `event`, `level`, `timestamp`, `correlation_id` — and recurses one level into `list`/`tuple`/`dict` values, building a new container rather than mutating structlog's shallow per-record copy. Sitting after `format_exc_info`, it covers tracebacks without any per-call-site work: the eight traceback-carrying records (five passing `exc_info=True`, three using `logger.exception()`) hand the renderer an exception object rather than text, and the processor redacts the rendered `exception` string instead. The same transform is applied to child output **before it reaches the console**; the log buffer still holds the raw line, and `download_failed` applies the transform at its own call site.
+
+The transform covers three shapes:
+
+| Shape | Result |
+|---|---|
+| `https?://` URL | `scheme://host/***REDACTED***` |
+| `vk_cookies_<tail>.cookies.txt` (the credential file) | `***REDACTED***`, with the parent path consumed |
+| `vk_cookies__dir<tail>` (the per-run artefact directory) | `***REDACTED***`, with the parent path consumed |
+
+The two artefact rules key on prefix **and** suffix and consume the leading parent path, so a user's own output folder named `vk_cookies_videos` is untouched, while the username-bearing temp root (`C:\Users\<name>\AppData\Local\Temp`, CWE-532) is removed together with the artefact name.
+
+**Two gaps, stated rather than implied.** The `Cookie:` / `Set-Cookie:` header value is **not** covered — no child sink in `src/` emits one to any destination, and the durable control for a session value in flight is the carrier, not the log: `HLSDownloadRequest.cookies` is a `SecretStr` with `repr=False`, so it cannot surface through a `repr()`, a `model_dump_json()`, or a log line. The transform is the identity on a flat `name=value; name=value` session string, which is precisely why that carrier needed marking rather than another rule. And the processor recurses one level only, so a secret nested two containers deep is passed through unchanged.
+
 ### 4.6 Async Logging
 
 structlog offers `await logger.ainfo(...)` (async variants) for non-blocking logging in async code. For the batch downloader where yt-dlp runs in a thread pool, the current sync `logger.info()` is fine — but for any **pure async path**, prefer the `a`-prefixed methods to avoid blocking the event loop on I/O-heavy rendering.
@@ -923,6 +937,6 @@ def register_handlers(app: FastAPI) -> None:
 | `assert` in validators | Use `raise PydanticCustomError(...)` or `raise ValueError(...)` |
 | Parsing error message strings for logic | Store structured fields on exception attributes |
 | Returning raw `ValidationError` to clients | Convert to stable envelope (`type` + `loc` + `code`) |
-| Logging full request bodies / cookies | Use `_strip_auth_params` or redaction fields |
+| Logging full request bodies / cookies | Redact at the sink — `_strip_auth_params` / `sanitize_url_for_log` for URLs, `sanitize_text_for_log` for free text — and let the central `redact_log_event` processor catch every event-dict string behind it. A secret that is a **value in flight**, not text, needs the carrier marked `SecretStr` instead |
 | `raise X from None` when context matters | Use `add_note()` to preserve traceback context |
 | `asyncio.gather(return_exceptions=True)` for batch ops | Use `TaskGroup` + `except*` to surface all failures |
