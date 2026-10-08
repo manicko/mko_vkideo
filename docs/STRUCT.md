@@ -47,7 +47,7 @@ src/
 
 ## Layering
 
-- **Entry layer**: `cli.py`, `__main__.py` — argument parsing, Settings construction, error presentation, exit codes. No business logic or private-symbol imports from service/utils layers.
+- **Entry layer**: `cli.py`, `__main__.py` — argument parsing, Settings construction, error presentation, exit codes. No business logic or private-symbol imports from service/utils layers. Measured import cost on the post-Block-7 tree: ~660 ms (varies 625–683 ms across runs; see Block 13 commit body for the measurement command).
 - **Service layer**: `services/` — streaming download orchestration, stream extraction, quality selection, throttling, batch coordination. Imports private symbols from `utils/` internally.
 - **Models layer**: `models/` — Pydantic/StrEnum definitions shared with services and entry layer.
 - **Utils layer**: `utils/` — low-level helpers (URL sanitization, correlation IDs, security validation, byte-size formatting).
@@ -55,16 +55,17 @@ src/
 
 ## Advisory — import-order inversion: `utils/security.py` → `config.py`
 
-**`utils/security.py` imports `Settings` from `..config` at module level**, and
-`utils/__init__.py` eagerly imports `from .security import …`. That means any
-import of the `vkdownloader.utils` package triggers a transitive import of
-`config.py` before `config.py` has finished executing its own module body.
+**`utils/security.py` imports `Settings` from `..config` at module level`.** The
+inversion itself survives Block 7. What Block 7 changed is the chain that made
+the inversion dangerous: `utils/__init__.py` is now a docstring-only module and
+no longer eagerly imports `from .security import …`, so importing the
+`vkdownloader.utils` package does **not** transitively import `config.py`.
 
-Because of this inversion, `config.py` **must** import `redact_log_event`
-**inside** `setup_logging()` (a runtime, deferred import), not at module level.
-Hoisting it to module level creates a cycle: `config.py` → `utils.url_sanitizer`
-→ `utils/__init__` → `utils.security` → `from ..config import Settings` while
-`config.py` is still mid-import, so `Settings` is not yet bound and the import
-raises `ImportError`. The `B6` code comment in `config.py` documents the
-consequence; the inversion itself is left **unchanged** — fixing it requires
-restructuring the package import graph and is outside this change's scope.
+`config.py`'s `B6` deferred import of `redact_log_event` remains in place per
+this plan's scope boundaries (the deferral was not lifted here — see §1.3,
+ENT-013 lazy-import refactor is OUT). With the `utils/__init__` → `.security`
+chain gone, `url_sanitizer` (stdlib-only at module scope) no longer bridges
+`config.py` to `security.py` through the package root, so the original
+cycle's trigger path is removed even though the deferral itself was left in
+place. The `B6` comment in `config.py` still describes the pre-Block-7 chain
+for historical context.
