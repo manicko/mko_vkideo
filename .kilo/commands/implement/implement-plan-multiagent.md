@@ -56,18 +56,14 @@ Save the result as `Execution plan`: `.ai\plans\{next-number}-{plan-name}.md`.
 
 ## 2. Ask user as the Product Owner
 Skip this step unless there are business uncertainty.
-
-Ask user as the Product Owner only the questions required to resolve business uncertainty.
-Provide questions with options to choose basing on the best practices and highlight recommended options. 
+Do not ask about technical implementation or architecture - this is your task.
 
 Questions should focus on:
-- product behavior
+- product behavior and usage examples
 - business rules
-- priorities
-- user expectations
-- acceptance criteria
-
-Do not ask about technical implementation.
+- user expectations or experience
+.
+Provide questions with options to choose basing on the best practices and highlight recommended options. 
 
 Collect answers for the the specification.
 
