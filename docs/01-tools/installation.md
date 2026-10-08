@@ -17,7 +17,7 @@ This guide covers installation and setup of VK Video Downloader for development 
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - ffmpeg installed and available in system PATH
 - Windows, macOS, or Linux operating system
 

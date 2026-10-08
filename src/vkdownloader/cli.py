@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict, cast
 
 import typer
 from pydantic import ValidationError
 from structlog import get_logger
+from typer.models import OptionInfo
 
 from .config import (
     Settings,
@@ -248,7 +249,7 @@ _QUALITY_REJECTION_MESSAGE = (
 )
 
 
-def _quality_option() -> Any:
+def _quality_option() -> OptionInfo:
     """Build the shared ``--quality`` option definition.
 
     VK height ladders are non-standard (a single video may offer 106p through
@@ -258,11 +259,14 @@ def _quality_option() -> Any:
     Returns:
         A Typer option definition carrying the shared callback and help text.
     """
-    return typer.Option(
-        "best",
-        "--quality",
-        callback=_validate_quality,
-        help=_QUALITY_OPTION_HELP,
+    return cast(
+        OptionInfo,
+        typer.Option(
+            "best",
+            "--quality",
+            callback=_validate_quality,
+            help=_QUALITY_OPTION_HELP,
+        ),
     )
 
 
@@ -342,7 +346,7 @@ app = typer.Typer(
 @app.command()
 def download(
     url: str = typer.Argument(..., help="VK Video URL to download"),
-    quality: str = _quality_option(),
+    quality: str = cast(str, _quality_option()),
     output: Path = typer.Option(
         ".",
         "--output",
@@ -475,7 +479,7 @@ def batch_download(
         exists=True,
         help="Path to file containing video URLs (one per line)",
     ),
-    quality: str = _quality_option(),
+    quality: str = cast(str, _quality_option()),
     output: Path = typer.Option(
         ".",
         "--output",

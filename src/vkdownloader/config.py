@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO, cast
 
 import structlog
 from dotenv import dotenv_values
@@ -508,7 +508,7 @@ class _EncodingSafeTextStream(io.TextIOBase):
         except Exception:
             pass
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._stream, name)
 
 
