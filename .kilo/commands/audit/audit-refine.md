@@ -16,7 +16,8 @@ If stop or break prefer resume old session not launching new agent.
 
 ## Gather Base Layer Context (once)
 Read `.ai/context/commands.md` for verification commands.
-Read `AGENTS.md` for project guidelines.
+Read `.kilo/rules/project.md` for project guidelines.
+Read `.kilo/rules/commands.md` for command conventions.
 List documentation structure from `docs/` folder.
 
 Set variables:
