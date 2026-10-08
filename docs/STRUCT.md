@@ -38,7 +38,7 @@ src/
     │   ├── signal_handlers.py   # SIGINT/SIGTERM handler registration
     │   └── ytdlp_downloader.py  # yt-dlp subprocess wrapper (cookie artefact lifecycle, B2/R1/R2)
     └── utils/
-        ├── __init__.py          # Exports validate_output_path, sanitize_title, _resolve_output_file, sanitize_url_for_log, _strip_auth_params
+        ├── __init__.py          # Package docstring only; no re-exports
         ├── correlation.py       # Correlation ID binding (structlog contextvars)
         ├── formatting.py        # Human-readable byte-size rendering (format_bytes)
         ├── security.py          # Security utilities (output path validation, title sanitization)

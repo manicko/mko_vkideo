@@ -117,6 +117,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "tests/__init__.py",
         "tests/conftest.py",
         "tests/integration/__init__.py",
+        "tests/test_import_graph.py",
         "tests/test_batch_downloader.py",
         "tests/test_browser_infrastructure.py",
         "tests/test_cli.py",

@@ -11,6 +11,7 @@ prefer ``status_label()`` directly.
 from collections.abc import Callable
 
 from vkdownloader.models.enums import ErrorCode
+from vkdownloader.utils.url_sanitizer import _strip_auth_params
 
 
 class VKDownloadError(Exception):
@@ -94,11 +95,6 @@ class InvalidVideoUrlError(VKDownloadError):
             url: The URL that did not match the VK video URL pattern.
         """
         self.url = url
-        # Imported lazily to avoid a circular import: vkdownloader.utils
-        # package __init__ imports security.py, which imports DownloadError
-        # from this module at module load time.
-        from vkdownloader.utils.url_sanitizer import _strip_auth_params
-
         super().__init__(f"Invalid VK video URL: {_strip_auth_params(url)}")
 
     def status_label(self) -> str:
