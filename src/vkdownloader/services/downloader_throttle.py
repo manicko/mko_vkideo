@@ -16,8 +16,12 @@ from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
-# Single source of truth: the download timeout default is owned by Settings.download_timeout.
-_DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].default
+# Single source of truth for the download-timeout default. Mirrors
+# Settings.download_timeout's declared default at import time; every consumer
+# default in segment_downloader.py and ffmpeg_utils.py is sourced from this
+# constant rather than re-hardcoding 300, so the two converge on the schema
+# in one place.
+DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].default
 
 # Default pause duration (seconds) applied to a shared origin backoff across all
 # segment and manifest retries when a retryable transport failure is observed.
@@ -212,7 +216,7 @@ async def _retry_429_with_backoff(
     headers: dict[str, str],
     segment_index: int,
     max_retries: int = 3,
-    download_timeout: int = _DEFAULT_DOWNLOAD_TIMEOUT,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bytes | None:
     """Download segment with AWS Full Jitter exponential backoff for 429/5xx errors.
 

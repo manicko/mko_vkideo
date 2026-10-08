@@ -1,5 +1,6 @@
 """Tests for configuration module."""
 
+import inspect
 import io
 import logging
 import os
@@ -20,6 +21,20 @@ from vkdownloader.config import (
     warn_unknown_env_vars,
 )
 from vkdownloader.models.enums import CookieSource, LogLevel
+from vkdownloader.services.downloader_throttle import DEFAULT_DOWNLOAD_TIMEOUT
+from vkdownloader.services.ffmpeg_utils import (
+    _merge_batch_segments,
+    _merge_segments_batched,
+    _perform_final_merge,
+)
+from vkdownloader.services.segment_downloader import (
+    DownloadPolicy,
+    _download_segment,
+    _download_segment_parallel,
+    _download_segment_sequential,
+    _run_parallel_download_with_backoff,
+    _try_single_download_attempt,
+)
 
 
 def test_settings_creates_with_defaults() -> None:
@@ -1460,3 +1475,45 @@ class TestSetupLoggingConsoleEncoding:
         finally:
             root.handlers.clear()
             root.handlers.extend(saved_handlers)
+
+
+class TestDownloadTimeoutSingleSource:
+    """ENT-010: every download-timeout default is sourced from one constant.
+
+    ``DEFAULT_DOWNLOAD_TIMEOUT`` mirrors ``Settings.download_timeout``'s declared
+    schema default at import time; every consumer default across
+    ``segment_downloader.py`` and ``ffmpeg_utils.py`` must equal it, so a schema
+    change re-converges every site in a single edit rather than nine literals
+    drifting out of step.
+    """
+
+    def test_constant_mirrors_schema_default(self) -> None:
+        """The module constant equals the schema's declared default."""
+        schema_default = Settings.model_fields["download_timeout"].default
+        assert DEFAULT_DOWNLOAD_TIMEOUT == schema_default
+
+    @pytest.mark.parametrize(
+        "consumer",
+        [
+            DownloadPolicy,
+            _download_segment,
+            _download_segment_parallel,
+            _download_segment_sequential,
+            _run_parallel_download_with_backoff,
+            _try_single_download_attempt,
+            _merge_batch_segments,
+            _merge_segments_batched,
+            _perform_final_merge,
+        ],
+    )
+    def test_consumer_default_equals_constant(self, consumer: Any) -> None:
+        """Each ``download_timeout`` default equals the single constant.
+
+        Introspected via ``inspect.signature`` rather than by reading source, so
+        a reintroduced literal ``300`` fails the test even if it is never
+        executed. Covers the ``DownloadPolicy`` field default plus the five
+        ``segment_downloader`` parameter defaults and the three
+        ``ffmpeg_utils`` parameter defaults (nine consumer sites in total).
+        """
+        default = inspect.signature(consumer).parameters["download_timeout"].default
+        assert default == DEFAULT_DOWNLOAD_TIMEOUT

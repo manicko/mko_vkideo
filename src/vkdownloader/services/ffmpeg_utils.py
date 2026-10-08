@@ -20,6 +20,7 @@ from ..utils.formatting import format_bytes
 from ..utils.url_sanitizer import (
     sanitize_text_for_log,  # SEC-002: redact signed CDN URLs from merge-failure stderr before logging
 )
+from .downloader_throttle import DEFAULT_DOWNLOAD_TIMEOUT
 
 logger = get_logger(__name__)
 
@@ -330,7 +331,7 @@ def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> lis
 
 
 async def _merge_batch_segments(
-    batch_files: list[Path], temp_dir: Path, download_timeout: float = 300.0
+    batch_files: list[Path], temp_dir: Path, download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT
 ) -> Path | None:
     """Merge a batch of segments into a single temp file.
 
@@ -400,7 +401,7 @@ async def _merge_batch_segments(
 
 
 async def _perform_final_merge(
-    temp_files: list[Path], output_file: Path, download_timeout: float = 300.0
+    temp_files: list[Path], output_file: Path, download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT
 ) -> bool:
     """Merge all batch temp files into final output.
 
@@ -543,7 +544,10 @@ def _check_merge_space(segment_paths: Iterable[Path], segments_dir: Path) -> Non
 
 
 async def _merge_segments_batched(
-    segments_dir: Path, output_file: Path, count: int, download_timeout: float = 300.0
+    segments_dir: Path,
+    output_file: Path,
+    count: int,
+    download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> Path | None:
     """Merge segments in batches to avoid command line limits.
 

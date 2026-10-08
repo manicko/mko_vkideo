@@ -25,6 +25,7 @@ from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
 from .downloader_throttle import (
     _TRANSPORT_FAILURE_STATUS,
+    DEFAULT_DOWNLOAD_TIMEOUT,
     RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
     _parse_retry_after,
@@ -82,7 +83,7 @@ class DownloadPolicy:
     backoff_coordinator: URLBackoffCoordinator | None
     video_url: str
     max_retries: int
-    download_timeout: int = 300
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT
     is_bounded_batch: bool = False
     m3u8_url: str = ""
     segments_dir: Path = Path()
@@ -162,7 +163,7 @@ async def _download_segment_sequential(
     headers: dict[str, str],
     segment_index: int = 0,
     max_retries: int = 3,
-    download_timeout: int = 300,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
 ) -> bool:
@@ -248,7 +249,7 @@ async def _run_parallel_download_with_backoff(
     video_url: str | None,
     attempt: int,
     max_retries: int,
-    download_timeout: int = 300,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bool | None:
     """Run a single download attempt in parallel mode.
 
@@ -313,7 +314,7 @@ async def _try_single_download_attempt(
     video_url: str | None,
     attempt: int,
     max_retries: int,
-    download_timeout: int = 300,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bool | None:
     """Try a single download attempt, return True on success. Handles exceptions.
 
@@ -345,7 +346,7 @@ async def _download_segment_parallel(
     max_retries: int = 3,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
-    download_timeout: int = 300,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bool:
     """Download a single HLS segment with parallel retry logic and shared backoff.
 
@@ -401,7 +402,7 @@ async def _download_segment(
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
     max_retries: int = 3,
-    download_timeout: int = 300,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> bool:
     """Download a single HLS segment.
 
