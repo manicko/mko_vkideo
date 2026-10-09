@@ -7,7 +7,8 @@ alwaysApply: false
 
 # Phase N Audit Findings — {Phase Name}
 
-**Executor:** auditor
+**Author:** auditor
+**Validated by:** {validator | not run}
 **Template:** {phase-template-file}
 **Status:** {pending|in-progress|complete}
 **Validated:** {yes|no}
@@ -18,7 +19,10 @@ alwaysApply: false
 
 ### {ID}: {Title}
 
-**Decision:** {validated | reclassified | merged | rejected} · {decision_detail}
+> **Validation Note:**
+> - **Action:** {validated | reclassified | merged | rejected}
+> - **Detail:** {rationale — required for every decision except `validated`}
+> - **See also:** {other finding IDs or sections}
 
 | Field | Value |
 |-------|-------|
@@ -89,11 +93,13 @@ If there are none, write "none".}
 | `affected_modules` | list | Affected module paths (e.g., `src/**/`, `frontend/src/features/auth/`) |
 | `recommendation` | string | Concrete fix direction: what to change and why |
 | `classification` | enum | `mandatory` (security, data loss, correctness) or `advisory` (improvement, refactoring) |
-| `decision` | enum | `validated` · `reclassified` · `merged` · `rejected` |
-| `decision_detail` | string | Optional rationale and cross-references; required for every decision except `validated` |
+| `validation_note` | block | Decision (`validated`, `reclassified`, `merged`, `rejected`), the rationale, and the cross-reference. Placed between the finding heading and the field table. |
 
 ### Classification Guide
 
 - **mandatory**: Security vulnerabilities, data loss risks, correctness issues, spec deviations requiring immediate fix
 - **advisory**: Code quality improvements, refactoring suggestions, best practice enhancements
 - **verification**: `observed` — the runtime consequence was executed and seen. `unverified` — it was not, and no band is asserted for a consequence nobody watched. A finding filed `unverified` is still assigned a severity: the band is composed from the structural fact under the owning phase's own severity table, which is what "composed from the structural fact" means and what this report format does not decide. What records that the consequence was not observed is the field, never the absence of a band.
+- **decision**: `validated`, `reclassified`, `merged` or `rejected`, recorded in `validation_note`.
+  A decision is never a severity and is never recorded in the severity column; a rejected finding
+  keeps the severity it carried and a reclassified finding keeps it.

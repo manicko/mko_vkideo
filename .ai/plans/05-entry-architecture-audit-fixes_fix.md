@@ -14,6 +14,42 @@
 
 ---
 
+## 0. Audit Status (2026-10-08)
+
+**Completed:** Blocks 1–6 (commits `d62671b`–`0790157`).
+`ruff check`, `ruff format --check`, `mypy src`, and `pytest` (excl. packaging)
+all pass.
+
+**Not implemented — proceed:** Blocks 7, 8, 13.
+These are low-risk, high-value changes:
+- **B7** (4 `__init__.py` roots → docstring only, hoist deferred import in
+  `exceptions.py`, add `test_import_graph.py` invariant): removes two import
+  cycles, enables hoisting the `exceptions.py:97` deferral.
+- **B8** (nine `300` literals → one constant): removes drift-prone duplication;
+  the constant already exists, just needs renaming and wiring.
+- **B13** (STRUCT.md entry-layer import cost): one-line documentation update.
+
+**Partially done — accepted as-is:** Blocks 9, 10.
+Commits `e443448`, `feb0a40`, `19143b1`, `0a8fa97` achieved the functional goals
+(label set, decision slot, evaluable gate, counter-based output) through a
+divergent approach. Per Tech Lead decision, do NOT rewrite these to match the
+plan's exact prose. **One follow-up remains:** fix the broken `AGENTS.md`
+reference in `audit-refine.md` line 19 (the file does not exist in the
+repository; should point to `.ai/context/commands.md`).
+
+**Deferred — confirmed:** Blocks 11, 12 (D7 = DEFER by default).
+ENT-008 remains classified `mandatory` in `findings.md`, which conflicts with
+the deferral. Recommendation: reclassify ENT-008 as `advisory` in
+`01-entry-architecture/findings.md` to align the finding with the plan's
+defer-the-block decision.
+
+**Verification commands:** `ruff check src tests`, `ruff format --check src tests`,
+`mypy src`, `pytest -q -rs --ignore=tests/test_packaging.py` (934 passed,
+3 skipped). Packaging tests fail due to a pre-existing `.python-version`
+deletion (commit `009f9fc`); see `.ai/audit/problems/` for the full report.
+
+---
+
 ## 1. Scope
 
 ### 1.1 How the scope was derived
