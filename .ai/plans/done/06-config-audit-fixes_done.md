@@ -2168,3 +2168,129 @@ block.
 | `VAL-004` | Every path named anywhere in the orchestrator is resolved on disk; the absent filename appears zero times. |
 | `VAL-006` | A repository-wide search for the two finding identifiers, filtered to the two edited files, returns nothing that points at a finding about a different subject. |
 | doc drift | Both documents are read against the code; neither contains a claim that a notice is a log record. |
+
+---
+
+## §8 Audit Completion Status
+
+**Audited on:** 2026-10-08
+**Auditor:** Kilo (verification pass)
+**Verdict:** **ALL 8 BLOCKS IMPLEMENTED — no code refinement required.**
+
+### §8.1 Execution record
+
+Every block landed as one commit, in the order declared by §3. Two follow-up commits
+refine B2 and B8 and are treated as part of those blocks' completion. None of the
+plan's blocks touched anything outside their stated file set.
+
+| Block | Commit | Date | Status |
+|---|---|---|---|
+| B1 (CFG-004) | `a704c8a` | 2026-09-30 | **Implemented** |
+| B2 (CFG-003, VAL-006) | `c078772` | 2026-09-30 | **Implemented** (+ follow-up `e15d928`) |
+| B3 (CFG-005) | `4a0add0` | 2026-09-30 | **Implemented** |
+| B4 (CFG-007, VAL-006) | `75e49ff` | 2026-09-30 | **Implemented** |
+| B5 (CFG-008) | `fcd86c8` | 2026-09-30 | **Implemented** |
+| B6 (VAL-001) | `feb0a40` | 2026-09-30 | **Implemented** |
+| B7 (VAL-003, VAL-004) | `19143b1` | 2026-09-30 | **Implemented** |
+| B8 (doc pass) | `1a304d4` | 2026-09-30 | **Implemented** (+ follow-up `db9f877`) |
+
+### §8.2 Verification
+
+| Check | Result |
+|---|---|
+| `tests/test_config.py` | 122 passed, 0 failed |
+| `tests/test_cli.py` | 80 passed, 0 failed |
+| `ruff check src tests` | 0 errors |
+| `ruff format --check src tests` | 54 files already formatted |
+| `mypy src` (strict) | 0 issues in 31 source files |
+| `git status --porcelain -- src tests docs .env.example pyproject.toml` | empty |
+
+**Note on the full-suite count.** At the plan's baseline (HEAD `0790157`) the
+suite was 507 passed / 4 skipped. At the time of this audit the suite is
+**946 passed / 3 skipped / 2 failed**. The passed-count rose because commits
+from *other* phases shipped new tests between the plan's base commit and now.
+The **2 failures are in `tests/test_packaging.py`** and are **not** caused by
+any of the eight blocks in this plan — see Problem 1 in §8.4.
+
+### §8.3 Acceptance-criteria coverage
+
+| Block | Criterion | Evidence |
+|---|---|---|
+| B1 | `_scan_env_file` uses `dotenv_values` with no `interpolate` arg | `config.py` line 463: `dotenv_values(env_path, encoding="utf-8")`; docstring states `interpolate=True` is the default |
+| B1 | `python-dotenv` declared in dependencies | `pyproject.toml` line 28: `"python-dotenv>=1.2.2"` |
+| B1 | `_is_unknown_env_var` splits scope (normalised) and membership (raw) | `config.py` lines 282-307 |
+| B1 | B1 acceptance criterion 13 (BOM). §1.4 **D-3** defers the cross-version test; the **run-and-record procedure** (§7.4) is a verification procedure, not a code change. **This procedure is NOT a task to implement** — it is explicitly deferred to phase 10. (See §8.5.) | — |
+| B2 | `format_validation_error` matches against `_build_valid_env_vars()` | `config.py` line 339 |
+| B2 | `cutoff=0.9` | `config.py` line 342 |
+| B2 | Self-referential suggestion suppression | `config.py` line 343: `if close and close[0] != match_key` (follow-up `e15d928`) |
+| B2 | Quote-preserving display | `config.py` lines 336-339 (follow-up `e15d928`) |
+| B3 | `.env.example` `THROTTLED_RATE=100000` | `.env.example` line 30 |
+| B3 | Ranges in `configuration.md` | Lines 37 (50000-1000000), 38 (0-104857600) |
+| B4 | `reject_empty_string` on `user_agent`/`timezone`/`locale` | `config.py` lines 212-233 |
+| B4 | CFG-002 citation removed from `empty_string_to_none` docstring | `config.py` lines 193-207; grep for `CFG-002` in config.py → no matches |
+| B4 | Same-subject citation retained in `TestConditionalOverridesConstruction` | `tests/test_config.py` line 1165 — correct per §4.9 criterion 6 |
+| B5 | `_log_env_file_path` at INFO, distinct event names | `cli.py` lines 118-122 |
+| B5 | Docs state CWD rule and "stderr, not a log record" | `configuration.md` line 19, `installation.md` line 114, `configuration.md` lines 180-183 |
+| B6 | Decision field in template skeleton + field reference | `audit-findings.md` line 21, lines 92-93 |
+| B6 | Deviation paragraph removed from handbook | `99-audit-validate.md` — grep for "format has no slot" / "deviation" returns only the deliberate `executor: validator` note (line 44); the former "Validation Note Format" section is now "Decision Field Format" |
+| B7 | No undefined gate condition remains | `audit-multi-phase.md` lines 95-99: "The gate that previously decided whether to do so is removed" |
+| B7 | `AGENTS.md` appears zero times | grep confirms 0 occurrences |
+| B7 | Output validation line is conditional | `audit-multi-phase.md` lines 139-142: "Emit the validated-findings block only while `{VALIDATED_PHASES}` > 0" |
+| B8 | Docs aligned with code | `1a304d4` + `db9f877` |
+
+### §8.4 Problems found during audit (reported to `.ai/audit/problems/`)
+
+**Problem 1 — Packaging test failures (pre-existing, NOT caused by this plan)**
+
+`tests/test_packaging.py` has 2 failures:
+`test_sdist_entry_set_matches_the_manifest` and
+`test_sdist_entry_count_matches_the_manifest`. The sdist has 74 entries but the
+manifest declares 75; the missing entry is `.python-version`.
+
+**Root cause:** `.python-version` (contents: `3.12`) was deleted in commit
+`009f9fc` ("chore(doc) audit and plans", 2026-10-08), which is the **current
+HEAD** and is **not** one of this plan's eight block commits (all from
+2026-09-30). The file is listed in
+`[tool.hatch.build.targets.sdist].include` (pyproject.toml line 61) but does
+not exist on disk, so the real-build sdist omits it and the manifest test fails.
+
+**Plan's role:** none. The plan's blocks do not touch `.python-version` or the
+sdist include list. B3 criterion 7 and B8 criterion 7 require
+`tests/test_packaging.py` to pass; at the time the blocks landed (2026-09-30)
+`.python-version` existed and the tests passed. The failure is a regression
+from a later chore commit.
+
+**Must not fix here.** Restoring `.python-version` is not in this plan's scope.
+
+**Problem 2 — Stale Python version in installation guide**
+
+`docs/01-tools/installation.md` line 20 says "Python 3.10 or higher" but
+`pyproject.toml` line 6 declares `requires-python = ">=3.12"`. The project also
+uses 3.12-only syntax (`X | None`, `from __future__ import annotations`).
+
+**Plan's role:** none directly. B5 corrected the `ssl_verify`/`cookie_source`
+reachability claim but did not address the version floor.
+
+**Problem 3 — Pre-existing `Any` type usage (violates C9)**
+
+`src/vkdownloader/config.py` lines 9, 511 (`_EncodingSafeTextStream.__getattr__`
+return type) and `src/vkdownloader/cli.py` lines 17, 251
+(`_quality_option` return type) use `Any`. Constraint C9 states "No `Any`."
+These are pre-existing and were not touched by any block in this plan.
+
+**Problem 4 — `--max-retries` "batch command only" claim (out of scope)**
+
+`docs/11-guides/configuration.md` lines 110, 115 claim `--max-retries` is
+"only available on the `batch` command". `cli.py` declares it on **both**
+`download` and `batch`. This was explicitly named as **phase 08's subject** in
+§1.3 and was left unchanged per the B8 hard boundary.
+
+### §8.5 Tasks explicitly NOT to implement (excluded)
+
+| # | Task | Why it must not be implemented |
+|---|---|---|
+| 1 | Commit a test for `.env.example` value validity (the §7.4 procedure) | Deferred to phase 10 under D-3. The plan's B3 explicitly does **not** commit a test for this. Implementing it now risks a duplicate when phase 10 runs. |
+| 2 | Restore `.python-version` to fix the packaging tests | Not in this plan's scope. The file was deleted by an unrelated chore commit (`009f9fc`). The plan's blocks do not touch `.python-version` or the sdist manifest. |
+| 3 | Clean up pre-existing `Any` usage in `config.py`/`cli.py` | Pre-existing code, untouched by any block. C9 applies to the plan's changes; it does not retroactively re-scope existing code. Out of this plan's scope. |
+| 4 | Fix the `--max-retries` "batch only" doc drift | Explicitly out of scope — §1.3 names it "phase 08's subject" and the B8 hard boundary forbids touching it. |
+| 5 | Re-validate the `CFG-002` override | §1.3 is a **hard prohibition**: "no block re-validates an override, because there is no override." The `model_copy` bypass was removed; re-adding validation logic would re-introduce the defect. |

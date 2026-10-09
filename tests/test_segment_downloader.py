@@ -1434,7 +1434,7 @@ class TestSegmentFanoutCompletion:
 
 
 class TestSegmentFanoutBoundedProduction:
-    """CON-003: _process_downloaded_segments bounds the live task set by max_concurrent_downloads.
+    """CON-003: _process_downloaded_segments bounds the live task set by max_concurrent_segments.
 
     Four tests cover:
       1. Bound check — live pending never exceeds the ceiling.
@@ -1452,7 +1452,7 @@ class TestSegmentFanoutBoundedProduction:
             session=session,
             semaphore=semaphore,
             headers={},
-            max_concurrent_downloads=4,
+            max_concurrent_segments=4,
             backoff_coordinator=None,
             video_url="https://vkvideo.ru/video-12345_67890",
             max_retries=3,
@@ -1463,7 +1463,7 @@ class TestSegmentFanoutBoundedProduction:
 
     @pytest.mark.asyncio
     async def test_bound_check_live_pending_never_exceeds_ceiling(self, tmp_path: Path) -> None:
-        """The FIRST_COMPLETED pump must keep live concurrent calls <= max_concurrent_downloads.
+        """The FIRST_COMPLETED pump must keep live concurrent calls <= max_concurrent_segments.
 
         A stubbed ``_download_segment_concurrent`` tracks an active-call counter
         and records the maximum observed value. The ceiling (4) must never be
@@ -1523,7 +1523,6 @@ class TestSegmentFanoutBoundedProduction:
             output_file: Path,
             progress_callback: Callable[[str, int, int], None] | None,
             video_url: str,
-            download_timeout: int,
         ) -> Path | None:
             captured_results.extend(download_results)
             return None  # Don't actually merge
@@ -1558,7 +1557,7 @@ class TestSegmentFanoutBoundedProduction:
         The stub raises ``asyncio.CancelledError`` on the first call. We assert:
         - ``_process_downloaded_segments`` propagates the CancelledError.
         - After propagation, the semaphore's internal value matches its initial
-          ``max_concurrent_downloads`` (no leaked permits).
+          ``max_concurrent_segments`` (no leaked permits).
         """
         policy = self._make_policy(tmp_path)
         segments: list[str] = [f"https://example.com/seg{i}.ts" for i in range(20)]
@@ -1585,8 +1584,8 @@ class TestSegmentFanoutBoundedProduction:
             _shutdown_event_ctx.reset(token)
 
         assert call_count[0] >= 1
-        assert semaphore._value == policy.max_concurrent_downloads, (
-            f"Semaphore leaked permits: {semaphore._value} (expected {policy.max_concurrent_downloads})"
+        assert semaphore._value == policy.max_concurrent_segments, (
+            f"Semaphore leaked permits: {semaphore._value} (expected {policy.max_concurrent_segments})"
         )
 
     @pytest.mark.asyncio
@@ -1617,7 +1616,6 @@ class TestSegmentFanoutBoundedProduction:
             output_file: Path,
             progress_callback: Callable[[str, int, int], None] | None,
             video_url: str,
-            download_timeout: int,
         ) -> Path | None:
             captured["results"] = download_results
             return None

@@ -176,7 +176,7 @@ Launch `Doc-specialist`.
 Ask it to update only the documentation affected by the implementation, following:
 
 <original_prompt>
-`mko_bazuna/docs/00-overview/doc-maintenance-rules.md`
+`./docs/00-overview/doc-maintenance-rules.md`
 
 Do not introduce unrelated documentation changes.
 

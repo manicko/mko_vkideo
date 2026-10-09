@@ -1,0 +1,5 @@
+fix(audit): make the report template legal to the roles that write it
+
+Findings closed: VAL-110, VAL-111
+Decision: D3 Route A, Route C blocked by commit hygiene
+Validator cross-reference results V1-V6

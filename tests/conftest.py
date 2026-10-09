@@ -48,6 +48,7 @@ def test_settings() -> Settings:
     return Settings(
         download_dir=Settings.model_fields["download_dir"].default,
         max_concurrent_downloads=2,
+        max_concurrent_segments=2,
         max_retries=1,
     )
 

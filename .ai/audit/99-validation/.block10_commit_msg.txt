@@ -1,0 +1,203 @@
+fix(audit): give the pipeline truthful context, an evaluable gate and non-colliding identifiers
+
+Findings closed: VAL-107 (context repoint), VAL-109 (evaluable gate), VAL-112 (identifier
+authority clause).
+
+Decisions implemented:
+- D4 Route A: phase-qualified VAL-{NN}-{NNN} identifiers, all published identifiers
+  grandfathered, (store, identifier) authority clause. D4 Route B (consolidating the
+  stores) rejected: requires moving untracked .ai/ files no block may stage. D4 Route C
+  (per-run offset) rejected: structurally incapable of preventing two runs of the same
+  phase from colliding; the tree already shows the offset discipline used four different
+  ways across four stores.
+- D5 Route B: repointed both command base-context reads at .ai/context/python-code-standards.md,
+  not .kilo/rules/project.md. D5 Route C (authoring a new rules file) rejected.
+- D6 Route B: rebuilt the closing output on maintained counters and removed the unevaluable
+  gate. D6 Route A (real thresholds) and Route C (keep the condition) rejected: the command
+  states no condition and must not silently skip validation.
+
+D5 context repoint — before:
+  Read `.ai/context/commands.md` for verification commands.
+  Read `.kilo/rules/project.md` for project guidelines.
+  Read `.kilo/rules/commands.md` for command conventions.
+  (Both audit-multi-phase.md and audit-refine.md.)
+
+D5 context repoint — after:
+  Read `.ai/context/commands.md` for verification commands.
+  Read `.ai/context/python-code-standards.md` for project code standards.
+  (Both files now name an identical set: .ai/context/commands.md,
+  .ai/context/python-code-standards.md, and docs/.)
+
+D5 existence guard added after the Set-variables list (and the DO-NOT lines in the
+orchestrator; directly in refine).
+
+Block-1 stale cross-reference fix (99-audit-validate.md, Reporting section) — before:
+  **The retained Rejected and Merged rows are not a concession to the format. They
+  are the reason the exemption exists**, and they are the direct opposite of the
+  pipeline rule that strips rejected content from the artifact before it is merged.
+  Where the two disagree, the preserving side governs this phase's output and the
+  contradiction is filed (`## 6` subject 3).
+
+Block-1 stale cross-reference fix — after:
+  **The retained Rejected and Merged rows are not a concession to the format. They
+  are the reason the exemption exists.** A command rule that stripped rejected content
+  from the artifact before merge was the direct opposite of this one; the pipeline no
+  longer carries it. Where two documents disagree, the preserving side governs this
+  phase's output (`## 6` subject 3).
+
+D5 residual, NOT repaired: the .ai/plans/05-entry-architecture-audit-fixes_fix.md plan
+binds eight blocks to project rules 2/5/8/9/10/11/14/15 by number, and the audit corpus
+cites rules by number in prose (e.g. ENT-011's reclassification rationale says "project
+rule 8"). After this repoint, those numbers no longer reach a file in the base context
+neither .ai/context/python-code-standards.md nor .kilo/rules/project.md is referenced by
+number in that scheme, so the citations are now orphaned. This inconsistency is created
+by this block and lives in the plan file, which this block does not touch. Recorded,
+not repaired.
+
+R1 future-tense residue, NOT fixed: 99-audit-validate.md line 135 still says the
+orchestrator's verification step "is being corrected" to match the write string, in
+future tense, although Block 1 already made that correction (the write and check both
+name -validated-findings.md). Recorded, not changed. It is an R1 checkpoint line, not a
+finding, and changing it now would turn a live check into a description of a fixed defect.
+
+Closing output block — before (audit-multi-phase.md):
+  <output>
+  ---------------------
+  AUDIT COMPLETE
+  Phases completed: {COMPLETED_PHASES}/{TOTAL_PHASES}
+  Phases validated: {VALIDATED_PHASES}/{TOTAL_PHASES}
+  Emit the validated-findings block only while `{VALIDATED_PHASES}` > 0
+  (the counter advances only for phases whose validator output was actually
+  verified present):
+  Validated findings: {VALIDATED_FINDINGS} total
+  By severity:
+  - CRITICAL: {CRITICAL_COUNT}
+  - HIGH: {HIGH_COUNT}
+  - MEDIUM: {MEDIUM_COUNT}
+  - LOW: {LOW_COUNT}
+  ---------------------
+  </output>
+
+Closing output block — after (audit-multi-phase.md):
+  <output>
+  ---------------------
+  AUDIT COMPLETE
+  Phases completed: {PHASES_COMPLETED}/{PHASES_SELECTED}
+  Phases validated: {PHASES_VALIDATED}/{PHASES_SELECTED}
+  Validated findings: {FINDINGS_VALIDATED} (read from validation stores)
+  Findings not validated: {FINDINGS_UNVALIDATED} (read from source reports;
+  the validator did not run for these phases)
+  By severity:
+  - CRITICAL: {SEV_CRITICAL}
+  - HIGH: {SEV_HIGH}
+  - MEDIUM: {SEV_MEDIUM}
+  - LOW: {SEV_LOW}
+  ---------------------
+  **Two lines are conditional, and the report says so.**
+  - When `{PHASES_VALIDATED}` is 0, the `Phases validated:` line and the
+    `Validated findings:` line are replaced by the single line
+    `Validated phases: 0 — the validator was launched for no phase.`
+  - When `{FINDINGS_UNVALIDATED}` is 0, omit the `Findings not validated:` line.
+  Every placeholder above names exactly one counter initialised in `## 2`, and
+  every counter initialised in `## 2` is printed.
+  </output>
+
+Grandfather inventory measurement (V16) — before and after:
+  Before edit: definitions: 55, distinct: 44, 6 live collisions
+  (VAL-001 through VAL-005 each in three stores: 02, 03, 08; VAL-006 in two: 02, 03).
+  After edit:  definitions: 55, distinct: 44, 6 live collisions (identical — no
+  .ai/audit artefact was touched). Zero new-format (VAL-NN-NNN) identifiers exist as
+  findings; VAL-01-001 and VAL-09-001 appear only as citations in the 09 store.
+
+  Counters' values for the run that produced this commit:
+  The run is NOT reconstructible — this block is documentation-only and executed no
+  audit run. The values the current artefacts imply:
+  - phases_selected: not reconstructible; 11 phase findings files exist (01–11)
+  - phases_completed: 11 (all 11 findings files exist and are non-empty)
+  - phases_validated: 11 (validation stores exist for all 11 phases)
+  - findings_validated: 113 = 11+7+15+10+11+7+13+12+8+13+16 (per-store read)
+  - findings_unvalidated: 0 (all phases have validation stores)
+  - severity_bands: read per store (see read traps below)
+
+  Read traps noted during measurement:
+  1. Phase-03 store states 15 in its 'Validated (unchanged)' row while naming 16
+     identifiers. Read the number the store states (15), do not recount.
+  2. Phase-06 store prints its tally twice (checkpoint table and Validation Summary).
+     Read the Validation Summary heading table only, once.
+  3. Phase-08 store uses a non-standard summary (Decisions-by-identifier table, not the
+     standard Action|Count|Details). Its own total states "12 validated, 1 reclassified,
+     2 merged, 2 rejected".
+  4. Phase-10 store uses a non-standard summary with no stated "Validated (unchanged)"
+     count. Counted 13 validated source findings from its decision table (14 including
+     one marked "working tree only").
+
+Read-back results V1–V22:
+  V1  AGENTS.md absent from both command files: 0 and 0. PASS
+  V2  Identical rule-path sets in both files: .ai/context/commands.md,
+      .ai/context/python-code-standards.md, docs/. (refine also has .ai/audit/99-
+      validation in its Set-variables list, which is a variable not a read — excluded
+      from the comparison as instructed.) PASS
+  V3  Neither .kilo/rules/project.md nor doc-maintenance-rules appears in either file.
+      PASS
+  V4  .ai/context/commands.md, .ai/context/python-code-standards.md, and docs/ all
+      exist and are tracked. PASS
+  V5  Zero references to rules/, python-code-standards, project.md, or AGENTS.md in
+      .kilo/agents/. The gather step is the only rules channel. PASS
+  V6  python-code-standards.md: 19 lines, alwaysApply: true. No line mandates a
+      frontend, HTTP API, database, or dataframe library — all lines apply here. PASS
+  V7  "not trivial" = 0, "significant" = 0, skip line absent from orchestrator. PASS
+  V8  No placeholder denotes two quantities. All old placeholders ({COMPLETED_PHASES},
+      {TOTAL_PHASES}, {VALIDATED_PHASES}, {VALIDATED_FINDINGS}, {CRITICAL_COUNT},
+      {HIGH_COUNT}, {MEDIUM_COUNT}, {LOW_COUNT}) are absent. PASS
+  V9  Zero-case rendering present ("Validated phases: 0 — the validator was launched
+      for no phase."). Old unconditional "Validated findings: {N} total" and
+      "Emit the validated-findings block only while..." both absent. PASS
+  V10 Every counter has init + increment: PHASES_SELECTED set, never incremented;
+      PHASES_COMPLETED init + increment after executor-output check; PHASES_VALIDATED
+      init + increment after validation-output check; FINDINGS_VALIDATED,
+      FINDINGS_UNVALIDATED, SEV_* bands accumulated at pass points. PASS
+  V11 Zero-findings phase trace: store tally of zeros increments PHASES_VALIDATED+1,
+      PHASES_COMPLETED+1, FINDINGS_VALIDATED+0, all SEV_* +0, FINDINGS_UNVALIDATED
+      unchanged; no fabricated severity entry or findings total; "Findings not
+      validated" line omitted when counter is 0. PASS
+  V12 Zero-phases-validated trace: the two lines replaced by "Validated phases: 0 —
+      the validator was launched for no phase."; phase-completion line still truthful.
+      PASS
+  V13 Live corpus: 12 store files in .ai/audit/99-validation (11 phase stores + 1
+      CON-002 record; 04 has two files), 11 findings dirs (01–11) + 99-validation.
+      Phase-11 store has no VAL findings. The corpus moves as sibling validators write.
+      PASS
+  V14 Identifier format stated and checkable: VAL-{NN}-{NNN} present, regex
+      ^VAL-[0-9]{2}-[0-9]{3}$ present, "does not encode the phase number" absent. PASS
+  V15 Preserved phrases: "renumbering never invalidates a published finding ID" survives
+      (on its own line); no-adoption clause "This phase adopts no identifier already
+      present in the tree" survives. PASS
+  V16 Collision check: before edit 55/44/6; after edit 55/44/6 (identical). No
+      published identifier moved. 0 new-format identifiers minted. PASS
+  V17 Orchestrator untouched for D4: no VAL-\d{3} identifier in audit-multi-phase.md.
+      PASS
+  V18 All four D4 locations changed: Finding Prefix (new format + grandfather
+      inventory), R0 identifier map (store that defines it), Edge Cases bullet
+      (two stores define), Validation Summary row (VAL-{NN}-{NNN}). PASS
+  V19 Block 1's fixes intact: write and check strings both name -validated-findings.md;
+      retry_rules contains no delete/strip/clean instruction. PASS
+  V20 Block-1 stale cross-reference closed: "strips rejected content from the artifact
+      before it is merged" now reads "was the direct opposite of this one; the pipeline
+      no longer carries it" (past tense / not asserted as active); "the preserving side
+      governs this phase's output" retained. PASS
+  V21 Handbook invariants untouched: Binding rules 1–3 intact, Decision Field Format
+      intact, Validation Note format intact, no-adoption clause intact, never-renamed
+      constraint intact, phase-number rule (subject 6) intact, worktree exemption
+      (subject 7) intact, per-checkpoint re-entry order intact. PASS
+  V22 Blast radius: exactly 3 files staged. No .ai/audit artefact staged. The plan
+      file is not staged. pre-existing working-tree churn in src/tests/docs belongs to
+      sibling agents and is not touched by this block. PASS
+
+Baseline gates:
+  uv run ruff check src tests — clean (All checks passed!)
+  uv run ruff format --check src tests — clean (55 files already formatted)
+  uv run mypy src — clean (Success: no issues found in 11 source files)
+  uv run pytest -q -rs — 1029 passed, 3 skipped, 1 warning (0 failures)
+  Note: the plan's anchors and acceptance criteria were written against an earlier
+  corpus snapshot (495 passed, 4 skipped); the current repo shows 1029 passed, 3
+  skipped. The 3 skips match the user-specified expectation. No regressions.

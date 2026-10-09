@@ -76,12 +76,18 @@ class Settings(BaseSettings):
         ge=30,
         le=3600,
         description="Timeout in seconds applied to individual segment and playlist "
-        "HTTP requests, to each ffmpeg merge subprocess, to the off-loop yt-dlp "
-        "extraction's wait_for, and to yt-dlp's socket timeout as a library option and "
-        "as a CLI flag. On expiry of that wait_for the extraction thread is not "
+        "HTTP requests, to the off-loop yt-dlp extraction's wait_for, and to "
+        "yt-dlp's socket timeout as a library option and as a CLI flag. "
+        "Does NOT bound the ffmpeg merge subprocesses — each merge stage has its "
+        "own separate per-stage budget (see ``_MERGE_STAGE_TIMEOUT`` in "
+        "``ffmpeg_utils``). On expiry of that wait_for the extraction thread is not "
         "stopped and is joined at interpreter shutdown under the interpreter's own "
         "thread-join rule, not under this setting. Does not bound the yt-dlp child's "
-        "post-drain re-wait — see ``download_stall_timeout`` for that inactivity bound.",
+        "post-drain re-wait — see ``download_stall_timeout`` for that inactivity bound. "
+        "On retryable HTTP failures (408, 425, 429, 5xx), the exponential backoff "
+        "delay is capped at 30 seconds per request — each request may wait up to "
+        "that ceiling independently, so a batch of N concurrent videos may have "
+        "multiple bounded waits in flight simultaneously.",
     )
     download_stall_timeout: float = Field(
         default=300.0,
@@ -96,8 +102,8 @@ class Settings(BaseSettings):
         "re-raised. This is NOT a whole-operation budget — a download that keeps "
         "producing output is never killed, no matter how long it runs, because the "
         "reader's continued liveness holds the bound at bay until EOF. It does not "
-        "apply to the ffmpeg merge subprocesses, which ``download_timeout`` already "
-        "bounds.",
+        "apply to the ffmpeg merge subprocesses, which use a separate per-stage budget "
+        "(``_MERGE_STAGE_TIMEOUT``).",
     )
     backoff_pause_seconds: int = Field(
         default=10,
@@ -131,13 +137,21 @@ class Settings(BaseSettings):
         default=4,
         ge=1,
         le=16,
-        description="Maximum number of videos downloading concurrently in a batch. "
-        "The batch semaphore gates one permit per video (acquired once per video); "
-        "each video's segment fan-out is bounded separately by a semaphore of the "
-        "same size owned by the segment layer; each download's aiohttp connection "
-        "pool is sized to the same value for both the total and the per-origin "
-        "ceiling, so the transport never clips this setting. Setting this to 1 "
-        "enables an anti-detection delay between sequential segment downloads.",
+        description="Maximum number of videos downloading concurrently in a batch (1-16). "
+        "The batch semaphore gates one permit per video. The segment fan-out within "
+        "each video is bounded separately by ``max_concurrent_segments``. Each download's "
+        "aiohttp connection pool is sized to this value for both the total and per-origin "
+        "ceiling, so the transport never clips this setting. Setting this to 1 disables "
+        "batch parallelism.",
+    )
+    max_concurrent_segments: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Maximum number of segments to download concurrently per video. "
+        "Governs the segment fan-out semaphore and yt-dlp's -N (fragment concurrency) "
+        "flag. The batch-level video gate remains governed by ``max_concurrent_downloads``. "
+        "Setting this to 1 enables sequential segment download with an anti-detection delay.",
     )
     throttled_rate: int = Field(
         default=100000,

@@ -577,7 +577,7 @@ class TestYtdlpCliCommand:
     def test_cli_command_custom_values(self) -> None:
         """Test CLI command accepts custom settings values."""
         custom_settings = Settings(
-            max_concurrent_downloads=8, throttled_rate=200000, http_chunk_size=5242880
+            max_concurrent_segments=8, throttled_rate=200000, http_chunk_size=5242880
         )
 
         cmd, _ = _build_ytdlp_cli_command(
@@ -1377,12 +1377,12 @@ class TestParallelSegmentsDownload:
     async def test_semaphore_limits_concurrent_downloads(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test that semaphore enforces max_concurrent_downloads limit."""
+        """Test that semaphore enforces max_concurrent_segments limit."""
         from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=2)
+        test_settings = Settings(max_concurrent_segments=2)
 
         output_path = tmp_path / "video.mp4"
 
@@ -1488,7 +1488,7 @@ class TestParallelSegmentsDownload:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=4)
+        test_settings = Settings(max_concurrent_segments=4)
 
         output_path = tmp_path / "video.mp4"
 
@@ -1640,7 +1640,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=1)
+        test_settings = Settings(max_concurrent_segments=1)
 
         output_path = tmp_path / "video.mp4"
 
@@ -1707,7 +1707,7 @@ class TestSequentialDownloadMode:
                                 settings=test_settings,
                             )
 
-        # Verify delay was called for each segment in sequential mode (max_concurrent_downloads=1)
+        # Verify delay was called for each segment in sequential mode (max_concurrent_segments=1)
         assert len(wait_for_calls) == 2, "Should have wait_for call for each segment"
         # Each delay should be approximately 1.5-2.0 seconds (1.5 + 0-0.5 jitter)
         for delay in wait_for_calls:
@@ -1722,7 +1722,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=1)
+        test_settings = Settings(max_concurrent_segments=1)
 
         output_path = tmp_path / "video.mp4"
 
@@ -1799,7 +1799,7 @@ class TestSequentialDownloadMode:
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
-        test_settings = Settings(max_concurrent_downloads=4)
+        test_settings = Settings(max_concurrent_segments=4)
 
         output_path = tmp_path / "video.mp4"
 
@@ -2712,7 +2712,7 @@ class TestDownloadSegmentRealExecution:
                 segment_url,
                 output_path,
                 headers,
-                max_concurrent_downloads=1,
+                max_concurrent_segments=1,
                 segment_index=0,
             )
 
@@ -2742,7 +2742,7 @@ class TestDownloadSegmentRealExecution:
             segment_url,
             output_path,
             headers,
-            max_concurrent_downloads=4,
+            max_concurrent_segments=4,
             segment_index=0,
         )
 

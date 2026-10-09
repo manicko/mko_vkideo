@@ -17,6 +17,7 @@ from vkdownloader.services.downloader_throttle import (
     _resource_key,
     _retry_429_with_backoff,
     _wait_with_shutdown,
+    build_client_timeout,
 )
 
 
@@ -540,41 +541,45 @@ class TestURLBackoffCoordinator:
 class TestParseRetryAfter:
     """Tests for _parse_retry_after function."""
 
-    def test_parse_integer_seconds(self) -> None:
-        """Test parsing Retry-After header with integer seconds."""
+    @pytest.mark.parametrize(
+        ("header_value", "expected"),
+        [
+            # Integer seconds
+            ("120", 120.0),
+            (" 120 ", 120.0),  # whitespace-padded
+            ("-5", None),  # negative — rejected (criterion 2)
+            ("0", None),  # zero — rejected (criterion 2)
+            ("invalid", None),  # non-numeric
+            # IMF-fixdate
+            ("Mon, 01 Jan 2094 00:00:00 GMT", "positive"),  # future
+            ("mon, 01 jan 2094 00:00:00 gmt", "positive"),  # lowercase
+            ("Mon, 01 Jan 1994 00:00:00 GMT", None),  # past
+            # RFC 850 (2-digit year, 68->2068)
+            ("Monday, 01-Jan-68 00:00:00 GMT", "positive"),  # future
+            # asctime
+            ("Tue Jan  1 00:00:00 2094", "positive"),  # future
+            # Absent / invalid
+            (None, None),  # absent header
+            ("not-a-date", None),  # unparseable
+            ("", None),  # empty string
+        ],
+    )
+    def test_retry_after_header_forms(self, header_value, expected) -> None:
+        """Thirteen-row header-form table covering integer, IMF-fixdate, RFC 850,
+        asctime, lower-case, negative, zero, whitespace-padded, past, absent,
+        and invalid inputs."""
         mock_response = MagicMock()
-        mock_response.headers = {"Retry-After": "120"}
+        if header_value is None:
+            mock_response.headers = {}
+        else:
+            mock_response.headers = {"Retry-After": header_value}
 
         result = _parse_retry_after(mock_response)
 
-        assert result == 120.0
-
-    def test_no_retry_after_header(self) -> None:
-        """Test None returned when no Retry-After header present."""
-        mock_response = MagicMock()
-        mock_response.headers = {}
-
-        result = _parse_retry_after(mock_response)
-
-        assert result is None
-
-    def test_invalid_integer_returns_none(self) -> None:
-        """Test invalid integer format returns None."""
-        mock_response = MagicMock()
-        mock_response.headers = {"Retry-After": "invalid"}
-
-        result = _parse_retry_after(mock_response)
-
-        assert result is None
-
-    def test_invalid_date_format_returns_none(self) -> None:
-        """Test invalid date format returns None."""
-        mock_response = MagicMock()
-        mock_response.headers = {"Retry-After": "not-a-date"}
-
-        result = _parse_retry_after(mock_response)
-
-        assert result is None
+        if expected == "positive":
+            assert isinstance(result, float) and result > 0
+        else:
+            assert result == expected
 
 
 class TestComputeBackoffDelay:
@@ -595,15 +600,21 @@ class TestComputeBackoffDelay:
         assert result == 0.025
 
     def test_delay_caps_at_30_seconds(self) -> None:
-        """Test delay upper bound is capped at 30 seconds."""
+        """Test delay upper bound is capped at 30 seconds on the jitter range."""
         with patch("vkdownloader.services.downloader_throttle.random.uniform") as mock_uniform:
             mock_uniform.return_value = 0.0  # Return 0 when called with capped upper bound
             result = _compute_backoff_delay(429, 100, None)
 
-        # Verify the upper bound was capped at 30.0
         call_args = mock_uniform.call_args[0]
-        assert call_args[1] == 30.0  # Upper bound should be 30.0
+        assert call_args[1] == 30.0  # jitter ceiling, not the Retry-After floor
         assert result == 0.0
+
+    def test_retry_after_ceiling_applies_after_max(self) -> None:
+        """Retry-After above the 30s ceiling is clamped, not passed through (NET-018)."""
+        with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=5.0):
+            result = _compute_backoff_delay(429, 0, 600.0)
+
+        assert result == 30.0  # 600 clamped to ceiling
 
     def test_retry_after_overrides_delay(self) -> None:
         """Test Retry-After header value overrides calculated delay."""
@@ -893,3 +904,36 @@ class TestProgressManager:
         result = await manager.get_formatted_progress(1)
         assert "video_0: 12.1KB" in result
         assert "100" not in result  # Should NOT show 100% (the SRV-003 bug)
+
+
+class TestClientTimeoutComposition:
+    """Table-driven tests that build_client_timeout maps the setting to a
+    single composed client timeout object.
+
+    sock_connect is intentionally dropped (redundant with connect); sock_read
+    grows with the operator's budget. The returned object is inspected directly
+    via its attributes rather than by importing the client library.
+    """
+
+    @pytest.mark.parametrize(
+        ("download_timeout", "expected_total", "expected_connect", "expected_sock_read"),
+        [
+            (30, 30, 7, 30),  # floor
+            (300, 300, 30, 300),  # default
+            (3600, 3600, 30, 3600),  # ceiling
+        ],
+    )
+    def test_composition(
+        self,
+        download_timeout: int,
+        expected_total: int,
+        expected_connect: int,
+        expected_sock_read: int,
+    ) -> None:
+        """Each row checks total/connect/sock_read against the documented formula."""
+        timeout = build_client_timeout(download_timeout)
+
+        assert timeout.total == expected_total
+        assert timeout.connect == expected_connect
+        assert timeout.sock_read == expected_sock_read
+        assert timeout.sock_connect is None

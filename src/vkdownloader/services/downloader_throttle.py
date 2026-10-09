@@ -23,6 +23,23 @@ logger = get_logger(__name__)
 # in one place.
 DEFAULT_DOWNLOAD_TIMEOUT: int = Settings.model_fields["download_timeout"].default
 
+
+def build_client_timeout(download_timeout: int) -> aiohttp.ClientTimeout:
+    """Compose a ``ClientTimeout`` from the ``download_timeout`` setting.
+
+    Replaces the three byte-identical compositions that were duplicated across
+    ``downloader_throttle.py``, ``segment_downloader.py`` (x2). The floor (30s)
+    on ``connect`` is preserved; ``sock_connect`` is removed (it is redundant
+    with ``connect``); ``sock_read`` is set to the full ``download_timeout`` so
+    the per-read ceiling grows with the operator's budget.
+    """
+    return aiohttp.ClientTimeout(
+        total=download_timeout,
+        connect=min(30, download_timeout // 4),
+        sock_read=download_timeout,
+    )
+
+
 # Default pause duration (seconds) applied to a shared origin backoff across all
 # segment and manifest retries when a retryable transport failure is observed.
 _DEFAULT_BACKOFF_PAUSE_SECONDS: float = 10.0
@@ -236,12 +253,7 @@ async def _retry_429_with_backoff(
     """
     sanitized_url = _strip_auth_params(segment_url)
     shutdown_event = get_shutdown_event()
-    client_timeout = aiohttp.ClientTimeout(
-        total=download_timeout,
-        connect=min(30, download_timeout // 4),
-        sock_connect=30,
-        sock_read=60,
-    )
+    client_timeout = build_client_timeout(download_timeout)
 
     for attempt in range(max_retries):
         if shutdown_event.is_set():
@@ -311,16 +323,26 @@ async def _retry_429_with_backoff(
     return None
 
 
+_HTTP_DATE_FORMATS = (
+    "%a, %d %b %Y %H:%M:%S GMT",  # IMF-fixdate (RFC 7231)
+    "%A, %d-%b-%y %H:%M:%S GMT",  # RFC 850
+    "%a %b %d %H:%M:%S %Y",  # asctime (RFC 7231)
+)
+
+
 def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
     """Parse Retry-After header from response.
 
-    Handles both integer seconds and HTTP date formats.
+    Handles integer seconds and three HTTP-date forms (IMF-fixdate, RFC 850,
+    asctime) per RFC 7231 §7.1.3. Non-positive parsed values are rejected.
+    Lower-case variants (e.g. ``gmt``) are accepted via upper-casing.
 
     Args:
         response: aiohttp ClientResponse with headers.
 
     Returns:
-        Seconds to wait, or None if header not present or invalid.
+        Seconds to wait (always positive), or None if header absent,
+        invalid, or in the past.
     """
     retry_after = response.headers.get("Retry-After")
     if retry_after is None:
@@ -328,19 +350,25 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
 
     # Try parsing as integer seconds
     try:
-        return float(retry_after)
-    except ValueError:
-        pass
-
-    # Try parsing as HTTP date
-    try:
-        retry_date = datetime.strptime(retry_after, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=UTC)
-        now = datetime.now(UTC)
-        delta = (retry_date - now).total_seconds()
-        if delta > 0:
-            return delta
+        seconds = float(retry_after.strip())
+        if seconds <= 0:
+            return None
+        return seconds
     except (ValueError, TypeError):
         pass
+
+    # Try parsing as HTTP date (IMF-fixdate, RFC 850, asctime)
+    normalized = retry_after.strip().upper()
+    for date_format in _HTTP_DATE_FORMATS:
+        try:
+            retry_date = datetime.strptime(normalized, date_format).replace(tzinfo=UTC)
+            now = datetime.now(UTC)
+            delta = (retry_date - now).total_seconds()
+            if delta > 0:
+                return delta
+            return None  # Past date — ignored per spec (criterion 6)
+        except (ValueError, TypeError):
+            continue
 
     return None
 
@@ -370,12 +398,18 @@ def _compute_backoff_delay(
         # 5xx errors use shorter base delay per AWS SDK guidance
         base_delay = 0.05
 
-    # Calculate delay with full jitter: random(0, base_delay * 2^attempt)
+    # Calculate delay with full jitter: random(0, min(base_delay * 2^attempt, 30.0))
+    # The 30s ceiling bounds the jitter RANGE passed to random.uniform —
+    # test_delay_caps_at_30_seconds asserts this and must stay green unchanged.
     delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
 
-    # Retry-After header is a floor on the calculated delay
+    # Retry-After header is a floor on the calculated delay. The 30s ceiling
+    # is applied AFTER this max, so Retry-After is a clamped floor (NET-018):
+    # values above the ceiling are clamped, not passed through uncapped.
     if retry_after_seconds is not None:
         delay = max(delay, retry_after_seconds)
+
+    delay = min(delay, 30.0)
 
     return delay
 

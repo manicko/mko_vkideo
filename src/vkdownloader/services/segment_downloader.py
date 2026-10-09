@@ -31,6 +31,7 @@ from .downloader_throttle import (
     _parse_retry_after,
     _retry_429_with_backoff,
     _wait_with_shutdown,
+    build_client_timeout,
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
@@ -79,7 +80,7 @@ class DownloadPolicy:
     session: aiohttp.ClientSession
     semaphore: asyncio.Semaphore
     headers: dict[str, str]
-    max_concurrent_downloads: int
+    max_concurrent_segments: int
     backoff_coordinator: URLBackoffCoordinator | None
     video_url: str
     max_retries: int
@@ -255,13 +256,7 @@ async def _run_parallel_download_with_backoff(
 
     Returns True on success, None for retryable status codes, False for fatal errors.
     """
-    connect_timeout = min(30, download_timeout // 4)
-    client_timeout = aiohttp.ClientTimeout(
-        total=download_timeout,
-        connect=connect_timeout,
-        sock_connect=30,
-        sock_read=60,
-    )
+    client_timeout = build_client_timeout(download_timeout)
     async with session.get(segment_url, headers=headers, timeout=client_timeout) as response:
         if response.status == 200:
             content = await response.read()
@@ -397,7 +392,7 @@ async def _download_segment(
     segment_url: str,
     output_path: Path,
     headers: dict[str, str],
-    max_concurrent_downloads: int = 1,
+    max_concurrent_segments: int = 1,
     segment_index: int = 0,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
@@ -411,7 +406,7 @@ async def _download_segment(
         segment_url: URL of the segment to download.
         output_path: Path to save the downloaded segment.
         headers: Request headers to use.
-        max_concurrent_downloads: Maximum concurrent downloads. When 1, uses sequential retry.
+        max_concurrent_segments: Maximum concurrent segment downloads. When 1, uses sequential retry.
         segment_index: Index of the segment being downloaded (for logging).
         backoff_coordinator: Optional URLBackoffCoordinator for shared rate limiting.
         video_url: Original video URL for coordinator keying (required if coordinator provided).
@@ -421,7 +416,7 @@ async def _download_segment(
     Returns:
         True on success, False on failure.
     """
-    if max_concurrent_downloads == 1:
+    if max_concurrent_segments == 1:
         return await _download_segment_sequential(
             session,
             segment_url,
@@ -608,12 +603,7 @@ async def _fetch_playlist_with_retry(
         None on failure.
     """
     current_url = m3u8_url
-    client_timeout = aiohttp.ClientTimeout(
-        total=settings.download_timeout,
-        connect=min(30, settings.download_timeout // 4),
-        sock_connect=30,
-        sock_read=60,
-    )
+    client_timeout = build_client_timeout(settings.download_timeout)
     shutdown_event = get_shutdown_event()
 
     for attempt in range(max_retries):
@@ -839,7 +829,6 @@ async def _tally_and_merge(
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
-    download_timeout: int,
 ) -> Path | None:
     """Tally download results and merge if all segments downloaded.
 
@@ -853,7 +842,6 @@ async def _tally_and_merge(
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
         video_url: Video URL for progress callback video_id extraction.
-        download_timeout: Maximum seconds for ffmpeg subprocess merge operations.
 
     Returns:
         Path to merged file on success, None otherwise.
@@ -875,9 +863,7 @@ async def _tally_and_merge(
     # All segments present on disk — merge
     if downloaded_count == len(segments):
         logger.info("merging_segments", count=len(segments))
-        result = await _merge_segments_batched(
-            segments_dir, output_file, len(segments), float(download_timeout)
-        )
+        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
         if result:
             _cleanup_segments(segments_dir)
         return result
@@ -894,7 +880,7 @@ async def _process_downloaded_segments(
     """Process downloaded segments and merge if complete.
 
     Uses a FIRST_COMPLETED completion pump over a counting window of
-    ``max_concurrent_downloads`` task objects, bounding the live task set
+    ``max_concurrent_segments`` task objects, bounding the live task set
     by the configured ceiling (CON-003). The per-item ``async with
     policy.semaphore:`` claim stays inside ``_download_segment_concurrent``;
     the window is a ``len()`` comparison on an int — no permit object is
@@ -929,7 +915,7 @@ async def _process_downloaded_segments(
             for item in source:
                 # Store the pulled item on the next line, never break/return
                 # before storing (measured: drops one item per full window).
-                if len(pending) >= policy.max_concurrent_downloads:
+                if len(pending) >= policy.max_concurrent_segments:
                     done, _ = await asyncio.wait(
                         list(pending),
                         return_when=asyncio.FIRST_COMPLETED,
@@ -974,7 +960,6 @@ async def _process_downloaded_segments(
         output_file,
         progress_callback,
         policy.video_url,
-        policy.download_timeout,
     )
 
 
@@ -1012,7 +997,7 @@ async def _download_segment_concurrent(
             full_url,
             segment_path,
             policy.headers,
-            max_concurrent_downloads=policy.max_concurrent_downloads,
+            max_concurrent_segments=policy.max_concurrent_segments,
             segment_index=task.idx,
             backoff_coordinator=policy.backoff_coordinator,
             video_url=policy.video_url,
@@ -1030,7 +1015,7 @@ async def _download_segment_concurrent(
             downloaded = len(list(task.segments_dir.glob("*.ts")))
             policy.progress_callback(video_id, downloaded, task.total_segments)
 
-        if result and not policy.is_bounded_batch and policy.max_concurrent_downloads == 1:
+        if result and not policy.is_bounded_batch and policy.max_concurrent_segments == 1:
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
 
@@ -1052,7 +1037,7 @@ def _iter_pending_segment_tasks(
 
     Does NOT create asyncio tasks — the caller (the segment pump in
     ``_process_downloaded_segments``) owns task creation so it can bound
-    the live task set by ``max_concurrent_downloads`` (CON-003).
+    the live task set by ``max_concurrent_segments`` (CON-003).
 
     Skips segments whose .ts file already exists with non-zero size.
 
@@ -1136,11 +1121,11 @@ async def _run_download_session(
         # caller's batch permit here for per-segment acquisition would deadlock once
         # all video permits are held, because every inner acquisition would wait on a
         # permit the same task already holds. The segment fan-out is therefore
-        # bounded by a semaphore this layer owns, sized by the same
-        # max_concurrent_downloads setting. The live task set is further
+        # bounded by a semaphore this layer owns, sized by
+        # max_concurrent_segments. The live task set is further
         # bounded by a counting window of that same ceiling in the segment
-        # pump (len(pending) >= policy.max_concurrent_downloads), so no more
-        # than max_concurrent_downloads task objects exist at once (CON-003).
+        # pump (len(pending) >= policy.max_concurrent_segments), so no more
+        # than max_concurrent_segments task objects exist at once (CON-003).
         # CON-009: the connector this function constructs carries the SAME value as
         # both its total and its per-origin ceiling, so limit_per_host == limit is
         # provably non-binding (the per-host term can never be the binding one —
@@ -1149,14 +1134,14 @@ async def _run_download_session(
         # the single binding authority. The connector is per download — this is NOT
         # a process-wide pool — so the aggregate is per-download times concurrent
         # downloads.
-        semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+        semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_segments)
         is_bounded_batch = video_semaphore is not None
 
         policy = DownloadPolicy(
             session=session,
             semaphore=semaphore_to_use,
             headers=headers,
-            max_concurrent_downloads=settings.max_concurrent_downloads,
+            max_concurrent_segments=settings.max_concurrent_segments,
             backoff_coordinator=backoff_coordinator,
             video_url=video_url,
             max_retries=settings.max_retries,
@@ -1203,7 +1188,7 @@ async def download_hls_with_resume(
             second acquisition from the same object per segment could never be
             satisfied once all video permits are held. When ``None`` (single-download
             mode), the segment layer still creates its own local semaphore sized
-            by ``settings.max_concurrent_downloads``.
+            by ``settings.max_concurrent_segments``.
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.

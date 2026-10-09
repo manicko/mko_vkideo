@@ -22,6 +22,12 @@ from ..utils.url_sanitizer import (
 )
 from .downloader_throttle import DEFAULT_DOWNLOAD_TIMEOUT
 
+# Per-stage timeout for ffmpeg merge subprocesses. Separate from download_timeout
+# so lowering the HTTP budget (NET-007) does not shorten each merge stage and
+# trigger the NET-001 data-loss path. Each subprocess gets this budget once;
+# the caller passes it through _merge_segments_batched rather than repeating it.
+_MERGE_STAGE_TIMEOUT: float = float(DEFAULT_DOWNLOAD_TIMEOUT)
+
 logger = get_logger(__name__)
 
 # TRN-003: Process boundary at every asyncio subprocess spawn site.
@@ -331,7 +337,7 @@ def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> lis
 
 
 async def _merge_batch_segments(
-    batch_files: list[Path], temp_dir: Path, download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT
+    batch_files: list[Path], temp_dir: Path, download_timeout: float = _MERGE_STAGE_TIMEOUT
 ) -> Path | None:
     """Merge a batch of segments into a single temp file.
 
@@ -401,7 +407,7 @@ async def _merge_batch_segments(
 
 
 async def _perform_final_merge(
-    temp_files: list[Path], output_file: Path, download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT
+    temp_files: list[Path], output_file: Path, download_timeout: float = _MERGE_STAGE_TIMEOUT
 ) -> bool:
     """Merge all batch temp files into final output.
 
@@ -547,7 +553,7 @@ async def _merge_segments_batched(
     segments_dir: Path,
     output_file: Path,
     count: int,
-    download_timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
+    download_timeout: float = _MERGE_STAGE_TIMEOUT,
 ) -> Path | None:
     """Merge segments in batches to avoid command line limits.
 

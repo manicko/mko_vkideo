@@ -755,7 +755,7 @@ def _build_ytdlp_cli_command(
         "--fragment-retries",
         str(settings.max_retries),
         "-N",
-        str(settings.max_concurrent_downloads),
+        str(settings.max_concurrent_segments),
         "--throttled-rate",
         str(settings.throttled_rate),
         "--user-agent",

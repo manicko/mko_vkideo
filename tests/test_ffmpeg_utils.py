@@ -1,6 +1,7 @@
 """Unit tests for ffmpeg_utils merge and process management functions."""
 
 import asyncio
+import inspect
 import signal
 import sys
 from collections import namedtuple
@@ -12,8 +13,10 @@ import pytest
 
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import DownloadError
+from vkdownloader.services.downloader_throttle import DEFAULT_DOWNLOAD_TIMEOUT
 from vkdownloader.services.ffmpeg_utils import (
     _MERGE_SPACE_MARGIN_BYTES,
+    _MERGE_STAGE_TIMEOUT,
     _build_ffmpeg_concat_command,
     _merge_batch_segments,
     _merge_segments_batched,
@@ -1183,3 +1186,44 @@ class TestSpawnBoundaryKwargs:
                 assert "creationflags" in call_kwargs
             else:
                 assert call_kwargs["start_new_session"] is True
+
+
+class TestMergeBudgetSeparatedFromDownload:
+    """B11: the ffmpeg merge stage uses ``_MERGE_STAGE_TIMEOUT`` (a per-stage
+    constant) as its default parameter value, NOT ``DEFAULT_DOWNLOAD_TIMEOUT``.
+
+    This guarantees that lowering the HTTP ``download_timeout`` setting (NET-007)
+    does not shorten each merge subprocess and trigger the NET-001 data-loss
+    path. The two are intentionally separate constants even though they share
+    the same numeric value today.
+    """
+
+    def test_merge_stage_timeout_constant_is_separate(self) -> None:
+        """_MERGE_STAGE_TIMEOUT is a distinct name from DEFAULT_DOWNLOAD_TIMEOUT.
+
+        They may share a numeric value today, but the names must remain distinct
+        so the two budgets are independently tunable in the future.
+        """
+        assert _MERGE_STAGE_TIMEOUT is not DEFAULT_DOWNLOAD_TIMEOUT
+        assert _MERGE_STAGE_TIMEOUT == float(DEFAULT_DOWNLOAD_TIMEOUT)
+
+    def test_merge_batch_segments_default_is_merge_stage_timeout(self) -> None:
+        """_merge_batch_segments defaults ``download_timeout`` to _MERGE_STAGE_TIMEOUT."""
+        sig = inspect.signature(_merge_batch_segments)
+        default = sig.parameters["download_timeout"].default
+        assert default is _MERGE_STAGE_TIMEOUT
+        assert default is not DEFAULT_DOWNLOAD_TIMEOUT
+
+    def test_perform_final_merge_default_is_merge_stage_timeout(self) -> None:
+        """_perform_final_merge defaults ``download_timeout`` to _MERGE_STAGE_TIMEOUT."""
+        sig = inspect.signature(_perform_final_merge)
+        default = sig.parameters["download_timeout"].default
+        assert default is _MERGE_STAGE_TIMEOUT
+        assert default is not DEFAULT_DOWNLOAD_TIMEOUT
+
+    def test_merge_segments_batched_default_is_merge_stage_timeout(self) -> None:
+        """_merge_segments_batched defaults ``download_timeout`` to _MERGE_STAGE_TIMEOUT."""
+        sig = inspect.signature(_merge_segments_batched)
+        default = sig.parameters["download_timeout"].default
+        assert default is _MERGE_STAGE_TIMEOUT
+        assert default is not DEFAULT_DOWNLOAD_TIMEOUT

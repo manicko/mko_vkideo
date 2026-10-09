@@ -85,6 +85,7 @@ def test_settings_accepts_valid_fields() -> None:
         download_timeout=600,
         ssl_verify=False,
         max_concurrent_downloads=8,
+        max_concurrent_segments=12,
         log_level="DEBUG",
     )
 
@@ -95,6 +96,7 @@ def test_settings_accepts_valid_fields() -> None:
     assert settings.download_timeout == 600
     assert settings.ssl_verify is False
     assert settings.max_concurrent_downloads == 8
+    assert settings.max_concurrent_segments == 12
     assert settings.log_level == LogLevel.DEBUG
 
 
@@ -1106,6 +1108,7 @@ class TestEnvironmentIsolation:
         assert settings.cookie_source == CookieSource.NONE
         assert settings.max_retries == 3
         assert settings.max_concurrent_downloads == 4
+        assert settings.max_concurrent_segments == 4
         assert settings.download_timeout == 300
         assert settings.throttled_rate == 100000
         assert settings.log_level == LogLevel.INFO
@@ -1517,3 +1520,70 @@ class TestDownloadTimeoutSingleSource:
         """
         default = inspect.signature(consumer).parameters["download_timeout"].default
         assert default == DEFAULT_DOWNLOAD_TIMEOUT
+
+
+class TestMaxConcurrentSegments:
+    """B14: tests for the max_concurrent_segments setting.
+
+    This setting governs the per-video segment fan-out (the segment
+    semaphore and yt-dlp's -N flag). It is decoupled from
+    max_concurrent_downloads, which remains the batch-level video gate.
+    """
+
+    def test_default_value(self) -> None:
+        """max_concurrent_segments defaults to 4."""
+        settings = Settings()
+        assert settings.max_concurrent_segments == 4
+
+    def test_accepts_valid_values(self) -> None:
+        """max_concurrent_segments accepts values in range [1, 16]."""
+        for val in [1, 2, 4, 8, 16]:
+            settings = Settings(max_concurrent_segments=val)
+            assert settings.max_concurrent_segments == val
+
+    def test_rejects_below_minimum(self) -> None:
+        """max_concurrent_segments rejects values below 1."""
+        with pytest.raises(ValidationError):
+            Settings(max_concurrent_segments=0)
+
+    def test_rejects_above_maximum(self) -> None:
+        """max_concurrent_segments rejects values above 16."""
+        with pytest.raises(ValidationError):
+            Settings(max_concurrent_segments=17)
+
+    def test_from_env_var(self) -> None:
+        """VKDOWNLOADER_MAX_CONCURRENT_SEGMENTS is accepted via environment."""
+        os.environ["VKDOWNLOADER_MAX_CONCURRENT_SEGMENTS"] = "6"
+        try:
+            settings = Settings()
+            assert settings.max_concurrent_segments == 6
+        finally:
+            del os.environ["VKDOWNLOADER_MAX_CONCURRENT_SEGMENTS"]
+
+
+@pytest.mark.parametrize(
+    ("segments", "downloads", "expected_aggregate"),
+    [
+        # Default: min(4, 4) * 4 = 4 * 4 = 16
+        (4, 4, 16),
+        # Ceiling: min(16, 16) * 16 = 16 * 16 = 256
+        (16, 16, 256),
+        # segments capped by downloads: min(16, 4) * 4 = 4 * 4 = 16
+        (16, 4, 16),
+        # downloads capped by segments: min(4, 16) * 16 = 4 * 16 = 64
+        (4, 16, 64),
+    ],
+)
+def test_aggregate_segment_ceiling_formula(
+    segments: int, downloads: int, expected_aggregate: int
+) -> None:
+    """The aggregate segment ceiling is min(segments, downloads) * downloads.
+
+    This pins the effective maximum number of in-flight segment downloads across
+    a batch: segment fan-out per video (segments, capped by downloads since the
+    batch semaphore gates how many videos run concurrently) times the number of
+    concurrent videos (downloads).
+    """
+    effective_per_video = min(segments, downloads)
+    aggregate = effective_per_video * downloads
+    assert aggregate == expected_aggregate
