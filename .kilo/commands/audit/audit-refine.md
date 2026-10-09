@@ -16,13 +16,16 @@ If stop or break prefer resume old session not launching new agent.
 
 ## Gather Base Layer Context (once)
 Read `.ai/context/commands.md` for verification commands.
-Read `.kilo/rules/project.md` for project guidelines.
-Read `.kilo/rules/commands.md` for command conventions.
+Read `.ai/context/python-code-standards.md` for project code standards.
 List documentation structure from `docs/` folder.
 
 Set variables:
 - `{BASE_CONTEXT}` = summary of the above files
 - `{AUDIT_FILES}` = list of files in `.ai/audit/99-validation`
+
+Every file named in this step must exist. If one does not, name the missing file in the
+run's summary and continue with what is present — a read that silently yields nothing is the
+defect this step exists to prevent.
 
 <refine_loop>
 

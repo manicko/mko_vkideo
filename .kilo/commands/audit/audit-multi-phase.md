@@ -40,8 +40,7 @@ From `{SELECTED_PHASES}` parse each remaining filename (`NN-audit-name.md`) to e
 
 
 Read `.ai/context/commands.md` for verification commands.
-Read `.kilo/rules/project.md` for project guidelines.
-Read `.kilo/rules/commands.md` for command conventions.
+Read `.ai/context/python-code-standards.md` for project code standards.
 List documentation structure from `docs/` folder.
 
 Set variables:
@@ -51,13 +50,23 @@ Set variables:
 *DO NOT* Read executor role or executor tasks and templates, just provide links
 *DO NOT* Read production code, full documentation content
 
+Every file named in this step must exist. If one does not, name the missing file in the
+run's closing output and continue with what is present — a read that silently yields nothing
+is the defect this step exists to prevent.
+
 
 ## 2. Execute Phase Loop
 
-`{TOTAL_PHASES}` = number of entries in `{SELECTED_PHASES}`.
-Before the loop, initialise `{COMPLETED_PHASES}`, `{VALIDATED_PHASES}`,
-`{VALIDATED_FINDINGS}`, `{CRITICAL_COUNT}`, `{HIGH_COUNT}`,
-`{MEDIUM_COUNT}` and `{LOW_COUNT}` to 0.
+Set every counter below before the loop starts. **Each number the closing output prints
+comes from exactly one of them, and no counter is printed that is not named here.**
+
+- `{PHASES_SELECTED}` — the count of files in `{SELECTED_PHASES}`. Set here, never incremented.
+- `{PHASES_COMPLETED}` = 0.
+- `{PHASES_VALIDATED}` = 0.
+- `{FINDINGS_VALIDATED}` = 0 — findings counted from a validation store.
+- `{FINDINGS_UNVALIDATED}` = 0 — findings counted from a source report, because the
+  validator did not run for that phase.
+- `{SEV_CRITICAL}` = 0, `{SEV_HIGH}` = 0, `{SEV_MEDIUM}` = 0, `{SEV_LOW}` = 0.
 
 For each phase file in `{SELECTED_PHASES}` 
 
@@ -88,15 +97,13 @@ Task(
 Check that `{OUTPUT_PATH}` exists and is not empty.
 If missing or empty: retry once, then escalate on second failure.
 
-When the check passes, increment `{COMPLETED_PHASES}`.
+On a pass: `{PHASES_COMPLETED}` = `{PHASES_COMPLETED}` + 1.
 
 ### 2.4 Launch Validator
 
-Launch the Validator for every selected phase. The gate that previously
-decided whether to do so is removed: its condition was not defined anywhere
-in the command, the validator's handbook, or the report format, so it could
-never be evaluated and was always applied by unrecorded judgement. The
-validator's per-finding decisions carry the triage instead.
+Launch the Validator for **every** selected phase. There is no precondition and no
+threshold: this step states no condition, so none is evaluated and none can be silently
+skipped.
 
 ```
 Task(
@@ -116,13 +123,18 @@ Task(
 Check that `.ai/audit/99-validation/{PHASE_NUMBER}-{PHASE_NAME}-validated-findings.md` exists.
 If missing or empty: retry once, then escalate on second failure.
 
-When the file is present — i.e. the Validator ran for this phase — increment
-`{VALIDATED_PHASES}`, add the number of findings it kept (not rejected) to
-`{VALIDATED_FINDINGS}`, and fold its severity tally into `{CRITICAL_COUNT}`,
-`{HIGH_COUNT}`, `{MEDIUM_COUNT}` and `{LOW_COUNT}`. A phase whose findings file
-held no findings increments `{VALIDATED_PHASES}` but contributes nothing to
-`{VALIDATED_FINDINGS}`, so it cannot claim validation coverage it did not
-produce.
+On a pass: `{PHASES_VALIDATED}` = `{PHASES_VALIDATED}` + 1, and accumulate this phase's
+counts into the counters from one read of the store:
+
+- `{FINDINGS_VALIDATED}` += the `Validated (unchanged)` count in the store's **Validation
+  Summary** table. Read the number the store states. Do not recount the identifiers it
+  lists, and do not sum a repeated table.
+- `{SEV_CRITICAL}`, `{SEV_HIGH}`, `{SEV_MEDIUM}`, `{SEV_LOW}` += that store's per-severity
+  counts, from the same read.
+
+If the validator did not run for this phase, accumulate from `{OUTPUT_PATH}` instead and
+label the source: `{FINDINGS_UNVALIDATED}` += its finding count, and the four `{SEV_*}`
+bands += its per-severity counts, from the same read.
 
 </phase_loop>
 
@@ -133,20 +145,29 @@ produce.
 ---------------------
 AUDIT COMPLETE
 
-Phases completed: {COMPLETED_PHASES}/{TOTAL_PHASES}
-Phases validated: {VALIDATED_PHASES}/{TOTAL_PHASES}
+Phases completed: {PHASES_COMPLETED}/{PHASES_SELECTED}
 
-Emit the validated-findings block only while `{VALIDATED_PHASES}` > 0
-(the counter advances only for phases whose validator output was actually
-verified present):
-Validated findings: {VALIDATED_FINDINGS} total
+Phases validated: {PHASES_VALIDATED}/{PHASES_SELECTED}
+Validated findings: {FINDINGS_VALIDATED} (read from validation stores)
+Findings not validated: {FINDINGS_UNVALIDATED} (read from source reports; the validator did not run for these phases)
 
 By severity:
-- CRITICAL: {CRITICAL_COUNT}
-- HIGH: {HIGH_COUNT}
-- MEDIUM: {MEDIUM_COUNT}
-- LOW: {LOW_COUNT}
+- CRITICAL: {SEV_CRITICAL}
+- HIGH: {SEV_HIGH}
+- MEDIUM: {SEV_MEDIUM}
+- LOW: {SEV_LOW}
 ---------------------
+
+**Two lines are conditional, and the report says so.**
+- When `{PHASES_VALIDATED}` is 0, the `Phases validated:` line and the `Validated findings:`
+  line are replaced by the single line `Validated phases: 0 — the validator was launched for
+  no phase.` No validation coverage is claimed.
+- When `{FINDINGS_UNVALIDATED}` is 0, omit the `Findings not validated:` line.
+
+Every placeholder above names exactly one counter initialised in `## 2`, and every counter
+initialised in `## 2` is printed. The severity bands count the findings in scope for the
+run, read from the validation store for each phase whose validator ran and from the source
+report for each phase whose validator did not.
 
 </output>
 

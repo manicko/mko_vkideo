@@ -106,9 +106,11 @@ file, module or class name appears in this list.
    wrote it, its finding count, and whether a handbook exists for it. A handbook
    with no findings file is a gap; a findings file with no handbook is a gap. Both
    are reported.
-2. **Identifier map** — every finding identifier in the corpus, its prefix, and
-   the phase that owns it. A prefix no phase claims, and a collision between two
-   live prefixes, are recorded here.
+2. **Identifier map** — every finding identifier in the corpus, its prefix, the
+   store that defines it, and the phase that owns it. A prefix no phase claims, and
+   two stores that define the same identifier string, are recorded here — the second
+   as a live collision, whether or not the two strings turn out to name the same
+   subject.
 3. **Decision-record map** — for every finding, which of the four decisions the
    report format has room to carry, and where that room is. A decision with no
    slot is recorded as an **absent slot**, not as a missing decision.
@@ -348,7 +350,7 @@ is the question, and the finding is named as a condition to look for.
 - **Stale-but-similar** — a finding may be rejected as stale while a sibling finding (same root cause) is validated; record the relationship in `## 11` Merged Findings.
 - **A source report that is absent, empty, or holds only a pass line.** The decision is a non-reproduction with the inputs recorded — never a clean bill of health, and never a set of `VAL-` findings about a report that was never produced.
 - **A finding whose evidence cites something that no longer exists.** Technical correctness fails on the citation, not on the claim; the finding is reclassified or rejected with the reason that the evidence is gone, and the claim is not re-derived from the finding's own wording.
-- **An identifier in the corpus that no phase prefix claims, or that two live prefixes share.** Recorded in R0's identifier map and filed once here; the test suite and other artifacts may already carry forms of this shape, and this phase adopts none of them.
+- **An identifier in the corpus that no phase prefix claims, or that two stores define.** A string two stores define names two subjects until the evidence shows otherwise, and `VAL-001`…`VAL-006` are live instances today; it is recorded in R0's identifier map, cited as `(store, identifier)`, and filed once here. **Existing stores are never renumbered to resolve it** — the grandfather clause in `## 10` governs. The test suite and other artifacts may already carry forms of this shape, and this phase adopts none of them.
 - **A finding from a phase number outside the range.** Reported as corpus drift, not validated.
 - **A phase that produced findings and was never validated.** The coverage claim the run's closing output makes is checkable here, and is checkable only here.
 - **A finding this phase rejected that a later run re-derives as valid.** The retained rejection reason is the evidence that decides it; a re-derivation that ignores it is a finding against the reason, not against the earlier decision.
@@ -401,9 +403,10 @@ with the exact inputs recorded, never as a clean bill of health.
 
 1. **Executor subagent** → `.ai/audit/{NN}-{slug}/findings.md`.
    Gate: the file exists and is not empty. One retry, then escalation.
-2. **Validator subagent — this file**, launched only when the command's own
-   condition holds, which is stated in words nothing evaluates (see `## 6`
-   subjects 1 and 2, and blocks (g) and (h)).
+2. **Validator subagent — this file**, launched for **every** selected phase. The
+   command states no precondition and defines no threshold; the gate below is the
+   only one. (What the command used to state instead is `## 6` subject 2 — a
+   subject to verify, not an assertion that such a condition still exists.)
    → `.ai/audit/99-validation/{NN}-{slug}-validated-findings.md`.
    Gate: the artifact exists. One retry, then escalation.
 
@@ -436,9 +439,38 @@ line of the report must close that door.
 
 Use `VAL-` for all findings in this phase. `VAL-` is unique among the phase
 prefixes, shares no first two characters with any of them (`EN CF NE CO PR SE AR
-OU QL TS DE VA` are all distinct), is obtainable from no other prefix by a single
-plausible edit, and does not encode the phase number, so renumbering never
-invalidates a published finding ID.
+OU QL TS DE VA` are all distinct), and is obtainable from no other prefix by a
+single plausible edit.
+
+**A finding this phase mints carries the phase it belongs to: `VAL-{NN}-{NNN}`**,
+where `{NN}` is the phase number of the source findings file named in `## 3`, and
+`{NNN}` is a per-phase sequence starting at `001`. A phase-`02` finding is
+`VAL-02-001`, not `VAL-001`, and the form matches `^VAL-[0-9]{2}-[0-9]{3}$` — a
+shape a check can test. Two runs of the same phase against the same corpus are the
+only way two identifiers can still collide, and R0's identifier map is where that
+is caught.
+
+**Renumbering never invalidates a published finding ID.** The identifier encodes the
+phase, not the subject, and a number is never reused for a different subject.
+
+**Published identifiers are grandfathered, and are never renumbered, re-expressed,
+re-issued or deleted.** Every identifier already present in a validation store keeps
+the exact string that store gave it. As of this revision there are 11 stores and
+55 definitions: `VAL-101`…`VAL-112` in phase-01, `VAL-001`…`VAL-006` in phase-02,
+`VAL-001`…`VAL-007` in phase-03, `VAL-401`…`VAL-410` in phase-04, `VAL-501`…`VAL-502`
+in phase-05, `VAL-601`…`VAL-603` in phase-06, `VAL-701` in phase-07, `VAL-001`…`VAL-005`
+in phase-08, `VAL-901`…`VAL-903` in phase-09, and `VAL-120`…`VAL-125` in phase-10.
+Phase-11 produced a store with no findings.
+`VAL-001`…`VAL-005` name a different subject in each of the three stores that hold
+them, and `VAL-006` in each of the two that hold it. This phase does not resolve
+that, does not renumber either occurrence, and does not re-issue it.
+
+**A published identifier is cited as `(store, identifier)`, never as a bare
+identifier.** `VAL-001` alone names three subjects; the phase-02 store's `VAL-001`
+names one. The store path is part of an existing identifier's authority, so every
+cross-reference to one — in a `Validation Note`, in the `Merged Findings` table, in
+an R0 identifier-map row — carries it. A bare legacy identifier in a cross-reference
+is an incomplete reference.
 
 **`VAL-` is reserved for defects in the audit inputs themselves** — a conflict, a
 merge, an unsafe ordering, a pipeline-document defect — **and is never used for a
@@ -492,10 +524,10 @@ Decisions are applied inline to the copied findings file:
 | **Rollout safety issues** | Add as new finding entries (`VAL-`) if detected. |
 
 **The retained Rejected and Merged rows are not a concession to the format. They
-are the reason the exemption exists**, and they are the direct opposite of the
-pipeline rule that strips rejected content from the artifact before it is merged.
-Where the two disagree, the preserving side governs this phase's output and the
-contradiction is filed (`## 6` subject 3).
+are the reason the exemption exists.** A command rule that stripped rejected content
+from the artifact before merge was the direct opposite of this one; the pipeline no
+longer carries it. Where two documents disagree, the preserving side governs this
+phase's output (`## 6` subject 3).
 
 ### Decision Field Format
 
@@ -538,7 +570,7 @@ Append at the end of the file:
 | Reclassified | N | ID1, ID2 |
 | Merged | N | ID3 → ID4 |
 | Rejected | N | ID5, ID6 |
-| VAL- (cross-phase / rollout) | N | VAL-001, ... |
+| VAL- (cross-phase / rollout) | N | VAL-{NN}-{NNN}, ... |
 
 ### Rejected Findings
 
