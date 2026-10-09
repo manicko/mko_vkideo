@@ -14,7 +14,7 @@ from vkdownloader.models.enums import CookieSource, QualityLabel, StreamFormat
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
-from vkdownloader.services.extractor import VKVideoExtractor, _build_streams
+from vkdownloader.services.extractor import VKVideoExtractor, _build_streams, is_valid_video_url
 
 
 def test_parse_video_id_valid() -> None:
@@ -57,6 +57,32 @@ def test_parse_video_id_empty_string() -> None:
 
     with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
         extractor.parse_video_id("")
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # ACCEPT — canonical URL acceptance (criterion 8: sample_video_url must stay accepted)
+        pytest.param("https://vkvideo.ru/video-12345_67890", True, id="canonical_with_host"),
+        pytest.param("https://vkvideo.ru/video-12345_67890/", True, id="canonical_trailing_slash"),
+        pytest.param(
+            "https://vkvideo.ru/video-12345_67890?some=param", True, id="canonical_with_query"
+        ),
+        pytest.param(
+            "https://vkvideo.ru/video-12345_67890?t=123", True, id="canonical_with_query_params"
+        ),
+        pytest.param("https://vk.com/video-12345_67890", True, id="alternate_host"),
+        # REJECT — near misses that the old unanchored .search would wrongly accept
+        pytest.param("video_123_456", False, id="wrong_separator"),
+        pytest.param("videos-123_456", False, id="plural_videos"),
+        pytest.param("video-1O3_456", False, id="letter_o_not_zero"),
+        pytest.param("", False, id="empty_string"),
+        pytest.param("not a url", False, id="no_pattern"),
+    ],
+)
+def test_video_url_acceptance_table(url: str, expected: bool) -> None:
+    """is_valid_video_url must accept canonical VK video URLs and reject near misses."""
+    assert is_valid_video_url(url) is expected
 
 
 class TestExtractionErrors:

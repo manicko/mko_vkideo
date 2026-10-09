@@ -4,7 +4,7 @@ import asyncio
 import re
 from pathlib import PurePosixPath
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlparse, urlsplit
 
 import yt_dlp
 from playwright.async_api import Cookie, Page
@@ -30,13 +30,20 @@ VIDEO_ID_PATTERN = re.compile(r"video-(-?\d+)_(\d+)")
 def is_valid_video_url(url: str) -> bool:
     """Check if a URL matches the VK video URL pattern.
 
+    The pattern must appear as a complete path component — not embedded in
+    a query value or a longer path segment.
+
     Args:
         url: The URL to validate.
 
     Returns:
-        True if the URL contains a valid VK video identifier, False otherwise.
+        True if the URL matches a valid VK video identifier, False otherwise.
     """
-    return bool(VIDEO_ID_PATTERN.search(url))
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    components = path.split("/")
+    last_component = components[-1] if components else ""
+    return bool(VIDEO_ID_PATTERN.fullmatch(last_component))
 
 
 def _classify_format(url: str) -> StreamFormat:
