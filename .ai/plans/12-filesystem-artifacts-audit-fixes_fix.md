@@ -39,7 +39,7 @@ Four inputs, in this order. Nothing in this plan comes from the artifact's own `
 | `ART-008` ffmpeg argfile residue in system `TEMP` | **STAYS RETIRED — for a different reason than this plan first gave.** Its subject was the ffmpeg **argfile**, the loader's artefact. The loader was the part removed; the merger stayed. Measured: **zero** occurrences of `gettempdir`, `iterdir`, `rmtree` or `TEMP` in `src/`. The residue class is empty because the artefact belonged to the loader. Do not resurrect it. | **OUT** | — |
 | `ART-009` `validate_output_path` has no containment root | **CONFIRMED, live — but the remedy shrinks under Decision B.** Re-measured: `C:\Windows\System32` and `/etc` → `C:\etc` are both **accepted** (correct under the ruling), and `repo_root` still derives to **`C:\py_exp\mko_vkideo\src`** — one level too deep. The sole comparison is warn-only, and **two of the three call sites suppress it**: `security._resolve_output_file` and `ytdlp_downloader`'s probe pass `warning=False`; only `segment_downloader.download_hls_with_resume`'s call fires. `security.py` is unchanged since `e59523c`, so every anchor here still holds verbatim. | **IN** (re-scoped) | `P12-B2` |
 | `ART-010` `".." in str(path)` substring test refuses `a..b` | **CONFIRMED, live.** The guard is a substring test at **two layers** — pre-resolution and post-resolution. All five tests in `TestValidateOutputPathTraversal` use real `..` components, so a `".." in path.parts` fix keeps them green. `security.py` unchanged. | **IN** | `P12-B1` |
-| `ART-011` `[:100]` bounds a title component, not the path | **CONFIRMED, live.** `sanitize_title`'s own docstring claims "limits length to 100 characters" — true of the component, false of the path. `TestSanitizeTitle::test_limits_length_to_100_characters` pins the bound. Re-measured: a 777-character path is **accepted**, so the UNVERIFIED failure (`WinError 206`) was not reproduced on this host. | **IN** (decide and record) | `P12-B4` |
+| `ART-011` `[:100]` bounds a title component, not the path | **CONFIRMED, live.** `sanitize_title`'s own docstring claims "limits length to 100 characters" — true of the component, false of the path. `TestSanitizeTitle::test_limits_length_to_100_characters` pins the bound. Re-measured: a 777-character path is **accepted**, so the UNVERIFIED failure (`WinError 206`) was not reproduced on this host. | **DONE** (`D-2`, option a, `aabfc46`) | `P12-B4` |
 | `ART-012` no download-stage probe; merge multiplier now insufficient | **CONFIRMED, live — and its importance RISES under Decision C.** Half 1: the tree's only free-space probe is `shutil.disk_usage` inside the merge, called once before batch 1. Half 2: `_required_merge_bytes` still returns `segment_bytes * 2 + _MERGE_SPACE_MARGIN_BYTES` and its docstring still justifies `2×`, while the landed additive merge holds segments **plus** batch temps **plus** a growing output = up to `3×`. **The merge engine is now the product's only merge and is permanent surface** (§2.4.4), so an insufficient free-space estimate on it is a standing defect on the only merge path, not one concern among several. The artifact's 3.15× / 1.40× figures were measured on a synthetic 250-segment set it itself marks non-transferable and were never re-driven — do not cite them. | **IN** (priority raised) | `P12-B8` |
 | `ART-013` `NNNNN.ts.tmp` residue is unmatched by any sweep | **CONFIRMED, live.** Two sites derive `output_path.with_suffix(output_path.suffix + ".tmp")` and publish with `os.replace`. Measured: `glob("*")`, `glob("*.ts")` (four occurrences) and `f"{i:05d}.ts"` all miss `NNNNN.ts.tmp`. No test anywhere uses `os.replace`. The reporter half is already fixed. | **IN** | `P12-B6` (sweep half) + `P12-B7` (lifetime half) |
 | `ART-014` no reserved device name, no trailing dot | **CONFIRMED, live, creation half is Windows-only.** Re-measured on this host: `CON`, `CON.txt`, `NUL` write without exception and leave no file; `AUX.txt` raises `FileNotFoundError [Errno 2]`; `sanitize_title("title...")` is a no-op. On POSIX these names are ordinary files. Derived names always append `_{id}.mp4`, which is the scope bound. **This bound is load-bearing for Decision A's dedup key** (§3.8). | **IN** | `P12-B5` |
@@ -783,8 +783,8 @@ Criterion: (a) is the smallest change that is unambiguously correct. Choose (b) 
 | 2 | **`P12-B1`** | The unambiguous half of the traversal finding. It precedes `B2` because both write `validate_output_path`, and it is ahead of `B4`/`B5` only because it is the shortest block in the plan and shares nothing with them. |
 | 3 | **`P12-B10`** | **Moved here by Decision A.** It has no open decision any more, it writes none of `utils/security.py`, and it is now independent of every other block in the plan — except `B2`. Placed early because `B10 → B2` is the one new edge, and because a two-phase pre-pass is the largest structural change in the plan and should be landed before the segment track starts. |
 | 4 | **`P12-B2`** | **Moved here by Decision B + the new edge.** It no longer decides a scope; it fixes the `repo_root` derivation and makes the warning fire. Doing it after `B10` means the suppression change lands on a call site the pre-pass already established, rather than one `B10` is about to restructure. |
-| 5 | **`P12-B4`** | `D-2`, still open. Queued after the guard pair because it shares `utils/security.py` with them and nothing else. |
-| 6 | **`P12-B5`** | `D-3`, still open. Last on the `security.py` track because its route (a) renames the function `B4` re-contracted. |
+| 5 | **`P12-B4`** | `D-2` resolved — option (a) chosen and committed (`aabfc46`): docstring-only clarification that the `[:100]` bound limits the title component, not the composed path. Queued after the guard pair because it shares `utils/security.py` with them and nothing else. |
+| 6 | **`P12-B5`** | `D-3` resolved — option (a) chosen and committed (`6bd3188`): rename `sanitize_title` → `sanitize_filename_component` across `security.py`, `downloader.py`, and both test files; docstring states the function does NOT handle reserved Windows device names or trailing dots. No behavior change. Last on the `security.py` track because it renames the function `B4` re-contracted. |
 | 7 | **`P12-B6`** | First segment block. Carries the guard that `B7`'s new call sites depend on, and settles the sweep semantics before the lifetime change alters when the tree exists. |
 | 8 | **`P12-B7`** | Second segment block. Owns the shared insertion point for `ART-005` and `ART-013`'s lifetime half, and it can only be placed after `B6`'s guard exists. |
 | 9 | **`P12-B8`** | Third segment block. Its new probe must be placed relative to the session shape `B7` leaves behind. **Under Decision C this is the highest-value block in the segment track** — the merge is the only merge and is permanent, so an insufficient free-space estimate is a standing defect on the product's single merge path (§2.4.5). It stays behind `B6`/`B7` because it writes the same file. |
@@ -1249,7 +1249,7 @@ The standing gate (§7.1) **plus** the following, which are only meaningful once
 | `ART-006` | `B10` | One-dispatch-and-it-is-the-last; no-media-transfer not-called assertions on dispatch/permit/subprocess/segment/working tree; `ProgressStatus.SKIPPED` **and** a distinct summary line; key asserted both directions; idempotence; `mkdir` side effect asserted | `B10` Validator | **Within-batch collision is structurally eliminated** — no mutex needed, none introduced. **Cross-run collision is not**: dedup is per invocation. `DEF-6` (the extraction call the key requires) is unresolved. |
 | `ART-007` | `B11` | `grep` proving no sweep and no age heuristic; comment and documentation read together | `B11` Validator | **Both halves open.** Zero compensating controls and zero runnable oracles survive (`§5.7` items 1–2). The block records a posture; it closes no exposure on options (c) and (d). |
 | `ART-008` | — | §7.3 item 2 | §7.3 | **Retired, and not to be resurrected.** The residue class is empty because the argfile was the **loader's** artefact. |
-| `ART-009` | `B2` | `repo_root` derived **by value**; a root-but-not-`src/` path warns; the blind mock removed or supplemented | `B2` Validator | **Re-scoped by Decision B.** The absence of a containment root is decided behaviour, not a residual. What remains open is only whether internal call sites keep their suppression. |
+| `ART-009` | `B2` | `repo_root` derived **by value**; a root-but-not-`src/` path warns; the blind mock removed or supplemented | `B2` Validator | **Resolved by Decision B, option (a).** The absence of a containment root is decided behaviour, not a residual. Both `warning=False` suppressions were dropped (`_resolve_output_file` and the ytdlp retry probe), so the warning now fires on all three call sites. Nothing remains open. |
 | `ART-010` | `B1` | False-positive oracle accepted; post-resolution layer reached by a new oracle | `B1` Validator | — |
 | `ART-011` | `B4` | Option (a): the pin unchanged and the docstring names the component. Option (b): a composed-path budget oracle | `B4` Validator | Under Decision B a long path is **accepted by design**; `B4` records the bound's true scope rather than adding a limit. |
 | `ART-012` | `B8` | `disk_usage` **1 → 2** by grep; the three declared assertion changes; the unrounded boundary test | `B8` Validator | **Raised in importance by Decision C**: the merge is the only merge and permanent, so a too-low estimate is a standing defect there. The volume can still fill after the probe — another process may consume it, and no probe can predict that. |
@@ -1277,4 +1277,1290 @@ The standing gate (§7.1) **plus** the following, which are only meaningful once
 - **Nothing in this plan edits `services/downloader.py`'s re-export lines as a remedy** (`C3`), and nothing adds a lock file, a temp-dir abstraction, `fsync`, a clobber policy, a name suffix or a temp sweep.
 
 **Plan ends.** Twelve blocks, one commit each; fourteen findings routed; seven deferred with named owners; six decisions left open with stated criteria rather than chosen by the Planner.
+
+---
+
+## 8. Implementation task: P12-B1 — component-wise traversal detection
+
+**Status:** DONE — implemented, tested (1047 passed, 3 skipped), committed as `12af960`. Execution position 2 (after `P12-B3`, which is already committed).
+**Task file:** `.ai/tasks/p12-b1-component-traversal-detection.yaml`
+
+### 8.1 Semantic scope
+
+Exactly two locations, both inside `src/vkdownloader/utils/security.py::validate_output_path`:
+
+1. **Pre-resolution guard** (the first `if` in the function body, before `path.resolve()`): the substring test `".." in str(path)` becomes the component-wise `".." in path.parts`. The now-unused local `path_str = str(path)` is removed.
+2. **Post-resolution guard** (the defense-in-depth `if`, after `path.resolve()`): the substring test `".." in str(resolved)` becomes the component-wise `".." in resolved.parts`.
+
+**Do not touch:** `repo_root` (the module-level expression), the `relative_to` containment comparison, the `warning` parameter plumbing, or the `return resolved`. Those are `P12-B2`'s territory. Do not collapse the two guards into one.
+
+### 8.2 Implementation sequence
+
+1. **Modify the pre-resolution guard.** In `validate_output_path` in `src/vkdownloader/utils/security.py`, replace `path_str = str(path)` + `if ".." in path_str:` with `if ".." in path.parts:`. Remove the unused local. Update the preceding comment to describe component-wise semantics: an exact `..` path component is refused; a component merely containing `..` is not.
+2. **Modify the post-resolution guard.** Replace `if ".." in str(resolved):` with `if ".." in resolved.parts:`. Update the defense-in-depth comment to reference `resolved.parts`.
+3. **Add oracles** to `tests/test_security.py::TestValidateOutputPathTraversal`:
+   - **False-positive acceptance:** `Path("a..b") / "video.mp4"` is accepted (measured live today as rejected by the substring test). Assert `validate_output_path` returns without raising.
+   - **New post-resolution oracle:** an input path with no `..` component so the pre-resolution guard is a no-op; patch `Path.resolve` to return a path whose `.parts` still contains `..` (e.g. `Path("/safe") / ".." / "etc"`); assert `DownloadError` is raised — proving the post-resolution layer fires independently. The test is distinguishable from the pre-resolution layer because the input contains no `..` component; the error can only originate from the post-resolution check.
+4. **Run the standing gate** (§7.1): `pytest`, `ruff check src tests`, `ruff format --check src tests`, `mypy src`, `mypy src tests`, `ruff check .`. Confirm `G1`/`G2`/`G4`/`G6` exit 0, `G5` non-increasing, `G3` unchanged from red baseline, skip count 3.
+
+### 8.3 Architectural constraints
+
+- **Two-layer structure preserved.** The pre-resolution guard catches raw user input; the post-resolution guard catches already-resolved paths (where the pre-resolution check is a no-op) plus symlink/UNC edge cases. Both are in scope and both must be changed; they must not be merged.
+- **No `file:line` references.** All anchors are symbol names: `validate_output_path`, `path.parts`, `resolved.parts`, `path.resolve`. The commit subject describes the behaviour.
+- **Leaf safety.** `security.py` currently imports only `config`, `exceptions`, `models.enums`, `models.video`. `path.parts` and `resolved.parts` are stdlib `pathlib` — no new import is introduced.
+- **POSIX neutrality.** `PurePath.parts` normalises both `/` and `\` on Windows, so the component-wise test is correct regardless of separator.
+- **`Path(".")` is not disturbed.** `Path(".").parts` is `('.',)` — `".." not in ('.',)` is `False`, so the empty-path edge case (`TestValidateOutputPathEdgeCases::test_empty_path_resolves_to_cwd`) keeps passing. This is the one edge case that must be verified before closing.
+
+### 8.4 Required tests — mechanical verification
+
+| # | Oracle | Target class | Expected with fix | Expected without fix |
+|---|---|---|---|---|
+| (i) | False-positive: component `a..b` is accepted | `TestValidateOutputPathTraversal` | Returns without raising | **Rejected** (substring `..` in `a..b`) |
+| (ii) | All 5 `TestValidateOutputPathTraversal` tests unchanged | existing | Green | Green |
+| (iii) | All 3 traversal tests in `TestValidateOutputPath` unchanged | existing | Green | Green |
+| (iv) | `test_empty_path_resolves_to_cwd` unchanged | `TestValidateOutputPathEdgeCases` | Green | Green |
+| (v) | `test_validate_output_path_rejects_traversal_even_if_resolved` unchanged | `TestValidateOutputPathTraversal` | Green | Green |
+| (vi) | New post-resolution oracle reaches the post-resolution layer | `TestValidateOutputPathTraversal` | Green (raises) | Green (raises, via pre-resolution) — but does not *prove* the post layer |
+
+No test in the existing traversal classes is edited. Two new tests are added to `TestValidateOutputPathTraversal`.
+
+### 8.5 Honest judgement
+
+**The decision is low-stakes and the plan does not withhold it: prefer option (a).**
+
+- **Option (a):** `".." in path.parts` written at both layers. The smallest change that is unambiguously correct.
+- **Option (b):** a shared predicate (e.g. `_contains_parent_reference(path)`) called from both layers. Adds structure beyond what rule 5 (avoid overengineering) warrants for two call sites of a one-line expression.
+
+**Criterion:** (a) is the smallest change that is unambiguously correct. Choose (b) only if the Implementer can demonstrate the two layers will otherwise drift again. **Recommendation: (a)** — the two layers operate on different `Path` objects (the raw argument vs. the resolved result), and a shared predicate would obscure that distinction rather than clarify it.
+
+**The one thing to verify before closing:** `Path(".").parts` returns `('.',)`. A naive implementation that checks `str(path)` instead of `path.parts` would break `test_empty_path_resolves_to_cwd`, but the component-wise test does not. Confirm this test passes after the change.
+
+### 8.6 Deliverable
+
+One commit. Production change in `src/vkdownloader/utils/security.py` plus oracle extension in `tests/test_security.py`. No test in the existing traversal classes is edited. The commit subject describes the behaviour (component-wise traversal detection), not a file location. The commit body is empty or notes only the option (a) vs (b) choice.
+
+### 8.7 Dependency metadata
+
+- **Blocked by:** Nothing.
+- **Blocks:** `P12-B2` (both write `validate_output_path`; `B1` settles what the guard refuses, `B2` settles whether the warning reaches the user).
+- **Conflict-matrix rows:** §4.3 rows 2 and 5 (`validate_output_path` code; `TestValidateOutputPath`/`TestValidateOutputPathTraversal` test classes).
+- **Risk tier:** Medium — security guard semantics (T8 pin set, §5.6).
+- **Agent roster:** Implementer, Planner, Validator. (No Auditor — the change is one expression at two confirmed sites, fully located. No Researcher — no multi-viable approach survives the criterion above.)
+
+---
+
+## 9. P12-B6 Auditor context (`context_a`)
+
+Live-tree audit of the three findings bundled under `P12-B6`
+(`ART-003`, `ART-004`, `ART-013` sweep half), inspected against the
+current working tree at task time. All source paths are
+`src/vkdownloader/services/segment_downloader.py` and
+`src/vkdownloader/services/ffmpeg_utils.py` (the plan's §1.3 `services/`
+prefix resolves under `src/vkdownloader/`).
+
+### 9.1 Current line counts (re-measured vs §2.6 table)
+
+| File | §2.6 claims (`58bb7ce`) | Live on-disk | Discrepancy |
+|---|---|---|---|
+| `segment_downloader.py` | 1283 | **1275** | −8 lines; content matches semantically |
+| `ffmpeg_utils.py` | 493 | **646** | **+153 lines** vs the committed figure |
+
+The `ffmpeg_utils.py` delta is material: §2.6 line 286–288 records that
+*immediately after the baseline was measured*, uncommitted modifications
+appeared on `ffmpeg_utils.py` and `ytdlp_downloader.py` from a transport
+finding (an over-long-line drain added to `iter_process_lines`). The
+current `git status` shows **neither file as modified**, meaning those
+changes were committed or reverted since the plan was written; the
+on-disk file is 646 committed lines, not 493. `segment_downloader.py`
+is unchanged from baseline. The symbols P12-B6 targets are all present
+and match the plan's description; the line-count gap is noted for B8's
+implementer, whose edit sits in that file.
+
+### 9.2 Measurement 1 — `_cleanup_segments` call-site guard
+
+**Finding:** `_cleanup_segments` is called **only** under `if result:`.
+
+Confirmed at `segment_downloader.py:866–869`:
+
+```python
+        result = await _merge_segments_batched(segments_dir, output_file, len(segments))
+        if result:
+            _cleanup_segments(segments_dir)
+        return result
+```
+
+This is the **sole** call site in production code. `services/downloader.py`
+re-exports the name (lines 39, 118, in `__all__`) for the backward-compat
+facade (§2.2 `C3`), but never calls it. No other call site exists in `src/`.
+
+**Implication for B6:** the guard must not change call-site topology —
+B7 adds new call sites; B6 only hardens the existing one. This matches
+plan §6.6 acceptance criterion 7.
+
+### 9.3 Measurement 2 — bare `f.unlink()` over `glob("*")`
+
+**Finding:** `_cleanup_segments` still runs a bare `f.unlink()` with **no
+`is_file()` guard and no `missing_ok`**.
+
+Confirmed at `segment_downloader.py:443–454`:
+
+```python
+def _cleanup_segments(segments_dir: Path) -> None:
+    for f in segments_dir.glob("*"):
+        f.unlink()                       # <-- no is_file(), no missing_ok
+    try:
+        segments_dir.rmdir()
+    except OSError:
+        pass
+```
+
+`glob("*")` enumerates every entry — regular files, directories, and
+symlinks. On Windows, `f.unlink()` on a directory raises
+`PermissionError [WinError 5]`; on POSIX it raises `IsADirectoryError`.
+The `rmdir()` at the tail is wrapped in `try/except OSError`, but the
+per-entry `unlink()` is not. This is the live `ART-003` defect.
+
+### 9.4 Measurement 3 — `glob("*.ts")` in `_tally_and_merge` includes `batch_*.ts`
+
+**Finding:** The merge-decision count derived from `glob("*.ts")`
+**does include `batch_*.ts`** temp files.
+
+Confirmed at `segment_downloader.py:849`:
+
+```python
+    downloaded_count = len(list(segments_dir.glob("*.ts")))
+```
+
+`glob("*.ts")` matches `00000.ts` and `batch_00000.ts` identically — both
+end in `.ts`. The count is then compared at line 864:
+
+```python
+    if downloaded_count == len(segments):
+```
+
+With N real segments plus M leftover batch temps, `downloaded_count ==
+N + M`, which exceeds `len(segments)` → the merge is **skipped** (`return
+None` at line 871). This is the stale merge-temps defect: a resumed run
+after a failed merge sees leftover temps and never re-merges.
+
+**Additional `glob("*.ts")` occurrences** (all in the same file, all
+untouched by this plan's other blocks):
+
+| Line | Context | Includes `batch_*.ts`? |
+|---|---|---|
+| 151 | `_clear_stale_segments` — `stale_count = len(...)` | Yes |
+| 154 | `_clear_stale_segments` — `for stale_file in ...` | Yes |
+| 849 | `_tally_and_merge` — `downloaded_count` | Yes |
+| 1015 | `_download_segment_concurrent` — progress callback count | Yes |
+| 1264 | `_log_preserve_segments` — `working_count` | Yes (intentional; compensating control per plan) |
+
+### 9.5 Measurement 4 — `_clear_stale_segments` misses `NNNNN.ts.tmp`
+
+**Finding:** `_clear_stale_segments` does **not** reconcile the
+`NNNNN.ts.tmp` temp files that the two `os.replace` publish sites create.
+
+The temp pattern is `output_path.with_suffix(output_path.suffix + ".tmp")`
+at two sites (`segment_downloader.py:204` and `:267`), producing e.g.
+`00000.ts.tmp`. This name:
+
+- Does **not** match `glob("*.ts")` (used at lines 151, 154 in
+  `_clear_stale_segments`).
+- Does **not** match `glob("*")` either — well, it *does* match `glob("*")`
+  in `_cleanup_segments`, but `_cleanup_segments` runs only after a
+  successful merge, and a `.ts.tmp` left by a crashed segment write is
+  never published by `os.replace` so it survives to the next session.
+- Is **not** matched by the `f"{i:05d}.ts"` enumeration in
+  `_merge_segments_batched` (ffmpeg_utils.py:593, 600).
+
+Additionally, `_clear_stale_segments` has a `.signature` short-circuit
+at lines 146–149:
+
+```python
+    if signature_file.exists():
+        stored = signature_file.read_text(encoding="utf-8").strip()
+        if stored == signature:
+            return            # <-- short-circuits ALL clearing
+```
+
+When the signature matches, the function returns **before** any glob runs
+— so even the `*.ts` sweep (which would miss `.ts.tmp` anyway) never
+executes. A failed run that wrote a matching `.signature` leaves
+everything: segments, batch temps, and `.ts.tmp` residue.
+
+**Test coverage gap:** `grep` over `tests/` for `os.replace` returns
+**0 results** — no test exercises the publish path, so no oracle can
+observe the `.ts.tmp` residue class.
+
+### 9.6 Measurement 5 — `TestCleanupSegments` does NOT exercise a non-regular entry
+
+**Finding:** `tests/test_hls_downloader.py::TestCleanupSegments`
+(lines 210–235) drives `_cleanup_segments` with real files but **never
+creates a non-regular entry** (directory or symlink) inside the segments
+directory.
+
+The two tests:
+
+1. `test_cleanup_removes_segment_files` — creates `00001.ts`, `00002.ts`.
+2. `test_cleanup_handles_non_empty_directory` — creates `00001.ts` +
+   `batch.txt`. The "non-empty" refers to the segments_dir itself being
+   non-empty, **not** to a subdirectory entry within it.
+
+Neither test places a subdirectory inside `segments_dir`. The
+`ART-003` gap — `PermissionError [WinError 5]` on a directory entry — is
+**not exercised**. This matches plan §1.1.3's correction ("the real
+`ART-003` gap is narrower and stated exactly: no test exercises a
+non-regular entry").
+
+### 9.7 Measurement 6 — `TestMergeSegmentsBatched` HAS the failure-preservation test
+
+**Finding:** `tests/test_ffmpeg_utils.py::TestMergeSegmentsBatched`
+**does** contain the "batch failure preserves inputs and earlier batch
+temps" test, at line 646:
+
+```python
+    @pytest.mark.asyncio
+    async def test_batch_failure_preserves_inputs_and_earlier_batch_temps(
+        self, tmp_path: Path
+    ) -> None:
+```
+
+This test (NET-001 oracle) asserts that a failure in the second batch:
+- Leaves all 250 original segments intact.
+- Leaves `batch_00000.ts` (the first batch's temp) intact.
+- Removes `batch_00100.ts` (the failed second batch's temp is never
+  created).
+
+This is the **D-13 preservation oracle** that P12-B6 acceptance criterion 5
+requires to stay green unchanged. The test was not weakened by the
+additive merge refactor.
+
+### 9.8 Measurement 7 — deferral comments still point at `ART-004` / `ART-012`
+
+**Finding:** Both in-code deferral comments are **still present** and
+**still point at the unfixed findings**.
+
+**`ffmpeg_utils.py`** — `_merge_segments_batched`, lines 616–640:
+
+```python
+        # D-13: the input segments are deleted here, and only here, because
+        # this is the first point at which the whole merge is known to have
+        # succeeded. ...
+        #
+        # `missing_ok=True` because `returncode == 0` from the final stage
+        # attests only to the batch temps ...
+        #
+        # Deferred (same tag): a graceful stage failure now leaves the temps
+        # beside a complete segment set, so the `*.ts` counts in
+        # segment_downloader.py also count `batch_*.ts` and a resumed run will
+        # not re-trigger the merge. Excluding the merge temps is phase 07's
+        # ART-004; this block edits no `*.ts` glob. The compensating control
+        # is `_log_preserve_segments`, which now reports the working
+        # directory's `*.ts` count and the clear-the-directory action instead
+        # of implying the directory is resumable as it stands. The merge peak
+        # also moves from 2x to 3x the segment bytes; the sizing belongs to
+        # phase 07's ART-012.
+```
+
+**`segment_downloader.py`** — `_log_preserve_segments`, lines 1256–1263:
+
+```python
+    # D-13: reported on every non-success exit, count 0 included. ...
+    # The count below is deliberately labelled: it is every `*.ts` in
+    # the working directory, and a failed merge leaves `batch_*.ts` temps
+    # there, which a `*.ts` glob cannot distinguish from segments. Excluding
+    # them is phase 07's ART-004; until then the count is stated as a
+    # working-directory count and the action is to clear the directory.
+```
+
+Both notes are intact. The `ART-004` deferral is discharged when B6
+narrows the merge-decision count (if `D-4 → (i)`), and both must be
+updated per plan §6.6 acceptance criterion 6.
+
+**`_merge_batch_segments`** (lines 396–404) also carries a D-13 note
+about additivity, but does **not** mention `ART-004` — only
+`NET-001`/`phase 03`. It is unaffected by B6.
+
+### 9.9 `TestPreserveSegmentsReporter` — three pinned tests (verified)
+
+`tests/test_segment_downloader.py::TestPreserveSegmentsReporter`
+(lines 419–472) — all three present and unchanged:
+
+1. **`test_reports_zero_count_directory`** (line 422): zero-count dir →
+   `logger.info` called once, `working_dir_ts_count == 0`, asserts
+   `"not a count of resumable segments"` and `"clear the working directory"`.
+2. **`test_count_includes_merge_temps_and_says_so`** (line 441): 2 segments
+   + 1 `batch_00000.ts` → `working_dir_ts_count == 3`, names `ART-004` in
+   its docstring, asserts `count_note` contains both
+   `"including any batch_*.ts"` and `"not a count of resumable segments"`.
+3. **`test_missing_directory_emits_nothing`** (line 464): missing dir →
+   `logger.info` not called.
+
+If `D-4` resolves to **(ii)** (narrow both counts), test 2 must be
+edited and the `count_note` text changes. If **(i)** (narrow only the
+merge decision), all three stay green unchanged.
+
+### 9.10 Architectural summary — the cleanup/sweep insertion points
+
+The segment path's filesystem surface and the three B6 entry points:
+
+```
+download_hls_with_resume
+  └── _run_download_session
+        ├── _fetch_playlist_with_retry
+        ├── _clear_stale_segments        ← B6: widen sweep to *.ts.tmp
+        │     └── (signature short-circuit at .signature)
+        └── _process_downloaded_segments
+              └── _tally_and_merge
+                    ├── glob("*.ts") → downloaded_count  ← B6: exclude batch_*.ts
+                    ├── _merge_segments_batched           ← B6: discharge ART-004 note
+                    └── if result:                         ← B6: guard exists; B7 adds sites
+                          _cleanup_segments               ← B6: add is_file() guard
+
+_log_preserve_segments  ← B6: discharge ART-004 note (compensating control)
+_merge_segments_batched ← B6: discharge ART-004 note (deferral comment)
+```
+
+`downloader.py` is a re-export facade (§2.2 `C3`); its `__all__`
+exports `_cleanup_segments` (line 118) but does not call it — fixes go
+in the owning module.
+
+### 9.11 Risks specific to P12-B6
+
+| Risk | Severity | Detail |
+|---|---|---|
+| `D-4` fork (i vs ii) | Medium | (ii) requires editing a pinned test and changes the `count_note` text; (i) keeps all three `TestPreserveSegmentsReporter` tests green. The decision is a product-call on whether the reporter's number is an inventory or a resume estimate. |
+| `.ts.tmp` sweep placement | Medium | (a) extend `_clear_stale_segments` only — leaves residue for a `.signature`-matching failed run; (b) extend `_cleanup_segments` too. Plan §3.4 prefers both. |
+| `_cleanup_segments` guard shape | High (I1) | Must be phrased by intent (`is_file()` / `is_dir()`), not by catching `IsADirectoryError`, which is POSIX-only. The existing `except OSError` on `rmdir()` is not a model — it silently swallows `PermissionError` on Windows too. |
+| `.signature` short-circuit interaction | Medium | B6 is the only block allowed to change the short-circuit (§4.3 row 8). If B6 extends the sweep without addressing the short-circuit, a matching-signature run still skips clearing entirely. The plan §6.6 names `_clear_stale_segments`'s sweep as in-scope but does not explicitly require touching the short-circuit — the Implementer must decide. |
+| Line-count drift on `ffmpeg_utils.py` | Low | 646 on-disk vs. 493 claimed in §2.6. The deferral comments are at different lines than the plan's implied positions, but the symbols are found by name (§2.6 discipline), so no anchor is lost. |
+
+---
+
+## 10. P12-B10 Auditor context (`context_a`)
+
+Live-tree audit of the implementation relevant to `P12-B10` — deduplicate by
+**resolved output filename** before dispatch, last occurrence wins, earlier
+occurrences skipped and performing no media transfer (`ART-006`, Decision A).
+Inspected against the current working tree at task time.
+
+### 10.0 Live-tree baseline state (re-measured; drifts from §2.0)
+
+The plan's §2.0 gates were run against `HEAD = 58bb7ce`. At task time the
+committed `HEAD` is **`12af960`** (`fix(security): detect traversal by component, not substring`).
+The tree has advanced past the baseline; `P12-B1` is already committed and the
+gate figures have moved. `src/` and `tests/` are **clean** in the working tree
+(`git status` shows no `M` on any file under `src/` or `tests/`).
+
+**Re-measured standing gates at `12af960`:**
+
+| # | Command | Result at `12af960` | Delta vs §2.0 (`58bb7ce`) |
+|---|---|---|---|
+| G1 | `uv run pytest tests/ -q -rs` | **1045 passed, 3 skipped, 1 warning** in 56.78s | +293 passed; skip count 3 (unchanged total, **composition changed** — see below) |
+| G2 | `uv run ruff check src tests` | `All checks passed!` | unchanged |
+| G3 | `uv run ruff format --check src tests` | **`55 files already formatted`** (GREEN) | **was RED** — the pre-existing `tests/test_hls_downloader.py` reformat is **resolved** on this tree, not inherited as red |
+| G4 | `uv run mypy src` | `Success: no issues found in 31 source files` | unchanged |
+| G5 | `uv run mypy src tests` | **`95 errors in 9 files`** (checked 55) | **was 86 in 8 files** — net +9 errors, +1 file |
+| G6 | `uv run ruff check .` | `All checks passed!` | unchanged |
+
+**Skip composition changed (material for B10's own gate accounting).** §2.0
+pins the skip floor at 3 and names them as the `D-11` mode oracles (two in
+`tests/test_config.py`, one in `tests/test_hls_downloader.py::TestCreateTempCookieFile`).
+The **live** three skips are `POSIX-only: killpg` tests —
+`tests/test_ffmpeg_utils.py:166`, `tests/test_ffmpeg_utils.py:189`, and
+`tests/test_hls_downloader.py:4723`. The `D-11` mode-oracle skip set the plan
+was written against is **not present on this tree**. B10's gate check must
+re-measure the skip set rather than inherit §7.1's "3 at rest" wording, which
+names a specific oracle composition that no longer matches.
+
+**New `G5` error directly relevant to B10's machinery.** `tests/test_batch_downloader.py:901`
+— a test helper subclasses a captured class (`class _CountingTrackedSemaphore(original_cls)`)
+and mypy reports `Variable "original_cls" is not valid as a type [valid-type]`.
+It is in `TestBatchLiveTaskBounding.test_no_half_claimed_batch_permit_after_stop`,
+the same file B10 extends. B10 must not increase the `mypy src tests` total
+(§7.1 gate lock); its own test additions must add zero `src/` errors and keep
+the test-file delta at net-zero or better.
+
+**Consequence for the baseline the plan recorded.** §2.6 asserted "every file
+carrying a phase-07 anchor is unchanged except the loader's own files" at
+`58bb7ce`. That is **no longer true**: `P12-B1` is committed, so
+`utils/security.py::validate_output_path` is changed (substring `".." in
+str(path)` → component-wise `".." in path.parts` at lines 56 and 68). `_resolve_output_file`
+itself (lines 91–120) is **unchanged**, and `repo_root` is **unchanged** (still
+`parent.parent.parent`, still one level too deep — `P12-B2`'s domain). So B10
+reads a `validate_output_path` that is already component-wise correct and a
+`_resolve_output_file` that is unchanged-from-baseline; the one drift that
+matters to B10 is that `repo_root` is still wrong, which only affects the
+`warning=False` suppression call site, not the key derivation.
+
+### 10.1 The `download_video` pipeline (`services/downloader.py`)
+
+`download_video` (signature `downloader.py:275`; body `275–360`) is the shared
+orchestration entry for both `download` and `batch`. It does **not** accept
+pre-extracted data:
+
+```python
+async def download_video(                        # downloader.py:275
+    url: str,
+    quality: QualitySpec,
+    output: Path,
+    method: DownloadMethod,
+    settings: Settings,
+    *,
+    log_available_qualities: bool = False,
+    backoff_coordinator: URLBackoffCoordinator | None = None,
+    semaphore: SemaphoreLike | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    output_index: int = 0,
+    echo: bool = True,
+    title_callback: Callable[[str], None] | None = None,
+) -> Path | None:
+```
+
+The live pipeline is **extract → title_callback → resolve → dispatch**, in this
+order (no pre-pass today):
+
+```python
+extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)   # 323
+video = await extractor.extract_streams(url)                                                # 324  <-- network
+if title_callback is not None and video.title:                                              # 326
+    title_callback(sanitize_title(video.title))                                             # 327
+...
+stream = selector.select(video.streams, quality)                                            # 343
+output_file = _resolve_output_file(video, output, settings, output_index)                   # 345  <-- KEY
+return await perform_download(                                                             # 347
+    url,
+    str(quality),
+    output_file,
+    method,
+    extractor,
+    settings,
+    ...
+    video_data=video,        # 357
+    selected_stream=stream,   # 358
+    echo=echo,
+)
+```
+
+**Key findings from this pipeline:**
+
+1. **Extraction precedes resolution** (line 324 before line 345). The resolved
+   filename is not knowable before a network call — `title` and `id` arrive with
+   `extract_streams`. This is exactly the `DEF-6` conflict the plan records
+   (§1.4, §3.8). It is **live and unsatisfied**, not theoretical.
+2. **`download_video` does NOT accept `video_data`/`selected_stream`** — only
+   `perform_download` does (params `downloader.py:141–142`; used at `195–197`:
+   `if video_data is not None and selected_stream is not None: streams =
+   video_data.streams; m3u8_url = str(selected_stream.url)`). So `download_video`
+   **always re-extracts**. The plan's §2.2 `C10` ("`perform_download` already
+   accepts pre-extracted `video_data` and `selected_stream` precisely so
+   extraction can be skipped") is accurate **as far as it goes** — but the
+   contract lives on `perform_download`, not on the `download_video` entry point
+   the batch calls. A two-phase pre-pass that "hands the buffered extraction
+   forward" (§3.8 line 560) is **not currently possible** through `download_video`;
+   it requires `download_video` to gain the params and to skip its own extract.
+   Plan row 18b confirms `download_video` is B10's sole writer, so that param
+   addition is **in scope**, not out of scope.
+3. `output_index` is threaded straight through to `_resolve_output_file(video,
+   output, settings, output_index)` (line 345). It is the **only** input that
+   can disambiguate two same-`id` entries without a title (fallback
+   `f"{index}_{video.id}.mp4"`, `security.py:118`).
+
+### 10.2 The `batch` URL reader and the single-URL `download` path (`src/vkdownloader/cli.py`)
+
+The `batch` command (`cli.py:475`, `batch_download`) reads and validates URLs
+into `valid_urls` / `skipped_count` **only** for malformed input — it does **not**
+dedup for collisions here:
+
+```python
+valid_urls: list[str] = []                                    # 520
+skipped_count = 0                                             # 521
+...
+raw_urls = urls_file.read_text()                              # 534
+for line in raw_urls.splitlines():                            # 540
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    if not is_valid_video_url(stripped):                      # 544  <-- format check only
+        logger.warning("invalid_url_in_batch", url=sanitize_url_for_log(stripped))
+        skipped_count += 1
+        continue
+    valid_urls.append(stripped)
+...
+exit_code = asyncio.run(
+    run_batch(valid_urls, quality_spec, DownloadMethod(method), settings, output, skipped_count)  # 560-569
+)
+```
+
+`is_valid_video_url` validates the **VK video URL shape** (regex), not uniqueness.
+`skipped_count` here is the **invalid-URL count**, and it is passed through to
+`run_batch` → `_run_batch_with_progress` → `_print_batch_summary(..., skipped_count)`,
+which renders it as the **first** "Skipped (invalid URLs)" line
+(`batch_downloader.py:507-508`). A **second** "Skipped (duplicates)" line is
+already rendered for `ProgressStatus.SKIPPED` entries (`batch_downloader.py:509-510`)
+— today that bucket is populated only by the exact-URL `seen_urls` check, not by
+filename-collision skips. This second line is the reporting spine B10 must wire
+a filename-dedup skip into; it does **not** need a new line of its own.
+
+**Single-URL `download` vs `batch` — the difference that matters to B10:**
+
+| Aspect | `download` (`cli.py:394-401`) | `batch` (`run_batch` → `_run_batch_with_progress`) |
+|---|---|---|
+| Entry call | `download_video(url, quality_spec, output, method, settings, log_available_qualities=True)` | `_download_single(url, ..., DownloadContext(index=i, ...))` → `download_video(...)` |
+| `output_index` | default `0` (not passed) | `i` = enumerate position (line 241, 345) |
+| `semaphore` | not passed (None) | shared `asyncio.Semaphore(max_concurrent_downloads)` via `_TrackedSemaphore` |
+| `title_callback` / `progress_callback` | not passed | `_on_title`/`_on_progress` wired to `reporter` |
+| Reporter | none | `RichProgressReporter` per run |
+| Dedup | **none** (one URL) | `seen_urls` exact-URL dedup (10.4) |
+| Post-result echo | `f"Downloaded: {result}"` / `"Download failed"` | `_print_batch_summary` four-bucket accounting |
+| Cancellation | `KeyboardInterrupt` re-raised → exit 130 | `ProgressStatus.CANCELLED` via shutdown Event → exit 130 |
+
+**B10 constraint:** §6.10 acceptance criterion 6 — "The single-URL `download`
+command is unchanged and does not pay for the registry." The reader has
+**no** registry and must stay that way; the pre-pass lives in the batch path
+only.
+
+### 10.3 `_resolve_output_file` — the dedup key producer (`utils/security.py:91-120`)
+
+Confirmed **unchanged** from the plan's description (last commit `e59523c` for
+the function; B1 only touched `validate_output_path`):
+
+```python
+def _resolve_output_file(video, output, settings, index) -> Path:        # 91
+    output_path = output if str(output) != "." else settings.download_dir
+    output_path = Path(output_path).resolve()
+    validated_output = validate_output_path(output_path, warning=False)  # 111
+    validated_output.mkdir(parents=True, exist_ok=True)                  # 112  <-- C9 side effect
+    safe_title = sanitize_title(video.title) if video.title else None
+    if safe_title:
+        output_file = validated_output / f"{safe_title}_{video.id}.mp4"  # 116
+    else:
+        output_file = validated_output / f"{index}_{video.id}.mp4"      # 118
+    return output_file
+```
+
+Three facts the key depends on:
+
+1. **The key is the resolved `Path`**, returned (not the composed string).
+   `safe_title` is already sanitised by `sanitize_title` (post-`B3`/`B4`/`B5`
+   normalisation), so two titles that sanitise to the same component — e.g.
+   `a?b` and `a:b` (both → `a_b`) — yield the same filename **here**. B10's
+   "sanitised-title collision deduped" oracle (§6.10 criterion 4 direction 1) is
+   therefore meaningful **only because B3/B4/B5 have landed**; `sanitize_title`
+   on this tree already replaces the nine illegal chars (`security.py:31`) but
+   the control-char and device-name halves are still pinned at plan baseline.
+2. **`mkdir` runs unconditionally** (line 112) — this is `C9`. A pre-pass that
+   calls `_resolve_output_file` for every entry (including a skipped one)
+   **creates the output directory for skipped entries**. The directory is
+   shared by every entry in the batch, so the side effect is harmless-but-
+   observable and B10 must assert it rather than assume it (§6.10 criterion 9).
+3. **`warning=False`** suppresses the `ART-009` repo-root warning at this call
+   site. Under Decision A the pre-pass resolves every entry, so this is the site
+   the plan's new `B10 → B2` edge is about (§4.1): if `B2` makes the warning fire,
+   it should do so through the pre-pass, not be re-added at a call site B10 is
+   restructuring.
+
+### 10.4 The fan-out, `output_index`, and the reporting path (`services/batch_downloader.py`)
+
+`_run_batch_with_progress` (`batch_downloader.py:294`) is the fan-out. It
+already contains a **Tier 1 exact-URL dedup** on `seen_urls` — this is **not**
+the filename-based dedup Decision A wants, and it sits *inside* the fill-phase
+loop rather than as a separate resolution phase:
+
+```python
+seen_urls: set[str] = set()                              # 347  <-- URL-keyed, not filename-keyed
+urls_left = iter(enumerate(urls))                         # 348
+...
+for i, url in urls_left:                                  # 374
+    # Tier 1 dedup (DEC-W R1): exact-URL duplicates are skipped
+    # before any network call ...                         # 375-379
+    if url in seen_urls:                                  # 380  <-- URL match, not path match
+        logger.info("duplicate_url_skipped", url=_strip_auth_params(url), index=i)
+        reporter.start_task(i)
+        reporter.finish_task(i, ProgressStatus.SKIPPED)
+        by_index[i] = (url, "", ProgressStatus.SKIPPED.value)
+        continue
+    seen_urls.add(url)
+    if len(pending) >= settings.max_concurrent_downloads: # 387  <-- bounded pump
+        ...
+    pending[
+        asyncio.create_task(                              # 391  <-- task created per non-dup URL
+            _download_single(url, quality, output, method, settings,
+                             DownloadContext(index=i, ...))
+        )
+    ] = i
+```
+
+**What this means for B10:**
+
+- The existing dedup is keyed on the **raw URL string**. Two *different* URLs
+  that resolve to the *same* filename (e.g. `a?b` and `a:b` with the same
+  `id`, or a re-listing) are **not** deduped — each becomes its own task and
+  one overwrites the other at `.part`/`os.replace` time. This is the `ART-006`
+  gap Decision A closes.
+- There is **no separate resolution phase before the fan-out**. Option (b) —
+  the chosen shape — must insert one: extract + resolve every entry, build a
+  filename→index registry, drop earlier collisions to `ProgressStatus.SKIPPED`
+  *before* `asyncio.create_task` runs, then fan out survivors only.
+- `output_index` is threaded as the enumerate position: `i` (`for i, url in
+  urls_left`) → `DownloadContext(index=i)` (line 400) → `context.index` in
+  `_download_single` (line 182) → `download_video(output_index=index, ...)`
+  (line 241) → `_resolve_output_file(video, output, settings, output_index)`
+  (line 345). So `index` is a **positional** index, not a survivor count. After
+  B10 drops collisions, the survivors keep their original enumerate indices (so
+  `by_index` ordering at line 420 and the `results = [by_index[i] for i in
+  range(len(urls))]` restoration still work); only dispatched tasks are created.
+
+**`_print_batch_summary` (`batch_downloader.py:457-545`)** — the reporting
+spine B10 reuses, shape:
+`_print_batch_summary(results: list[tuple[str,str,str]], peak_concurrent_videos: int, skipped_count: int = 0) -> int`
+
+- Per-line: `f"{url}: {status}"` + optional ` -> {output_path}` (line 485).
+- Four explicit buckets, **no subtraction rule** (lines 491-503):
+  `successful`, `cancelled`, `skipped` (counts `ProgressStatus.SKIPPED.value`),
+  `failed` (every status not in SUCCESS/CANCELLED/SKIPPED). This existing
+  four-bucket logic is what stops a dedup skip being mis-counted as a failure
+  (the comment at 489-490 names `OUT-009` as the regression it prevents).
+- Rendered lines: "Skipped (invalid URLs): {skipped_count}" (507-508, only if
+  `skipped_count > 0`) and "Skipped (duplicates): {skipped}" (509-510, only if
+  `skipped > 0`). A filename-dedup skip must join the **(duplicates)** bucket,
+  not the invalid-URL one — §6.10 criterion 3's "distinct summary line."
+- Exit code: `130` if any cancelled (wins), else `1` if `failed > 0`, else `0`
+  (line 542, 545). A dedup skip is neither success nor failure, so it leaves
+  the code at `0` on a clean batch — matching `TestBatchDedupSkip` (10.8).
+- `skipped_count` (invalid-URL count from the reader) is the **third** arg,
+  separate from the per-item `SKIPPED` count; B10 must keep these two counts
+  separate (plan row 18/§5.6 T12: "the invalid-URL `skipped_count` path must
+  stay green unchanged; the dedup skip gets its own line").
+
+### 10.5 `ProgressStatus.SKIPPED` (`models/enums.py`)
+
+Exits and exists. Members (`enums.py:82-105`):
+
+```
+IN_PROGRESS = "in_progress"      # 97  -- the only non-terminal state
+SUCCESS     = "success"          # 99
+FAILED      = "failed"           # 101
+SKIPPED     = "skipped"          # 103  -- produced by the batch-level dedup
+CANCELLED   = "cancelled"        # 105
+```
+
+`TERMINAL_STATUSES` (`112-114`) is derived: `frozenset(member for member in
+ProgressStatus if member != ProgressStatus.IN_PROGRESS)`. So `SKIPPED` is
+already a terminal status wired into the progress display's `render`/status
+column (`tests/test_progress_display.py:92` maps `ProgressStatus.SKIPPED` →
+`⊘`), and `_to_progress_status` (`batch_downloader.py:107-124`) maps a
+`"skipped"` literal to it. B10 consumes it; it does **not** define it (§6.10
+"Do not touch … `ProgressStatus.SKIPPED` — it already exists").
+
+**Stale docstring caveat.** `ProgressStatus`'s own docstring (line 90-91) says
+`SKIPPED` is "produced by the batch-level dedup check in `_run_batch_with_progress`
+when an **exact-URL duplicate** is detected before any network call." After B10,
+`SKIPPED` is **also** produced by filename-collision dedup. That sentence must be
+updated by B10 (it lives in `enums.py`, which B10 does not otherwise touch —
+flag it as a one-line docstring drift, not a code drift).
+
+### 10.6 `_map_exception_to_status` (`exceptions.py:216-229`)
+
+Exists, is **legacy**, and has **zero production call sites** — a dedup skip is
+not an exception and must not route through it:
+
+```python
+def _map_exception_to_status(exc: Exception) -> str:          # 216
+    for exc_type, handler in _EXCEPTION_STATUS_HANDLERS.items():  # 226
+        if isinstance(exc, exc_type):
+            return handler(exc)
+    return f"unexpected_error: {type(exc).__name__}"            # 229
+```
+
+`_EXCEPTION_STATUS_HANDLERS` (`240-247`) maps seven domain types:
+`ExtractionError→"extraction_error: {e}"`, `DownloadError→"download_error: {e}"`,
+`InvalidVideoUrlError→"invalid_url: {e}"`, `QualityNotAvailableError→_quality_not_available_status`,
+`QualityParseError→"invalid_quality: {e.quality}"`, `VideoNotFoundError→"video_not_found: {e}"`,
+and a `VKDownloadError` fallback → `"download_error: {e}"`.
+
+**Two auditor observations:**
+
+1. **Dead in production.** `grep` shows the only `src/` references are the
+   definition (`exceptions.py:216`), the module docstring (`exceptions.py:6-8`),
+   and a comment in `batch_downloader.py:282` ("the documented replacement for
+   the legacy `_map_exception_to_status` helper"). The live `_download_single`
+   (`160-291`) uses `e.status_label()` for the four domain except arms (lines
+   261-277) and `f"unexpected_error: {type(e).__name__}"` for the catch-all
+   (line 289). `README.md:157` and `docs/error-handling-logging-research-2025-2026.md`
+   both record the shim as backward-compat only. The 14-code-quality plan's
+   `B1` (already filed in `.ai/plans/14-code-quality-audit-fixes_fix.md`) is
+   slated to delete it. B10 must **not** touch it; the plan §6.10 "Do not touch"
+   and §3.8 both say so.
+2. **Format drift vs. the docstring.** The docstring (`47-53`) claims return
+   examples `"no_streams: <message>"`, `"video_not_found: <message>"`,
+   `"download_error: <message>"` — but the live handlers return
+   `"extraction_error: {e}"` etc. (with the message), and `status_label()`
+   returns the **bare** `"extraction_error"`/`"video_not_found"` (no message).
+   This is out of B10's scope, but the test suite `TestMapExceptionToStatus`
+   (`tests/test_exceptions.py:14-76`, `201-218`) pins the `: {e}` shape — so if
+   any future B10 test accidentally asserts against `_map_exception_to_status`'s
+   output it would be asserting a dead path. The B10 oracle should assert
+   `ProgressStatus.SKIPPED` and the summary's "Skipped (duplicates)" count, not
+   any exception→label mapping.
+
+### 10.7 `tests/test_cli.py::TestBatchCommand` — what exists, what's absent
+
+`TestBatchCommand` (`tests/test_cli.py:277-1100`) exercises the **reader and the
+summary renderer** end-to-end through `CliRunner`, but **does not test
+duplicates of any kind** — neither exact-URL nor filename-collision:
+
+- `test_batch_empty_file` / `test_batch_file_with_comments_only` /
+  `test_batch_file_with_whitespace_only` — empty/comment/whitespace reader.
+- `test_batch_statistics_summary` — two URLs, one fails with `VideoNotFoundError`;
+  asserts "Failed URLs:" + "video_not_found" appear (`701-774`).
+- `test_batch_all_success_exits_zero`, `test_batch_skip_invalid_urls`
+  (the `skipped_count` / "Skipped (invalid URLs)" line, `455-498`),
+  `test_batch_summary_total_line_names_videos_and_counts_each_video` (`B8` oracle).
+- `test_batch_start_finish_task_per_url` — start/finish_task accounting.
+- `test_batch_non_tty_reporter_logs_progress`, `test_batch_real_reporter_renders_concurrent_progress`.
+- `test_batch_status_lines_success_and_failed`, `test_batch_cancelled_produces_cancelled_status`.
+- `test_batch_echo_suppressed_when_reporter_enabled` / `test_batch_echo_not_suppressed_when_reporter_disabled` (echo wiring).
+- `test_batch_title_callback_reaches_reporter` (title_callback → `reporter.set_title`).
+- `test_batch_old_progress_polling_removed`, `test_batch_no_escape_codes_under_cli_runner`,
+  `test_batch_reporter_started_and_stopped`.
+
+**Gap:** none of these feed two URLs that resolve to one filename, and none
+assert that `download_video` is called once for a duplicate. §2.5 already says
+"this is the whole oracle set is new"; the live file confirms it —
+`TestBatchCommand` stays silent on duplicates. B10's §6.10 criterion 1 (exactly
+one dispatch, the last) and criterion 2 (no media transfer for the skipped
+entry) have **no existing home** and must be authored here (per plan row 20b,
+B10's sole test anchor). The class's existing `perform_download` mock shape
+(`MagicMock(id=..., title="Test Title", streams=[MagicMock(quality="720")]`)
+means a filename-collision oracle must make the two URLs yield **equal**
+`sanitized_title` + equal `id` — e.g. `?`/`/`-differing titles, or the same
+title — and the B10 oracle should reuse that fixture shape, not invent a new
+reader mock.
+
+### 10.8 `tests/test_batch_downloader.py` and the bounded-fan-out classes — location
+
+`TestBatchDownloaderSemaphore` (`:143`), `TestBatchCancellationReporting`
+(`:386`), `TestBatchCancelationPropagates` (`:624`), `TestCorrelationInheritance`
+(`:674`), `TestBatchLiveTaskBounding` (`:768`), `TestBatchDedupSkip` (`:939`),
+`TestBatchSummarySkippedAggregation` (`:1033`) — all in
+**`tests/test_batch_downloader.py`** (1069 lines).
+
+**The three bounded-fan-out classes are NOT in this file.** They are in
+**`tests/test_segment_downloader.py`** (`grep` confirms):
+- `TestSegmentFanoutCompletion` (`:1262`) — CON-006/007/008:
+  `_await_and_cancel` distinguishes `NOTHING_TO_DO` (empty task list),
+  `COMPLETED` (all settled), and re-raised `CancelledError`; asserts a
+  non-cancellation exception settles every sibling before propagating.
+- `TestSegmentFanoutBoundedProduction` (`:1436`) — CON-003:
+  `_process_downloaded_segments` keeps live `_download_segment_concurrent`
+  tasks ≤ `max_concurrent_segments`; asserts all 200 indices reach the merge,
+  and stop leaves no orphans / clean semaphore.
+- `TestConnectorCeilingsFollowTheSetting` (`:1640`) — the connector ceiling
+  tracks the configured limit.
+
+These assert the **segment-layer** fan-out, which B10 must leave untouched
+(§6.10 criterion 7: "stay green unchanged — this block changes **what** is
+dispatched, not **how** it is bounded"). The `TestBatchLiveTaskBounding` class
+in `test_batch_downloader.py` (:768) covers the **batch-layer** ceiling
+(max concurrent *videos*, via `asyncio.all_tasks` filtered on
+`get_coro().__qualname__ == "_download_single"`).
+
+**`TestBatchDedupSkip` (:939) — the one existing dedup oracle — asserts
+exact-URL dedup only:**
+
+- `test_duplicate_url_marked_skipped_not_downloaded` (`:943`): feeds
+  `[first_url, first_url, second_url]`; asserts `download_video` called
+  **once** per unique URL (`len(download_calls) == 2`), `finish_task(1,
+  SKIPPED)` was called on the **reporter** (mocked here), and `results[1] ==
+  SKIPPED`. This is **Tier 1 URL dedup**, the contract B10 *augments*, not
+  replaces.
+- `test_duplicate_skip_summary_reports_skipped_not_failed` (`:995`): asserts
+  "Total videos: 2", "Successful: 1", "Failed: 0", "Skipped (duplicates): 1",
+  `exit_code == 0`.
+- `TestBatchSummarySkippedAggregation` (`:1033`): feeds hand-built `results`
+  with a `SKIPPED` entry and asserts it is counted under "Skipped (duplicates)",
+  not "Failed" / "Failed URLs:" — independent of any dedup logic.
+
+**Critical nuance for B10:** these two `TestBatchDedupSkip` tests patch
+`RichProgressReporter` (so no real rendering) and stub `download_video` — they
+do **not** assert that no `_resolve_output_file`/`extract_streams`/media-
+transfer ran for the skipped entry. B10's filename-dedup oracle cannot reuse
+them as-is; it needs the **no-transfer not-called** assertions (§6.10
+criterion 2) layered on top.
+
+### 10.9 Answers to the key questions
+
+- **Is there any existing dedup mechanism?** Yes — `seen_urls: set[str]` in
+  `_run_batch_with_progress` (`batch_downloader.py:347,380-386`), keyed on the
+  **exact-URL string**, running *inside* the fill-phase loop (Tier 1, DEC-W R1).
+  It dedups on URL, not on resolved output filename, and it is **not** a
+  pre-dispatch resolution phase. There is **no** filename-keyed registry
+  anywhere in `src/` or `tests/`. This is precisely the gap Decision A closes
+  (§1.3: "A name-level mutex for within-batch collisions — structurally
+  impossible after Decision A").
+- **Does `download_video` accept `video_data`/`selected_stream`?** No. Only
+  `perform_download` does (`downloader.py:141-142, 195-197`); `download_video`
+  always calls `extract_streams` (`275-324`), then passes the result forward to
+  `perform_download` as `video_data=video, selected_stream=stream`. So
+  `C10` is true of `perform_download` but **not exposed through the batch
+  entry point**. Realising §3.8's "pre-pass hands the buffered extraction
+  forward" requires `download_video` to gain those params and skip its own
+  extract (plan row 18b: B10 is `download_video`'s sole writer — in scope).
+- **How is `output_index` threaded?** `urls` enumerated → `i` →
+  `DownloadContext(index=i)` (line 400) → `context.index` (182) →
+  `download_video(output_index=index, ...)` (241) →
+  `_resolve_output_file(video, output, settings, output_index)` (345). Index is
+  positional, survives skip-removal (survivors keep original enumerate index so
+  `by_index`/`results` restoration at 420 stays correct).
+- **What is `_print_batch_summary`'s shape?**
+  `_print_batch_summary(results: list[tuple[str,str,str]], peak_concurrent_videos: int, skipped_count: int = 0) -> int`
+  (`:457-461`). Renders per-line results, then four explicit buckets (no
+  subtraction rule — `:491-503`), then "Skipped (invalid URLs): {skipped_count}"
+  (`:507-508`) and conditionally "Skipped (duplicates): {skipped}" (`:509-510`).
+  Exit `130` if any cancelled (wins), else `1` if failed>0, else `0`.
+- **How does single-URL `download` differ from `batch`?** `download` calls
+  `download_video` directly with `output_index=0` (default), no semaphore, no
+  reporter, no `title_callback`/`progress_callback`, and no dedup (single URL);
+  it echoes "Downloaded: …" / "Download failed" and maps
+  `InvalidVideoUrlError`/`KeyboardInterrupt` itself. `batch` routes through
+  `run_batch` → `_run_batch_with_progress`, which adds the shared semaphore,
+  the bounded pump, the reporter, the title/progress closures, the `output_index=i`
+  threading, and the `seen_urls` Tier 1 dedup. B10's pre-pass is a batch-only
+  addition; `download` must not gain a registry (§6.10 criterion 6).
+
+### 10.10 What the option-(b) pre-pass must add (and the conflicts it inherits)
+
+A separate resolution phase in `batch_downloader` before fan-out requires a
+component that today **does not exist** as a unit. Concretely, B10 must
+introduce (in `batch_downloader.py`, per plan row 18c "sole owner"):
+
+1. A per-batch resolution routine that, for each URL, calls extraction to
+   obtain `title`+`id`, then `_resolve_output_file(video, output, settings,
+   output_index)` to obtain the key — **in order to know the key at all**
+   (the `DEF-6` conflict, live at `downloader.py:324` then `:345`).
+2. A `dict[resolved_path → index]` registry with **last-wins** semantics
+   (Decision A). Collisions are terminalised as `(url, "", SKIPPED.value)`
+   via `finish_task` (the `[⊘]` marker, already wired at
+   `progress_display.py:92` / `ProgressStatus.SKIPPED`) **before** any
+   `asyncio.create_task` — so the "one dispatch and it is the last" and
+   "no media transfer for skipped" oracles (§6.10 criteria 1-2) hold.
+3. A dispatch that calls `download_video` with the **same** `output_index` the
+   registry used, so the survivor's resolved path matches the key the dedup
+   ran on. Today the only `download_video` caller in the batch path
+   (`_download_single`, line 232) does **not** accept pre-extracted data, so
+   either (a) `download_video` grows `video_data`/`selected_stream` params and
+   skips its own `extract_streams` (realising `C10`'s stated intent), or (b)
+   `_download_single` is rewired to call `perform_download` directly with the
+   buffered extraction. The plan prefers "hand the buffered extraction forward,
+   not re-fetch" (§3.8 line 560), which **requires** the `download_video`
+   param addition — B10 owns that signature change (row 18b).
+4. The `mkdir` side effect (`C9`, `security.py:112`) to be asserted, not
+   assumed: every resolved entry — including a skipped one — leaves the directory
+   present. Harmless (shared dir), but `FileExistsError [WinError 183]` is the
+   named B10/I7 risk (§5.1 `I7`) when the target exists as a file.
+
+**Conflicts B10 inherits unchanged:**
+
+- **`DEF-6` (no-network clause vs. key derivation):** the resolved filename
+  needs `title`+`id` from `extract_streams`; a literal "no network at all" for a
+  skipped entry is unsatisfiable. The plan resolves this to "no **media
+  transfer** for a skipped entry" and escalates the tension to the Product Owner
+  (§1.4 `DEF-6`, §3.8). B10 delivers the achievable form and must record, in the
+  commit body, any narrowing of the no-network clause (§6.10 deliverable).
+- **`output_index` vs. filename key:** the key is the resolved `Path`, but the
+  fallback name embeds `output_index`. Two same-`id` entries with different
+  indices and no title are **not** deduped (they get different names) —
+  §6.10 criterion 4 direction 2 depends on this. The pre-pass must key on the
+  resolved path, not on `(title, id, index)`.
+- **`B10 → B2` edge:** the pre-pass resolves every entry (Decision A), and
+  Decision B makes the suppressed warning at `validate_output_path(...,
+  warning=False)` (10.3 line 111) the loader path's only user-facing guard.
+  `B2` should let the warning fire through the pre-pass, not be re-added at a
+  call site B10 is restructuring (§4.1, row 3).
+- **`G3` and `G5` are no longer stable baselines:** at `12af960` `G3` is
+  **green** (the `test_hls_downloader.py` reformat is resolved) and `G5` is
+  **95** (was 86). B10 must re-measure these at execution time, not inherit
+  §2.0's figures, and must keep the skip count at the live floor of 3
+  (composition: the three `POSIX-only: killpg` skips, **not** the `D-11` oracles
+   the plan names).
+
+---
+
+## 11. Implementation task: P12-B10 — dedup by resolved output filename, before dispatch
+
+**Status:** DONE — implemented, tested (1054 passed, 3 skipped), committed as `1d09009`.
+**Task file:** `.ai/tasks/p12-b10-dedup-by-resolved-output-filename.yaml`
+
+### 11.1 Semantic scope
+
+`download_video` in `services/downloader.py` — the extract → `title_callback` → `_resolve_output_file` → `perform_download` pipeline. Gained `video_data` / `selected_stream` keyword-only params so the pre-pass can hand the buffered extraction forward rather than re-fetching (§2.2 `C10`; plan row 18b confirms B10 is `download_video`'s sole writer).
+
+`_run_batch_with_progress` in `services/batch_downloader.py` — the fan-out. The pre-pass (option (b), PoO decision) is inserted here, before the fill-phase loop: extract + resolve every URL, build a `dict[resolved_path → index]` registry with last-wins semantics, terminalise losers as `ProgressStatus.SKIPPED` before any `asyncio.create_task`, then dispatch survivors only. `DownloadContext` gains `video_data` / `selected_stream` fields; `_download_single` forwards them into `download_video`.
+
+`_resolve_output_file` in `utils/security.py` — **read only**, the key producer. Not modified (Decision A disambiguates no names, so no suffix is added). Its `mkdir(parents=True, exist_ok=True)` side effect (C9) is asserted, not assumed.
+
+`ProgressStatus.SKIPPED` in `models/enums.py` — **the member is not redefined** (it already exists, already wired into `progress_display.py:92` → `⊘`). Only its docstring is updated to mention the filename-collision tier alongside the existing exact-URL tier.
+
+`_print_batch_summary` in `services/batch_downloader.py` — **no new reporting channel**. The existing four-bucket accounting already isolates `SKIPPED` into its own bucket and renders "Skipped (duplicates): {count}" as a distinct line from "Skipped (invalid URLs): {skipped_count}". The filename-dedup skip joins the existing duplicates bucket; it does not get a new summary line.
+
+`_map_exception_to_status` in `exceptions.py:216` — **not touched**. A dedup skip is not an exception.
+
+The single-URL `download` command in `src/vkdownloader/cli.py` (`download()`, lines 394–401) — **not modified**. It calls `download_video` directly with `output_index=0`, no semaphore, no reporter, no dedup. B10's pre-pass is batch-only.
+
+### 11.2 Implementation sequence
+
+Five phases:
+
+1. **Phase 1 — `download_video` signature.** Add `video_data: VideoWithStreams | None = None` and `selected_stream: Stream | None = None` as keyword-only params. When both are provided, skip `extract_streams` and use the pre-extracted data directly (mirroring `perform_download`'s existing guard at `downloader.py:195`). The `title_callback` still fires with `sanitize_title(video_data.title)`. Update the docstring.
+
+2. **Phase 2 — pre-pass.** Insert a resolution phase in `_run_batch_with_progress` before the fill-phase loop. For each URL, call `extract_streams` to get `title`+`id`, then `_resolve_output_file` to get the resolved `Path`. Build `dict[Path, int]` with last-wins (later index overwrites). Terminalise losers into `by_index` as `(url, "", ProgressStatus.SKIPPED.value)` via `reporter.start_task(i)` + `reporter.finish_task(i, SKIPPED)` — **before** any `asyncio.create_task`. Survivors carry their `video_data` and `selected_stream` forward.
+
+3. **Phase 3 — dispatch wiring.** Add `video_data` and `selected_stream` to `DownloadContext`. Thread them from the pre-pass into `_download_single` → `download_video(...)`. The `output_index` passed to `download_video` must match the index the pre-pass used for resolution. Survivors keep their original enumerate indices so `results = [by_index[i] for i in range(len(urls))]` at `batch_downloader.py:420` still restores ordering.
+
+4. **Phase 4 — reporting.** Update `ProgressStatus.SKIPPED`'s docstring (enums.py) to mention the filename-collision tier. Verify `_print_batch_summary`'s four-bucket accounting already isolates `SKIPPED` and renders the distinct "Skipped (duplicates)" line — no code change needed there, just verification.
+
+5. **Phase 5 — tests.** Add the oracle set (§6.10 criteria 1–9) to `tests/test_cli.py::TestBatchCommand` and extend `tests/test_batch_downloader.py::TestBatchDedupSkip` with no-transfer assertions. One single-URL regression test pins "no registry on the single-URL path."
+
+### 11.3 Architectural constraints
+
+- **Two-tier dedup, not one.** Tier 1 (`seen_urls: set[str]`, the existing exact-URL dedup at `batch_downloader.py:347`) is **kept unchanged**. Tier 2 (resolved-filename) is **added** as the pre-pass. Do not remove Tier 1 — it prevents redundant extraction calls for true duplicate URLs and is tested by `TestBatchDedupSkip`'s existing tests.
+- **Batch-only pre-pass.** The pre-pass lives in `_run_batch_with_progress` (called only from `run_batch`). The single-URL `download` command does not call it and does not carry a registry.
+- **Last-wins.** The registry is `dict[Path, int]`. When a collision is detected (path already in the dict), the earlier entry (the current registry value) is terminalised as `SKIPPED`; the dict entry is overwritten with the new index. Survivors dispatch exactly once; the survivor is always the last occurrence.
+- **No media transfer for skipped.** A skipped entry must not trigger any `asyncio.create_task`, no `download_video` dispatch, no semaphore permit, no yt-dlp subprocess, no segment fetch, no `.part` file, no working tree. The pre-pass terminalises losers **before** task creation — by structure, not by accident.
+- **Key is resolved path, not `(title, id)`.** Different titles can sanitise to the same filename (`sanitize_title("a?b")` and `sanitize_title("a:b")` both yield `a_b`); `output_index` discriminates same-`id` entries with different indices and no title. The resolved `Path` gets both directions right.
+- **`output_index` is positional, not survivor-count.** Survivors keep their original enumerate indices; `by_index` ordering and the `results` restoration at line 420 are unchanged.
+- **No name-level mutex.** Structurally impossible after dedup-before-dispatch (§3.8, §5.4 `C3`). No lock file, no lock primitive. The cross-run case is a recorded residual (§5.7 item 4).
+- **`mkdir` side effect asserted.** `_resolve_output_file` calls `mkdir(parents=True, exist_ok=True)` for every entry (C9). A skipped entry's directory is still created. The directory is shared by every entry, so this is harmless-but-observable and must be asserted in a test.
+- **`ProgressStatus.SKIPPED` already exists.** It is used, not defined. The enum member itself is not redefined. Only its docstring changes.
+- **No new reporting channel.** `_map_exception_to_status` is not the vehicle (a dedup skip is not an exception). No new exception-to-status mapping is added.
+
+### 11.4 Required tests — the 9 acceptance criteria mapped
+
+| §3.8 criterion | Test method | Target class | What it asserts |
+|---|---|---|---|
+| 1. Two entries → one dispatch, it is the last | `test_dedup_filename_collision_dispatches_only_last` | `TestBatchCommand` | Exactly one `download_video` call; the dispatched URL is the **last** occurrence (asserted by identity, not just count) |
+| 2. Skipped entry: no media transfer | `test_dedup_filename_collision_skipped_entry_no_transfer` | `TestBatchCommand` | Patch `download_video`/`perform_download`/subprocess/segment fetch/mkdir; assert all `not_called` for the skipped index |
+| 3. Visible at both levels | `test_dedup_filename_collision_visible_in_results_and_summary` | `TestBatchCommand` | `ProgressStatus.SKIPPED` in `results` for the skipped index AND a "Skipped (duplicates):" line distinct from "Skipped (invalid URLs):" in captured output |
+| 4a. Key is resolved path — sanitised-title collision | `test_dedup_key_sanitised_title_collision_deduped` | `TestBatchCommand` | Two URLs with different titles that sanitise to one filename (e.g. `"Title?A"` and `"Title:A"`, same id) ARE deduped — exactly one dispatch |
+| 4b. Key is resolved path — same id, different index, no title | `test_dedup_key_same_id_different_index_not_deduped` | `TestBatchCommand` | Two entries with same id, different `output_index`, and no title are NOT deduped — both dispatch, two distinct output paths |
+| 5. Idempotence | `test_dedup_filename_collision_idempotent_on_rerun` | `TestBatchCommand` | Same URL file run into the same directory twice produces the same skip pattern and the same survivor |
+| 6. Single-URL unchanged | `test_single_url_download_no_registry` | `TestBatchCommand` | Single-URL `download` produces no `SKIPPED` status and calls `download_video` exactly once |
+| 7. Bounded fan-out unchanged | (existing) | `TestBatchDownloaderSemaphore`, `TestBatchLiveTaskBounding`, `TestSegmentFanoutCompletion`, `TestSegmentFanoutBoundedProduction`, `TestConnectorCeilingsFollowTheSetting` | Must pass **unchanged** — B10 changes what is dispatched, not how it is bounded |
+| 8. `mkdir` side effect | `test_dedup_filename_collision_mkdir_side_effect` | `TestBatchCommand` | The output directory exists for a skipped entry (C9); assert it is the shared batch directory |
+| 9. Gate accounting | standing gate §7.1 | all | G1/G2/G4/G6 exit 0, G5 non-increasing, G3 unchanged from green-at-12af960, skip count 3 at rest (4 inside B10's commit) |
+
+**Extensions to `TestBatchDedupSkip`** (in `tests/test_batch_downloader.py`):
+
+| Test | What it asserts |
+|---|---|
+| (new) `test_filename_dedup_no_extract_no_download_for_skipped` | Two entries resolving to the same path: patch `VKVideoExtractor.extract_streams` and `perform_download`; assert **neither** is called for the skipped entry |
+| (new) `test_filename_dedup_mkdir_side_effect` | The output directory is created for a skipped entry (C9) |
+
+**Existing tests must pass unchanged:** `TestBatchDedupSkip`'s two existing tests (`test_duplicate_url_marked_skipped_not_downloaded`, `test_duplicate_skip_summary_reports_skipped_not_failed`), `TestBatchSummarySkippedAggregation::test_skipped_entry_counted_as_skipped_not_as_failed`, `TestBatchDownloaderSemaphore`, `TestBatchLiveTaskBounding`.
+
+### 11.5 Honest judgement
+
+- **Pre-pass shape (option (b)).** PoO decision: option (b) — a separate resolution phase in `batch_downloader` before the fan-out. The criterion was whether the batch's progress display stays meaningful during a long batch (§3.8 alternatives). Under (b), the screen shows resolution for all N then downloads; under (a) they interleave. If Decision A's no-network clause is read strictly, (b) is forced because (a) extracts every entry regardless. The `download_video` param addition (phase 1) realises `C10`'s stated intent: "hand the buffered extraction forward, not re-fetch."
+- **No-network clause vs. key derivation (DEF-6).** The resolved filename needs `title` and `id` from `extract_streams` (`downloader.py:324`), which is a network call. A literal "no network at all" for a skipped entry is unsatisfiable at this key. The achievable form — no **media transfer** — is delivered and the gap is recorded as `DEF-6`. The commit body must state this narrowing and why.
+- **`mkdir` side effect (I7).** `_resolve_output_file`'s `mkdir` runs for every resolved entry, including a skipped one (`C9`). Harmless because the directory is shared; `FileExistsError [WinError 183]` is the named risk when the target exists as a file — out of scope (Decision B: warn only, no refusal) but must be documented in the commit body if observed.
+- **Pre-pass extraction bounding.** The pre-pass extracts every entry before any download starts. Extraction is a metadata call, not a media transfer, so it does not count toward `max_concurrent_downloads` (C6). The Implementer must decide whether the pre-pass needs its own concurrency bound or runs sequentially.
+
+### 11.6 Deliverable
+
+One commit.
+
+- **Production code:** `src/vkdownloader/services/downloader.py` (download_video param addition + skip-extract), `src/vkdownloader/services/batch_downloader.py` (pre-pass + dispatch wiring + DownloadContext fields + docstring), `src/vkdownloader/models/enums.py` (SKIPPED docstring only).
+- **Test code:** `tests/test_cli.py` (7 new methods in `TestBatchCommand`), `tests/test_batch_downloader.py` (2 new methods extending `TestBatchDedupSkip`).
+- **Not modified:** `_resolve_output_file` (security.py), `_map_exception_to_status` (exceptions.py:216), the single-URL `download` command (cli.py), `perform_download`'s existing `video_data`/`selected_stream` contract.
+- **Commit constraints:** one commit; no existing test in `TestBatchDedupSkip`, `TestBatchSummarySkippedAggregation`, `TestBatchDownloaderSemaphore`, `TestBatchLiveTaskBounding`, or any bounded-fan-out class is edited — only extended with new methods; no new lock file, no temp-dir abstraction, no `fsync`, no clobber policy, no name suffix, no temp sweep (C5, C7).
+- **Commit body names:** (1) the pre-pass shape (option (b)), (2) the `mkdir` side effect (C9), (3) the narrowing of the no-network clause to "no media transfer" and why, (4) any existing tests preserved unchanged.
+
+### 11.7 Dependency metadata
+
+- **Blocked by:** `P12-B1` (both write `validate_output_path` / `security.py`; B10 reads `_resolve_output_file` which calls it). **`P12-B2`** (the new `B10 → B2` edge — the pre-pass is the right place to let the warning fire, not a call site B10 is about to restructure).
+- **Blocks:** `P12-B2` (B10 establishes the pre-pass; B2 makes the warning fire through it).
+- **Conflict-matrix rows:** §4.3 row 3 (`_resolve_output_file` — read-only for B10), row 18 (`cli.py` batch reader, sole owner), row 18b (`download_video`, sole owner), row 18c (`batch_downloader.py` fan-out and `_print_batch_summary`, sole owner), row 20b (`TestBatchCommand`), row 22 (`test_packaging.py` frozensets — no new file added, so 73/32/2/4 unchanged).
+- **Risk tier:** High — but reduced: the within-batch mutex is structurally unnecessary (§3.8), Decision A and B are both closed (no open decision), and `download_video` is B10's sole writer (row 18b).
+- **Agent roster:** Implementer, Planner, Validator. (No Auditor — the block inherits the auditor context verbatim in §10. No Researcher — Decision A fixes the answer. Planner stays because the pre-pass shape and `output_index` threading need a defined registry lifetime.)
+
+---
+
+## 12. Implementation task: P12-B6 — make the sweeps match what the tree contains
+
+**Status:** PENDING — not yet implemented. Execution position 7 (B1 → B10 → B2 → B4 → B5 → B6), but can proceed once B6 Auditor context is in.
+
+**Task file:** `.ai/tasks/p12-b6-sweeps-match-tree.yaml`
+
+### 12.1 Semantic scope
+
+One commit, three findings — `ART-003`, `ART-004`, `ART-013` (sweep half). All production
+changes land in `src/vkdownloader/services/segment_downloader.py`; one comment-only update
+in `src/vkdownloader/services/ffmpeg_utils.py`. The owning module is `segment_downloader.py`;
+`src/vkdownloader/services/downloader.py` is a re-export facade (§2.2 `C3`) that exports
+`_cleanup_segments` but never calls it.
+
+**`_cleanup_segments` (lines 443–454):** bare `f.unlink()` over `glob("*")` with no
+`is_file()` guard and no `missing_ok`. On Windows this raises `PermissionError [WinError 5]`
+on a directory entry; on POSIX `IsADirectoryError`. The fix is intent-based: skip
+non-regular entries with `if not f.is_file(): continue` and call `f.unlink(missing_ok=True)`.
+`glob("*")` already matches `*.ts.tmp`; the guard is what makes unlinking them safe.
+
+**`_tally_and_merge` (line 849):** `downloaded_count = len(list(segments_dir.glob("*.ts")))`
+includes `batch_*.ts` temps, so `downloaded_count > len(segments)` and the merge is SKIPPED.
+The fix narrows this count only (PoO decision D-4 = option (i)): filter out
+`batch_`-prefixed names so the merge-decision count reflects real segments.
+
+**`_clear_stale_segments` (lines 146–157):** sweeps only `*.ts`; the `NNNNN.ts.tmp`
+residue created at the two `os.replace` publish sites (lines 204, 267) is never matched.
+The fix introduces one suffix constant (`_SEGMENT_TEMP_SUFFIX: Final = ".tmp"`) shared at
+both publish sites and the new `*.ts.tmp` glob in `_clear_stale_segments`.
+
+**`_log_preserve_segments` (lines 1247–1275):** reporter count stays a raw working-directory
+inventory. Under D-4 option (i) it is NOT narrowed — `TestPreserveSegmentsReporter` stays
+green unchanged. Only its D-13/ART-004 deferral comment is updated to record the discharge.
+
+**`ffmpeg_utils._merge_segments_batched` (lines 616–642):** comment-only update. The
+D-13 deferral note that assigns the merge-temp count exclusion to ART-004 is updated to
+record that the exclusion is now implemented in `_tally_and_merge`. The ART-012 sizing
+note stays for B8. No logic is changed.
+
+### 12.2 Implementation sequence
+
+Six steps:
+
+1. **Constant.** Add `_SEGMENT_TEMP_SUFFIX: Final = ".tmp"` near `_PLAYLIST_SIGNATURE_FILE`
+   (segment_downloader.py:110). `Final` is already imported (line 14).
+
+2. **`_cleanup_segments` guard (ART-003).** Replace `for f in segments_dir.glob("*"): f.unlink()`
+   with an intent-guarded loop: skip non-files with `if not f.is_file(): continue`, then
+   `f.unlink(missing_ok=True)`. The `rmdir()` tail and its `try/except OSError` are
+   untouched.
+
+3. **`_tally_and_merge` count (ART-004).** Replace
+   `downloaded_count = len(list(segments_dir.glob("*.ts")))` with
+   `downloaded_count = len([f for f in segments_dir.glob("*.ts") if not f.name.startswith("batch_")])`.
+   D-4 = option (i): the reporter's count is not narrowed.
+
+4. **`_clear_stale_segments` .ts.tmp sweep (ART-013).** After the existing `*.ts` unlink
+   loop (line 155), add a second loop over `glob(f"*.ts{_SEGMENT_TEMP_SUFFIX}")` calling
+   `stale_temp.unlink(missing_ok=True)`. Update the docstring to mention `.ts.tmp` coverage.
+
+5. **Publish sites.** Replace the hard-coded `".tmp"` at both `os.replace` publish sites
+   (lines 204, 267: `output_path.with_suffix(output_path.suffix + ".tmp")`) with
+   `_SEGMENT_TEMP_SUFFIX`.
+
+6. **Deferral comments.** Update the ART-004 half of the deferral note in
+   `ffmpeg_utils._merge_segments_batched` (lines 631–640) and in
+   `segment_downloader._log_preserve_segments` (lines 1256–1263) to record that the
+   merge-temp count exclusion is now implemented. No logic changes — comment only.
+
+### 12.3 Architectural constraints
+
+- **Intent guard, not exception type.** `is_file()` to skip non-regular entries, NOT
+  catching `IsADirectoryError` (POSIX-only). Windows raises `PermissionError [WinError 5]`.
+  The existing `try/except OSError` on `rmdir()` must NOT be used as a model — it silently
+  swallows `PermissionError`.
+
+- **D-4 = option (i).** Narrow only the merge-decision count. `_log_preserve_segments`'s
+  count stays a raw working-directory inventory. `TestPreserveSegmentsReporter`'s three tests
+  stay green, unchanged. Do not narrow both counts.
+
+- **Call sites unchanged.** `_cleanup_segments` is still called only under `if result:`
+  (segment_downloader.py:867–868). This block adds NO new call sites — B7 owns those.
+  Plan §6.6 acceptance criterion 7.
+
+- **`.signature` short-circuit.** B6 is the only block allowed to change it (§4.3 row 8).
+  The sweep in `_clear_stale_segments` currently runs only when the signature does NOT match;
+  a matching-signature run skips all clearing. The Implementer must decide whether the
+  `.ts.tmp` sweep should run even on a matching signature. Honest judgement point — see §12.5.
+
+- **No `os.replace` test.** No test exercises `os.replace` (0 results in tests/). Do not
+  introduce `fsync`, a temp-dir abstraction, or a lock file (§2.2 C5).
+
+- **Leaf safety.** `segment_downloader.py` imports from `..config`, `..models.*`,
+  `..utils.*`, `.concurrency`, `.downloader_throttle`, `.ffmpeg_utils`, `.quality`.
+  No new import — `is_file()`, `missing_ok`, `glob`, `Final` are already in scope.
+  `ffmpeg_utils.py` is a leaf (C4): no imports from `segment_downloader`.
+
+- **No file:line references in commit message.** Anchors are symbol names.
+
+- **One suffix constant.** `_SEGMENT_TEMP_SUFFIX` is shared at both publish sites and the
+  new glob — the sweep glob and publish sites cannot drift.
+
+### 12.4 Required tests
+
+| Criterion | Test method | Target | What it asserts |
+|---|---|---|---|
+| Directory entry does not crash cleanup | (new) `test_cleanup_skips_non_regular_entries` | `TestCleanupSegments` | A subdirectory inside `segments_dir` alongside segment files → `_cleanup_segments` returns without raising, file entries are removed |
+| Merge reached with leftover batch temps | (new) `test_tally_excludes_batch_temps_and_reaches_merge` | new class in `test_segment_downloader.py` | A tree of NNNNN.ts segments + batch_*.ts temps → `_tally_and_merge` calls `_merge_segments_batched` (patched) instead of returning `None` on count mismatch |
+| .ts.tmp does not survive stale sweep | (new) `test_ts_tmp_cleaned_by_stale_sweep` | new class in `test_segment_downloader.py` | A `.ts.tmp` file beside segments does not survive `_clear_stale_segments` when the signature does not match |
+| Reporter unchanged | all 3 existing | `TestPreserveSegmentsReporter` | Green, UNCHANGED. `test_count_includes_merge_temps_and_says_so` still asserts `working_dir_ts_count == 3` |
+| D-13 preservation oracle | existing | `TestMergeSegmentsBatched::test_batch_failure_preserves_inputs_and_earlier_batch_temps` | Green, UNCHANGED — failure leaves accumulated batch temps intact |
+| Standing gate | §7.1 | all | G1/G2/G4/G6 exit 0, G5 non-increasing, skip count 3 |
+
+**Existing tests must pass unchanged:**
+- `TestCleanupSegments` (2 tests at test_hls_downloader.py:210–235) — extended only with a new method.
+- `TestPreserveSegmentsReporter` (3 tests at test_segment_downloader.py:419–472) — green, unchanged.
+- `TestMergeSegmentsBatched::test_batch_failure_preserves_inputs_and_earlier_batch_temps` (test_ffmpeg_utils.py:646) — green, unchanged.
+
+### 12.5 Honest judgement
+
+- **`.signature` short-circuit scope.** B6 may extend `_clear_stale_segments`'s sweep to
+  cover `*.ts.tmp` (inside the clearing path, after the signature check) or may move the
+  `.ts.tmp` sweep before the short-circuit so it runs regardless of signature match.
+  Recommendation: keep it inside the clearing path (smallest diff). The matching-signature
+  + `.ts.tmp`-residue case is a narrow edge: the residue is created during an active
+  download (between `open()` and `os.replace()`), and if the download was progressing far
+  enough to have written a matching `.signature`, the segment is either complete (`.ts` on
+  disk, no `.ts.tmp`) or the crash happened before the signature write. Declare the residual
+  in the commit body if the Implementer disagrees.
+
+- **D-4 = option (i) confirmed.** The reporter's number is a working-directory inventory
+  (`_log_preserve_segments`'s `next_action` says "clear the working directory"; its pinned
+  test asserts `working_dir_ts_count == 3` with a `batch_00000.ts` present). Narrowing only
+  the merge-decision count is the binding decision.
+
+### 12.6 Deliverable
+
+One commit.
+
+- **Production code:** `src/vkdownloader/services/segment_downloader.py`
+  (constant + 4 production changes + 1 comment), `src/vkdownloader/services/ffmpeg_utils.py`
+  (1 comment only — D-13/ART-004 discharge in `_merge_segments_batched`).
+- **Test code:** `tests/test_hls_downloader.py` (1 new method in
+  `TestCleanupSegments`), `tests/test_segment_downloader.py` (extend import block + 1 new
+  test class with 2 methods).
+- **Not modified:** `_cleanup_segments` call sites (still only under `if result:`), the
+  `if result:` guard itself, `_log_preserve_segments`'s count logic (only its comment), the
+  `.signature` short-circuit logic (only a decision about sweep placement), `os.replace`
+  publish paths (only the suffix literal → constant).
+- **Commit constraints:** one commit; `TestPreserveSegmentsReporter` unchanged,
+  `TestMergeSegmentsBatched::test_batch_failure_preserves_inputs_and_earlier_batch_temps`
+  unchanged, `TestCleanupSegments` extended only (not edited); no new file, no lock file,
+  no `fsync`, no temp-dir abstraction (C5, C7); `_SEGMENT_TEMP_SUFFIX` shared at both
+  publish sites.
+- **Commit body names:** (1) D-4 = option (i) — only the merge-decision count is narrowed,
+  (2) the `_.ts.tmp` sweep placement decision (inside the clearing path, after the
+  short-circuit), (3) the `is_file()` intent guard as the ART-003 fix (not
+  `IsADirectoryError`), (4) the ART-004 deferral discharge, (5) any existing tests preserved
+  unchanged.
+
+### 12.7 Dependency metadata
+
+- **Blocked by:** Nothing — no code dependency on prior blocks. B6 writes
+  `segment_downloader.py` and `ffmpeg_utils.py`, not `utils/security.py`. Execution-order
+  predecessor is B5 by the linearisation (B1 → B10 → B2 → B4 → B5 → B6).
+- **Blocks:** `P12-B7` (new cleanup call sites rely on the `is_file()` guard), `P12-B9`
+  (ROLLOUT-1: ART-013 residue must be swept before the probe in B9 fires).
+- **Conflict-matrix rows:** §4.3 row 6 (`segment_downloader.py`), row 7
+  (`_cleanup_segments` guard + call sites; B6 edits the guard, B7 owns new call sites),
+  row 8 (`_clear_stale_segments` short-circuit; B6 is the only block that may change it),
+  row 9 (`_tally_and_merge` count), row 10 (`TestPreserveSegmentsReporter`), row 13
+  (`_merge_segments_batched` deferral comment), row 17 (`TestCleanupSegments`), row 18b
+  (`download_video` — not touched).
+- **Risk tier:** High — narrows the count that decides whether a merge runs. Mitigated by
+  D-13 oracle (batch-failure-preservation test unchanged) and the merge's own
+  existence check (the downstream `concat` list file names missing files via
+  `FileNotFoundError`, which is the backstop against a narrowed count admitting an
+  incomplete set).
+- **Agent roster:** Implementer, Auditor, Planner, Validator. (Auditor context in §9.
+  Researcher returned empty output (rate-limited); research direction is captured inline
+  in the task YAML. Planner stays because the `.signature` short-circuit decision and
+  the D-4 option (i) fork need a defined resolution.)
+
+---
+
+## 13. P12-B2 Auditor context (`context_a`)
+
+**Block:** P12-B2 — make the `ART-009` warning reach the user (§3.3 / §6.3)
+**PoO decision:** option (a) — warn everywhere (all call sites).
+**Full output:** `.ai/audit/problems/12-filesystem-artifacts-p12-b2-context_a.md`
+
+### 13.1 Call-site census (`validate_output_path` — 3 sites)
+
+| # | File | Line | Call | `warning` | Fires? |
+|---|---|---|---|---|---|
+| 1 | `utils/security.py` (`_resolve_output_file`) | 111 | `validate_output_path(output_path, warning=False)` | `False` | No |
+| 2 | `services/segment_downloader.py` (`download_hls_with_resume`) | 1205 | `validate_output_path(request.output_file)` | default `True` | **Yes** |
+| 3 | `services/ytdlp_downloader.py` (`download_with_ytdlp_with_resume_fallback`, retry probe) | 909 | `validate_output_path(output_file, warning=False)` | `False` | No |
+
+One site fires; two suppress. **No direct `validate_output_path` call exists in `cli.py`.**
+
+### 13.2 Call-site census (`_resolve_output_file` — 2 sites)
+
+| # | File | Line | Context |
+|---|---|---|---|
+| 1 | `services/downloader.py` (`download_video`) | 360 | Single-URL `download` path; also batch path via `_download_single` |
+| 2 | `services/batch_downloader.py` (pre-pass) | 390 | B10 pre-pass — resolves every URL before dispatch |
+
+Both reach `validate_output_path(..., warning=False)` at security.py:111.
+
+### 13.3 The warning itself
+
+**Code:** `security.py:78–83`
+
+```python
+logger.warning(
+    "output_path_inside_repository",
+    path=str(resolved),
+    repo_root=str(repo_root),
+    error_code="output_path_in_root",
+)
+```
+
+| Attribute | Value |
+|---|---|
+| Event name | `"output_path_inside_repository"` |
+| Level | `WARNING` |
+| Logger | `structlog.get_logger("vkdownloader.utils.security")` |
+| Fields | `path` (resolved), `repo_root` (derived), `error_code` (literal str) |
+| Trigger | `resolved.relative_to(repo_root)` succeeds AND `warning` is `True` |
+| Channel | structlog JSON sink (per `config.setup_logging`), not `typer.echo` |
+
+**The two `..`-guards (lines 56, 68) `raise DownloadError`** — they are not warnings. There is only **one** `logger.warning` in `validate_output_path`. B1's change (`".." in str(path)` → `".." in path.parts`) is **committed** as `12af960` (the preamble's "uncommitted in working tree" is stale). `_resolve_output_file` body and `warning=False` are unchanged since `e59523c`.
+
+### 13.4 The loader path
+
+The single-URL `download` command does **not** call `validate_output_path` directly. The chain is:
+
+```
+cli.download (cli.py:394)
+  → download_video (downloader.py:394 → :360)
+      → _resolve_output_file (security.py:111) → validate_output_path(warning=False)  ← suppressed
+  → perform_download (downloader.py:368)
+      → download_with_ytdlp_with_resume_fallback (ytdlp_downloader.py:229)
+          → [retry probe, line 909:] validate_output_path(warning=False)  ← suppressed
+          → [segment fallback:] download_hls_with_resume → validate_output_path(request.output_file)  ← fires
+```
+
+The warning fires **only** on the segment-fallback path. Both the initial resolution and the retry-loop probe on the default loader path suppress it.
+
+### 13.5 The B10 → B2 edge — what needs to change
+
+The B10 pre-pass is **in the working tree**, unmodified (`batch_downloader.py:390` calls `_resolve_output_file`). It reaches `validate_output_path(..., warning=False)` at `security.py:111`.
+
+Per B2 option (a) "warn everywhere":
+
+1. **In `_resolve_output_file` (security.py:111):** remove `warning=False` → default `warning=True`. This single change covers **both** call sites of `_resolve_output_file` (the B10 pre-pass and the single-URL `download` path), since both funnel through this function.
+2. **In `ytdlp_downloader.py:909`:** remove `warning=False` → default `warning=True`. This is the second `warning=False` suppression site.
+3. **No change** to `segment_downloader.py:1205` — already uses the default.
+
+B2 must change `security.py:111` (inside `_resolve_output_file`), **not** re-add the warning at `batch_downloader.py:390` — B10 is restructuring the pre-pass and that call site should not be touched by B2.
+
+### 13.6 The `repo_root` defect (B2's domain)
+
+**Line 74:** `repo_root = Path(__file__).resolve().parent.parent.parent`
+
+`__file__` = `src/vkdownloader/utils/security.py`:
+- `.parent` → `src/vkdownloader/utils/`
+- `.parent` → `src/vkdownloader/`
+- `.parent` → `src/` ← live value (`C:\py_exp\mko_vkideo\src`)
+
+The repository root is `C:\py_exp\mko_vkideo`. The expression is **one `.parent` short**. This means `resolved.relative_to(repo_root)` only succeeds for paths under `src/` — paths under the rest of the repo (`docs/`, `tests/`, project root) hit `ValueError` (caught, no warning). The warning fires only inside `src/` and is silent everywhere else in the repo, even though Decision B says those paths are accepted. Fix: four `.parent` calls.
+
+### 13.7 Test note for B2's Validator
+
+`tests/test_security.py::test_path_inside_repo_warns` (lines 57–78) **mocks `Path.resolve`**, returning a `MagicMock`. The mock replaces the entire `repo_root` derivation, so the test **cannot detect** that `repo_root` is one level too deep. A B2 oracle must assert the derivation **by value** using the real `repo_root` — e.g., a path under `<repo>/docs/` (not under `src/`) should warn, proving the root is at the right level.
+
+---
 

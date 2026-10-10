@@ -1,0 +1,205 @@
+# Implementation task for P12-B5
+# Block 5 in execution order (after P12-B4, which is committed as aabbc46)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §3.11, §6.5
+
+id: p12-b5
+
+title: P12-B5 — rename sanitize_title to sanitize_filename_component (ART-014, Decision D-3)
+
+priority: low
+
+depends_on:
+  - p12-b3  # shares sanitize_title
+  - p12-b4  # committed
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§3.11 P12-B5 — device names and trailing dots"
+
+# ── Task description ──
+description: >
+  Decision D-3 is open. The criterion is: is a second, non-appending caller
+  foreseeable? Verified: the only filesystem-facing call site is
+  `_resolve_output_file`, which always appends `_{video.id}.mp4`. The
+  `downloader.title_callback` call site is for display only, not filesystem.
+  Therefore the suffix invariant is real. Option (a) is chosen: rename the
+  utility to make the contract honest — it sanitizes a filename *component*,
+  not a full filename — and state in the docstring that reserved device names
+  and trailing dots are NOT handled (measured: CON, CON.txt, NUL write silently
+  on Windows; AUX.txt raises FileNotFoundError; trailing-dot names are accepted
+  by creation).
+
+# ── Goals ──
+goals:
+  - Rename sanitize_title → sanitize_filename_component in security.py
+  - Update docstring to state what it does NOT handle (device names, trailing dots)
+  - Update both call sites (security.py:116, downloader.py:342)
+  - Update test references (test_security.py, test_import_graph.py)
+  - TestSanitizeTitle's six existing test assertions unchanged (only the function name reference changes)
+  - Document the measured Windows behavior table in the commit body
+  - No behavior change — purely a rename + docstring clarification
+  - Standing gate: G1/G2/G4/G6 exit 0, G5 non-increasing, G3 unchanged, skip count 3
+
+# ── Implementation sequence ──
+implementation_sequence:
+  - step: 1
+    action: modify_production
+    target: src/vkdownloader/utils/security.py
+    description: >
+      Rename `sanitize_title` to `sanitize_filename_component`. Update the
+      docstring: (a) state explicitly that the function sanitizes a filename
+      *component* and does NOT handle reserved device names (CON, PRN, AUX,
+      NUL, COM1-COM9, LPT1-LPT9) or trailing dots — those are Windows filesystem
+      properties outside this function's scope; (b) keep the existing statements
+      about control character replacement, whitespace stripping, and the [:100]
+      component bound (B4 already clarified the bound's scope).
+  - step: 2
+    action: modify_production
+    target: src/vkdownloader/services/downloader.py
+    description: >
+      Update the import (line 23) and the call site (line 342) to use the new name.
+  - step: 3
+    action: modify_tests
+    target: tests/test_security.py
+    description: >
+      Update the import (line 11), rename TestSanitizeTitle to
+      TestSanitizeFilenameComponent, and update all inline `sanitize_title(...)`
+      calls to `sanitize_filename_component(...)`. The six existing test assertions
+      stay unchanged — only the function name reference changes.
+  - step: 4
+    action: modify_tests
+    target: tests/test_import_graph.py
+    description: >
+      Update the `PACKAGES_WITHOUT_REEXPORTS` entry from `("vkdownloader.utils", "sanitize_title")`
+      to `("vkdownloader.utils", "sanitize_filename_component")`.
+  - step: 5
+    action: verify
+    target: standing gate §7.1
+    description: >
+      Run pytest tests/test_security.py, ruff check src tests, ruff format
+      --check src tests, mypy src, mypy src tests, ruff check . — confirm gates.
+
+# ── Architectural constraints ──
+architectural_constraints:
+  rename_only: >
+    Option (a) is a rename + docstring clarification. No behavior change.
+    The [:100] truncation, the control character replacement (B3), and all
+    output are identical.
+  suffix_invariant_verified: >
+    The only filesystem-facing call site (_resolve_output_file) always appends
+    `_{video.id}.mp4`. The display caller (downloader.title_callback) does not
+    write to the filesystem. No second non-appending filesystem caller exists.
+  no_broadening: >
+    This block does NOT add device-name normalization or trailing-dot stripping.
+    Under Decision B, §5.7 item 8 records that reserved names remain ordinary
+    files on POSIX — that is decided behaviour, not a residual this block fixes.
+  documented_limitation: >
+    The docstring states the function does NOT handle reserved device names or
+    trailing dots. The measured Windows behavior table goes in the commit body.
+
+# ── Files ──
+files:
+  - path: src/vkdownloader/utils/security.py
+    targets:
+      - type: function
+        name: sanitize_title  # → renamed to sanitize_filename_component
+    changes:
+      - action: rename_symbol
+        description: sanitize_title → sanitize_filename_component
+      - action: modify_docstring
+        description: >
+          State that the function sanitizes a filename component, not a full
+          filename. Explicitly state it does NOT handle reserved device names
+          or trailing dots — those are Windows filesystem properties outside
+          this function's scope.
+
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: import
+        name: sanitize_title  # → sanitize_filename_component
+      - type: call_site
+        description: "title_callback(sanitize_title(video.title))"
+    changes:
+      - action: update_import
+      - action: update_call_site
+
+  - path: tests/test_security.py
+    targets:
+      - type: import
+      - type: class
+        name: TestSanitizeTitle  # → TestSanitizeFilenameComponent
+    changes:
+      - action: update_import
+      - action: rename_class
+      - action: update_call_sites
+
+  - path: tests/test_import_graph.py
+    targets:
+      - type: list_entry
+        description: "('vkdownloader.utils', 'sanitize_title')"
+    changes:
+      - action: update_symbol_name
+
+# ── Required tests ──
+required_tests:
+  six_tests_unchanged: >
+    TestSanitizeFilenameComponent's (formerly TestSanitizeTitle's) six existing
+    tests stay green unchanged — same assertions, same expected values. Only the
+    function name reference changes.
+  edge_cases_unchanged: >
+    TestValidateOutputPathEdgeCases (3 tests) pass unchanged.
+  import_graph_unchanged: >
+    test_package_root_does_not_reexport_symbols passes with the updated symbol name.
+  behavior_preserved: >
+    The function's output for any given input is byte-for-byte identical to
+    before the rename.
+
+# ── Honest judgement required ──
+honest_judgement:
+  question: >
+    Option (a) — rename the utility to make the contract honest (no behavior change)
+    vs. option (b) — make it a real sanitiser (strip/prefix device names, strip trailing dots).
+  criterion: >
+    Is a second, non-appending caller foreseeable? Verified: the only filesystem-
+    facing call site (_resolve_output_file) always appends `_{video.id}.mp4`. The
+    display caller (downloader.title_callback) does not write to the filesystem.
+    The suffix invariant is real. Prefer (a) — it removes the misleading name without
+    changing any output. Choose (b) only with explicit acceptance that the display
+    string changes.
+  resolution: >
+    Option (a) chosen. The suffix invariant is real. No second non-appending
+    filesystem caller exists. The rename makes the contract honest without
+    altering any behavior.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/utils/security.py (rename + docstring),
+    src/vkdownloader/services/downloader.py (import + call site),
+    tests/test_security.py (import + class rename + call sites),
+    tests/test_import_graph.py (symbol name update)
+  commit_constraints:
+    - One commit only
+    - No behavior change — purely rename + docstring
+    - Commit body documents: (1) D-3 resolution (option a chosen, suffix invariant verified),
+      (2) the measured Windows device-name behavior table, (3) that the function does NOT
+      handle device names or trailing dots by design (§5.7 item 8)
+
+# ── Dependency metadata ──
+blocked_by:
+  - p12-b3  # shares sanitize_title
+  - p12-b4  # completed
+blocks: B10 (route b only) — if B10 route b changes sanitize_title's output, this rename must land first
+risk_tier: Low
+risk_notes: >
+  No behavior change. Rename + docstring only. The function is not re-exported
+  from vkdownloader.utils (confirmed by test_import_graph.py's PACKAGES_WITHOUT_REEXPORTS).
+  mypy src tests non-increasing from 95 baseline. Skip count unchanged at 3.
+agent_roster:
+  - Implementer
+  - Validator
