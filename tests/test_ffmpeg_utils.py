@@ -1176,6 +1176,7 @@ class TestSpawnBoundaryKwargs:
         with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
             await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
                 output_file,
                 "720",
                 test_settings,
