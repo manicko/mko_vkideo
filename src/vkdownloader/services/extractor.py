@@ -23,27 +23,50 @@ from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
-# VK video URL pattern for validation and parsing
-VIDEO_ID_PATTERN = re.compile(r"video-(-?\d+)_(\d+)")
+# VK video URL pattern for validation and parsing.
+# Anchored (^…$) so fullmatch on a single path segment accepts only a
+# complete ``video-<owner>_<id>`` token, never a suffix of a longer token.
+VIDEO_ID_PATTERN = re.compile(r"^video-(-?\d+)_(\d+)$")
+
+
+def _extract_video_segment(url: str) -> str | None:
+    """Return the last path segment of a well-formed http(s) URL, or ``None``.
+
+    Strips a trailing slash so ``…/video-<owner>_<id>/`` and
+    ``…/video-<owner>_<id>`` yield the same segment.  Returns ``None`` when
+    the URL has no recognised scheme/origin (the bare-pattern form, e.g.
+    ``video-123_456``), when the path is empty, or when ``urlparse`` raises,
+    so callers can treat ``None`` as "not a candidate path segment".
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    path = parsed.path.rstrip("/")
+    if not path:
+        return None
+    return path.rsplit("/", 1)[-1]
 
 
 def is_valid_video_url(url: str) -> bool:
-    """Check if a URL matches the VK video URL pattern.
+    """Check if a URL is a valid VK video URL matching the canonical pattern.
 
-    The pattern must appear as a complete path component — not embedded in
-    a query value or a longer path segment.
+    Acceptance is anchored to the **parsed path** — a foreign origin whose
+    path embeds the pattern, and a foreign origin whose query value embeds it,
+    are rejected.  The bare pattern with no scheme or origin is also rejected.
 
     Args:
         url: The URL to validate.
 
     Returns:
-        True if the URL matches a valid VK video identifier, False otherwise.
+        True if the URL is a valid VK video URL matching the canonical pattern.
     """
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/")
-    components = path.split("/")
-    last_component = components[-1] if components else ""
-    return bool(VIDEO_ID_PATTERN.fullmatch(last_component))
+    segment = _extract_video_segment(url)
+    if segment is None:
+        return False
+    return bool(VIDEO_ID_PATTERN.fullmatch(segment))
 
 
 def _classify_format(url: str) -> StreamFormat:
@@ -147,15 +170,16 @@ class VKVideoExtractor:
         Extract owner_id and video_id from VK video URL.
 
         Args:
-            url: VK video URL containing video identifier.
+            url: VK video URL matching the canonical pattern.
 
         Returns:
             Tuple of (owner_id, video_id) extracted from URL.
 
         Raises:
-            InvalidVideoUrlError: If URL does not contain a valid video identifier.
+            InvalidVideoUrlError: If URL does not match the canonical VK video pattern.
         """
-        match = self.VIDEO_ID_PATTERN.search(url)
+        segment = _extract_video_segment(url)
+        match = VIDEO_ID_PATTERN.fullmatch(segment) if segment else None
         if not match:
             raise InvalidVideoUrlError(url)
         owner_id, video_id = match.group(1), match.group(2)

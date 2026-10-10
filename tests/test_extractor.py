@@ -59,30 +59,68 @@ def test_parse_video_id_empty_string() -> None:
         extractor.parse_video_id("")
 
 
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        # ACCEPT — canonical URL acceptance (criterion 8: sample_video_url must stay accepted)
-        pytest.param("https://vkvideo.ru/video-12345_67890", True, id="canonical_with_host"),
-        pytest.param("https://vkvideo.ru/video-12345_67890/", True, id="canonical_trailing_slash"),
-        pytest.param(
-            "https://vkvideo.ru/video-12345_67890?some=param", True, id="canonical_with_query"
-        ),
-        pytest.param(
-            "https://vkvideo.ru/video-12345_67890?t=123", True, id="canonical_with_query_params"
-        ),
-        pytest.param("https://vk.com/video-12345_67890", True, id="alternate_host"),
-        # REJECT — near misses that the old unanchored .search would wrongly accept
-        pytest.param("video_123_456", False, id="wrong_separator"),
-        pytest.param("videos-123_456", False, id="plural_videos"),
-        pytest.param("video-1O3_456", False, id="letter_o_not_zero"),
-        pytest.param("", False, id="empty_string"),
-        pytest.param("not a url", False, id="no_pattern"),
-    ],
-)
-def test_video_url_acceptance_table(url: str, expected: bool) -> None:
-    """is_valid_video_url must accept canonical VK video URLs and reject near misses."""
-    assert is_valid_video_url(url) is expected
+# ---------------------------------------------------------------------------
+# B12 acceptance table — data-driven accept / reject oracle
+# ---------------------------------------------------------------------------
+
+_ACCEPT_URLS = [
+    "https://vkvideo.ru/video-12345_67890",  # canonical, no trailing slash
+    "https://vkvideo.ru/video-12345_67890/",  # canonical, trailing slash
+    "https://vkvideo.ru/video-12345_67890?some=param",  # canonical, query string
+    "https://vk.com/video-12345_67890",  # alternate host
+    "https://vkvideo.ru/video-12345_67890?t=123",  # canonical, query params
+]
+
+_REJECT_URLS = [
+    "video_123_456",  # wrong separator: _ instead of -
+    "videos-123_456",  # plural "videos" not "video"
+    "video-1O3_456",  # letter O instead of zero
+    "",  # empty string
+    "not a url",  # no pattern at all
+    "https://example.com/some/video-12345_67890/extra",  # pattern embedded in longer path
+]
+
+
+@pytest.mark.parametrize("url", _ACCEPT_URLS)
+def test_video_url_acceptance_table(url: str) -> None:
+    """B12: is_valid_video_url accepts the canonical VK forms.
+
+    Criterion 8 — the canonical form (``sample_video_url``) and its
+    trailing-slash / query variants stay accepted. criterion 2 — the bare
+    pattern with no scheme or origin is rejected — is exercised by the
+    rejection table below.
+    """
+    assert is_valid_video_url(url) is True
+
+
+@pytest.mark.parametrize("url", _REJECT_URLS)
+def test_video_url_rejection_table(url: str) -> None:
+    """B12: is_valid_video_url rejects near-miss and foreign-origin forms.
+
+    criterion 1 — a foreign origin whose path embeds the pattern, and one
+    whose query value embeds it, are rejected (the last case in the table
+    has the pattern as a non-final path component).  criterion 2 — the
+    bare pattern with no scheme or origin is rejected (``video_123_456``,
+    ``videos-123_456``, ``video-1O3_456``, the empty string, ``not a url``).
+    """
+    assert is_valid_video_url(url) is False
+
+
+@pytest.mark.parametrize("url", _ACCEPT_URLS)
+def test_video_url_acceptance_table_parse(url: str) -> None:
+    """B12: accepted URLs also parse to the expected owner/video pair."""
+    extractor = VKVideoExtractor()
+    owner_id, video_id = extractor.parse_video_id(url)
+    assert owner_id == "12345"
+    assert video_id == "67890"
+
+
+@pytest.mark.parametrize("url", _REJECT_URLS)
+def test_video_url_rejection_table_parse(url: str) -> None:
+    """B12: rejected URLs raise InvalidVideoUrlError from parse_video_id."""
+    extractor = VKVideoExtractor()
+    with pytest.raises(InvalidVideoUrlError, match="Invalid VK video URL"):
+        extractor.parse_video_id(url)
 
 
 class TestExtractionErrors:
