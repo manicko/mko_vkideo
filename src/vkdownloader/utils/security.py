@@ -19,8 +19,8 @@ logger = get_logger(__name__)
 _CONTROL_CHARS = "".join(chr(c) for c in range(32)) + chr(127)
 
 
-def sanitize_title(title: str) -> str:
-    """Sanitize title for filesystem safety.
+def sanitize_filename_component(title: str) -> str:
+    """Sanitize a filename component for filesystem safety.
 
     Replaces characters that are invalid on Windows/Unix filesystems — the nine
     path-separator and reserved characters and the C0 control range
@@ -29,6 +29,11 @@ def sanitize_title(title: str) -> str:
     output path — including the ``_{id}.mp4`` suffix and the output directory —
     is not length-bounded by this function; any path-length limit is enforced
     by the platform, not by this code.
+
+    This function does **not** handle reserved Windows device names (CON, PRN,
+    AUX, NUL, COM1-COM9, LPT1-LPT9) or trailing dots and spaces — those are
+    filesystem properties outside this function's scope. Reserved names are
+    ordinary files on POSIX (§5.7 item 8).
     """
     for char in '/\\:*?"<>|' + _CONTROL_CHARS:
         title = title.replace(char, "_")
@@ -113,7 +118,7 @@ def _resolve_output_file(
     validated_output = validate_output_path(output_path)
     validated_output.mkdir(parents=True, exist_ok=True)
 
-    safe_title = sanitize_title(video.title) if video.title else None
+    safe_title = sanitize_filename_component(video.title) if video.title else None
     if safe_title:
         output_file = validated_output / f"{safe_title}_{video.id}.mp4"
     else:

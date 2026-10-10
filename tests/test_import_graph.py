@@ -47,7 +47,7 @@ def _package_modules() -> list[str]:
 # pull in a subtree of modules it does not itself need to define.
 PACKAGES_WITHOUT_REEXPORTS: list[tuple[str, str]] = [
     ("vkdownloader.services", "QualitySelector"),
-    ("vkdownloader.utils", "sanitize_title"),
+    ("vkdownloader.utils", "sanitize_filename_component"),
     ("vkdownloader.models", "Video"),
     ("vkdownloader.infrastructure", "BrowserManager"),
 ]

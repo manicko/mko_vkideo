@@ -8,7 +8,11 @@ import pytest
 from vkdownloader.exceptions import DownloadError
 from vkdownloader.models.enums import StreamFormat
 from vkdownloader.models.video import Stream, VideoWithStreams
-from vkdownloader.utils.security import _resolve_output_file, sanitize_title, validate_output_path
+from vkdownloader.utils.security import (
+    _resolve_output_file,
+    sanitize_filename_component,
+    validate_output_path,
+)
 
 
 class TestValidateOutputPath:
@@ -136,13 +140,13 @@ class TestValidateOutputPathEdgeCases:
             assert ".." not in str(result)
 
 
-class TestSanitizeTitle:
-    """Tests for sanitize_title filesystem safety."""
+class TestSanitizeFilenameComponent:
+    """Tests for sanitize_filename_component filesystem safety."""
 
     def test_strips_windows_illegal_characters(self) -> None:
         """Test that Windows-illegal characters are replaced with underscores."""
         raw = 'my:title/with*illegal?chars|and"quotes<>п'
-        result = sanitize_title(raw)
+        result = sanitize_filename_component(raw)
 
         for char in '/\\:*?"<>|':
             assert char not in result
@@ -151,28 +155,28 @@ class TestSanitizeTitle:
 
     def test_strips_leading_and_trailing_whitespace(self) -> None:
         """Test that surrounding whitespace is stripped."""
-        result = sanitize_title("   spaced title   ")
+        result = sanitize_filename_component("   spaced title   ")
         assert result == "spaced title"
 
     def test_preserves_internal_whitespace(self) -> None:
         """Test that internal whitespace is preserved (only strip, not collapse)."""
-        result = sanitize_title("normal title")
+        result = sanitize_filename_component("normal title")
         assert result == "normal title"
 
     def test_limits_length_to_100_characters(self) -> None:
         """Test that output is truncated to 100 characters."""
-        result = sanitize_title("a" * 150)
+        result = sanitize_filename_component("a" * 150)
         assert len(result) == 100
 
     def test_returns_empty_string_for_blank_input(self) -> None:
         """Test that blank/whitespace-only input yields an empty string."""
-        assert sanitize_title("   ") == ""
-        assert sanitize_title("") == ""
+        assert sanitize_filename_component("   ") == ""
+        assert sanitize_filename_component("") == ""
 
     def test_combines_all_sanitizations(self) -> None:
         """Test illegal chars, whitespace strip, and length limit together."""
         raw = "  title:with|illegal*chars?and/long-suffix-" + "x" * 200
-        result = sanitize_title(raw)
+        result = sanitize_filename_component(raw)
         for char in '/\\:*?"<>|':
             assert char not in result
         assert not result.startswith(" ")
@@ -183,12 +187,12 @@ class TestSanitizeTitle:
     def test_no_control_character_survives(self, code: str) -> None:
         """No C0 control character (chr(0)-chr(31)) or DEL (chr(127)) survives."""
         char = code
-        result = sanitize_title(f"before{char}after")
+        result = sanitize_filename_component(f"before{char}after")
         assert char not in result
 
     def test_newline_and_tab_do_not_produce_multiline(self) -> None:
         """A newline or tab in a title no longer produces a multi-line string."""
-        result = sanitize_title("line1\nline2\ttabbed")
+        result = sanitize_filename_component("line1\nline2\ttabbed")
         assert "\n" not in result
         assert "\t" not in result
 
@@ -199,7 +203,7 @@ class TestSanitizeTitle:
         and a null byte that reaches the filesystem layer raises
         ValueError: embedded null byte. Replacement is the required shape.
         """
-        result = sanitize_title("before\x00after")
+        result = sanitize_filename_component("before\x00after")
         assert result == "before_after"
         assert "\x00" not in result
 

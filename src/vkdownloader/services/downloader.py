@@ -20,7 +20,7 @@ from ..models.enums import CookieSource, DownloadMethod
 from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
-from ..utils.security import _resolve_output_file, sanitize_title
+from ..utils.security import _resolve_output_file, sanitize_filename_component
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
 from .cookies import _cookies_to_netscape  # noqa: F401 — backward-compat re-export
@@ -339,7 +339,7 @@ async def download_video(
         video = await extractor.extract_streams(url)
 
     if title_callback is not None and video.title:
-        title_callback(sanitize_title(video.title))
+        title_callback(sanitize_filename_component(video.title))
 
     if not video.streams:
         raise QualityNotAvailableError(
