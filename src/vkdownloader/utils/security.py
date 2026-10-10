@@ -25,8 +25,10 @@ def sanitize_title(title: str) -> str:
     Replaces characters that are invalid on Windows/Unix filesystems — the nine
     path-separator and reserved characters and the C0 control range
     (chr(0)-chr(31)) plus DEL (chr(127)) — with underscores, strips surrounding
-    whitespace, and limits the result to 100 characters. The length bound
-    applies to this title component only, not to the full output path.
+    whitespace, and limits the title component to 100 characters. The composed
+    output path — including the ``_{id}.mp4`` suffix and the output directory —
+    is not length-bounded by this function; any path-length limit is enforced
+    by the platform, not by this code.
     """
     for char in '/\\:*?"<>|' + _CONTROL_CHARS:
         title = title.replace(char, "_")
