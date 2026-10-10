@@ -286,6 +286,8 @@ async def download_video(
     output_index: int = 0,
     echo: bool = True,
     title_callback: Callable[[str], None] | None = None,
+    video_data: VideoWithStreams | None = None,
+    selected_stream: Stream | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -312,6 +314,12 @@ async def download_video(
             title immediately after stream extraction succeeds. Used by the
             batch progress reporter for per-file labeling. If the video has no
             title (None), the callback is not invoked.
+        video_data: Optional pre-extracted video data with streams. When
+            provided together with ``selected_stream``, skips the
+            ``extract_streams`` call and uses ``video_data`` directly.
+        selected_stream: Optional pre-selected stream. When provided together
+            with ``video_data``, used as the m3u8 source for ``perform_download``
+            instead of the stream produced by ``QualitySelector.select``.
 
     Returns:
         Path to the downloaded file on success, None on failure.
@@ -321,7 +329,14 @@ async def download_video(
         VideoNotFoundError: If the video cannot be found or is unavailable.
     """
     extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)
-    video = await extractor.extract_streams(url)
+
+    # When pre-extracted data is provided (B10, Decision A), skip the network
+    # extraction and use the buffered video_data directly, mirroring
+    # perform_download's guard at line ~195.
+    if video_data is not None and selected_stream is not None:
+        video = video_data
+    else:
+        video = await extractor.extract_streams(url)
 
     if title_callback is not None and video.title:
         title_callback(sanitize_title(video.title))
@@ -343,6 +358,12 @@ async def download_video(
     stream = selector.select(video.streams, quality)
 
     output_file = _resolve_output_file(video, output, settings, output_index)
+
+    # When pre-extracted data is provided, forward the pre-selected stream
+    # to perform_download (which will skip its own extraction via the
+    # video_data / selected_stream guard).
+    if video_data is not None and selected_stream is not None:
+        stream = selected_stream
 
     return await perform_download(
         url,

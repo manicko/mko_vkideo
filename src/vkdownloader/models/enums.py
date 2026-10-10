@@ -87,8 +87,9 @@ class ProgressStatus(StrEnum):
     member is terminal:
 
     ``SUCCESS`` is the normal completion of a download. ``SKIPPED`` is
-    produced by the batch-level dedup check in ``_run_batch_with_progress``
-    when an exact-URL duplicate is detected before any network call;
+    produced by the batch-level dedup checks in ``_run_batch_with_progress``
+    when a duplicate is detected before any network call: Tier 1 (exact-URL
+    duplicate) or Tier 2 (resolved-filename collision, last-wins);
     ``CANCELLED`` by the shutdown signal during a batch run or by an
     explicit ``CancelledError`` in single-download mode. ``FAILED`` covers
     every other outcome.

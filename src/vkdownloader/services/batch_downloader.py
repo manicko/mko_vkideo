@@ -27,12 +27,16 @@ from ..exceptions import (
 )
 from ..models.enums import DownloadMethod, ProgressStatus
 from ..models.quality import QualitySpec
+from ..models.video import Stream, VideoWithStreams
 from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
+from ..services.extractor import VKVideoExtractor
 from ..services.progress_display import RichProgressReporter
 from ..services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from ..utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
+from ..utils.security import _resolve_output_file
 from ..utils.url_sanitizer import _strip_auth_params
+from .quality import QualitySelector
 
 logger = get_logger(__name__)
 
@@ -102,6 +106,8 @@ class DownloadContext:
     backoff_coordinator: URLBackoffCoordinator | None = None
     reporter: RichProgressReporter | None = None
     peak_tracker: ConcurrencyTracker | None = None
+    video_data: VideoWithStreams | None = None
+    selected_stream: Stream | None = None
 
 
 def _to_progress_status(status: str) -> ProgressStatus:
@@ -184,6 +190,8 @@ async def _download_single(
     backoff_coordinator = context.backoff_coordinator if context else None
     peak_tracker = context.peak_tracker if context else None
     reporter = context.reporter if context else None
+    video_data = context.video_data if context else None
+    selected_stream = context.selected_stream if context else None
 
     # Wrap semaphore with concurrency tracker so peak is measured at the
     # actual point of concurrency limiting, not the configured maximum.
@@ -241,6 +249,8 @@ async def _download_single(
             output_index=index,
             echo=echo,
             title_callback=title_cb,
+            video_data=video_data,
+            selected_stream=selected_stream,
         )
         status = _classify_download_result(result)
         _finish(_to_progress_status(status))
@@ -363,6 +373,65 @@ async def _run_batch_with_progress(
             # finally's stop() still runs if start() raises.
             reporter.start()
 
+            # --- Pre-pass: resolve every URL to its output path before dispatch (B10, Decision A) ---
+            # Each URL is extracted once; the resolved Path is the dedup key.
+            # Last occurrence wins; earlier entries are terminalised as SKIPPED
+            # before any asyncio.create_task, so no media transfer occurs for a skipped entry.
+            _batch_extractor = VKVideoExtractor(settings=settings, backoff_coordinator=None)
+            _batch_selector = QualitySelector()
+            _resolved: list[tuple[VideoWithStreams, Stream, Path] | str | None] = [None] * len(urls)
+            # Tier 1 pre-pass guard: exact-URL duplicates must not be extracted a
+            # second time. _pre_pass_seen_urls is intentionally distinct from the
+            # fill-phase loop's ``seen_urls`` — it is populated here, before the
+            # fill-phase loop runs, so that the fill-phase Tier 1 check still
+            # sees an empty ``seen_urls`` on the first occurrence and can own
+            # the first-wins terminalisation (DEC-W R1). Duplicates land in
+            # ``_resolved[i] = None`` and fall through to the fill-phase
+            # ``if url in seen_urls`` branch for first-wins SKIPPED terminalisation.
+            _pre_pass_seen_urls: set[str] = set()
+            for i, url in enumerate(urls):
+                if url in _pre_pass_seen_urls:
+                    _resolved[i] = (
+                        None  # Tier 1 duplicate — let fill-phase loop terminalise (first-wins)
+                    )
+                    continue
+                _pre_pass_seen_urls.add(url)
+                try:
+                    _video = await _batch_extractor.extract_streams(url)
+                    _stream = _batch_selector.select(_video.streams, quality)
+                    _resolved[i] = (
+                        _video,
+                        _stream,
+                        _resolve_output_file(_video, output, settings, i),
+                    )
+                except (
+                    ExtractionError,
+                    QualityNotAvailableError,
+                    VideoNotFoundError,
+                    VKDownloadError,
+                ) as exc:
+                    _status = exc.status_label()
+                    _resolved[i] = _status
+                    by_index[i] = (url, "", _status)
+                    reporter.start_task(i)
+                    reporter.finish_task(i, ProgressStatus.FAILED)
+
+            # Tier 2: filename-collision dedup (last-wins). Terminalise losers before dispatch.
+            _filename_registry: dict[Path, int] = {}
+            for i, entry in enumerate(_resolved):
+                if isinstance(entry, str) or entry is None:
+                    continue
+                _, _, resolved_path = entry
+                if resolved_path in _filename_registry:
+                    _loser = _filename_registry[resolved_path]
+                    if _loser not in by_index:
+                        logger.info("filename_collision_skipped", url=urls[_loser], index=_loser)
+                        reporter.start_task(_loser)
+                        reporter.finish_task(_loser, ProgressStatus.SKIPPED)
+                        by_index[_loser] = (urls[_loser], "", ProgressStatus.SKIPPED.value)
+                _filename_registry[resolved_path] = i
+            # --- end pre-pass ---
+
             # Fill phase: consume the lazy source, spinning up one task per
             # non-duplicate URL and pumping (draining completed tasks) only
             # once the live window is full. Every pulled item is stored in
@@ -372,6 +441,10 @@ async def _run_batch_with_progress(
             # No break/return drops a pulled URL before it is stored
             # (measured: a drop there loses one URL per full window).
             for i, url in urls_left:
+                # Pre-pass may have terminalised this index (extraction error
+                # or filename-collision dedup) — skip it without dispatch.
+                if i in by_index:
+                    continue
                 # Tier 1 dedup (DEC-W R1): exact-URL duplicates are skipped
                 # before any network call, never launching a second media
                 # download. The item is terminalised via finish_task so the
@@ -388,6 +461,14 @@ async def _run_batch_with_progress(
                     done, _ = await asyncio.wait(list(pending), return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
                         by_index[pending.pop(task)] = task.result()
+                # Forward pre-resolved video_data and selected_stream from the
+                # pre-pass so download_video skips its own extraction. Binding
+                # _resolved[i] to a local makes the tuple narrowing type-checkable.
+                _resolved_entry = _resolved[i]
+                _pre_video_data = _resolved_entry[0] if isinstance(_resolved_entry, tuple) else None
+                _pre_selected_stream = (
+                    _resolved_entry[1] if isinstance(_resolved_entry, tuple) else None
+                )
                 pending[
                     asyncio.create_task(
                         _download_single(
@@ -402,6 +483,8 @@ async def _run_batch_with_progress(
                                 backoff_coordinator=backoff_coordinator,
                                 reporter=reporter,
                                 peak_tracker=concurrency_tracker,
+                                video_data=_pre_video_data,
+                                selected_stream=_pre_selected_stream,
                             ),
                         )
                     )

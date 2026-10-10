@@ -136,6 +136,10 @@ def _batch_runtime(download: Any) -> Iterator[None]:
         patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
         patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
         patch("vkdownloader.services.batch_downloader.download_video", side_effect=download),
+        patch(
+            "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+            side_effect=_make_mock_extract_streams(),
+        ),
     ):
         yield
 
@@ -719,6 +723,10 @@ class TestCorrelationInheritance:
             patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
             patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
             patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=_make_mock_extract_streams(),
+            ),
+            patch(
                 "vkdownloader.services.batch_downloader.bind_correlation_id",
                 side_effect=_track_bind,
             ),
@@ -1028,6 +1036,148 @@ class TestBatchDedupSkip:
         assert "Failed: 0" in captured.out
         assert "Skipped (duplicates): 1" in captured.out
         assert exit_code == 0
+
+    @pytest.mark.asyncio
+    async def test_filename_dedup_skipped_entry_not_called(self, tmp_path: Path) -> None:
+        """B10: two URLs resolving to the same output filename produce exactly one
+        ``download_video`` dispatch — the last survivor only — and the loser is
+        never dispatched.
+
+        Fails on regression if: the pre-pass is removed (both dispatched), the
+        wrong entry wins (first instead of last), or the loser's SKIPPED status
+        never reaches results.
+        """
+        settings = _make_settings(tmp_path)
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls = [url_a, url_b]
+
+        # Same id; titles "Title?A" and "Title:A" both sanitise to "Title_A"
+        # so _resolve_output_file yields the identical path for both entries.
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[_hls_stream()])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[_hls_stream()])
+
+        async def mock_extract_streams(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        download_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path | None:
+            download_calls.append(url)
+            return tmp_path / "Title_A_12345.mp4"
+
+        with patch(
+            "vkdownloader.services.batch_downloader.RichProgressReporter"
+        ) as mock_reporter_cls:
+            mock_reporter = mock_reporter_cls.return_value
+            with _batch_runtime(tracking_download):
+                with patch(
+                    "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+                    side_effect=mock_extract_streams,
+                ):
+                    results, _ = await asyncio.wait_for(
+                        _run_batch_with_progress(
+                            urls,
+                            QualitySpec.parse("best"),
+                            DownloadMethod.AUTO,
+                            settings,
+                            output=tmp_path,
+                        ),
+                        timeout=30,
+                    )
+
+        # download_video was dispatched exactly once — for the survivor (url_b,
+        # the last in list order).  The loser (url_a) was terminalised as
+        # SKIPPED in the pre-pass and never reaches the dispatch path.
+        assert len(download_calls) == 1
+        assert download_calls[0] == url_b
+
+        # The loser (index 0) reached finish_task(SKIPPED) via the real producer
+        # path — the pre-pass terminalisation, not a mocked renderer call.
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SKIPPED)
+
+        # Results carry the SKIPPED status for the loser position.
+        statuses = [status for _, _, status in results]
+        assert statuses[0] == ProgressStatus.SKIPPED.value
+        assert statuses[1] == ProgressStatus.SUCCESS.value
+        assert ProgressStatus.FAILED.value not in statuses
+
+    @pytest.mark.asyncio
+    async def test_filename_dedup_mkdir_side_effect(self, tmp_path: Path) -> None:
+        """B10 (C9): the ``_resolve_output_file`` mkdir side effect runs for every
+        resolved entry — including the filename-collision loser — so the output
+        directory is created even for a skipped entry.
+
+        Fails on regression if: the pre-pass skips resolution for a collided
+        entry (loser's mkdir never runs), or the loser reaches the fill phase
+        and is dispatched before being terminalised.
+        """
+        from vkdownloader.utils.security import _resolve_output_file
+
+        settings = _make_settings(tmp_path)
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls = [url_a, url_b]
+
+        # Same id; titles sanitise to the same filename component → collision.
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[_hls_stream()])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[_hls_stream()])
+
+        async def mock_extract_streams(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        download = _make_batch_download({url_b: tmp_path / "Title_A_12345.mp4"})
+
+        # Non-existent subdirectory so the mkdir side effect is observable.
+        output_dir = tmp_path / "batch_output"
+        assert not output_dir.exists()
+
+        # Spy on _resolve_output_file: every call records the index and then
+        # delegates to the real implementation (which performs the mkdir).
+        resolve_indices: list[int] = []
+
+        def tracking_resolve(
+            video: VideoWithStreams,
+            output: Path,
+            settings_obj: Settings,
+            index: int,
+        ) -> Path:
+            resolve_indices.append(index)
+            return _resolve_output_file(video, output, settings_obj, index)
+
+        with patch("vkdownloader.services.batch_downloader.RichProgressReporter"):
+            with _batch_runtime(download):
+                with patch(
+                    "vkdownloader.services.downloader.VKVideoExtractor.extract_streams",
+                    side_effect=mock_extract_streams,
+                ):
+                    with patch(
+                        "vkdownloader.services.batch_downloader._resolve_output_file",
+                        side_effect=tracking_resolve,
+                    ):
+                        results, _ = await asyncio.wait_for(
+                            _run_batch_with_progress(
+                                urls,
+                                QualitySpec.parse("best"),
+                                DownloadMethod.AUTO,
+                                settings,
+                                output=output_dir,
+                            ),
+                            timeout=30,
+                        )
+
+        # The loser (index 0) is terminalised as SKIPPED in by_index.
+        statuses = [status for _, _, status in results]
+        assert statuses[0] == ProgressStatus.SKIPPED.value
+
+        # _resolve_output_file was called for BOTH entries (including the
+        # loser) in the pre-pass — the mkdir side effect (C9) ran for every
+        # resolved entry, not just the survivor.
+        assert resolve_indices == [0, 1]
+
+        # The output directory was created by the mkdir side effect.
+        assert output_dir.exists()
+        assert output_dir.is_dir()
 
 
 class TestBatchSummarySkippedAggregation:

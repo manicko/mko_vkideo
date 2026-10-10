@@ -4,8 +4,10 @@ import asyncio
 import locale
 import logging
 import re
+from collections.abc import Iterator
 from io import StringIO
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,13 +20,54 @@ from vkdownloader.exceptions import (
     QualityNotAvailableError,
     VideoNotFoundError,
 )
-from vkdownloader.models.enums import TERMINAL_STATUSES, CookieSource, ProgressStatus
+from vkdownloader.models.enums import (
+    TERMINAL_STATUSES,
+    CookieSource,
+    ProgressStatus,
+    StreamFormat,
+)
 from vkdownloader.models.quality import QualitySpec
+from vkdownloader.models.video import Stream, VideoWithStreams
 from vkdownloader.services import batch_downloader
 from vkdownloader.services.downloader import download_video as _real_download_video
 from vkdownloader.services.progress_display import RichProgressReporter
 
 runner = CliRunner()
+
+
+def _make_pre_pass_extract_streams() -> Any:
+    """Return an async ``extract_streams`` mock for the B10 pre-pass.
+
+    The pre-pass in ``_run_batch_with_progress`` calls ``extract_streams`` on
+    the real ``VKVideoExtractor`` class (imported into ``batch_downloader``).
+    Tests that mock that class in ``downloader`` instead do not cover the
+    pre-pass, so this helper provides a proper ``VideoWithStreams`` (valid
+    ``title``, ``id``, ``.streams``) that the real ``QualitySelector`` can
+    consume.
+    """
+
+    async def mock_extract_streams(url: str) -> VideoWithStreams:
+        video_id = url.rsplit("_", 1)[-1]
+        return VideoWithStreams(
+            id=f"12345_{video_id}",
+            title="Test Title",
+            streams=[
+                Stream(
+                    url="https://example.com/playlist.m3u8",
+                    format=StreamFormat.HLS,
+                    quality="best",
+                    height=1080,
+                )
+            ],
+        )
+
+    return mock_extract_streams
+
+
+_PRE_PASS_EXTRACT_STREAMS_PATCH = patch(
+    "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+    side_effect=_make_pre_pass_extract_streams(),
+)
 
 _REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-reference"
 _REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
@@ -277,6 +320,24 @@ class TestDownloadCommand:
 class TestBatchCommand:
     """Tests for the batch CLI command."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_pre_pass_extract_streams(self) -> Iterator[None]:
+        """Stub ``VKVideoExtractor.extract_streams`` for the B10 pre-pass.
+
+        The pre-pass in ``_run_batch_with_progress`` calls ``extract_streams``
+        on the real ``VKVideoExtractor`` class (imported into
+        ``batch_downloader``). Most TestBatchCommand tests mock that class in
+        ``downloader`` instead, which does not reach the pre-pass. This
+        fixture patches the class-level method so the pre-pass is stubbed
+        with a proper ``VideoWithStreams`` (valid ``title``, ``id``,
+        ``.streams``) that the real ``QualitySelector`` can consume.
+
+        Tests that need custom extraction behaviour add an inner
+        ``with patch(...)`` which overrides this fixture's patch.
+        """
+        with _PRE_PASS_EXTRACT_STREAMS_PATCH:
+            yield
+
     def test_batch_empty_file(self, tmp_path: Path) -> None:
         """Check handling of empty batch input file."""
         empty_file = tmp_path / "empty_urls.txt"
@@ -332,6 +393,24 @@ class TestBatchCommand:
                 return MagicMock(id="video1", streams=[])
             raise VideoNotFoundError("Video not found")
 
+        async def _pre_pass_extract_streams(url: str) -> VideoWithStreams:
+            """Override the fixture mock: first URL extracts, second raises."""
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return VideoWithStreams(
+                    id="video1",
+                    title="Test Title",
+                    streams=[
+                        Stream(
+                            url="https://example.com/playlist.m3u8",
+                            format=StreamFormat.HLS,
+                            quality="best",
+                            height=1080,
+                        )
+                    ],
+                )
+            raise VideoNotFoundError("Video not found")
+
         with (
             patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
             patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
@@ -356,11 +435,15 @@ class TestBatchCommand:
                         log_file=None,
                     )
 
-                    result = runner.invoke(
-                        app,
-                        ["batch", str(urls_file)],
-                        catch_exceptions=False,
-                    )
+                    with patch(
+                        "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                        side_effect=_pre_pass_extract_streams,
+                    ):
+                        result = runner.invoke(
+                            app,
+                            ["batch", str(urls_file)],
+                            catch_exceptions=False,
+                        )
 
         assert result.exit_code == 1
         assert "Download Summary:" in result.output
@@ -1071,11 +1154,31 @@ class TestBatchCommand:
                         log_file=None,
                     )
 
-                    result = runner.invoke(
-                        app,
-                        ["batch", str(urls_file)],
-                        catch_exceptions=False,
-                    )
+                    async def _pre_pass_alpha_beta(url: str) -> VideoWithStreams:
+                        """Override fixture mock: return proper titles the reporter renders."""
+                        title = "Alpha Title" if "video-1_1" in url else "Beta Title"
+                        return VideoWithStreams(
+                            id="v1" if title == "Alpha Title" else "v2",
+                            title=title,
+                            streams=[
+                                Stream(
+                                    url="https://example.com/playlist.m3u8",
+                                    format=StreamFormat.HLS,
+                                    quality="best",
+                                    height=1080,
+                                )
+                            ],
+                        )
+
+                    with patch(
+                        "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                        side_effect=_pre_pass_alpha_beta,
+                    ):
+                        result = runner.invoke(
+                            app,
+                            ["batch", str(urls_file)],
+                            catch_exceptions=False,
+                        )
 
         assert result.exit_code == 0
         output = buffer.getvalue()
@@ -1096,6 +1199,434 @@ class TestBatchCommand:
         assert mock_dv.call_count == 2
         for call in mock_dv.call_args_list:
             assert call.kwargs["echo"] is False
+
+    def test_dedup_filename_collision_dispatches_only_last(self, tmp_path: Path) -> None:
+        """B10 (Decision A): a filename collision dedups by resolved output path.
+
+        Two URLs share ``id="12345"``; their titles sanitize to the same stem
+        (``"Title?A"`` / ``"Title:A"`` -> ``"Title_A"``), so ``_resolve_output_file``
+        resolves both entries to one path. Tier 2 terminalises the loser (index 0,
+        url_a) as SKIPPED before dispatch; only the last survivor (url_b) is
+        dispatched to ``download_video``.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[stream])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        dispatch_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            dispatch_calls.append(url)
+            return tmp_path / "Title_A_12345.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ) as mock_download_video,
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert len(dispatch_calls) == 1
+        assert dispatch_calls[0] == url_b
+        assert mock_download_video.call_count == 1
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SKIPPED)
+
+    def test_dedup_filename_collision_skipped_entry_no_transfer(self, tmp_path: Path) -> None:
+        """B10: the collision loser never reaches a transfer boundary.
+
+        The survivor (url_b) is the only dispatch target; the loser (url_a) is
+        terminalised as SKIPPED in the pre-pass. ``perform_download`` and the
+        subprocess surface are patched so an escape would be observable as a call
+        rather than a real transfer.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[stream])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        download_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            download_calls.append(url)
+            return tmp_path / "Title_A_12345.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ) as mock_download_video,
+            patch("vkdownloader.services.downloader.perform_download") as mock_perform,
+            patch("subprocess.Popen") as mock_popen,
+            patch("asyncio.create_subprocess_exec") as mock_create_subprocess,
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert mock_download_video.call_count == 1
+        assert mock_perform.call_count <= 1
+        mock_popen.assert_not_called()
+        mock_create_subprocess.assert_not_called()
+        assert url_a not in download_calls
+        assert download_calls == [url_b]
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SKIPPED)
+
+    def test_dedup_filename_collision_visible_in_results_and_summary(self, tmp_path: Path) -> None:
+        """B10: the collision loser is visible as a skipped duplicate in the summary.
+
+        The summary counts the skipped entry under ``Skipped (duplicates)`` (not
+        ``Failed`` and not ``Skipped (invalid URLs)``), and the total video count
+        still includes it.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[stream])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        dispatch_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            dispatch_calls.append(url)
+            return tmp_path / "Title_A_12345.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ),
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert "Skipped (duplicates): 1" in result.output
+        assert "Total videos: 2" in result.output
+        assert "Skipped (invalid URLs)" not in result.output
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SKIPPED)
+
+    def test_dedup_key_sanitised_title_collision_deduped(self, tmp_path: Path) -> None:
+        """B10: titles ``"a?b"`` and ``"a:b"`` both sanitize to ``"a_b"`` -> collision.
+
+        The dedup key is the *sanitized* title fused with the id, so two distinct
+        raw titles that collapse to one stem collide and dedup the same way as a
+        literal title match.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title="a?b", streams=[stream])
+        video_b = VideoWithStreams(id="12345", title="a:b", streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        dispatch_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            dispatch_calls.append(url)
+            return tmp_path / "a_b_12345.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ),
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert len(dispatch_calls) == 1
+        assert dispatch_calls[0] == url_b
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SKIPPED)
+
+    def test_dedup_key_same_id_different_index_no_title_not_deduped(self, tmp_path: Path) -> None:
+        """B10: absent titles fall back to ``{index}_{id}.mp4`` so no two paths collide.
+
+        Without a title the filename is indexed, so two URLs that share an id but
+        differ only by position resolve to distinct paths and are NOT deduplicated.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title=None, streams=[stream])
+        video_b = VideoWithStreams(id="12345", title=None, streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        dispatch_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            dispatch_calls.append(url)
+            return tmp_path / f"out_{url.rsplit('_', 1)[-1]}.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ),
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    result = runner.invoke(
+                        app,
+                        ["batch", str(urls_file)],
+                        catch_exceptions=False,
+                    )
+
+        assert result.exit_code == 0
+        assert len(dispatch_calls) == 2
+        assert url_a in dispatch_calls
+        assert url_b in dispatch_calls
+        mock_reporter.finish_task.assert_any_call(0, ProgressStatus.SUCCESS)
+        mock_reporter.finish_task.assert_any_call(1, ProgressStatus.SUCCESS)
+
+    def test_dedup_filename_collision_idempotent_on_rerun(self, tmp_path: Path) -> None:
+        """B10: rerun into the same directory reproduces the last-wins outcome.
+
+        The skip pattern is chosen by list order against a fresh in-memory
+        filename registry built each run, so a second run into the same
+        directory yields the same single dispatch for url_b and the same skip for
+        url_a -- filesystem state does not drive the dedup decision.
+        """
+        urls_file = tmp_path / "urls.txt"
+        url_a = "https://vkvideo.ru/video-12345_00001"
+        url_b = "https://vkvideo.ru/video-12345_00002"
+        urls_file.write_text(f"{url_a}\n{url_b}\n")
+
+        stream = Stream(
+            url="https://example.com/playlist.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        video_a = VideoWithStreams(id="12345", title="Title?A", streams=[stream])
+        video_b = VideoWithStreams(id="12345", title="Title:A", streams=[stream])
+
+        async def mock_extract(url: str) -> VideoWithStreams:
+            return video_a if url == url_a else video_b
+
+        current_calls: list[str] = []
+
+        async def tracking_download(url: str, *args: object, **kwargs: object) -> Path:
+            current_calls.append(url)
+            return tmp_path / "Title_A_12345.mp4"
+
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.RichProgressReporter"
+            ) as mock_reporter_cls,
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=mock_extract,
+            ),
+            patch(
+                "vkdownloader.services.batch_downloader.download_video",
+                side_effect=tracking_download,
+            ),
+        ):
+            mock_reporter = mock_reporter_cls.return_value
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(
+                        max_concurrent_downloads=4,
+                        max_retries=3,
+                        log_file=None,
+                    )
+                    # Two independent runs into the same directory: each must
+                    # dispatch only url_b and skip only url_a.
+                    for _ in range(2):
+                        current_calls.clear()
+                        result = runner.invoke(
+                            app,
+                            ["batch", str(urls_file)],
+                            catch_exceptions=False,
+                        )
+                        assert result.exit_code == 0
+                        assert current_calls == [url_b]
+
+        # One dispatch per run (url_b only) and one SKIPPED terminalisation per run.
+        skipped_finishes = [
+            call
+            for call in mock_reporter.finish_task.call_args_list
+            if call.args[1] == ProgressStatus.SKIPPED
+        ]
+        assert len(skipped_finishes) == 2
+
+    def test_single_url_download_no_registry(self, tmp_path: Path) -> None:
+        """The single-URL ``download`` command has no batch dedup registry.
+
+        A lone URL is dispatched straight to ``download_video`` with no pre-pass,
+        no collision registry and therefore no SKIPPED outcome; the command
+        reports a plain ``Downloaded:`` result and exits 0.
+        """
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        with (
+            patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "video.mp4",
+            ) as mock_download_video,
+            patch("vkdownloader.cli.Settings") as mock_settings_cls,
+        ):
+            mock_settings_cls.return_value = MagicMock(
+                max_concurrent_downloads=4,
+                max_retries=3,
+                log_file=None,
+            )
+            result = runner.invoke(
+                app,
+                ["download", url],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        assert "Downloaded:" in result.output
+        mock_download_video.assert_awaited_once()
+        assert "SKIPPED" not in result.output
 
 
 class TestQualityOptionValidation:
@@ -1922,9 +2453,19 @@ class TestExitCodeContract:
             raise TimeoutError("the second interrupt did not escalate")
 
         try:
-            with patch(
-                "vkdownloader.services.batch_downloader.download_video",
-                side_effect=_stalls,
+            with (
+                patch(
+                    "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                    side_effect=_make_pre_pass_extract_streams(),
+                ),
+                patch(
+                    "vkdownloader.utils.security.validate_output_path",
+                    return_value=tmp_path,
+                ),
+                patch(
+                    "vkdownloader.services.batch_downloader.download_video",
+                    side_effect=_stalls,
+                ),
             ):
                 result = runner.invoke(
                     app,
@@ -2234,6 +2775,10 @@ class TestEntryPointSourcePrecedence:
         with (
             patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
             patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=_make_pre_pass_extract_streams(),
+            ),
+            patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
             patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
@@ -2331,6 +2876,10 @@ class TestEntryPointSourcePrecedence:
 
         with (
             patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=_make_pre_pass_extract_streams(),
+            ),
             patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
@@ -2475,6 +3024,10 @@ class TestEntryPointSourcePrecedence:
         with (
             patch("vkdownloader.cli.setup_logging") as mock_setup,
             patch("vkdownloader.services.batch_downloader.RichProgressReporter"),
+            patch(
+                "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
+                side_effect=_make_pre_pass_extract_streams(),
+            ),
             patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
