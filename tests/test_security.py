@@ -232,6 +232,32 @@ class TestValidateOutputPathTraversal:
         with pytest.raises(DownloadError, match="Path traversal detected"):
             validate_output_path(path)
 
+    def test_double_dot_inside_filename_accepted(self) -> None:
+        """A literal filename component containing ".." (e.g. "a..b") is accepted.
+
+        The guard inspects path *components*, so a filename that merely contains
+        two consecutive dots is not confused with the parent-directory component
+        ".." and is therefore not a false positive.
+        """
+        path = Path("a..b") / "video.mp4"
+        with patch("vkdownloader.utils.security.logger"):
+            result = validate_output_path(path, warning=True)
+        assert result == path.resolve()
+
+    def test_post_resolution_double_dot_component_rejected(self, tmp_path: Path) -> None:
+        """A resolved path whose components still contain ".." is rejected.
+
+        The input itself has no ".." component, so the pre-resolution guard is
+        a no-op; the post-resolution guard must catch a resolved value whose
+        parts still contain ".." (e.g. from a symlink or UNC path that survives
+        normalization).
+        """
+        path = tmp_path / "output" / "video.mp4"
+        malicious_resolved = Path("/safe") / ".." / "etc"
+        with patch.object(Path, "resolve", return_value=malicious_resolved):
+            with pytest.raises(DownloadError, match="Path traversal detected in resolved path"):
+                validate_output_path(path, warning=False)
+
 
 class TestResolveOutputFile:
     """Tests for _resolve_output_file path resolution."""

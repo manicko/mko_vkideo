@@ -51,10 +51,9 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
     Raises:
         DownloadError: If path contains traversal attempts ("..").
     """
-    # Check for path traversal in the original path string (before resolution).
-    # This catches ".." segments in unresolved user input.
-    path_str = str(path)
-    if ".." in path_str:
+    # Check for path traversal in the original path (before resolution).
+    # This catches ".." components in unresolved user input.
+    if ".." in path.parts:
         exc = DownloadError(f"Path traversal detected in output path: {path}")
         exc.error_code = ErrorCode.PATH_TRAVERSAL
         raise exc
@@ -62,11 +61,11 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
     # Resolve to absolute path
     resolved = path.resolve()
 
-    # Defense-in-depth: check for ".." in the resolved path too.
+    # Defense-in-depth: check for ".." components in the resolved path too.
     # This catches edge cases where symlinks or UNC paths cause ".." to
     # survive resolution, and makes the guard effective even when callers
     # pass already-resolved paths (where the pre-resolution check is a no-op).
-    if ".." in str(resolved):
+    if ".." in resolved.parts:
         exc = DownloadError(f"Path traversal detected in resolved path: {resolved}")
         exc.error_code = ErrorCode.PATH_TRAVERSAL
         raise exc
