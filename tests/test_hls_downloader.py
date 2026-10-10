@@ -54,6 +54,7 @@ from vkdownloader.services.segment_downloader import (
     _is_retryable_status,
 )
 from vkdownloader.services.signal_handlers import setup_signal_handlers
+from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
 
 
 class TestDownloadHlsWithResume:
@@ -5040,7 +5041,9 @@ class TestAttemptSegmentResumeQuality:
         from vkdownloader.services.downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
-        output_file.write_bytes(b"partial data")
+        # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
+        # temp file (P12-B9 route (a)).
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
 
         stream = Stream(
             url="https://example.com/fresh.m3u8",
@@ -5249,7 +5252,9 @@ class TestB13ResumeErrorHandling:
         from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
-        output_file.write_bytes(b"partial data")
+        # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
+        # temp file (P12-B9 route (a)).
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
 
         stream = Stream(
             url="https://example.com/fresh.m3u8",
@@ -5294,7 +5299,9 @@ class TestB13ResumeErrorHandling:
         from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
-        output_file.write_bytes(b"partial data")
+        # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
+        # temp file (P12-B9 route (a)).
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
 
         mock_extractor = MagicMock()
         mock_extractor.extract_streams_with_cookies = AsyncMock(
@@ -5412,8 +5419,9 @@ class TestYtDlpRetryBackoff:
         from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
 
         output_file = tmp_path / "video.mp4"
-        # Create a partial file so the retry loop doesn't exit early
-        output_file.write_text("partial")
+        # Create a .part file (yt-dlp's temp name) so the retry loop
+        # doesn't exit early at the partial-file probe.
+        _ytdlp_temp_name(output_file).write_text("partial")
 
         mock_coord = AsyncMock()
         mock_coord.wait_if_paused = AsyncMock(return_value=False)
@@ -5466,7 +5474,9 @@ class TestYtDlpRetryBackoff:
         from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
 
         output_file = tmp_path / "video.mp4"
-        output_file.write_text("partial")
+        # Create a .part file (yt-dlp's temp name) so the retry loop
+        # doesn't exit early at the partial-file probe.
+        _ytdlp_temp_name(output_file).write_text("partial")
 
         mock_coord = AsyncMock()
         mock_coord.wait_if_paused = AsyncMock(return_value=False)
@@ -5507,6 +5517,61 @@ class TestYtDlpRetryBackoff:
 
         # Coordinator should have been consulted during the backoff
         mock_coord.wait_if_paused.assert_called()
+
+
+class TestYtdlpTempName:
+    """Tests for _ytdlp_temp_name: the .part derivation (P12-B9, route (a))."""
+
+    def test_ytdlp_temp_name_appends_part_suffix(self) -> None:
+        """_ytdlp_temp_name appends .part to the full filename."""
+        output_file = Path("/tmp/video.mp4")
+        result = _ytdlp_temp_name(output_file)
+        assert result == Path("/tmp/video.mp4.part")
+
+    def test_ytdlp_temp_name_matches_yt_dlp_temp_name(self) -> None:
+        """_ytdlp_temp_name matches yt-dlp's FileDownloader.temp_name output.
+
+        yt-dlp's temp_name returns ``filename + '.part'`` when --no-part is
+        not set (which it never is in this codebase; see TestYtdlpCliCommand's
+        --no-part-absent oracle). This test verifies our derivation against the
+        installed yt-dlp version, so if yt-dlp ever changes the scheme we break
+        loudly rather than silently diverging.
+        """
+        from yt_dlp.downloader.common import FileDownloader
+
+        # temp_name is an instance method that reads self.params for 'nopart'.
+        # We construct a lightweight stand-in with empty params (nopart defaults
+        # to False, so temp_name appends .part as yt-dlp does in this codebase).
+        fake_downloader = FileDownloader.__new__(FileDownloader)
+        fake_downloader.params = {}
+
+        output_file = Path("/tmp/video.mp4")
+        expected = fake_downloader.temp_name(str(output_file))
+        result = _ytdlp_temp_name(output_file)
+        assert str(result) == expected
+
+    def test_ytdlp_temp_name_preserves_directory(self) -> None:
+        """_ytdlp_temp_name preserves the directory component."""
+        output_file = Path("/tmp/nested/dir/video.mp4")
+        result = _ytdlp_temp_name(output_file)
+        assert result == Path("/tmp/nested/dir/video.mp4.part")
+        assert result.parent == output_file.parent
+
+    def test_ytdlp_temp_name_handles_no_extension(self) -> None:
+        """_ytdlp_temp_name handles paths with no file extension."""
+        output_file = Path("/tmp/video")
+        result = _ytdlp_temp_name(output_file)
+        assert result == Path("/tmp/video.part")
+
+    def test_ytdlp_temp_name_roundtrip_unlink(self, tmp_path: Path) -> None:
+        """Writing to _ytdlp_temp_name then unlinking leaves no residue."""
+        output_file = tmp_path / "clip.mp4"
+        temp_file = _ytdlp_temp_name(output_file)
+        temp_file.write_text("partial")
+        assert temp_file.exists()
+        temp_file.unlink(missing_ok=True)
+        assert not temp_file.exists()
+        assert not output_file.exists()
 
 
 class TestDownloadVideoTitleCallback:

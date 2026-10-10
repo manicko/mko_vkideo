@@ -30,6 +30,7 @@ from vkdownloader.services.batch_downloader import (
 )
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
 from vkdownloader.services.segment_downloader import PlaylistFetchResult
+from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
 
 
 def _make_settings(tmp_path: Path) -> Settings:
@@ -160,9 +161,9 @@ class TestBatchDownloaderSemaphore:
         n = settings.max_concurrent_downloads + 2
         urls = [f"https://vkvideo.ru/video-12345_{i:05d}" for i in range(n)]
 
-        # Pre-create partial files so the yt-dlp fallback engages segment resume.
+        # Pre-create .part files so the yt-dlp fallback engages segment resume.
         for url in urls:
-            _expected_output_path(tmp_path, url).write_bytes(b"partial")
+            _ytdlp_temp_name(_expected_output_path(tmp_path, url)).write_bytes(b"partial")
 
         # _merge_segments_batched returns the output_file arg so the chain sees success.
         merge_side_effect = lambda segments_dir, output_file, *_: output_file  # noqa: E731
@@ -306,7 +307,9 @@ class TestBatchDownloaderSemaphore:
 
         url = "https://vkvideo.ru/video-12345_00001"
         output_file = _expected_output_path(tmp_path, url)
-        output_file.write_bytes(b"partial")
+        # Pre-create .part file (yt-dlp's temp name) so the retry loop
+        # doesn't exit early at the partial-file probe.
+        _ytdlp_temp_name(output_file).write_bytes(b"partial")
 
         merge_side_effect = lambda segments_dir, out_file, *_: out_file  # noqa: E731
 

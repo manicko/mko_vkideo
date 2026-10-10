@@ -802,6 +802,26 @@ def _build_ytdlp_cli_command(
     return cmd, cookie_file
 
 
+def _ytdlp_temp_name(output_file: Path) -> Path:
+    """Derive the temporary filename yt-dlp writes to during download.
+
+    yt-dlp writes downloads to ``<name>.part`` and only renames to the final
+    name on success. This helper centralises that derivation so the partial-file
+    probe and the cleanup can both reference the same name without diverging
+    (P12-B9, route (a)).
+
+    The derivation mirrors yt-dlp's own ``FileDownloader.temp_name`` (verified
+    against the installed version at test time): ``filename + '.part'``.
+
+    Args:
+        output_file: The final resolved output path.
+
+    Returns:
+        The ``.part`` temp path yt-dlp writes to.
+    """
+    return output_file.with_suffix(output_file.suffix + ".part")
+
+
 async def download_with_ytdlp_with_resume_fallback(
     video_url: str,
     m3u8_url: str,
@@ -905,9 +925,12 @@ async def download_with_ytdlp_with_resume_fallback(
             )
             return None
 
-        # Check for partial file - switch to segment download with fresh token
+        # Check for partial file - switch to segment download with fresh token.
+        # yt-dlp writes to <output>.part until the download completes, so we
+        # probe for the .part file, not the final name (P12-B9, route (a)).
         validated_output = validate_output_path(output_file)
-        if not validated_output.exists() or validated_output.stat().st_size == 0:
+        temp_file = _ytdlp_temp_name(validated_output)
+        if not temp_file.exists() or temp_file.stat().st_size == 0:
             return None
 
         # Attempt segment resume with fresh token
@@ -933,11 +956,14 @@ async def download_with_ytdlp_with_resume_fallback(
         url=_strip_auth_params(video_url),
         retries=settings.max_retries,
     )
-    # DF-008: Clean up partial output file left by yt-dlp on failure
+    # DF-008: Clean up partial output file left by yt-dlp on failure.
+    # yt-dlp writes to <output>.part, never to the final name, so the cleanup
+    # targets the temp file (P12-B9, route (a)).
+    temp_file = _ytdlp_temp_name(validated_output)
     try:
-        validated_output.unlink(missing_ok=True)
+        temp_file.unlink(missing_ok=True)
     except OSError:
-        logger.warning("failed_to_cleanup_partial_file", path=str(validated_output))
+        logger.warning("failed_to_cleanup_partial_file", path=str(temp_file))
     return None
 
 
@@ -987,7 +1013,7 @@ async def _attempt_segment_resume(
         "download_interrupted_switching_to_segments",
         url=_strip_auth_params(video_url),
         path=str(output_file),
-        size=output_file.stat().st_size,
+        size=_ytdlp_temp_name(output_file).stat().st_size,
         retry=retry_count,
     )
     logger.info("attempting_segment_resume", retry=retry_count)
@@ -1029,8 +1055,9 @@ async def _attempt_segment_resume(
                     available=[s.quality for s in browser_streams],
                 )
                 raise
-            # Remove partial file to start clean segment download
-            output_file.unlink()
+            # Remove partial .part file to start clean segment download.
+            # yt-dlp writes to the .part temp name, not the final name.
+            _ytdlp_temp_name(output_file).unlink()
             # Continue to segment download
             return await download_hls_with_resume(
                 HLSDownloadRequest(

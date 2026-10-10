@@ -22,6 +22,7 @@ from vkdownloader.models.enums import CookieSource, DownloadMethod, StreamFormat
 from vkdownloader.models.video import Stream, VideoWithStreams
 from vkdownloader.services.downloader import perform_download
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
 
 _URL = "https://vkvideo.ru/video-12345_67890"
 _QUALITY = "720"
@@ -309,7 +310,9 @@ class TestPerformDownload:
 
         # --- segment path: _attempt_segment_resume forwards to download_hls_with_resume ---
         seg_output = tmp_path / "segment_output.mp4"
-        seg_output.write_bytes(b"partial data")
+        # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
+        # temp file (P12-B9 route (a)).
+        _ytdlp_temp_name(seg_output).write_bytes(b"partial data")
 
         stream = Stream(
             url="https://example.com/fresh.m3u8",
