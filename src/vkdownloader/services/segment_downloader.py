@@ -108,6 +108,7 @@ def _parse_m3u8_segments(content: str) -> list[str]:
 
 
 _PLAYLIST_SIGNATURE_FILE = ".signature"
+_SEGMENT_TEMP_SUFFIX: Final = ".tmp"
 
 
 def _compute_playlist_signature(segments: list[str]) -> str:
@@ -130,8 +131,8 @@ def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
     """Remove stale segment files that belong to a previous playlist.
 
     If the playlist signature does not match the one on disk, all ``*.ts``
-    files in ``segments_dir`` are stale and must be removed before
-    downloading the current playlist's segments.
+    files and ``*.ts.tmp`` residue in ``segments_dir`` are stale and must be
+    removed before downloading the current playlist's segments.
 
     Args:
         segments_dir: Directory containing downloaded segments.
@@ -153,6 +154,8 @@ def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
         logger.info("clearing_stale_segments", count=stale_count)
     for stale_file in segments_dir.glob("*.ts"):
         stale_file.unlink(missing_ok=True)
+    for stale_temp in segments_dir.glob(f"*.ts{_SEGMENT_TEMP_SUFFIX}"):
+        stale_temp.unlink(missing_ok=True)
 
     signature_file.write_text(signature, encoding="utf-8")
 
@@ -201,7 +204,7 @@ async def _download_segment_sequential(
     )
     if content is not None and len(content) > 0:
         # DF-010: Write to temp file then os.replace for atomicity
-        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        temp_path = output_path.with_suffix(output_path.suffix + _SEGMENT_TEMP_SUFFIX)
         try:
             with open(temp_path, "wb") as f:
                 f.write(content)
@@ -264,7 +267,7 @@ async def _run_parallel_download_with_backoff(
                 logger.warning("empty_segment_content", segment_url=_strip_auth_params(segment_url))
                 return None
             # DF-010: Write to temp file then os.replace for atomicity
-            temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+            temp_path = output_path.with_suffix(output_path.suffix + _SEGMENT_TEMP_SUFFIX)
             try:
                 with open(temp_path, "wb") as f:
                     f.write(content)
@@ -447,7 +450,9 @@ def _cleanup_segments(segments_dir: Path) -> None:
         segments_dir: Directory containing downloaded segments.
     """
     for f in segments_dir.glob("*"):
-        f.unlink()
+        if not f.is_file():
+            continue
+        f.unlink(missing_ok=True)
     try:
         segments_dir.rmdir()
     except OSError:
@@ -846,7 +851,9 @@ async def _tally_and_merge(
     Returns:
         Path to merged file on success, None otherwise.
     """
-    downloaded_count = len(list(segments_dir.glob("*.ts")))
+    downloaded_count = len(
+        [f for f in segments_dir.glob("*.ts") if not f.name.startswith("batch_")]
+    )
 
     if progress_callback:
         video_id = video_url.split("_")[-1] if "_" in video_url else video_url
@@ -1258,9 +1265,10 @@ def _log_preserve_segments(segments_dir: Path) -> None:
     # a total loss -- so the operator saw silence instead of "nothing was
     # kept". The count below is deliberately labelled: it is every `*.ts` in
     # the working directory, and a failed merge leaves `batch_*.ts` temps
-    # there, which a `*.ts` glob cannot distinguish from segments. Excluding
-    # them is phase 07's ART-004; until then the count is stated as a
-    # working-directory count and the action is to clear the directory.
+    # there, which a `*.ts` glob cannot distinguish from segments. The merge-decision
+    # count in _tally_and_merge now excludes batch_*.ts (discharged by P12-B6);
+    # _log_preserve_segments itself still reports the raw working-directory count
+    # as its compensating control.
     working_count = len(list(segments_dir.glob("*.ts")))
     logger.info(
         "preserving_segments_for_resume",

@@ -2287,7 +2287,7 @@ One commit.
 
 ## 12. Implementation task: P12-B6 — make the sweeps match what the tree contains
 
-**Status:** PENDING — not yet implemented. Execution position 7 (B1 → B10 → B2 → B4 → B5 → B6), but can proceed once B6 Auditor context is in.
+**Status:** DONE — implemented, tested (256 passed, 3 skipped in scope), committed. Execution position 7 (B1 → B10 → B2 → B4 → B5 → B6).
 
 **Task file:** `.ai/tasks/p12-b6-sweeps-match-tree.yaml`
 

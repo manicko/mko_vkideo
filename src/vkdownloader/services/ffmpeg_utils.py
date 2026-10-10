@@ -632,7 +632,7 @@ async def _merge_segments_batched(
         # beside a complete segment set, so the `*.ts` counts in
         # segment_downloader.py also count `batch_*.ts` and a resumed run will
         # not re-trigger the merge. Excluding the merge temps is phase 07's
-        # ART-004; this block edits no `*.ts` glob. The compensating control
+        # ART-004; discharged by P12-B6 in segment_downloader._tally_and_merge. The compensating control
         # is `_log_preserve_segments`, which now reports the working
         # directory's `*.ts` count and the clear-the-directory action instead
         # of implying the directory is resumable as it stands. The merge peak

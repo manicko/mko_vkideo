@@ -234,6 +234,32 @@ class TestCleanupSegments:
 
         assert not segments_dir.exists()
 
+    def test_cleanup_skips_non_regular_entries(self, tmp_path: Path) -> None:
+        """Non-regular entries (subdirectories) are left untouched by _cleanup_segments.
+
+        The ``is_file()`` guard skips anything that is not a regular file,
+        so a stray subdirectory inside the segments dir survives the unlink sweep.
+        Because the directory is not empty after the sweep, ``rmdir()`` fails
+        silently and the segments dir itself is preserved.
+        """
+        segments_dir = tmp_path / ".segments"
+
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "00001.ts").write_text("segment data")
+        subdir = segments_dir / "subdir"
+        subdir.mkdir()
+
+        _cleanup_segments(segments_dir)
+
+        # Regular file was cleaned up.
+        assert not (segments_dir / "00001.ts").exists()
+        # Non-regular entry (subdirectory) was skipped, not removed.
+        assert subdir.exists(), "subdirectory should be skipped by is_file() guard"
+        # Segments dir still exists because it contains the subdir (rmdir fails).
+        assert segments_dir.exists(), (
+            "segments dir with surviving subdir should not be removed by rmdir"
+        )
+
 
 class TestCookiesToNetscape:
     """Tests for _cookies_to_netscape helper function."""

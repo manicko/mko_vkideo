@@ -26,6 +26,7 @@ from vkdownloader.services.segment_downloader import (
     PlaylistFetchResult,
     SegmentTask,
     _await_and_cancel,
+    _clear_stale_segments,
     _create_connector,
     _download_segment_sequential,
     _fetch_playlist_with_retry,
@@ -33,6 +34,7 @@ from vkdownloader.services.segment_downloader import (
     _log_preserve_segments,
     _process_downloaded_segments,
     _SegmentFanoutOutcome,
+    _tally_and_merge,
     download_hls_with_resume,
 )
 from vkdownloader.utils.url_sanitizer import _strip_auth_params
@@ -1701,3 +1703,73 @@ class TestConnectorCeilingsFollowTheSetting:
             finally:
                 for connector in connectors:
                     await connector.close()
+
+
+class TestSweepExclusion:
+    """ART-004: batch_*.ts excluded from merge-decision count; ART-013: .ts.tmp swept."""
+
+    @pytest.mark.asyncio
+    async def test_tally_excludes_batch_temps_and_reaches_merge(self, tmp_path: Path) -> None:
+        """Without the batch_*.ts exclusion the count would be 3, not 2, so
+        3 != len(segments) and the merge would be skipped. With the exclusion
+        count = 2 == len(segments) and _merge_segments_batched is invoked.
+        """
+        segments_dir = tmp_path / ".segments"
+        segments_dir.mkdir()
+        (segments_dir / "00000.ts").write_bytes(b"seg0")
+        (segments_dir / "00001.ts").write_bytes(b"seg1")
+        (segments_dir / "batch_00000.ts").write_bytes(b"merged")
+
+        fake_output = tmp_path / "output.mp4"
+        segments = ["seg1.ts", "seg2.ts"]
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader.logger",
+                MagicMock(),
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._merge_segments_batched",
+                new_callable=AsyncMock,
+                return_value=fake_output,
+            ) as mock_merge,
+        ):
+            result = await _tally_and_merge(
+                download_results=[],
+                segments=segments,
+                segments_dir=segments_dir,
+                output_file=fake_output,
+                progress_callback=None,
+                video_url="https://vkvideo.ru/video-12345_67890",
+            )
+
+        assert result == fake_output
+        mock_merge.assert_awaited_once_with(segments_dir, fake_output, len(segments))
+
+    def test_ts_tmp_cleaned_by_stale_sweep(self, tmp_path: Path) -> None:
+        """ART-013: .ts.tmp residue is removed alongside .ts files in the stale sweep.
+
+        A stale signature triggers the clearing branch: both *.ts and *.ts.tmp
+        files are unlinked before downloading the current playlist's segments.
+        """
+        segments_dir = tmp_path / ".segments"
+        segments_dir.mkdir()
+        (segments_dir / "00000.ts").write_bytes(b"old segment")
+        (segments_dir / "00001.ts.tmp").write_bytes(b"partial write")
+        (segments_dir / "batch_00000.ts.tmp").write_bytes(b"partial batch")
+
+        # Stale signature so the clearing path runs.
+        (segments_dir / ".signature").write_text("stale-signature")
+
+        with patch(
+            "vkdownloader.services.segment_downloader.logger",
+            MagicMock(),
+        ):
+            _clear_stale_segments(
+                segments_dir,
+                ["https://example.com/seg1.ts", "https://example.com/seg2.ts"],
+            )
+
+        assert not (segments_dir / "00000.ts").exists()
+        assert not (segments_dir / "00001.ts.tmp").exists()
+        assert not (segments_dir / "batch_00000.ts.tmp").exists()
