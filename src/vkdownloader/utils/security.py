@@ -71,7 +71,7 @@ def validate_output_path(path: Path, warning: bool = True) -> Path:
         raise exc
 
     # Check if inside repository root (warn for safety)
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     try:
         resolved.relative_to(repo_root)
         if warning:
@@ -108,7 +108,7 @@ def _resolve_output_file(
     output_path = output if str(output) != "." else settings.download_dir
     output_path = Path(output_path).resolve()
 
-    validated_output = validate_output_path(output_path, warning=False)
+    validated_output = validate_output_path(output_path)
     validated_output.mkdir(parents=True, exist_ok=True)
 
     safe_title = sanitize_title(video.title) if video.title else None

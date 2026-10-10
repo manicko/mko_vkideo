@@ -906,7 +906,7 @@ async def download_with_ytdlp_with_resume_fallback(
             return None
 
         # Check for partial file - switch to segment download with fresh token
-        validated_output = validate_output_path(output_file, warning=False)
+        validated_output = validate_output_path(output_file)
         if not validated_output.exists() or validated_output.stat().st_size == 0:
             return None
 

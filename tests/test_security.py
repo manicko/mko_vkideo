@@ -54,27 +54,56 @@ class TestValidateOutputPath:
             mock_logger.warning.assert_not_called()
             assert result == path.resolve()
 
-    def test_path_inside_repo_warns(self, tmp_path: Path) -> None:
-        """Test that path inside repository root triggers warning."""
-        test_path = tmp_path / "output" / "video.mp4"
+    def test_path_inside_repo_warns(self) -> None:
+        """Test that path inside repository root triggers warning.
+
+        Uses the real repo_root derivation (no Path.resolve mock) so the
+        assertion is meaningful: the path under src/ must be recognised as
+        inside the repository root.
+        """
+        repo_root = Path(__file__).resolve().parent.parent  # tests/ → repo root
+        test_path = repo_root / "src" / "vkdownloader" / "placeholder.mp4"
 
         with patch("vkdownloader.utils.security.logger") as mock_logger:
-            # Mock relative_to to succeed (meaning path is inside repo)
-            resolved_mock = MagicMock()
-            resolved_mock.relative_to.return_value = tmp_path  # Succeeds for paths inside repo
+            validate_output_path(test_path, warning=True)
 
-            with patch.object(
-                Path,
-                "resolve",
-                return_value=resolved_mock,
-            ):
-                validate_output_path(test_path, warning=True)
+            # Warning should be logged for path inside repo
+            mock_logger.warning.assert_called_once()
+            call_kwargs = mock_logger.warning.call_args[1]
+            assert "path" in call_kwargs
+            assert "repo_root" in call_kwargs
 
-                # Warning should be logged for path inside repo
-                mock_logger.warning.assert_called_once()
-                call_kwargs = mock_logger.warning.call_args[1]
-                assert "path" in call_kwargs
-                assert "repo_root" in call_kwargs
+    def test_path_inside_repo_outside_src_warns(self) -> None:
+        """Test that a path under the repo root but outside src/ also warns.
+
+        This is the oracle that detects the repo_root mis-derivation: with
+        the old three-.parent expression repo_root pointed to src/ and a path
+        under docs/ would not warn. With four .parent calls it points to the
+        true repo root and the warning fires.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        test_path = repo_root / "docs" / "test_output.mp4"
+
+        with patch("vkdownloader.utils.security.logger") as mock_logger:
+            validate_output_path(test_path, warning=True)
+
+            mock_logger.warning.assert_called_once()
+            call_kwargs = mock_logger.warning.call_args[1]
+            assert "path" in call_kwargs
+            assert "repo_root" in call_kwargs
+
+    def test_repo_root_derives_to_project_root(self) -> None:
+        """Test that repo_root in security.py derives to the true project root.
+
+        security.py lives at src/vkdownloader/utils/security.py, so four
+        .parent calls reach the repository root. Asserted by value, not mock.
+        """
+        from vkdownloader.utils import security as security_module
+
+        security_file = Path(security_module.__file__).resolve()
+        actual_repo_root = security_file.parent.parent.parent.parent
+        expected_repo_root = Path(__file__).resolve().parent.parent
+        assert actual_repo_root == expected_repo_root
 
 
 class TestValidateOutputPathEdgeCases:
