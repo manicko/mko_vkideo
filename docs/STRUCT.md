@@ -31,7 +31,7 @@ src/
     │   ├── downloader.py        # Single-video download pipeline (download_video)
     │   ├── downloader_throttle.py # Adaptive throttling (ProgressManager, URLBackoffCoordinator, get_shutdown_event)
     │   ├── extractor.py         # Stream extraction (VKVideoExtractor, is_valid_video_url)
-    │   ├── ffmpeg_utils.py      # FFmpeg discovery and stream concatenation
+     │   ├── ffmpeg_utils.py      # FFmpeg subprocess infrastructure: shared spawn boundary (iter_process_lines, cancel_subprocess) and the permanent segment-merge engine (check_ffmpeg_available, _merge_segments_batched)
     │   ├── progress_display.py   # RichProgressReporter (multi-line batch progress display)
     │   ├── quality.py           # Quality selection (QualitySelector)
     │   ├── segment_downloader.py # HTTP segment downloader with retries

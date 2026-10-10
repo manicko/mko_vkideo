@@ -1,0 +1,180 @@
+# Implementation task for P12-B9
+# Block 9 in execution order (after P12-B8, plan terminus)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §3.7, §6.9
+
+id: p12-b9
+
+title: P12-B9 — the probe and the cleanup name the right file (.part)
+
+priority: high
+
+depends_on:
+  - p12-b3
+  - p12-b6
+  - p12-b7
+  - p12-b8
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§6.9 P12-B9 — the probe and the cleanup name the right file"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  yt-dlp writes downloads to `<name>.part` and only renames to the final
+  name on success. The partial-file probe in
+  ``download_with_ytdlp_with_resume_fallback`` and the DF-008 cleanup at
+  the retry loop's end both target the final name, missing the actual
+  temp file. Under Decision C (route (a) chosen), add a helper
+  ``_ytdlp_temp_name`` that derives the ``.part`` name mirroring yt-dlp's
+  own ``FileDownloader.temp_name``, and repoint both the probe and the
+  cleanup to use it. ``_attempt_segment_resume``'s stat() and unlink()
+  inside the function are updated to target ``.part`` as well, while the
+  ``download_hls_with_resume`` call still receives the final name.
+
+# ── Goals ──
+goals:
+  - Add _ytdlp_temp_name helper function in ytdlp_downloader.py
+  - Repoint partial-file probe to check .part temp file (not final name)
+  - Repoint DF-008 cleanup to unlink .part temp file
+  - Update _attempt_segment_resume to stat/unlink .part, pass final name to download_hls_with_resume
+  - Add TestYtdlpTempName class with 5 oracles including yt-dlp temp_name match
+  - Update TestYtDlpRetryBackoff, TestB13ResumeErrorHandling, TestPerformDownload, TestBatchDownloaderSemaphore tests to create .part files
+  - All standing gates green
+
+# ── Implementation sequence ──
+implementation_sequence:
+  - step: 1
+    action: modify_code
+    target: src/vkdownloader/services/ytdlp_downloader.py
+    description: Add _ytdlp_temp_name helper function deriving the .part name.
+  - step: 2
+    action: modify_code
+    target: src/vkdownloader/services/ytdlp_downloader.py → download_with_ytdlp_with_resume_fallback
+    description: Repoint the partial-file probe to check temp_file (.part), not validated_output (final name).
+  - step: 3
+    action: modify_code
+    target: src/vkdownloader/services/ytdlp_downloader.py → download_with_ytdlp_with_resume_fallback → DF-008 cleanup
+    description: Repoint the cleanup to unlink temp_file (.part), not validated_output.
+  - step: 4
+    action: modify_code
+    target: src/vkdownloader/services/ytdlp_downloader.py → _attempt_segment_resume
+    description: Update stat() and unlink() to target _ytdlp_temp_name(output_file) while passing output_file (final name) to download_hls_with_resume.
+  - step: 5
+    action: add_tests
+    target: tests/test_hls_downloader.py → TestYtdlpTempName
+    description: 5 oracles: suffix, yt-dlp temp_name match, directory preservation, no-extension, roundtrip unlink.
+  - step: 6
+    action: modify_tests
+    target: tests/test_hls_downloader.py, tests/test_downloader.py, tests/test_batch_downloader.py
+    description: Update tests that simulate yt-dlp partial files to create .part files instead of final name.
+  - step: 7
+    action: verify
+    target: standing gate §7.1
+    description: Run pytest, ruff check, ruff format --check, mypy src, mypy src tests, ruff check . — confirm G1-G6 green.
+
+# ── Architectural constraints ──
+minimal_change: >
+  _ytdlp_temp_name mirrors yt-dlp's FileDownloader.temp_name: filename + '.part'.
+  No new error class, no new dependency. The helper is a pure function.
+leaf_safety: >
+  ytdlp_downloader.py imports only ..config, ..exceptions, ..models.*, ..services.*,
+  ..utils.* — no leaf property is broken.
+no_new_files: >
+  No new source files added. The four packaging frozensets stay at 73/32/2/4.
+
+# ── Files ──
+files:
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: _ytdlp_temp_name
+        action: add
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+        action: modify_code
+        description: Repoint probe and DF-008 cleanup to .part name.
+      - type: function
+        name: _attempt_segment_resume
+        action: modify_code
+        description: Update stat() and unlink() to target .part temp file.
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: class
+        name: TestYtdlpTempName
+        action: add
+      - type: class
+        name: TestYtDlpRetryBackoff
+        action: modify_tests
+        description: Two tests updated to create .part files.
+      - type: class
+        name: TestB13ResumeErrorHandling
+        action: modify_tests
+        description: Two tests updated to create .part files.
+  - path: tests/test_downloader.py
+    targets:
+      - type: class
+        name: TestPerformDownload
+        action: modify_tests
+        description: Segment-path test updated to create .part file.
+  - path: tests/test_batch_downloader.py
+    targets:
+      - type: class
+        name: TestBatchDownloaderSemaphore
+        action: modify_tests
+        description: Two tests updated to create .part files.
+
+# ── Required tests ──
+required_tests:
+  suffix_append: >
+    _ytdlp_temp_name(Path("/tmp/video.mp4")) == Path("/tmp/video.mp4.part")
+  yt_dlp_match: >
+    _ytdlp_temp_name matches the installed yt-dlp FileDownloader.temp_name output.
+  directory_preserved: >
+    _ytdlp_temp_name preserves the parent directory.
+  no_extension: >
+    _ytdlp_temp_name handles paths with no extension.
+  roundtrip_unlink: >
+    Write to temp, unlink, assert no residue.
+  partial_probe_unreachable_without_part: >
+    When only the final name exists (not .part), the probe returns False (exits retry loop).
+  cleanup_targets_part: >
+    DF-008 cleanup unlinks .part, not the final name.
+  standing_gate: >
+    G1 (pytest): exit 0, pass count >= pre-block, skip count 3. G2 (ruff check src tests): exit 0. G4 (mypy src): exit 0. G6 (ruff check .): exit 0. G5 non-increasing. G3 unchanged from red baseline.
+
+# ── Honest judgement required ──
+honest_judgement:
+  question: >
+    Route (a) repoint vs (b) --no-part vs (c) probe both.
+  criterion: >
+    Route (b) removes yt-dlp's own resumability, replacing it with the segment
+    path's resume, which needs a fresh browser token. Route (c) leaves residue.
+    Route (a) is the default.
+  recommendation: >
+    Route (a): add _ytdlp_temp_name, repoint probe and cleanup. Minimal, correct.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/services/ytdlp_downloader.py (_ytdlp_temp_name + probe + cleanup + _attempt_segment_resume stat/unlink)
+    tests/test_hls_downloader.py (new TestYtdlpTempName class, updated TestYtDlpRetryBackoff and TestB13ResumeErrorHandling)
+    tests/test_downloader.py (updated TestPerformDownload)
+    tests/test_batch_downloader.py (updated TestBatchDownloaderSemaphore)
+  commit_constraints:
+    - One commit only
+    - Commit body notes which tests were updated and why
+    - No new files added
+
+# ── Dependency metadata ──
+blocked_by: p12-b7, p12-b8
+blocks: nothing (plan terminus)
+risk_tier: Medium
+risk_notes: >
+  The change fixes a latent bug where the probe and cleanup target the wrong
+  filename. Risk is low: yt-dlp's .part naming is stable and verified by test
+  against the installed version.

@@ -1,6 +1,6 @@
 # Phase 07 — Filesystem Artefacts Fix Plan
 
-**Status**: PARTIALLY IMPLEMENTED — `P12-B1` (`12af960`), `P12-B2` (`5d264d4`), `P12-B3` (`12af960`), `P12-B4` (`aabfc46`), `P12-B5` (`cfe4ce8`), `P12-B6` (`40404e2`), `P12-B7` (`e2c5ad0`), `P12-B8` (`0c704de`), `P12-B9` (`767bb47`), `P12-B10` (`1d09009`) done. Remaining: `P12-B11`, `P12-B12`.
+**Status**: PARTIALLY IMPLEMENTED — `P12-B1` (`12af960`), `P12-B2` (`5d264d4`), `P12-B3` (`12af960`), `P12-B4` (`aabfc46`), `P12-B5` (`cfe4ce8`), `P12-B6` (`40404e2`), `P12-B7` (`e2c5ad0`), `P12-B8` (`0c704de`), `P12-B9` (`767bb47`), `P12-B10` (`1d09009`) done. `P12-B11` verified (no code change needed — in-code comment and docs already state the posture, preferred shape "no code at all"). `P12-B12` done (`STRUCT.md` sentence updated). Remaining: none.
 **Audit input**: `.ai/audit/99-validation/07-filesystem-artifacts-validated-findings.md` (validated findings artifact, phase 07, audit `HEAD = 4bf9efb`)
 **Baseline re-verified by this Planner against live `HEAD = 58bb7ce`** (re-baselined after the loader retirement landed; the tree under `src` and `tests` is clean at that commit)
 **Binding decisions applied**:
@@ -1158,6 +1158,8 @@ Second, **what "no network" can mean here**, and this is escalated rather than d
 
 ### 6.11 `P12-B11` — the confinement posture
 
+**Status:** DONE — no code change needed (preferred shape "no code at all"). Verified: in-code comment in `setup_logging` already states the Windows caveat; `docs/01-tools/vkdownloader-overview.md` and `docs/11-guides/configuration.md` already carry the same caveat. `grep` over `src/` for `gettempdir`/`iterdir`/`rmtree` shows only the pre-existing cookie-artefact lifecycle in `ytdlp_downloader.py` (SEC-001/SEC-002), no new occurrences introduced by this plan.
+
 **Semantic targets.**
 1. `src/vkdownloader/config.py::setup_logging` — the log-file creation branch, **only if** the chosen option changes what it does.
 2. `docs/11-guides/configuration.md` and `docs/01-tools/vkdownloader-overview.md` — the two documents that already carry the Windows caveat for other artefacts, in the same register and the same words.
@@ -1176,6 +1178,8 @@ Second, **what "no network" can mean here**, and this is escalated rather than d
 ---
 
 ### 6.12 `P12-B12` — the structural map sentence
+
+**Status:** DONE — committed as part of `767bb47`. The `docs/STRUCT.md` line for `ffmpeg_utils.py` updated to name all three surviving kinds: shared subprocess infrastructure, availability discovery, and the segment merge engine. No frozenset changes (no new files).
 
 **Semantic target.** `docs/STRUCT.md` — the `services/` tree listing's entry for `ffmpeg_utils.py`, currently "FFmpeg discovery and stream concatenation". Read `docs/00-overview/doc-maintenance-rules.md` before editing anything under `docs/`.
 
