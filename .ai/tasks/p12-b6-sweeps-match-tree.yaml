@@ -1,0 +1,524 @@
+# Implementation task for P12-B6
+# Block 6 in execution order (after P12-B5; preceded by B3→B1→B10→B2→B4→B5)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §6.6
+# PoO decision D-4: option (i) — narrow only the merge-decision count
+#
+# Three findings, one commit:
+#   ART-003 — bare f.unlink() over glob("*") raises on non-regular entries (Windows PermissionError [WinError 5])
+#   ART-004 — glob("*.ts") merge-decision count includes batch_*.ts temps, causing merge SKIP on resume
+#   ART-013 — NNNNN.ts.tmp residue is unmatched by any sweep
+
+id: p12-b6
+
+title: P12-B6 — make the sweeps match what the tree contains (ART-003 cleanup guard, ART-004 tally exclusion, ART-013 .ts.tmp sweep)
+
+priority: high
+
+depends_on:
+  - p12-b5   # execution-order predecessor; no hard code dependency — B6 writes segment_downloader.py and ffmpeg_utils.py only, not utils/security.py
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§6.6 P12-B6 — the sweeps match the tree"
+source_audit_section: "§9 P12-B6 Auditor context (context_a)"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  Three related reconciliations in one commit:
+
+  (1) ART-003 — `_cleanup_segments` bare `f.unlink()` over `glob("*")`:
+      Add an intent guard — skip non-regular entries (`is_file()`) and tolerate
+      already-gone files (`missing_ok=True`). Must be phrased by INTENT, not
+      by catching `IsADirectoryError` (POSIX-only). On Windows the operative
+      failure is `PermissionError [WinError 5]` from unlinking a directory.
+
+  (2) ART-004 — `_tally_and_merge` `downloaded_count` derived from
+      `glob("*.ts")`: `batch_*.ts` matches it exactly as `NNNNN.ts` does.
+      Exclude merge temps from THIS count only (PoO decision D-4 = option (i)).
+      The reporter `_log_preserve_segments`'s count stays a raw working-directory
+      inventory, keeping `TestPreserveSegmentsReporter` green unchanged.
+
+  (3) ART-013 — `NNNNN.ts.tmp` residue unmatched by any sweep: The two `os.replace`
+      publish sites produce `output_path.with_suffix(output_path.suffix + ".tmp")`.
+      Extend `_clear_stale_segments`'s sweep to cover `*.ts.tmp` alongside `*.ts`.
+      Also ensure `_cleanup_segments` sweeps `.ts.tmp` correctly (its `glob("*")`
+      already matches the temp suffix, but the `is_file()` guard from change (1)
+      is what makes it safe to unlink them). One suffix constant for the `.tmp`
+      pattern, shared at both publish sites and the new glob.
+
+  Additionally: update the two in-code deferral comments that still point at
+  `ART-004` as unfixed — in `ffmpeg_utils._merge_segments_batched` and
+  `segment_downloader._log_preserve_segments` — to record that the deferral is
+  discharged by this block's tally exclusion.
+
+# ── Goals ──
+goals:
+  - _cleanup_segments no longer raises PermissionError on a directory entry inside the segments tree
+  - _tally_and_merge's merge-decision count excludes batch_*.ts temps so a resumed run reaches the merge
+  - _clear_stale_segments reconciles NNNNN.ts.tmp residue alongside *.ts files
+  - The .tmp suffix constant is shared at both publish sites and the new glob
+  - The ART-004 deferral comments in _merge_segments_batched and _log_preserve_segments are updated to discharged
+  - _cleanup_segments is still called only under if result: (no new call sites — B7 owns those)
+  - TestPreserveSegmentsReporter's three tests stay green unchanged (D-4 = option i)
+  - TestMergeSegmentsBatched's batch-failure-preservation test stays green unchanged (D-13 oracle)
+
+# ── Implementation sequence ──
+implementation_sequence:
+
+  # ── Phase 1: introduce the suffix constant ──
+  - phase: 1
+    step: 1
+    action: add_constant
+    target: src/vkdownloader/services/segment_downloader.py → module level
+    description: >
+      Add `_SEGMENT_TEMP_SUFFIX: Final = ".tmp"` near the existing
+      `_PLAYLIST_SIGNATURE_FILE` constant (segment_downloader.py:110).
+      `Final` is already imported (line 14). This constant replaces the
+      hard-coded ".tmp" at both os.replace publish sites and is used in the
+      new *.ts.tmp glob in _clear_stale_segments.
+
+  # ── Phase 2: ART-003 — _cleanup_segments guard ──
+  - phase: 2
+    step: 1
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py → _cleanup_segments
+    description: >
+      Replace the bare `for f in segments_dir.glob("*"): f.unlink()` with an
+      intent-guarded loop: skip entries that are not files (`if not f.is_file():
+      continue`) and call `f.unlink(missing_ok=True)`. This prevents the
+      PermissionError [WinError 5] on directory entries. The `glob("*")`
+      already matches `*.ts.tmp` files; the `is_file()` guard is what makes
+      unlinking them safe. The `rmdir()` tail with its existing try/except
+      is untouched.
+
+  # ── Phase 3: ART-004 — _tally_and_merge count exclusion ──
+  - phase: 3
+    step: 1
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py → _tally_and_merge → downloaded_count
+    description: >
+      Replace `downloaded_count = len(list(segments_dir.glob("*.ts")))` with a
+      filtered comprehension that excludes batch_*.ts temps: `downloaded_count =
+      len([f for f in segments_dir.glob("*.ts") if not f.name.startswith("batch_")])`.
+      D-4 = option (i): narrow only this merge-decision count. The progress
+      callback still receives this narrowed count so progress reporting is
+      consistent with the merge decision.
+
+  # ── Phase 4: ART-013 — _clear_stale_segments .ts.tmp sweep ──
+  - phase: 4
+    step: 1
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py → _clear_stale_segments
+    description: >
+      After the existing `for stale_file in segments_dir.glob("*.ts")` loop,
+      add a second loop for the temp residue:
+      `for stale_temp in segments_dir.glob(f"*.ts{_SEGMENT_TEMP_SUFFIX}"):
+      stale_temp.unlink(missing_ok=True)`. The .ts.tmp files are always stale
+      residue (never a valid segment), so sweeping them alongside *.ts is
+      correct. Update the docstring to mention *.ts.tmp coverage.
+
+  - phase: 4
+    step: 2
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py → _download_segment_sequential and _download_segment_parallel → publish sites
+    description: >
+      Replace the hard-coded `".tmp"` at the two `os.replace` publish sites
+      (lines ~204 and ~267: `output_path.with_suffix(output_path.suffix + ".tmp")`)
+      with `_SEGMENT_TEMP_SUFFIX`. Both sites now derive the temp name from the
+      same constant, so the sweep glob and the publish sites cannot drift.
+
+  # ── Phase 5: comment updates (discharge ART-004 deferral) ──
+  - phase: 5
+    step: 1
+    action: modify_code
+    target: src/vkdownloader/services/ffmpeg_utils.py → _merge_segments_batched → D-13 deferral comment
+    description: >
+      Update the ART-004 deferral note (around line 631-640) to record that
+      the merge-temp exclusion from the *.ts count is now implemented in
+      segment_downloader._tally_and_merge, so the deferral is discharged.
+      Keep the ART-012 sizing note (B8's domain). Do NOT change the cleanup
+      logic itself — only the comment.
+
+  - phase: 5
+    step: 2
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py → _log_preserve_segments → D-13 comment
+    description: >
+      Update the ART-004 note in _log_preserve_segments (lines ~1256-1263) to
+      record that the deferral is discharged: the merge-decision count in
+      _tally_and_merge now excludes batch_*.ts, while _log_preserve_segments
+      itself still reports the raw working-directory count (its compensating
+      control) and the count_note text remains true under D-4 option (i).
+
+  # ── Phase 6: tests ──
+  - phase: 6
+    step: 1
+    action: add_tests
+    target: tests/test_hls_downloader.py → TestCleanupSegments
+    description: >
+      Extend the existing class with a directory-entry oracle: create a
+      subdirectory inside segments_dir alongside segment files, call
+      _cleanup_segments, assert it returns without raising and the file
+      entries are gone. Assert no POSIX-specific exception type is named
+      in the guard or the test. (test_hls_downloader.py already imports
+      _cleanup_segments from services.downloader at line 31.)
+
+  - phase: 6
+    step: 2
+    action: add_tests
+    target: tests/test_segment_downloader.py → new Test class or section
+    description: >
+      Add two oracles. (a) Merge-reached oracle: a tree with the expected
+      NNNNN.ts segments plus one or more batch_NNNNN.ts temps reaches the
+      merge (not None on count mismatch). Requires importing _tally_and_merge
+      and patching _merge_segments_batched. (b) .ts.tmp sweep oracle: a
+      .ts.tmp file beside segments does not survive a stale sweep under
+      _clear_stale_segments. Requires importing _clear_stale_segments.
+
+  - phase: 6
+    step: 3
+    action: verify
+    target: standing gate §7.1
+    description: >
+      Run pytest, ruff check src tests, ruff format --check src tests,
+      mypy src, mypy src tests, ruff check . — confirm G1/G2/G4/G6 exit 0,
+      G5 non-increasing, G3 unchanged from red baseline, skip count 3.
+
+# ── Architectural constraints ──
+architectural_constraints:
+
+  intent_guard_not_exception_type: >
+    The _cleanup_segments fix must be phrased by intent — `is_file()` guard
+    to skip non-regular entries — NOT by catching `IsADirectoryError`.
+    `IsADirectoryError` is POSIX-only; on Windows, unlinking a directory
+    raises `PermissionError [WinError 5]`. The existing `try/except OSError`
+    on `rmdir()` is NOT a model — it silently swallows `PermissionError` on
+    Windows. This is plan §2.3 and §5.1 risk I1.
+
+  d4_option_i_poo: >
+    PoO decision D-4 = option (i): narrow only the merge-decision count in
+    _tally_and_merge. The _log_preserve_segments count stays a raw
+    working-directory inventory. ALL THREE TestPreserveSegmentsReporter
+    tests stay green unchanged. This is the binding decision — do not narrow
+    both counts.
+
+  cleanup_call_sites_unchanged: >
+    _cleanup_segments is still called only under `if result:` (segment_downloader.py:867-868).
+    This block adds NO new call sites — P12-B7 owns those. Stated so the two
+    blocks are not confused. Plan §6.6 acceptance criterion 7.
+
+  signature_short_circuit_is_b6_only: >
+    The .signature short-circuit in _clear_stale_segments is the ONLY
+    short-circuit any block in this plan may change, and that block is B6
+    (§4.3 conflict-matrix row 8). The Implementer must decide whether the
+    .ts.tmp sweep in _clear_stale_segments needs to run even when the
+    signature matches (currently the short-circuit returns before any glob
+    runs). If addressed, the .ts.tmp sweep must run before the short-circuit
+    return. This is an honest judgement point, not a mechanical requirement.
+
+  no_os_replace_or_durability: >
+    No test anywhere uses os.replace (0 results in tests/). Do not introduce
+    fsync, a temp-dir abstraction, or a lock file (§2.2 C5). The is_file()
+    guard is about correctness of the unlink, not about durability.
+
+  leaf_safety: >
+    segment_downloader.py imports from ..config, ..models.*, ..utils.*,
+    .concurrency, .downloader_throttle, .ffmpeg_utils, .quality. No new import
+    is introduced — is_file(), missing_ok, glob, and Final are already
+    in scope or already imported.
+
+  no_file_line_references: >
+    Anchors are symbol names: _cleanup_segments, _tally_and_merge,
+    _clear_stale_segments, _log_preserve_segments, _merge_segments_batched,
+    _SEGMENT_TEMP_SUFFIX. No file:line references in the commit message.
+
+# ── Files ──
+files:
+
+  # ── Production: segment_downloader.py ──
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: constant
+        name: _SEGMENT_TEMP_SUFFIX
+      - type: function
+        name: _cleanup_segments
+      - type: function
+        name: _tally_and_merge
+      - type: function
+        name: _clear_stale_segments
+      - type: function
+        name: _log_preserve_segments
+    semantic_anchors:
+      add_constant:
+        type: module_level_constant
+        near: _PLAYLIST_SIGNATURE_FILE
+        description: >
+          Add `_SEGMENT_TEMP_SUFFIX: Final = ".tmp"` near the existing
+          _PLAYLIST_SIGNATURE_FILE constant (line 110). Uses the already-imported
+          Final from typing (line 14).
+      cleanup_guard:
+        type: function_call
+        match: "f.unlink()"
+        description: >
+          Inside _cleanup_segments (line 449-450), the bare f.unlink() over
+          glob("*") with no is_file() guard and no missing_ok. Replace with
+          `if not f.is_file(): continue` and `f.unlink(missing_ok=True)`.
+      tally_count:
+        type: function_call
+        match: 'len(list(segments_dir.glob("*.ts")))'
+        description: >
+          Inside _tally_and_merge (line 849), the downloaded_count derived
+          from glob("*.ts") which includes batch_*.ts. Replace with a
+          filtered comprehension excluding batch_ prefixed names.
+      stale_sweep:
+        type: function_body
+        match: _clear_stale_segments
+        description: >
+          Lines 151-155: the stale_count and the for-loop over glob("*.ts").
+          Add a second loop for glob("*.ts.tmp") using _SEGMENT_TEMP_SUFFIX,
+          placed after the existing *.ts unlink loop, before the signature
+          write at line 157.
+      publish_site_sequential:
+        type: function_call
+        match: 'output_path.with_suffix(output_path.suffix + ".tmp")'
+        description: >
+          Line 204 inside _download_segment_sequential. Replace the
+          hard-coded ".tmp" with _SEGMENT_TEMP_SUFFIX.
+      publish_site_parallel:
+        type: function_call
+        match: 'output_path.with_suffix(output_path.suffix + ".tmp")'
+        description: >
+          Line 267 inside _download_segment_parallel. Replace the
+          hard-coded ".tmp" with _SEGMENT_TEMP_SUFFIX.
+    changes:
+      - action: add_code
+        target: add_constant
+        description: "Introduce _SEGMENT_TEMP_SUFFIX: Final = '.tmp'"
+      - action: modify_code
+        target: cleanup_guard
+        description: Add is_file() skip and missing_ok=True to unlink
+      - action: modify_code
+        target: tally_count
+        description: Exclude batch_*.ts from the merge-decision count
+      - action: modify_code
+        target: stale_sweep
+        description: Add .ts.tmp glob sweep using _SEGMENT_TEMP_SUFFIX
+      - action: modify_code
+        target: publish_site_sequential
+        description: Replace ".tmp" literal with _SEGMENT_TEMP_SUFFIX
+      - action: modify_code
+        target: publish_site_parallel
+        description: Replace ".tmp" literal with _SEGMENT_TEMP_SUFFIX
+      - action: update_comment
+        target: _log_preserve_segments
+        description: >
+          Update the D-13/ART-004 note (lines ~1256-1273) to record the
+          deferral is discharged; the count_note text stays true under D-4
+          option (i).
+
+  # ── Production: ffmpeg_utils.py (comment only) ──
+  - path: src/vkdownloader/services/ffmpeg_utils.py
+    targets:
+      - type: function
+        name: _merge_segments_batched
+    semantic_anchors:
+      deferral_comment:
+        type: inline_comment
+        match: "Excluding the merge temps is phase 07's ART-004"
+        description: >
+          Lines 631-640: the D-13 deferral note that assigns the merge-temp
+          count exclusion to ART-004 and the sizing to ART-012. Update the
+          ART-004 half to record it is discharged by B6; keep the ART-012
+          half for B8. Edit COMMENT ONLY — do not touch any logic. The module
+          is a leaf (C4): no imports from segment_downloader.
+    changes:
+      - action: update_comment
+        target: deferral_comment
+        description: Record ART-004 deferral as discharged; keep ART-012 deferral
+
+  # ── Tests: extend TestCleanupSegments ──
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: class
+        name: TestCleanupSegments
+    changes:
+      - action: add_test
+        description: >
+          New test: a subdirectory inside segments_dir alongside segment
+          files; _cleanup_segments returns without raising and removes the
+          file entries but leaves the (now-empty) segments_dir — or removes
+          it via rmdir if the directory entry is the only remaining item.
+          Assert no POSIX-specific exception type is named. Uses tmp_path
+          fixture (real subdir, not platform-gated). _cleanup_segments is
+          already imported at line 31 from services.downloader.
+
+  # ── Tests: new oracles in test_segment_downloader.py ──
+  - path: tests/test_segment_downloader.py
+    targets:
+      - type: class
+        name: TestPreserveSegmentsReporter  # reference only — must stay green unchanged
+      - type: new_class  # new test class for B6 oracles
+    changes:
+      - action: add_import
+        description: >
+          Add _tally_and_merge and _clear_stale_segments to the import block
+          from vkdownloader.services.segment_downloader (lines 22-37).
+      - action: add_test
+        description: >
+          Merge-reached oracle: a segments_dir with the expected NNNNN.ts
+          files plus one or more batch_*.ts temps → _tally_and_merge reaches
+          _merge_segments_batched (patched) instead of returning None on the
+          count mismatch. Asserts the merge is called.
+      - action: add_test
+        description: >
+          .ts.tmp sweep oracle: a .ts.tmp file beside the segments does not
+          survive _clear_stale_segments when the signature does not match.
+          Assert the temp file is gone after the call.
+
+# ── Required tests ──
+required_tests:
+
+  non_regular_entry_oracle: >
+    A directory inside the segments tree no longer turns _cleanup_segments
+    into an exception. Oracle in TestCleanupSegments (test_hls_downloader.py)
+    with a real subdirectory via tmp_path. Asserts the call returns and the
+    file entries are removed. Asserts no POSIX-specific exception type
+    (IsADirectoryError) is named in the guard or test. (Existing:
+    test_cleanup_removes_segment_files, test_cleanup_handles_non_empty_directory
+    stay green unchanged.)
+
+  merge_reached_with_leftover_temps: >
+    A tree of the expected NNNNN.ts segments plus one or more batch_*.ts
+    temps reaches _merge_segments_batched (patched to return the output
+    path) instead of returning None on the now-narrowed count mismatch.
+    The merge IS reached precisely because batch_*.ts is excluded from the
+    count. (New test in test_segment_downloader.py.)
+
+  ts_tmp_not_survives_stale_sweep: >
+    A .ts.tmp file beside segments does not survive _clear_stale_segments
+    when the signature does not match. (New test in test_segment_downloader.py.)
+
+  preserve_reporter_unchanged: >
+    TestPreserveSegmentsReporter's three tests stay green, UNCHANGED. Under
+    D-4 option (i), no test is edited:
+    test_reports_zero_count_directory, test_count_includes_merge_temps_and_says_so
+    (asserts working_dir_ts_count == 3 with batch_00000.ts present), and
+    test_missing_directory_emits_nothing.
+
+  merge_failure_preservation_unchanged: >
+    TestMergeSegmentsBatched::test_batch_failure_preserves_inputs_and_earlier_batch_temps
+    (test_ffmpeg_utils.py:646) stays green, UNCHANGED. This is the D-13
+    preservation oracle — it asserts that a graceful failure leaves the
+    accumulated batch temps, which is precisely the ART-004 residue. Must
+    not be weakened.
+
+  comment_discharge_verified: >
+    The two deferral comments mentioning ART-004 no longer point at an
+    unfixed finding. _merge_segments_batched's comment and _log_preserve_segments'
+    comment both record that the merge-temp count exclusion is now
+    implemented. (Verified by reading, not by a test.)
+
+  standing_gate: >
+    G1 (pytest): exit 0, pass count >= pre-block minus only declared re-
+    scopes (none here — no pinned tests edited). Skip count 3.
+    G2 (ruff check src tests): exit 0.
+    G3 (ruff format --check src tests): unchanged from red baseline
+      (tests/test_hls_downloader.py still needs its pre-existing reformat;
+      do not absorb or widen it — §2.1 rule 3).
+    G4 (mypy src): exit 0.
+    G5 (mypy src tests): non-increasing (86 at 58bb7ce; re-measure at
+      task time). Zero errors in src/.
+    G6 (ruff check .): exit 0.
+
+# ── Honest judgement required ──
+honest_judgement:
+
+  signature_short_circuit:
+    question: >
+      The .signature short-circuit in _clear_stale_segments returns before
+      any glob runs when the signature matches. A failed run that wrote a
+      matching .signature leaves everything — including .ts.tmp residue.
+      Does B6 need to make the .ts.tmp sweep run even on a matching
+      signature?
+    criterion: >
+      B6 is the only block allowed to change the short-circuit (§4.3 row 8).
+      If the Implementer moves the .ts.tmp sweep before the short-circuit,
+      the sweep runs regardless of signature match — which is the safer
+      choice, since .ts.tmp files are always stale residue. If the sweep
+      stays after the short-circuit, a matching-signature run with a .ts.tmp
+      residue will not clean it — but that residue was created by a crash
+      between open() and os.replace(), which is the same window where the
+      signature was NOT yet written for the current playlist (the signature
+      is written at the end of _clear_stale_segments). So the residue only
+      survives if a PREVIOUS run's signature matches the current playlist.
+      Recommendation: keep the sweep inside the existing clearing path (after
+      the short-circuit check) for the smallest diff, and note the residual
+      case in the commit body. The .ts.tmp sweep is still correct for the
+      non-matching-signature case, which is the case the sweep exists to
+      handle.
+    recommendation: >
+      Keep the .ts.tmp sweep inside the existing clearing path. The matching-
+      signature + .ts.tmp-residue case is a narrow edge: the .ts.tmp is only
+      created during an active download, and if the download was progressing
+      far enough to write the signature, the segment is either complete (.ts
+      on disk, no .ts.tmp) or the crash happened before the signature write.
+      Declare the residual in the commit body if the Implementer disagrees.
+
+  d4_option_i_confirmed:
+    question: >
+      Is _log_preserve_segments's number a working-directory inventory or a
+      resumable-segment count?
+    criterion: >
+      Its docstring, its next_action ("clear the working directory"), and
+      its pinned test (test_count_includes_merge_temps_and_says_so, which
+      asserts working_dir_ts_count == 3 with batch_00000.ts present) all
+      say inventory. Choose option (i): narrow only the merge-decision count.
+    recommendation: >
+      Option (i) is the PoO decision for this task. Do NOT narrow the
+      reporter's count. The count_note text stays true: it says the count
+      includes batch_*.ts and is "not a count of resumable segments" —
+      that remains accurate even after the merge-decision count is narrowed.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/services/segment_downloader.py (constant + 4 production
+    changes + 1 comment), src/vkdownloader/services/ffmpeg_utils.py (1
+    comment only), tests/test_hls_downloader.py (extend TestCleanupSegments),
+    tests/test_segment_downloader.py (extend imports + new test class).
+  commit_constraints:
+    - One commit only
+    - TestPreserveSegmentsReporter's three tests stay green UNCHANGED (D-4 = option i)
+    - TestMergeSegmentsBatched's failure-preservation test stays green UNCHANGED
+    - No existing test is edited — only extended with new methods
+    - .ts.tmp publish sites use _SEGMENT_TEMP_SUFFIX at both sites
+    - Commit body records D-4 = option (i), the .ts.tmp sweep placement decision (inside the clearing path, after the short-circuit), and the ART-004 deferral discharge
+    - Commit subject describes the behaviour"
+  test_packaging_impact: >
+    No new file under src/ or tests/. test_packaging.py frozensets unchanged
+    (73 / 32 / 2 / 4). (C1 does not apply.)
+
+# ── Dependency metadata ──
+blocked_by: Nothing (no code dependency on prior blocks — B6 writes segment_downloader.py and ffmpeg_utils.py, not utils/security.py. Execution-order predecessor is B5 by the linearization)
+blocks: B7, B9
+conflict_matrix_rows: "§4.3 rows 6 (segment_downloader.py), 7 (_cleanup_segments guard + call sites), 8 (_clear_stale_segments short-circuit), 9 (_tally_and_merge count), 10 (TestPreserveSegmentsReporter), 13 (_merge_segments_batched deferral comment), 17 (TestCleanupSegments), 18b (download_video — not touched)"
+risk_tier: High — changes the decision that decides whether a merge runs
+risk_notes: >
+  I1 (POSIX-shaped fix): the guard must be is_file(), not IsADirectoryError
+  catch. G2/G3 (count mismatch): narrowing the count to exclude batch temps
+  must not let a genuinely incomplete segment set reach the merge — the
+  merge's own existence check (FileNotFoundError naming the missing file)
+  is the backstop. D1 (stale deferral): both ART-004 comment pointers must
+  be discharged. T6 (D-13 oracle): the batch-failure-preservation test must
+  stay green unchanged.
+agent_roster:
+  - Implementer
+  - Auditor
+  - Researcher
+  - Planner
+  - Validator

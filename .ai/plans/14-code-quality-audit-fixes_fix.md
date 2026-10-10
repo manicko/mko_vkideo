@@ -1560,3 +1560,64 @@ Stated plainly so the end-of-plan report does not overclaim:
 **Newly found and assigned:** the facade defect `d572d96` introduced in `services/downloader.py` — §2.5 correction 12, `B4`, §4.4 row 25
 **Blocks removed by the rulings:** none. This plan never proposed an `ffmpeg_utils.py` decomposition — §1.6
 **Couplings recorded by no prior audit or plan:** the `EXPECTED_SDIST_ENTRIES` / `EXPECTED_WHEEL_ENTRIES` dependency of `QLT-006` and `QLT-008` — §2.4 item 1, §4.4 row 15
+
+---
+
+## 9. Audit update (2026-10-10)
+
+### 9.1 Execution status
+
+An audit against the live working tree (HEAD `2289f6f`) determines that **none of the 13 blocks have been
+executed by this plan.** The plan file retained its original name (no `_fix` or `_done` suffix) until this
+update renamed it to `_fix`. Full evidence is in
+`.ai/audit/problems/14-code-quality-audit-doc-problems.md`.
+
+| Block | Status | Notes |
+|---|---|---|
+| B1 | **NOT DONE** | `_map_exception_to_status`, `_EXCEPTION_STATUS_HANDLERS`, `_quality_not_available_status` all still defined; `ErrorCode.NO_STREAMS` absent; six `status_label()` overrides return bare strings |
+| B2 | **NOT DONE** | `cli.py` ladders lack a `VKDownloadError` arm; terminal arms use `logger.exception` without structured context |
+| B3 | **NOT DONE** | `pyproject.toml` lacks `disallow_any_explicit`; pins still `3.12` — Ruling B (`>=3.14`) not landed |
+| B4 | **NOT DONE** | `downloader_throttle.py` not split; all retry symbols still in module |
+| B5 | **DONE** | Commit `83ba0f8` documented Retry-After as a floor |
+| B6 | **PARTIAL** | Three `STRUCT.md` rows added (quality.py, ytdlp_downloader.py); four rows still wrong; `models→exceptions` upward-import disclosure missing |
+| B7 | **NOT DONE** | `py_map.yaml` has 23/31 modules + phantom symbols; `front/*` maps reference foreign project; `builders/` anchors unsafe; `map.md` lists 5 `.pyc` entries for non-existent modules |
+| B8 | **PARTIAL** | `--method ffmpeg` row already fixed by other work (ceded per plan 18 §1.2); universal-export claim and 4 stale line counts remain |
+| B9 | **NOT DONE** | `cli-reference-clean.md` still exists (mojibake, duplicate `id`) |
+| B10 | **NOT DONE** | `morfx-tools.md` (600 lines) and `ast-editor.md` (41 lines) still shipped, describe non-existent MCP tooling |
+| B11 | **NOT DONE** | `INT-008` (line 51 `downloader_throttle.py`), `SRV-001` (line 290 `vkdownloader-overview.md`), `STR-008` (line 80 `ffmpeg_utils.py`) still cited |
+| B12 | **NOT DONE** | `models/quality.py` mixed import form undocumented |
+| B13 | **NOT DONE** | No escalation report for `VAL-901`/`VAL-902` produced |
+
+### 9.2 Voided assertions (from plan 18 §5.1, V1–V13)
+
+The following plan assertions were voided by commits between `09f1b10` and the live HEAD. They are
+recorded here so a future Implementor does not re-inherit an incorrect premise:
+
+- **§2.3 / §2.9** — "`check_ffmpeg_available` return value is discarded." **Void.** Commit `e6e6c68`
+  now consumes the probe's answer via `logger.warning("ffmpeg_missing_for_merge", …)`.
+- **§2.2** — "Skip floor = 3 D-11 permission oracles." **Void.** Commit `3778e13` made the permission
+  oracles executable; the 3 live skips are now POSIX-killpg oracles.
+- **§2.3** — "Format gate is red." **Void.** Gate is green at 54 files.
+- **§2.5 correction 12** — Facade defect in `services/downloader.py`. The symbol-ownership comment's
+  four deleted groups were restored by commit `0ee7297`. The 28 `does not explicitly export attribute`
+  mypy errors remain and are now owned by plan 18 `P18-B14` / `DEC-Z`.
+- **`QLT-009` (B3)** — `INT-014` was listed as a separate code path. **Void.** The `INT-014` citation
+  was removed by ruling A; the path is now `INT-008` only. `QLT-009`'s `Any` count did not move.
+
+### 9.3 Recommendation
+
+**Implement the plan.** All target issues are real and still present. The blocks' prescriptions do not
+violate architecture or quality — they correct violations. The consolidated plan 18 lists every block
+as a source row, so execution should proceed through plan 18's register (`P18-B26` → `P18-B27` … →
+`P18-B38`), not as free-standing commits. The single deviation already executed (B5) was done via a
+commit whose message did not cite this plan or qualify the `TRN-` / `QLT-` id, which §8.4 violation 11
+warns against — future blocks must qualify all audit ids.
+
+### 9.4 Documentation problems discovered during audit
+
+Saved to `.ai/audit/problems/14-code-quality-audit-doc-problems.md`. Summary: five stale/wrong
+`docs/STRUCT.md` rows; false universal-export claim and four stale line counts in
+`vkdownloader-overview.md`; `api-reference.md` lists 5 `RETRYABLE_STATUS_CODES` vs actual 7;
+`cli-reference-clean.md` not yet deleted; `morfx-tools.md` and `ast-editor.md` document non-existent
+MCP tooling; five `.ai/structure/` map issues. No code was modified — only verification and this
+plan-file rename.

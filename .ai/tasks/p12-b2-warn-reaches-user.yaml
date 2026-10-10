@@ -1,0 +1,245 @@
+# Implementation task for P12-B2
+# Block 2 in execution order (after P12-B10, which is committed as 1d09009)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §3.3 / §6.3
+# Decision B is closed. PoO decision: option (a) — warn everywhere.
+# Auditor context: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §13
+
+id: p12-b2
+
+title: P12-B2 — the ART-009 warning reaches the user (repo_root fix + suppression drop)
+
+priority: medium
+
+depends_on:
+  - p12-b1   # writes validate_output_path (".." detection layer)
+  - p12-b10  # B10 pre-pass calls _resolve_output_file; B2 must not touch that call site
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§3.3 P12-B2 — make the warning actually reach the user"
+source_audit_section: "§13 P12-B2 Auditor context (context_a)"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  Two changes to make the existing `output_path_inside_repository` warning
+  fire on every code path, per PoO decision option (a) "warn everywhere":
+
+  1. Fix `repo_root` derivation in `validate_output_path` (security.py:74).
+     Change `Path(__file__).resolve().parent.parent.parent` to
+     `Path(__file__).resolve().parent.parent.parent.parent` (four `.parent`
+     calls, one too many currently). This makes `repo_root` point to the
+     directory containing `src/` (the true repository root), not `src/` itself.
+
+  2. Drop the two `warning=False` suppressions:
+     - security.py:111 in `_resolve_output_file`: `validate_output_path(output_path, warning=False)` → `validate_output_path(output_path)` (default `warning=True`). This covers both call sites of `_resolve_output_file` (B10 pre-pass and single-URL download path).
+     - ytdlp_downloader.py:909 in `download_with_ytdlp_with_resume_fallback`: `validate_output_path(output_file, warning=False)` → `validate_output_path(output_file)`.
+
+  Decision B is closed: warn only, do not refuse. No new refusal logic is added.
+
+# ── Goals ──
+goals:
+  - repo_root derives to the directory that contains src/ (asserted by value)
+  - A path under the repo root but outside src/ warns (new oracle)
+  - A path under src/ still warns (updated existing test)
+  - All three call sites now warn (option a)
+  - No behaviour changes beyond the warning (no new refusals, no path acceptance changes)
+  - Existing TestValidateOutputPathEdgeCases pass unchanged
+  - Standing gate: G1/G2/G4/G6 exit 0, G5 non-increasing, G3 unchanged, skip count 3
+
+# ── Implementation sequence ──
+implementation_sequence:
+  - step: 1
+    action: modify_production
+    target: src/vkdownloader/utils/security.py → validate_output_path → repo_root
+    description: >
+      Change line 74: `Path(__file__).resolve().parent.parent.parent` →
+      `Path(__file__).resolve().parent.parent.parent.parent`.
+  - step: 2
+    action: modify_production
+    target: src/vkdownloader/utils/security.py → _resolve_output_file → validate_output_path call
+    description: >
+      Change line 111: remove the `warning=False` argument so the default
+      `warning=True` takes effect.
+  - step: 3
+    action: modify_production
+    target: src/vkdownloader/services/ytdlp_downloader.py → validate_output_path call
+    description: >
+      Change line 909: remove the `warning=False` argument so the default
+      `warning=True` takes effect.
+  - step: 4
+    action: add_tests
+    target: tests/test_security.py → TestValidateOutputPath
+    description: >
+      (a) Modify test_path_inside_repo_warns to remove the Path.resolve MagicMock
+      mock and use a real path under src/. (b) Add test_path_inside_repo_outside_src_warns
+      using a real path under the repo root but outside src/ (e.g. docs/). (c) Add
+      test_repo_root_derives_to_project_root asserting the four-.parent derivation.
+  - step: 5
+    action: verify
+    target: standing gate §7.1
+    description: >
+      Run pytest, ruff check src tests, ruff format --check src tests,
+      mypy src, mypy src tests, ruff check . — confirm G1/G2/G4/G6 exit 0,
+      G5 non-increasing, G3 unchanged, skip count 3.
+
+# ── Architectural constraints ──
+architectural_constraints:
+  warn_only: >
+    Decision B is closed: warn only. No refusal, no root concept, no write-blocking
+    check. validate_output_path's `..` guard still raises DownloadError; the
+    warning is the entire user-facing behaviour B2 touches.
+  repo_root_by_value: >
+    repo_root must be derived by value, not by mock. A test that patches
+    Path.resolve to always succeed cannot detect a wrong root derivation and
+    must not be used as the sole oracle.
+  existing_suppression_sites: >
+    _resolve_output_file (security.py:111) and the retry probe in
+    ytdlp_downloader (line 909) are the two warning=False sites. segment_downloader.py:1205
+    already uses the default. Three sites, two changed, one already correct.
+  no_test_edits_beyond_scope: >
+    Existing TestValidateOutputPathTraversal (5 tests) and TestValidateOutputPathEdgeCases
+    (3 tests) must pass unchanged — except test_path_inside_repo_warns which loses its
+    blind mock. No traversal test is edited.
+
+# ── Files ──
+files:
+  - path: src/vkdownloader/utils/security.py
+    targets:
+      - type: function
+        name: validate_output_path
+    semantic_anchors:
+      repo_root_expression:
+        type: variable_assignment
+        match: "repo_root = Path(__file__).resolve().parent.parent.parent"
+        description: Line 74. Three .parent calls — one too few. Must be four.
+      resolve_output_file_warning:
+        type: function_call
+        match: "validate_output_path(output_path, warning=False)"
+        description: Line 111 inside _resolve_output_file. Must become validate_output_path(output_path).
+    changes:
+      - action: modify_code
+        target: repo_root_expression
+        description: Add one .parent to derive the true repo root.
+      - action: modify_code
+        target: resolve_output_file_warning
+        description: Remove warning=False argument so warning defaults to True.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+    semantic_anchors:
+      probe_warning:
+        type: function_call
+        match: "validate_output_path(output_file, warning=False)"
+        description: Line 909, retry probe. Must become validate_output_path(output_file).
+    changes:
+      - action: modify_code
+        target: probe_warning
+        description: Remove warning=False argument so warning defaults to True.
+
+  - path: tests/test_security.py
+    targets:
+      - type: class
+        name: TestValidateOutputPath
+    changes:
+      - action: edit_test
+        description: >
+          test_path_inside_repo_warns (line 57): remove the MagicMock +
+          Path.resolve patch. Use a real path under src/ (computed from
+          __file__). The test must prove the warning fires for paths inside
+          the repo root, using the real repo_root derivation — not a mock.
+      - action: add_test
+        description: >
+          test_path_inside_repo_outside_src_warns: use a real path under the
+          repo root but outside src/ (e.g. repo_root / "docs" / "test_file.mp4").
+          Assert the warning fires — this is the oracle that detects the
+          mis-derivation. If repo_root were still src/, this path would not
+          warn.
+      - action: add_test
+        description: >
+          test_repo_root_derives_to_project_root: compute the expected repo
+          root from the security module's __file__ (four .parent calls) and
+          compare to Path(__file__).resolve().parent.parent (from tests/ to
+          repo root). Assert equality.
+
+# ── Required tests ──
+required_tests:
+  repo_root_by_value: >
+    test_repo_root_derives_to_project_root — asserts the four-.parent derivation
+    matches the independently computed repo root. NOT a mock.
+  outside_src_warns: >
+    test_path_inside_repo_outside_src_warns — a path under repo root but outside
+    src/ triggers the warning. This test CANNOT pass with the old repo_root
+    (which pointed to src/); it fails before the fix and passes after, proving
+    the derivation changed.
+  inside_src_warns: >
+    test_path_inside_repo_warns (modified) — uses the real derivation, not a
+    MagicMock. Asserts warning fires for a path under src/.
+  existing_edge_cases_unchanged: >
+    test_empty_path_resolves_to_cwd, test_absolute_path_valid, test_relative_path_valid
+    stay green unchanged (paths outside repo do not warn).
+  traversal_tests_unchanged: >
+    All 5 tests in TestValidateOutputPathTraversal pass unchanged. The `..` guard
+    still raises DownloadError.
+  acceptance_unchanged: >
+    test_valid_path_creates_no_warning (tmp_path, outside repo) still passes —
+    no spurious warning for paths outside the repo.
+
+# ── Honest judgement required ──
+honest_judgement:
+  question: >
+    Option (a) — warn everywhere (drop both warning=False) vs. option (b) —
+    fix repo_root but keep deliberate suppression at internal call sites,
+    documenting why.
+  criterion: >
+    Under Decision B, the warning is the guard's entire user-facing behaviour.
+    Option (b) leaves the default loader path silent, which contradicts the
+    purpose of the fix. Option (a) is the only option that makes the warning
+    actually reach the user on every path.
+  resolution: >
+    PoO decision: option (a). Both warning=False arguments are removed.
+
+  test_mock_question: >
+    test_path_inside_repo_warns currently mocks Path.resolve and the logger,
+    making the repo_root derivation untestable. Does removing the mock and using
+    a real path inside the repo break the test's intent, or improve it?
+  resolution: >
+    Removing the mock improves it. The test's intent was always "the warning
+    fires for paths inside the repo" — the mock made that assertion vacuous.
+    Using a real path under src/ proves the derivation works end to end.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/utils/security.py (repo_root fix + warning=False drop in _resolve_output_file) +
+    src/vkdownloader/services/ytdlp_downloader.py (warning=False drop in probe) +
+    tests/test_security.py (1 modified test, 2 new tests)
+  commit_constraints:
+    - One commit only
+    - No traversal test is edited
+    - TestValidateOutputPathEdgeCases pass unchanged
+    - Commit subject describes the behaviour, not a file:line
+    - Commit body names: (1) option (a) chosen, (2) whether test_path_inside_repo_warns lost its mock, (3) the repo_root derivation fix
+
+# ── Dependency metadata ──
+blocked_by:
+  - p12-b1   # B1 writes validate_output_path
+  - p12-b10  # B10 pre-pass calls _resolve_output_file; B2 must not touch that call site
+blocks: Nothing
+risk_tier: Medium
+risk_notes: >
+  Lowest-risk block — a warning-only change. The repo_root fix changes which paths warn
+  (now the whole repo, not just src/). No path acceptance behaviour changes. The
+  suppression drop means _resolve_output_file now warns for paths inside the repo on
+  every download — a developer running from a clone will see warnings, which is the
+  intended signal under Decision B. mypy src tests is non-increasing from 95 baseline.
+agent_roster:
+  - Implementer
+  - Planner
+  - Validator

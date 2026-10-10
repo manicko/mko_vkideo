@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 import random
+import shutil
 import ssl
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -18,8 +19,10 @@ import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
+from ..exceptions import DownloadError
 from ..models.enums import QualityKind, QualityLabel
 from ..models.quality import QualitySpec
+from ..utils.formatting import format_bytes
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
@@ -110,6 +113,14 @@ def _parse_m3u8_segments(content: str) -> list[str]:
 _PLAYLIST_SIGNATURE_FILE = ".signature"
 _SEGMENT_TEMP_SUFFIX: Final = ".tmp"
 
+# Per-segment estimated size used by the download-stage free-space probe.
+# HLS segments are typically 2-10 seconds of video; 2 MB is a conservative
+# lower-bound estimate that lets most segments download while catching
+# catastrophically undersized volumes before the fan-out begins (ART-012,
+# P12-B8). The figure is an estimate — actual segment sizes vary with bitrate
+# and duration — and an unreadable mount is not treated as a full one.
+_DOWNLOAD_SEGMENT_BUDGET_BYTES: Final[int] = 2 * 1024 * 1024
+
 
 def _compute_playlist_signature(segments: list[str]) -> str:
     """Compute a SHA-256 signature of the segment URL list.
@@ -158,6 +169,61 @@ def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
         stale_temp.unlink(missing_ok=True)
 
     signature_file.write_text(signature, encoding="utf-8")
+
+
+def _check_download_space(segment_count: int, segments_dir: Path) -> None:
+    """Fail before the fan-out begins when the volume cannot hold the download.
+
+    The download stage writes segment files into ``segments_dir``; if the
+    volume cannot hold them the fan-out stalls far from the merge, which is the
+    one place the tool already probes. This probe mirrors the merge's
+    ``_check_merge_space`` shape: it raises an actionable ``DownloadError``
+    naming the required and available figures, and it treats an unreadable
+    mount as evidence of neither full nor empty — it logs and proceeds (ART-012,
+    P12-B8).
+
+    The demand figure is an estimate: ``segment_count`` multiplied by a
+    per-segment budget. The budget is conservative (2 MB); actual segment sizes
+    vary with bitrate and duration. The probe's purpose is to catch
+    catastrophically undersized volumes before the fan-out, not to be precise.
+
+    Args:
+        segment_count: Number of segments the download is about to fetch.
+        segments_dir: Directory the segments will be written into; the volume
+            probed is the one the download will fill.
+
+    Raises:
+        DownloadError: If the volume holds less free space than the estimate.
+    """
+    # G5 risk (§5.1): the probe must not pre-empt the merge's own, more
+    # precise check. A download-stage failure is not catastrophic — segments
+    # are resumable — so an unreadable mount logs and proceeds rather than
+    # blocking a download that would otherwise succeed.
+    try:
+        free_bytes = shutil.disk_usage(segments_dir).free
+    except OSError as exc:
+        logger.warning("download_space_probe_failed", error=str(exc))
+        return
+
+    required_bytes = segment_count * _DOWNLOAD_SEGMENT_BUDGET_BYTES
+    if free_bytes >= required_bytes:
+        return
+
+    hint = (
+        "Free disk space, write the download to another output volume, or select a "
+        "lower quality so the video is smaller."
+    )
+    logger.error(
+        "download_insufficient_disk_space",
+        required_bytes=required_bytes,
+        available_bytes=free_bytes,
+        hint=hint,
+    )
+    raise DownloadError(
+        f"Not enough free space to download the segments: {format_bytes(required_bytes)} "
+        f"required ({required_bytes} bytes) but only {format_bytes(free_bytes)} "
+        f"available ({free_bytes} bytes). {hint}"
+    )
 
 
 async def _download_segment_sequential(
@@ -1089,6 +1155,11 @@ async def _run_download_session(
     (P12-B7, ART-005 lifetime). The directory is not removed here; removal on
     every non-success exit is the caller's responsibility.
 
+    Probes the download volume's free space before the segment fan-out begins
+    (P12-B8, ART-012): if the estimated demand (segment count × per-segment
+    budget) exceeds available free space, raises ``DownloadError`` before any
+    segment is fetched. An unreadable mount logs and proceeds.
+
     Args:
         m3u8_url: HLS playlist URL.
         headers: Request headers to use.
@@ -1133,6 +1204,13 @@ async def _run_download_session(
         segments_dir.mkdir(parents=True, exist_ok=True)
 
         _clear_stale_segments(segments_dir, segments)
+
+        # P12-B8 (ART-012): probe the download volume's free space before the
+        # fan-out begins, mirroring _check_merge_space's shape. The demand
+        # figure is a per-segment estimate; an unreadable mount logs and
+        # proceeds (a failed probe must not block a download that would
+        # otherwise succeed — segments are resumable, unlike the merge).
+        _check_download_space(len(segments), segments_dir)
 
         # D-01: The batch semaphore gates *videos* (one permit per video, acquired
         # once in perform_download). asyncio.Semaphore is not reentrant: reusing the

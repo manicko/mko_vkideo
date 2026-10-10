@@ -66,6 +66,17 @@ _MERGE_HINT: Final[str] = "ffmpeg binary not found on PATH; segment merge will f
 # negligible against a video download and large enough to absorb all three.
 _MERGE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
 
+# The peak of the additive merge holds three live copies of the segment bytes
+# simultaneously: the original segments, the accumulated batch temp files, and
+# the growing final artefact. The multiplier therefore reflects that three-way
+# overlap, not a two-way one (ART-012, P12-B8).
+_MERGE_MULTIPLIER: Final[int] = 3
+
+# Number of segments merged per ffmpeg subprocess batch. Shared with
+# ``_required_merge_bytes`` so the sizing arithmetic and the merge staging
+# cannot drift apart (P12-B8).
+_MERGE_BATCH_SIZE: Final[int] = 100
+
 
 async def iter_process_lines(
     stream: asyncio.StreamReader,
@@ -468,11 +479,12 @@ async def _perform_final_merge(
 def _required_merge_bytes(segment_paths: Iterable[Path]) -> int:
     """Compute the free space the batched merge needs for ``segment_paths``.
 
-    Both merge stages write their output while their input is still on disk —
-    the final artefact is produced from the batch temp files before those are
-    unlinked — so the volume must hold the segments *and* a full copy of them
-    at the same time. The requirement is therefore twice the measured segment
-    bytes, plus a fixed safety margin.
+    The peak of the additive merge is the segments plus the accumulated batch
+    temps plus the growing final output, all alive at the same instant before
+    the success tail unlinks the originals. The volume must therefore hold
+    three copies of the segment bytes at once: the originals, the batch temp
+    files, and the final artefact. The requirement is therefore three times
+    the measured segment bytes, plus a fixed safety margin.
 
     A segment that has already disappeared contributes nothing: its absence is
     a different precondition, reported with a precise message by the merge's
@@ -493,7 +505,7 @@ def _required_merge_bytes(segment_paths: Iterable[Path]) -> int:
             # merge is decided by the existence check that runs next, which
             # names the file; a size probe must not pre-empt that verdict.
             continue
-    return segment_bytes * 2 + _MERGE_SPACE_MARGIN_BYTES
+    return segment_bytes * _MERGE_MULTIPLIER + _MERGE_SPACE_MARGIN_BYTES
 
 
 def _check_merge_space(segment_paths: Iterable[Path], segments_dir: Path) -> None:
@@ -585,7 +597,7 @@ async def _merge_segments_batched(
             relabel it "failed_to_refresh_token" and return None, losing the
             message.
     """
-    batch_size = 100
+    batch_size = _MERGE_BATCH_SIZE
     temp_files: list[Path] = []
     merged_inputs: list[Path] = []
 
@@ -636,8 +648,9 @@ async def _merge_segments_batched(
         # is `_log_preserve_segments`, which now reports the working
         # directory's `*.ts` count and the clear-the-directory action instead
         # of implying the directory is resumable as it stands. The merge peak
-        # also moves from 2x to 3x the segment bytes; the sizing belongs to
-        # phase 07's ART-012.
+        # sizing (3x the segment bytes via _MERGE_MULTIPLIER) is discharged
+        # by P12-B8 — both _required_merge_bytes and this comment now carry
+        # the corrected multiplier.
         for segment_path in merged_inputs:
             segment_path.unlink(missing_ok=True)
 

@@ -11,6 +11,7 @@ import aiohttp
 import pytest
 
 from vkdownloader.config import Settings
+from vkdownloader.exceptions import DownloadError
 from vkdownloader.models.dtos import HLSDownloadRequest
 from vkdownloader.models.enums import QualityLabel, StreamFormat
 from vkdownloader.models.video import Stream
@@ -26,6 +27,7 @@ from vkdownloader.services.segment_downloader import (
     PlaylistFetchResult,
     SegmentTask,
     _await_and_cancel,
+    _check_download_space,
     _clear_stale_segments,
     _create_connector,
     _download_segment_sequential,
@@ -1939,3 +1941,89 @@ class TestSweepExclusion:
         assert not (segments_dir / "00000.ts").exists()
         assert not (segments_dir / "00001.ts.tmp").exists()
         assert not (segments_dir / "batch_00000.ts.tmp").exists()
+
+
+class TestDownloadSpaceProbe:
+    """P12-B8 (ART-012): the download stage probes free space before the fan-out.
+
+    The probe mirrors _check_merge_space's shape: it raises DownloadError when
+    the estimated demand exceeds free space, and treats an unreadable mount
+    as neither full nor empty -- it logs and proceeds.
+
+    The demand figure is segment_count x a per-segment budget
+    (_DOWNLOAD_SEGMENT_BUDGET_BYTES). The budget is 2 MB, a conservative
+    lower-bound estimate; actual segment sizes vary with bitrate and duration.
+    """
+
+    from vkdownloader.services.segment_downloader import (
+        _DOWNLOAD_SEGMENT_BUDGET_BYTES,
+    )
+
+    def test_sufficient_space_proceeds(self, tmp_path: Path) -> None:
+        """Free space above the estimate does not raise."""
+        with patch(
+            "vkdownloader.services.segment_downloader.shutil.disk_usage",
+            return_value=_fake_disk_usage(self._DOWNLOAD_SEGMENT_BUDGET_BYTES * 100),
+        ):
+            _check_download_space(10, tmp_path)
+
+    def test_insufficient_space_raises_before_fanout(self, tmp_path: Path) -> None:
+        """A volume too small to hold the estimate raises DownloadError."""
+        available = 1
+        with patch(
+            "vkdownloader.services.segment_downloader.shutil.disk_usage",
+            return_value=_fake_disk_usage(available),
+        ):
+            with pytest.raises(DownloadError) as exc_info:
+                _check_download_space(10, tmp_path)
+
+        message = str(exc_info.value)
+        expected_required = 10 * self._DOWNLOAD_SEGMENT_BUDGET_BYTES
+        assert str(expected_required) in message
+        assert str(available) in message
+        assert "lower quality" in message
+
+    def test_unreadable_volume_proceeds_with_download(self, tmp_path: Path) -> None:
+        """A volume whose usage cannot be read does not block the download."""
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader.shutil.disk_usage",
+                side_effect=OSError("unreadable mount"),
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader.logger",
+                MagicMock(),
+            ),
+        ):
+            _check_download_space(100, tmp_path)
+
+    def test_free_space_exactly_meeting_requirement_proceeds(self, tmp_path: Path) -> None:
+        """Free space equal to the requirement is enough, not one byte less."""
+        segment_count = 10
+        exact_free = segment_count * self._DOWNLOAD_SEGMENT_BUDGET_BYTES
+
+        with patch(
+            "vkdownloader.services.segment_downloader.shutil.disk_usage",
+            return_value=_fake_disk_usage(exact_free),
+        ):
+            _check_download_space(segment_count, tmp_path)
+
+    def test_one_byte_below_requirement_fails(self, tmp_path: Path) -> None:
+        """One byte short of the requirement fails before the fan-out."""
+        segment_count = 10
+        short_free = segment_count * self._DOWNLOAD_SEGMENT_BUDGET_BYTES - 1
+
+        with patch(
+            "vkdownloader.services.segment_downloader.shutil.disk_usage",
+            return_value=_fake_disk_usage(short_free),
+        ):
+            with pytest.raises(DownloadError):
+                _check_download_space(segment_count, tmp_path)
+
+
+def _fake_disk_usage(free_bytes: int) -> object:
+    """Mirror the named-tuple shape shutil.disk_usage returns."""
+    from collections import namedtuple
+
+    DiskUsage = namedtuple("DiskUsage", "total used free")
+    return DiskUsage(free_bytes * 2, free_bytes, free_bytes)

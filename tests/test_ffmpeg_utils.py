@@ -757,20 +757,24 @@ class TestMergeFreeSpaceProbe:
     """Tests for the pre-merge free-space probe (D-09)."""
 
     def test_required_bytes_cover_final_merge_headroom(self, tmp_path: Path) -> None:
-        """D-09: the requirement is the segments plus a full copy of them.
+        """D-09: the requirement is the segments plus batch temps plus final output.
 
-        The final artefact is written while the input is still on disk, so the
-        required figure must cover the segment bytes twice, and carry the
-        safety margin on top. This is the assertion that fails if the
-        arithmetic drifts toward the segment total alone.
+        The additive merge's peak holds three copies of the segment bytes
+        simultaneously: the originals, the accumulated batch temp files, and
+        the growing final artefact. The required figure must cover the segment
+        bytes three times, and carry the safety margin on top. This is the
+        assertion that fails if the arithmetic drifts toward the segment
+        total alone.
+
+        Updated from 2x to 3x by P12-B8 (ART-012).
         """
         segments = _write_segments(tmp_path, 4, 1000)
         segment_bytes = 4000
 
         required = _required_merge_bytes(segments)
 
-        assert required >= segment_bytes * 2
-        assert required == segment_bytes * 2 + _MERGE_SPACE_MARGIN_BYTES
+        assert required >= segment_bytes * 3
+        assert required == segment_bytes * 3 + _MERGE_SPACE_MARGIN_BYTES
 
     def test_required_bytes_ignore_missing_segments(self, tmp_path: Path) -> None:
         """D-09: a segment that is already gone contributes no bytes.
@@ -778,12 +782,14 @@ class TestMergeFreeSpaceProbe:
         Its absence is a different precondition, reported by the merge's own
         existence check; the size probe must not pre-empt that verdict by
         raising on the unstattable path.
+
+        Updated from 2x to 3x by P12-B8 (ART-012).
         """
         segments = _write_segments(tmp_path, 2, 1000)
 
         required = _required_merge_bytes([*segments, tmp_path / "00002.ts"])
 
-        assert required == 2000 * 2 + _MERGE_SPACE_MARGIN_BYTES
+        assert required == 2000 * 3 + _MERGE_SPACE_MARGIN_BYTES
 
     @pytest.mark.asyncio
     async def test_insufficient_space_fails_before_spawning_ffmpeg(self, tmp_path: Path) -> None:
@@ -807,7 +813,7 @@ class TestMergeFreeSpaceProbe:
 
         mock_exec.assert_not_called()
         message = str(exc_info.value)
-        assert str(3 * 2048 * 2 + _MERGE_SPACE_MARGIN_BYTES) in message
+        assert str(3 * 2048 * 3 + _MERGE_SPACE_MARGIN_BYTES) in message
         assert str(available) in message
         assert "lower quality" in message
 

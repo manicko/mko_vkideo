@@ -1,0 +1,761 @@
+# Implementation task for P12-B10
+# Block 10 in execution order (after P12-B1, which is already committed)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §6.10
+# Decision A — closed. PoO chose option (b): separate resolution phase
+# in batch_downloader before fan-out.
+
+id: p12-b10
+
+title: P12-B10 — deduplicate by resolved output filename, before dispatch (ART-006, Decision A)
+
+priority: high
+
+depends_on:
+  - p12-b1   # B10 → B2 edge: pre-pass is the place the warning fires
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§6.10 P12-B10 — dedup by resolved output filename, before dispatch"
+source_audit_section: "§10 P12-B10 Auditor context (context_a)"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  Replace the single-URL-string `seen_urls` dedup inside the fill-phase loop
+  with a two-tier dedup scheme: Tier 1 (exact-URL, already present) is KEEPT
+  as-is; Tier 2 (resolved-output-filename) is ADDED as a separate resolution
+  phase that runs before the fan-out.
+
+  Decision A is closed: dedup by resolved output filename BEFORE any media
+  dispatch; the LAST occurrence in list order wins; earlier occurrences are
+  skipped, reported via ProgressStatus.SKIPPED, and must not perform any media
+  transfer (no dispatch, no permit, no subprocess, no segment fetch, no .part,
+  no working tree).
+
+  PoO decision: option (b) — a separate resolution phase in
+  `batch_downloader._run_batch_with_progress` that extracts and resolves every
+  URL, builds a filename→index registry (last-wins), and dispatches only
+  survivors. The extraction for each entry is performed once and handed forward
+  to `download_video` via new `video_data` / `selected_stream` parameters so
+  that the dispatched survivor does not re-extract.
+
+  The single-URL `download` command is unchanged and does not carry a
+  registry.
+
+# ── Goals ──
+goals:
+  - Two entries resolving to the same output path → exactly one dispatch, and it is the LAST in list order
+  - A skipped entry performs no media transfer (no dispatch, no permit, no subprocess, no segment fetch, no .part, no working tree)
+  - The skip is visible through existing channels: ProgressStatus.SKIPPED in results, and a dedup summary line distinct from the invalid-URL line
+  - The dedup key is the resolved output path — both directions: sanitised-title collisions ARE deduped; same id with different output_index and no title are NOT
+  - Idempotence on re-run (dedup is a function of the list, not of the filesystem)
+  - The single-URL `download` command is unchanged and does not carry a registry
+  - The mkdir side effect (C9) is asserted, not assumed: _resolve_output_file creates the output directory for every resolved entry including skipped ones
+  - Existing bounded-fan-out and semaphore tests pass unchanged
+  - No media transfer occurs for a skipped entry — asserted by patching each transfer surface and asserting not-called
+
+# ── Implementation sequence ──
+implementation_sequence:
+  - phase: 1
+    step: 1
+    action: modify_production
+    target: services/downloader.py → download_video → signature
+    description: >
+      Add `video_data: VideoWithStreams | None = None` and `selected_stream:
+      Stream | None = None` as keyword-only parameters to `download_video`.
+      When BOTH are provided, skip the `extractor.extract_streams(url)` call
+      and use the pre-extracted `video_data` directly, mirroring the existing
+      contract in `perform_download` (params at downloader.py:141-142,
+      used at 195-197: `if video_data is not None and selected_stream is not
+      None: streams = video_data.streams; m3u8_url = str(selected_stream.url)`).
+      Update the docstring to document the new params and the skip-extraction
+      behaviour. This is B10's sole write to `download_video` (plan row 18b).
+
+  - phase: 1
+    step: 2
+    action: modify_production
+    target: services/downloader.py → download_video → extraction site
+    description: >
+      Reorder the pipeline so that when pre-extracted data is provided,
+      `extract_streams` is NOT called, but the title_callback still fires
+      with the sanitized title from the pre-extracted video_data. The
+      stream selection (`selector.select`) and `_resolve_output_file` must
+      still run on the pre-extracted data. When neither param is provided,
+      behaviour is identical to today (extract_streams, then proceed).
+
+  - phase: 2
+    step: 3
+    action: modify_production
+    target: services/batch_downloader.py → _run_batch_with_progress → pre-pass
+    description: >
+      Insert a resolution phase before the fill-phase loop. For each URL in
+      `urls`, call `VKVideoExtractor.extract_streams(url)` to obtain the
+      `VideoWithStreams` (title + id), then call `_resolve_output_file(video,
+      output, settings, output_index)` to obtain the resolved Path. Record
+      the mapping `resolved_path → index` in a dict with LAST-WINS semantics
+      (later entries overwrite earlier ones). Entries that lose the collision
+      are terminalised as `by_index[i] = (url, "", ProgressStatus.SKIPPED.value)`
+      and reported via `reporter.start_task(i)` + `reporter.finish_task(i,
+      ProgressStatus.SKIPPED)` — BEFORE any `asyncio.create_task`.
+      Survivors (last occurrence of each resolved path) carry their
+      pre-extracted `video_data` and `selected_stream` forward for dispatch.
+
+  - phase: 2
+    step: 4
+    action: modify_production
+    target: services/batch_downloader.py → _download_single → dispatch wiring
+    description: >
+      Extend `DownloadContext` with optional `video_data: VideoWithStreams |
+      None` and `selected_stream: Stream | None` fields. Thread them through
+      `_download_single` into the `download_video(...)` call so the survivor
+      does not re-extract. Survivors that have no pre-extracted data (should
+      not occur in the pre-pass, but kept as a fallback for the existing
+      non-dedup path) follow the current extract-then-download behaviour.
+      The `output_index` passed to `download_video` must match the one the
+      pre-pass used for resolution, so the survivor's resolved path matches
+      the key the dedup ran on.
+
+  - phase: 3
+    step: 5
+    action: modify_production
+    target: services/batch_downloader.py → _download_single → download_video call
+    description: >
+      Forward `video_data` and `selected_stream` from the DownloadContext into
+      the `download_video(...)` call. The single dispatch point must consult
+      the registry implicitly — only survivors reach this point because the
+      pre-pass terminalised losers before task creation. Assert this by
+      structure: no `asyncio.create_task` is created for a skipped index.
+
+  - phase: 4
+    step: 6
+    action: modify_production
+    target: models/enums.py → ProgressStatus docstring
+    description: >
+      Update the `SKIPPED` docstring (currently says "produced by the
+      batch-level dedup check ... when an exact-URL duplicate is detected").
+      It must now state that SKIPPED is produced by BOTH the exact-URL
+      dedup (Tier 1) and the filename-collision dedup (Tier 2, Decision A).
+      This is the only change to enums.py; the enum member itself is NOT
+      redefined — it already exists and is already wired into the progress
+      display at progress_display.py:92 (ProgressStatus.SKIPPED → ⊘).
+
+  - phase: 4
+    step: 7
+    action: verify_production
+    target: services/batch_downloader.py → _print_batch_summary
+    description: >
+      Confirm the existing four-bucket accounting (successful, cancelled,
+      skipped, failed) already isolates ProgressStatus.SKIPPED into its own
+      bucket and renders "Skipped (duplicates): {count}" as a distinct line
+      from "Skipped (invalid URLs): {skipped_count}". No new reporting
+      channel is invented — the summary already has the spine; the filename-
+      dedup skip just needs to populate the existing SKIPPED bucket. Verify
+      by reading the code, not by assuming.
+
+  - phase: 5
+    step: 8
+    action: add_tests
+    target: tests/test_cli.py → TestBatchCommand
+    description: >
+      Add the oracle set for filename-collision dedup. The whole oracle set
+      is new (§2.5 confirms no existing test asserts anything about duplicates
+      beyond exact-URL). Reuse the existing perform_download mock fixture
+      shape (MagicMock with id, title, streams). Five test methods:
+      (a) two entries resolving to same path → exactly one dispatch and it
+          is the last; (b) skipped entry: no media transfer — patch
+          download_video/perform_download/subprocess/segment fetch and
+          assert not-called for the skipped index; (c) skip visible at both
+          levels — ProgressStatus.SKIPPED in results and a distinct dedup
+          summary line; (d) key is resolved path both directions — sanitised-
+          title collision deduped, same-id-different-index-no-title NOT
+          deduped; (e) idempotence on re-run.
+
+  - phase: 5
+    step: 9
+    action: add_tests
+    target: tests/test_batch_downloader.py (extension of TestBatchDedupSkip)
+    description: >
+      Extend the existing TestBatchDedupSkip class with the filename-collision
+      no-transfer assertions. The existing tests patch RichProgressReporter
+      and stub download_video — they do NOT assert that no extraction / media
+      transfer ran for the skipped entry. B10's filename-dedup oracle must add
+      the no-transfer not-called assertions layered on top: patch
+      download_video's internal extract_streams and perform_download for the
+      batch path and assert they are NOT called for a filename-collision
+      skip. Also assert the mkdir side effect (C9): the output directory
+      exists for a skipped entry.
+
+  - phase: 5
+    step: 10
+    action: add_tests
+    target: tests/test_cli.py → TestBatchCommand (single-URL regression)
+    description: >
+      Add one test asserting the single-URL `download` command does not carry
+      a registry and produces no SKIPPED status for a single URL. This
+      pins §6.10 acceptance criterion 6.
+
+  - phase: 5
+    step: 11
+    action: verify
+    target: standing gate §7.1
+    description: >
+      Run pytest, ruff check src tests, ruff format --check src tests,
+      mypy src, mypy src tests, ruff check . — confirm G1/G2/G4/G6 exit 0,
+      G5 non-increasing, G3 unchanged from green at 12af960, skip count 3 at
+      rest. Re-measure skip composition at execution time (§10.0 B10's own
+      gate accounting): the plan §7.1 names the D-11 oracles, but the live
+      skip set is three POSIX-only killpg tests. Do not inherit §2.0's
+      "3 at rest" wording without confirming the live composition.
+
+# ── Architectural constraints ──
+architectural_constraints:
+  two_tier_dedup: >
+    Tier 1 (exact-URL, via seen_urls) is KEPT unchanged inside the fill-phase
+    loop. Tier 2 (resolved-output-filename) is ADDED as a pre-pass BEFORE
+    the fill-phase loop. The existing URL dedup must not be removed — it
+    prevents redundant network calls for true duplicate URLs (Decision A says
+    "no media transfer for skipped"; an exact-URL duplicate is the cheapest
+    case and stays). The filename dedup is the NEW tier that closes ART-006.
+
+  batch_only: >
+    The pre-pass lives in `_run_batch_with_progress` (batch_downloader.py),
+    invoked only from `run_batch`. The single-URL `download` command calls
+    `download_video` directly with `output_index=0`, no semaphore, no reporter,
+    no dedup. It must NOT gain a registry, must NOT call the pre-pass, and
+    must NOT produce SKIPPED for a single URL.
+
+  last_wins: >
+    The registry is `dict[Path, int]` mapping resolved output path to the
+    index of the LAST occurrence in list order. When a collision is detected
+    (a path already in the registry), the earlier entry (the current registry
+    value) is terminalised as SKIPPED and the registry is overwritten with
+    the new index. Survivors are dispatched exactly once; the survivor is
+    always the last occurrence.
+
+  no_media_transfer_for_skipped: >
+    A skipped entry (whether Tier 1 URL or Tier 2 filename collision) must not
+    trigger any media transfer: no asyncio.create_task, no download_video
+    dispatch, no semaphore permit acquired, no yt-dlp subprocess spawned,
+    no segment fetch, no .part file, no working tree. This is the substance
+    of Decision A's "no network at all" clause as it is achievable (§3.8,
+    §5.1 I10). The pre-pass must terminalise losers BEFORE task creation.
+
+  key_is_resolved_path: >
+    The dedup key is the resolved Path returned by _resolve_output_file,
+    NOT (title, id). Two reasons: (1) different titles can sanitise to the
+    same filename (e.g. "a?b" and "a:b" both → "a_b"), so a (title, id) key
+    would miss the collision; (2) output_index discriminates same-id entries
+    with different indices and no title — a (title, id) key would over-dedup
+    those. The resolved path gets it right for free.
+
+  output_index_preservation: >
+    output_index is the positional enumerate index, not a survivor count.
+    After dedup, survivors keep their original enumerate indices so that
+    `by_index[i]` ordering and `results = [by_index[i] for i in range(len(urls))]`
+    restoration at batch_downloader.py:420 still work. Only the dispatched
+    tasks are created; skipped indices are terminalised in by_index directly.
+
+  existing_reporting_reused: >
+    ProgressStatus.SKIPPED already exists in enums.py:103 and is wired into
+    the progress display at progress_display.py:92 (→ ⊘ glyph). _print_batch_summary
+    already renders "Skipped (duplicates): {count}" as a distinct line from
+    "Skipped (invalid URLs): {skipped_count}". No new reporting channel is
+    invented; no new exception-to-status mapping is added. _map_exception_to_status
+    in exceptions.py:216 is NOT the vehicle (a dedup skip is not an exception)
+    and must NOT be touched.
+
+  read_only_anchors: >
+    _resolve_output_file (utils/security.py) is READ for its resolved Path output;
+    it is NOT modified by B10 (Decision A disambiguates no names, so no suffix
+    is added; the function's composition is unchanged). perform_download already
+    accepts video_data / selected_stream (downloader.py:141-142, C10) — the
+    contract already exists; B10 just extends it to the download_video entry
+    point so the batch path can hand the buffered extraction forward.
+
+  mkdir_side_effect_asserted: >
+    _resolve_output_file calls validated_output.mkdir(parents=True, exist_ok=True)
+    for EVERY entry it is called on (security.py:112, C9). A skipped entry's
+    output directory is still created. The directory is shared by every entry
+    in the batch, so this is harmless but observable — it must be ASSERTED in
+    a test, not assumed. On Windows, if the resolved path exists as a file,
+    FileExistsError [WinError 183] can be raised (exist_ok=True does not
+    suppress it); this is I7, recorded and asserted, not silently handled.
+
+  no_name_mutex: >
+    A name-level mutex for within-batch collisions is structurally impossible
+    after Decision A and therefore NOT introduced. Unique resolved paths by
+    construction (the dedup key IS the path), one permit per survivor, output
+    file computed before the permit is taken, and .part derived from the output
+    path means no two concurrently dispatched tasks can share a name. No lock
+    file, no lock primitive. The cross-run case is a recorded residual (§5.7
+    item 4), not solved here. The plan's prohibition on os.replace durability
+    assumptions (C5) still applies.
+
+  no_new_import_cycle: >
+    batch_downloader.py already imports download_video from services.downloader
+    (line 30). The pre-pass needs VKVideoExtractor — check whether it is already
+    accessible. _resolve_output_file is already imported in downloader.py
+    (line 23). No new import may introduce a cycle; C1/C2 govern any new
+    dependency.
+
+# ── Files ──
+files:
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: download_video
+    semantic_anchors:
+      signature:
+        type: function_signature
+        match: "async def download_video("
+        description: >
+          The shared orchestration entry for single and batch download.
+          Currently accepts no pre-extracted data — always calls
+          extract_streams at downloader.py:324. Must gain video_data and
+          selected_stream keyword-only params.
+      extraction_call:
+        type: function_call
+        match: "await extractor.extract_streams(url)"
+        description: >
+          Line 324. Must be skipped when both video_data and selected_stream
+          are provided. The title_callback invocation at line 326-327 must
+          still fire using video_data.title.
+      resolve_call:
+        type: function_call
+        match: "_resolve_output_file(video, output, settings, output_index)"
+        description: >
+          Line 345. Must run on the pre-extracted video_data when provided,
+          and the result must be the same Path the pre-pass key is derived
+          from.
+      perform_download_call:
+        type: function_call
+        match: "perform_download(url, str(quality), output_file, method, extractor, settings,"
+        description: >
+          Line 347. Already forwards video_data=video and selected_stream=stream
+          (lines 357-358 when data comes from extract_streams). When pre-extracted
+          data is provided, must forward it instead.
+    changes:
+      - action: modify_code
+        target: signature
+        description: >
+          Add `video_data: VideoWithStreams | None = None` and
+          `selected_stream: Stream | None = None` as keyword-only params
+          (after `title_callback`).
+      - action: modify_code
+        target: extraction_call
+        description: >
+          Wrap the extract_streams call in `if video_data is None or
+          selected_stream is None:` — exactly mirroring perform_download's
+          guard at downloader.py:195. When skipped, use video_data directly.
+
+  - path: src/vkdownloader/services/batch_downloader.py
+    targets:
+      - type: function
+        name: _run_batch_with_progress
+      - type: function
+        name: _download_single
+      - type: dataclass
+        name: DownloadContext
+    semantic_anchors:
+      existing_url_dedup:
+        type: variable
+        match: "seen_urls: set[str]"
+        description: >
+          Line 347. Tier 1 exact-URL dedup — KEPT unchanged inside the
+          fill-phase loop.
+      fill_phase_loop:
+        type: for_loop
+        match: "for i, url in urls_left:"
+        description: >
+          Line 374. The bounded-producer fill phase. Currently creates
+          asyncio.create_task per non-dup URL. Must only create tasks for
+          survivors of the pre-pass.
+      download_single_call:
+        type: function_call
+        match: "_download_single(url, quality, output, method, settings, DownloadContext(...))"
+        description: >
+          Line 393-407. Must thread video_data and selected_stream from
+          the pre-pass into the dispatched survivor.
+      results_restoration:
+        type: list_comprehension
+        match: "results = [by_index[i] for i in range(len(urls))]"
+        description: >
+          Line 420. Survivors keep original enumerate indices; skipped
+          indices are terminalised in by_index before this restoration.
+    changes:
+      - action: add_code
+        target: _run_batch_with_progress
+        description: >
+          Insert a resolution phase before the fill-phase loop. For each
+          URL, call VKVideoExtractor.extract_streams to obtain the
+          VideoWithStreams, then _resolve_output_file to obtain the key.
+          Build a dict[Path, int] with last-wins semantics. Terminalise
+          losers as (url, "", SKIPPED.value) via reporter.start_task +
+          reporter.finish_task(SKIPPED) into by_index, before any
+          asyncio.create_task. Survivors carry pre-extracted video_data
+          and selected_stream forward.
+      - action: modify_code
+        target: DownloadContext
+        description: >
+          Add `video_data: VideoWithStreams | None = None` and
+          `selected_stream: Stream | None = None` fields to the dataclass.
+      - action: modify_code
+        target: _download_single
+        description: >
+          Extract video_data and selected_stream from context; forward them
+          into the download_video(...) call. output_index stays as context.index.
+      - action: modify_code
+        target: _run_batch_with_progress docstring
+        description: >
+          Update the docstring to describe the two-tier dedup (Tier 1 URL,
+          Tier 2 filename) and the pre-pass shape. The current docstring
+          (lines 301-316) says "Exact-URL duplicates within the batch are
+          skipped (ProgressStatus.SKIPPED) before any network call" — it
+          must add the filename-collision tier.
+
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: _resolve_output_file
+        note: "READ ONLY — not modified by B10"
+    description: >
+      The dedup key producer (utils/security.py:91-120). Composes
+      {safe_title}_{video.id}.mp4 or {index}_{video.id}.mp4, calls
+      validate_output_path(warning=False), does mkdir(parents=True,
+      exist_ok=True). B10 reads its output Path as the key. Not modified.
+
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: enum
+        name: ProgressStatus
+    semantic_anchors:
+      skipped_member:
+        type: class_attribute
+        match: "SKIPPED = \"skipped\""
+        description: >
+          Line 103. Already exists; already wired into progress_display.py:92
+          (→ ⊘). NOT redefined by B10. The docstring (lines 89-94) says
+          SKIPPED is "produced by the batch-level dedup check in
+          _run_batch_with_progress when an exact-URL duplicate is detected"
+          — must be updated to mention the filename-collision tier too.
+    changes:
+      - action: modify_code
+        target: skipped_member docstring
+        description: >
+          Update the SKIPPED docstring to state it is produced by both
+          Tier 1 (exact-URL) and Tier 2 (resolved-filename collision) dedup.
+
+  - path: src/vkdownloader/services/exceptions.py
+    targets:
+      - type: function
+        name: _map_exception_to_status
+    note: "DO NOT TOUCH — zero production call sites, legacy shim"
+    description: >
+      Line 216. The plan explicitly forbids touching this. A dedup skip is
+      not an exception and does not route through it. B10 must not add a
+      test that asserts against its output.
+
+  - path: src/vkdownloader/cli.py
+    targets:
+      - type: function
+        name: download  # the single-URL command
+    note: "DO NOT TOUCH — single-URL download must remain unchanged"
+    description: >
+      cli.py:394-401. Calls download_video directly with output_index=0
+      (default), no semaphore, no reporter, no dedup. B10's pre-pass is
+      batch-only. The download() body must not gain a registry.
+
+  - path: tests/test_cli.py
+    targets:
+      - type: class
+        name: TestBatchCommand
+    description: >
+      The oracle set lives here (§6.10 criterion 1-5, 6-9). No existing
+      test asserts anything about duplicates beyond exact-URL. The whole
+      filename-collision oracle set is new. Reuse the existing
+      perform_download mock fixture shape (MagicMock with id, title, streams).
+    changes:
+      - action: add_test
+        description: >
+          test_dedup_filename_collision_dispatches_only_last — two entries
+          resolving to the same path: assert exactly one dispatch AND it is
+          the LAST occurrence (by URL identity).
+      - action: add_test
+        description: >
+          test_dedup_filename_collision_skipped_entry_no_transfer — patch
+          download_video, perform_download, subprocess spawn, segment fetch,
+          and mkdir; assert all not-called for the skipped index.
+      - action: add_test
+        description: >
+          test_dedup_filename_collision_visible_in_results_and_summary —
+          assert ProgressStatus.SKIPPED in results for the skipped index,
+          and a "Skipped (duplicates):" line distinct from
+          "Skipped (invalid URLs):" in the captured output.
+      - action: add_test
+        description: >
+          test_dedup_key_sanitised_title_collision_deduped — two entries
+          with different titles that sanitise to the same filename
+          (e.g. "a?b" and "a:b" with same id) ARE deduped; assert exactly one
+          dispatch.
+      - action: add_test
+        description: >
+          test_dedup_key_same_id_different_index_no_title_not_deduped — two
+          entries with the same id, different output_index, and no title are
+          NOT deduped (they get different filenames via the {index}_{id}
+          fallback); assert both dispatch.
+      - action: add_test
+        description: >
+          test_dedup_filename_collision_idempotent_on_rerun — running the
+          same URL file into the same directory twice produces the same
+          skip pattern (last wins, earlier skipped).
+      - action: add_test
+        description: >
+          test_single_url_download_no_registry — single-URL download command
+          produces no SKIPPED status and does not carry a registry.
+      - action: add_test
+        description: >
+          test_dedup_filename_collision_mkdir_side_effect — assert the output
+          directory exists even for a skipped entry (C9), and that it is the
+          shared batch directory.
+
+  - path: tests/test_batch_downloader.py
+    targets:
+      - type: class
+        name: TestBatchDedupSkip
+    note: >
+      Existing class tests exact-URL dedup only (3 tests). Does NOT assert
+      no-transfer for a skipped entry. B10 extends it with filename-collision
+      no-transfer assertions.
+    changes:
+      - action: add_test
+        description: >
+          Extend with filename-collision no-transfer assertions: patch
+          download_video's extract_streams and perform_download; assert
+          neither is called for the skipped (filename-collision) entry.
+      - action: add_test
+        description: >
+          Assert the mkdir side effect: the output directory exists for a
+          skipped entry (C9).
+
+# ── Required tests ──
+required_tests:
+  acceptance_criteria_mapped: >
+    The 9 acceptance criteria from §3.8 are mapped to test cases below.
+
+  criterion_1_last_dispatcher: >
+    Test: test_dedup_filename_collision_dispatch_only_last.
+    Two entries resolving to the same output path produce EXACTLY ONE dispatch,
+    and it is the LAST in list order. Assert both dispatch call count (==1)
+    AND the identity of the dispatched entry (the last URL's index).
+
+  criterion_2_no_media_transfer: >
+    Test: test_dedup_filename_collision_skipped_entry_no_transfer.
+    A skipped entry performs NO media transfer — no dispatch, no permit, no
+    subprocess, no segment fetch, no .part, no working tree. Patch each of
+    these surfaces and assert not-called for the skipped entry. This is the
+    load-bearing clause from Decision A — it gets an explicit oracle rather
+    than an inference from the dispatch count.
+
+  criterion_3_visible_at_both_levels: >
+    Test: test_dedup_filename_collision_visible_in_results_and_summary.
+    Skip visible at both levels: ProgressStatus.SKIPPED in the results list
+    (per-item), and a "Skipped (duplicates):" summary line DISTINCT from the
+    "Skipped (invalid URLs):" line. Both asserted.
+
+  criterion_4_key_is_resolved_path: >
+    Test: test_dedup_key_sanitised_title_collision_deduped — different titles
+    that sanitise to the same filename ARE deduped (assert exactly one
+    dispatch, the last).
+    Test: test_dedup_key_same_id_different_index_no_title_not_deduped —
+    same id, different output_index, no title are NOT deduped (assert both
+    dispatch, two distinct output paths).
+    Both directions assert the key is the resolved path, not (title, id).
+
+  criterion_5_idempotence: >
+    Test: test_dedup_filename_collision_idempotent_on_rerun.
+    Running the same URL file into the same directory twice: the same entries
+    are skipped, the same one dispatches. Dedup is a function of the list, not
+    of the filesystem.
+
+  criterion_6_single_url_unchanged: >
+    Test: test_single_url_download_no_registry.
+    The single-URL download command is unchanged and does not carry a
+    registry. Assert no SKIPPED status is produced for a single URL and
+    that download_video is called exactly once.
+
+  criterion_7_bounded_fanout_unchanged: >
+    Existing tests TestBatchDownloaderSemaphore, TestBatchLiveTaskBounding,
+    and the bounded-fan-out classes in test_segment_downloader.py (TestSegmentFanoutCompletion,
+    TestSegmentFanoutBoundedProduction, TestConnectorCeilingsFollowTheSetting)
+    must pass UNCHANGED. B10 changes WHAT is dispatched, not HOW it is bounded.
+    These are regression guards, not new additions.
+
+  criterion_8_mkdir_side_effect: >
+    Test: test_dedup_filename_collision_mkdir_side_effect (in TestBatchCommand).
+    The _resolve_output_file mkdir side effect (C9) is asserted: every resolved
+    entry — including a skipped one — has its output directory created. Assert
+    the directory exists for a skipped entry and that it is the shared batch
+    directory.
+
+  criterion_9_gate_accounting: >
+    The standing gate §7.1: G1/G2/G4/G6 exit 0, G5 non-increasing, G3
+    unchanged (green at 12af960 per §10.0), skip count 3 at rest. B10 adds
+    one test so the skip count is 4 inside B10's commit and returns to 3 at
+    rest (per §2.1 rule 2). Re-measure skip composition at execution time
+    — the live three skips are POSIX-only killpg tests, NOT the D-11 oracles
+    the plan's §7.1 names.
+
+  no_new_tests_for_legacy: >
+    Do NOT write any test that asserts against _map_exception_to_status output.
+    That function has zero production call sites and is not the vehicle for a
+    dedup skip. The TestMapExceptionToStatus class in tests/test_exceptions.py
+    pins the legacy format and is not extended.
+
+  existing_dedup_tests_unaffected: >
+    TestBatchDedupSkip's two existing tests (test_duplicate_url_marked_skipped_not_downloaded,
+    test_duplicate_skip_summary_reports_skipped_not_failed) test exact-URL (Tier 1)
+    dedup. They must pass UNCHANGED — B10 augments, does not replace, Tier 1.
+    TestBatchSummarySkippedAggregation's test must also pass unchanged.
+
+# ── Honest judgement required ──
+honest_judgement:
+  pre_pass_shape:
+    question: >
+      Option (a) — per-entry pre-pass inside download_video, registering
+      each entry's resolved path as it resolves and being told whether it
+      survives; vs. option (b) — a separate resolution phase in
+      batch_downloader before the fan-out that resolves all entries first,
+      then dispatches survivors only.
+    criterion: >
+      Decision A's "must not load the network at all" clause: under (a) every
+      entry is extracted regardless (the registry must see the path before
+      knowing if it survives), so (a) extracts every URL. Under (b) extraction
+      for every entry completes before any download starts — the two are
+      equivalent on extraction count, but (b) gives the registry a clean
+      lifetime and is the shape in which "no media transfer for skipped" is
+      even approximately true. The plan records this as an open choice and
+      notes that a strict no-network reading forces (b).
+    resolution: >
+      PoO decision recorded in §3.8: option (b). The pre-pass is a separate
+      resolution phase in batch_downloader._run_batch_with_progress before
+      the fill-phase fan-out. Extraction for every entry completes before any
+      download starts; this changes the batch's latency profile (the screen
+      shows resolution for all N, then downloads) and needs its own bounding
+      decision — extraction is currently interleaved with downloads under the
+      shared semaphore. The Implementer must decide whether extraction needs
+      its own bounding (it is currently gated by the per-video semaphore
+      inside download_video → perform_download, but the pre-pass extracts
+      before that gate). This is R9 in §5.1.
+    commit_body_note: >
+      The commit body must record the pre-pass shape chosen and, if the
+      no-network clause was narrowed to "no media transfer", that narrowing
+      and why.
+
+  no_network_clause_conflict:
+    question: >
+      download_video calls extract_streams BEFORE _resolve_output_file, so the
+      resolved filename is not knowable without a network call (title and id
+      arrive with the extraction). Decision A's key and a literal "no network
+      at all" reading are jointly unsatisfiable.
+    resolution: >
+      This is DEF-6, already escalated to the Product Owner. B10 delivers the
+      achievable form — no MEDIA TRANSFER for a skipped entry — and records
+      the gap. The commit body must state that the no-network clause is
+      narrowed to "no media transfer" and why: the resolved filename requires
+      title and id, which arrive via extract_streams (downloader.py:324),
+      which is itself a metadata fetch, not a media transfer.
+
+  mkdir_risk:
+    question: >
+      _resolve_output_file calls mkdir(parents=True, exist_ok=True) for every
+      entry (security.py:112, C9). A skipped entry's output directory is still
+      created. On Windows, if the resolved path exists as a file,
+      FileExistsError [WinError 183] can be raised (exist_ok=True does not
+      suppress it).
+    resolution: >
+      The directory is shared by every entry in the batch, so the mkdir for
+      a skipped entry is harmless in practice. The Implementer must assert
+      this in a test (C9), not assume it. The FileExistsError-on-file case is
+      recorded as I7 in §5.1 — it is out of scope for B10 (no refusal,
+      Decision B) but must be documented in the commit body if observed.
+
+  pre_pass_extraction_bounding:
+    question: >
+      Under option (b), the pre-pass extracts every entry before any download
+      starts. Extraction currently runs inside download_video → performer_download
+      under the shared per-video semaphore. The pre-pass extracts outside that
+      semaphore.
+    resolution: >
+      The pre-pass runs extraction sequentially (or with its own lightweight
+      bounding if needed). Extraction is a metadata call, not a media transfer,
+      so it does not count toward "max_concurrent_downloads" (C6 — that semaphore
+      bounds video downloads, not extractions). However, the Implementer must
+      decide: does the pre-pass need its own concurrency bound? The plan says
+      "needs its own bounding decision" (§3.8 line 588). At minimum, the pre-pass
+      must not deadlock or exceed reasonable memory for very large batches.
+
+  test_mock_shape:
+    question: >
+      The existing TestBatchCommand tests use MagicMock(id=..., title="Test
+      Title", streams=[MagicMock(quality="720")]) for perform_download. A
+      filename-collision oracle must make two URLs yield equal sanitized_title
+      + equal id.
+    resolution: >
+      Reuse the existing mock fixture shape — two MagicMocks with the same
+      id and titles that sanitise to the same safe_title (e.g. "Title?A" and
+      "Title:A" both → "Title_A"). The mock for extract_streams (already
+      patched in existing tests as VKVideoExtractor.extract_streams) must
+      return these per-URL. Do NOT invent a new reader mock.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/services/downloader.py (download_video param addition +
+    skip-extract) + src/vkdownloader/services/batch_downloader.py (pre-pass
+    + dispatch wiring + DownloadContext fields + docstring) +
+    src/vkdownloader/models/enums.py (SKIPPED docstring update only) +
+    tests/test_cli.py (TestBatchCommand extensions: 7 new test methods) +
+    tests/test_batch_downloader.py (TestBatchDedupSkip extensions: 2 new test
+    methods)
+  commit_constraints:
+    - One commit only
+    - No test in TestBatchDedupSkip, TestBatchSummarySkippedAggregation,
+      TestBatchDownloaderSemaphore, TestBatchLiveTaskBounding, or any
+      bounded-fan-out class is edited — only extended with new methods
+    - _map_exception_to_status (exceptions.py:216) is NOT touched
+    - _resolve_output_file (security.py) is NOT modified
+    - The single-URL download() command is NOT modified
+    - perform_download's existing video_data/selected_stream contract is NOT
+      changed (only download_video gains the params)
+    - No new lock file, no temp-dir abstraction, no fsync, no clobber policy,
+      no name suffix, no temp sweep (C5, C7)
+    - Commit subject: "fix(batch): deduplicate by resolved output filename
+      before dispatch" or equivalent behaviour-describing subject
+    - Commit body names: (1) the pre-pass shape (option b), (2) the mkdir
+      side effect (C9), (3) the narrowing of the no-network clause to "no
+      media transfer" and why, (4) any edited or preserved existing tests
+
+# ── Dependency metadata ──
+blocked_by:
+  - p12-b1
+blocks:
+  - p12-b2  # B10 → B2: the pre-pass is the place the warning fires
+risk_tier: High
+risk_notes: >
+  Decision A is closed (no open decision). The within-batch name mutex is
+  structurally impossible and not introduced (§3.8, §5.4 C3). The pre-pass
+  changes the batch's latency profile (R9) and must decide its own extraction
+  bounding. The mkdir side effect (I7) must be asserted, not assumed. The
+  no-network clause vs. key derivation conflict (DEF-6) is escalated to PO,
+  not reinterpreted. The existing Tier 1 URL dedup must not be removed — it
+  augments, not replaces. G3 is green at 12af960 (not red) and G5 is 95 (not
+  86); re-measure at execution time, do not inherit §2.0 figures. The live
+  skip set is three POSIX-only killpg tests, not the D-11 oracles §7.1 names.
+agent_roster:
+  - Implementer
+  - Planner
+  - Validator

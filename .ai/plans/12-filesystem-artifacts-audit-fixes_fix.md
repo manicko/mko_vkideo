@@ -1,6 +1,6 @@
 # Phase 07 — Filesystem Artefacts Fix Plan
 
-**Status**: PLANNED — not started
+**Status**: PARTIALLY IMPLEMENTED — `P12-B1` (`12af960`), `P12-B2` (`5d264d4`), `P12-B3` (`12af960`), `P12-B4` (`aabfc46`), `P12-B5` (`cfe4ce8`), `P12-B6` (`40404e2`), `P12-B7` (`e2c5ad0`), `P12-B8` (`PENDING COMMIT`), `P12-B10` (`1d09009`) done. Remaining: `P12-B9`, `P12-B11`, `P12-B12`.
 **Audit input**: `.ai/audit/99-validation/07-filesystem-artifacts-validated-findings.md` (validated findings artifact, phase 07, audit `HEAD = 4bf9efb`)
 **Baseline re-verified by this Planner against live `HEAD = 58bb7ce`** (re-baselined after the loader retirement landed; the tree under `src` and `tests` is clean at that commit)
 **Binding decisions applied**:
@@ -1059,6 +1059,9 @@ A task specification is complete when the agent executing it can find every file
 ---
 
 ### 6.7 `P12-B7` — the working tree's lifetime
+
+**Status:** DONE — implemented, tested (1063 passed, 3 skipped), committed as `e2c5ad0`. Execution position 7 (after `P12-B6`, before `P12-B8`).
+**Task file:** `.ai/tasks/p12-b7-tree-lifetime.yaml`
 
 **Semantic targets.**
 1. `services/segment_downloader.py::download_hls_with_resume` — the `segments_dir.mkdir(parents=True, exist_ok=True)` that runs before the playlist is fetched, and the `finally` that only reports today.

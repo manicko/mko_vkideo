@@ -1,0 +1,243 @@
+# Implementation task for P12-B1
+# Block 2 in execution order (after P12-B3, which is already implemented)
+# Source plan: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md §6.2
+
+id: p12-b1
+
+title: P12-B1 — component-wise traversal detection in validate_output_path
+
+priority: medium
+
+depends_on:
+  - p12-b3
+
+status: done
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/12-filesystem-artifacts-audit-fixes_fix.md
+source_section: "§6.2 P12-B1 — component-wise traversal detection"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  Replace the substring traversal test `".." in str(path)` with a
+  component-wise test `".." in path.parts` at BOTH guard layers inside
+  `validate_output_path` in `src/vkdownloader/utils/security.py`:
+
+    Layer 1 — pre-resolution (the first guard, before path.resolve()):
+      old:  path_str = str(path)
+            if ".." in path_str:
+      new:  if ".." in path.parts:
+
+    Layer 2 — post-resolution (the defense-in-depth guard, after resolve):
+      old:  if ".." in str(resolved):
+      new:  if ".." in resolved.parts:
+
+  A path component that merely *contains* `..` but is not equal to it
+  (e.g. the component `a..b`) must be accepted; only an exact `..` path
+  component is refused. The `repo_root` derivation, the containment
+  comparison, and the `warning` parameter's plumbing are explicitly out
+  of scope — those belong to P12-B2.
+
+# ── Goals ──
+goals:
+  - Replace the pre-resolution substring test with a component-wise parts test
+  - Replace the post-resolution substring test with a component-wise parts test
+  - Accept components containing but not equal to ".." (eliminate false positive)
+  - Keep all existing traversal tests green unchanged
+  - Add a new oracle that reaches the post-resolution layer specifically
+  - Remove the now-unused path_str local variable
+
+# ── Implementation sequence ──
+implementation_sequence:
+  - step: 1
+    action: modify_production
+    target: src/vkdownloader/utils/security.py → validate_output_path → pre-resolution guard
+    description: >
+      Replace `path_str = str(path)` and `if ".." in path_str:` with
+      `if ".." in path.parts:`. Remove the unused path_str local. Update
+      the preceding comment to describe component-wise semantics.
+  - step: 2
+    action: modify_production
+    target: src/vkdownloader/utils/security.py → validate_output_path → post-resolution guard
+    description: >
+      Replace `if ".." in str(resolved):` with `if ".." in resolved.parts:`.
+      Update the defense-in-depth comment accordingly.
+  - step: 3
+    action: add_tests
+    target: tests/test_security.py → TestValidateOutputPathTraversal
+    description: >
+      Add the false-positive acceptance oracle (a component containing ".."
+      but not equal to ".." is accepted) and the new post-resolution oracle
+      (input path has no ".." component, resolve() patched to return a path
+      with a ".." component, assert DownloadError — proves the post-
+      resolution layer fires independently).
+  - step: 4
+    action: verify
+    target: standing gate §7.1
+    description: >
+      Run pytest, ruff check, ruff format --check, mypy src, mypy src tests,
+      ruff check . — confirm G1/G2/G4/G6 exit 0, G5 non-increasing, G3
+      unchanged from red baseline, skip count 3.
+
+# ── Architectural constraints ──
+architectural_constraints:
+  two_layer_structure: >
+    validate_output_path has exactly two traversal guards. The pre-resolution
+    guard runs on the raw Path argument before path.resolve(); the
+    post-resolution guard runs on the resolved Path afterward. Both must be
+    changed. They must not be collapsed into one — the post-resolution layer
+    exists specifically to catch already-resolved paths where the pre-resolution
+    check is a no-op.
+  no_file_line_references: >
+    Anchors are symbol names: validate_output_path, path.parts,
+    resolved.parts. No file:line references appear in the commit message or
+    the test names. The commit subject describes the behaviour, not a location.
+  leaf_safety: >
+    security.py imports only config, exceptions, models.enums,
+    models.video — no transitive dependencies are introduced. path.parts and
+    resolved.parts are stdlib pathlib semantics; no new import is needed.
+  posix_neutrality: >
+    PurePath.parts normalises both / and \ separators on Windows, so the
+    component-wise test is correct regardless of the platform separator.
+
+# ── Files ──
+files:
+  - path: src/vkdownloader/utils/security.py
+    targets:
+      - type: function
+        name: validate_output_path
+    semantic_anchors:
+      pre_resolution_guard:
+        type: conditional
+        match: '".." in str(path)'
+        description: >
+          First traversal check on the unresolved input Path. Currently a
+          substring test on str(path). Must become a component-wise test on
+          path.parts. The unused `path_str = str(path)` local on the line
+          above must be removed.
+      post_resolution_guard:
+        type: conditional
+        match: '".." in str(resolved)'
+        description: >
+          Defense-in-depth traversal check on the resolved Path. Currently a
+          substring test on str(resolved). Must become a component-wise test
+          on resolved.parts.
+    changes:
+      - action: modify_code
+        target: pre_resolution_guard
+        description: >
+          Replace `path_str = str(path)` + `if ".." in path_str:` with
+          `if ".." in path.parts:`. Update the comment to state the test is
+          component-wise, not a substring test.
+      - action: modify_code
+        target: post_resolution_guard
+        description: >
+          Replace `if ".." in str(resolved):` with `if ".." in resolved.parts:`.
+          Update the defense-in-depth comment accordingly.
+
+  - path: tests/test_security.py
+    targets:
+      - type: class
+        name: TestValidateOutputPathTraversal
+    changes:
+      - action: add_test
+        description: >
+          False-positive acceptance: a path component that contains ".."
+          but is not equal to ".." (e.g. "a..b") is accepted. Measured live
+          today as rejected by the substring test.
+      - action: add_test
+        description: >
+          New post-resolution oracle: the input path has no ".." component
+          so the pre-resolution guard is a no-op; resolve() is patched to
+          return a path whose parts still contain ".."; assert DownloadError
+          is raised — proving the post-resolution layer fires independently.
+
+# ── Required tests ──
+required_tests:
+  acceptance: >
+    A path with a component containing ".." but not equal to it is accepted
+    (false-positive elimination). For example Path("a..b") / "file.mp4"
+    must pass both layers.
+  existing_unchanged: >
+    All five tests in TestValidateOutputPathTraversal and all three traversal
+    tests in TestValidateOutputPath pass unchanged. They use real ".." path
+    components, so a correct component-wise test keeps them green for the
+    right reason. No test in either class is edited.
+  edge_case_unchanged: >
+    TestValidateOutputPathEdgeCases::test_empty_path_resolves_to_cwd stays
+    green. Path(".").parts is ('.',), so ".." not in path.parts — the empty-
+    path case is not disturbed. Verified before closing.
+  existing_resolved_test_unchanged: >
+    test_validate_output_path_rejects_traversal_even_if_resolved passes
+    unchanged. Its own comment concedes resolve() yields no "..", so it
+    exercises the pre-resolution layer twice — it must NOT be relied upon as
+    the post-resolution oracle.
+  new_post_resolution_oracle: >
+    A new test in TestValidateOutputPathTraversal that reaches the
+    post-resolution layer specifically. The input path has no ".." component
+    (pre-resolution is a no-op). Path.resolve is patched to return a path
+    whose .parts still contains "..", and the guard must raise DownloadError.
+    The test is distinguishable from the pre-resolution layer because the
+    input contains no ".." component — the error can only come from the
+    post-resolution check.
+  standing_gate: >
+    G1 (pytest): exit 0, pass count unchanged, skip count 3. G2 (ruff check
+    src tests): exit 0. G4 (mypy src): exit 0. G6 (ruff check .): exit 0.
+    G5 (mypy src tests): non-increasing. G3 (ruff format): unchanged from
+    red baseline.
+
+# ── Honest judgement required ──
+honest_judgement:
+  question: >
+    Option (a) — write `".." in path.parts` at both layers (two call sites of
+    a trivial expression) — versus option (b) — extract a shared predicate
+    (e.g. `_contains_parent_reference(path)`) called from both layers.
+  criterion: >
+    Prefer (a). It is the smallest change that is unambiguously correct.
+    Choose (b) only if the Implementer can demonstrate the two layers will
+    otherwise drift again. The plan criterion is stated explicitly: smallest
+    change that is unambiguously correct.
+  recommendation: >
+    Option (a). Rule 5 (avoid overengineering) weighs against a shared
+    predicate for two call sites of a one-line expression. The duplication is
+    not the kind that drifts — the two layers operate on different Path
+    objects (the raw argument vs. the resolved result) and a shared
+    predicate would obscure that distinction.
+  edge_case_to_verify: >
+    Path(".").parts returns ('.',), never containing '..'. The empty-path
+    edge case (TestValidateOutputPathEdgeCases::test_empty_path_resolves_to_cwd)
+    must keep passing. A naive implementation that checks str(path) instead
+    of path.parts would break it — but the component-wise test does not.
+    Verify before closing.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/utils/security.py (production change) +
+    tests/test_security.py (oracle extension only — no existing test edited)
+  commit_constraints:
+    - One commit only
+    - No test in the existing traversal classes is edited
+    - Commit subject describes the behaviour, not a file:line
+    - Commit body is empty or notes only the judgement call (option a vs b)
+
+# ── Dependency metadata ──
+blocked_by: Nothing
+blocks: B2
+risk_tier: Medium
+risk_notes: >
+  Low-stakes security guard semantics. The change is a strict narrowing of
+  the false-positive set: a component containing ".." but not equal to ".."
+  is now accepted. The existing traversal tests still raise because they use
+  exact ".." path components. The residual false-acceptance risk (a
+  component that is exactly ".." but reaches the resolved layer via symlink
+  manipulation) is covered by the post-resolution guard and by the new
+  oracle. No behaviour changes outside the ".." detection: repo_root, the
+  containment comparison, and the warning plumbing are untouched.
+agent_roster:
+  - Implementer
+  - Planner
+  - Validator

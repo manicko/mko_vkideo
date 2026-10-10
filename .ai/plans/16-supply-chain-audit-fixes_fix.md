@@ -1,9 +1,97 @@
 # Plan 16 — Phase 11 Audit Fixes: Supply Chain
 
+> **AUDIT UPDATE (2026-10-10).** Re-checked against HEAD `2289f6f`.
+> The plan was prepared at `58bb7ce`; 29 additional commits have landed since.
+> Several findings have already been resolved by other phases — see §0 below.
+> The plan is **not yet executed** as a plan; it is renamed `_fix` and must be
+> updated before its remaining blocks run.
+>**
+
 **Source catalogue:** `.ai/audit/99-validation/11-supply-chain-validated-findings.md`
 **Repository:** `vkdownloader` (`C:\py_exp\mko_vkideo`) · branch `main` · Windows · `uv`
 **Prepared at:** HEAD `58bb7ce`, 54 commits after the catalogue's base `a335b2a`
+**Re-checked at:** HEAD `2289f6f`
 **Blocks:** 15 · one commit each (B14 is the one no-commit block) · all independently revertible
+
+## §0 — Audit update: what has already landed since this plan was prepared
+
+The plan was measured against `58bb7ce`. Between then and the current HEAD (`2289f6f`),
+other phases resolved several findings this plan targets. **No P16-B* commit exists** —
+the plan itself has not been executed. The resolution happened incidentally, as the
+side effect of other work.
+
+### Already resolved (by other commits)
+
+| Block | Finding | Commit | What landed |
+|-------|---------|--------|-------------|
+| **P16-B0** | format-gate regression | resolved by `e6e6c68` et seq. | `ruff format --check src tests` is **GREEN** at HEAD (was RED at `58bb7ce`). The two `with patch(...)` headers that `b0fb032` had split are now single-line. **B0 is moot — no commit needed.** |
+| **P16-B7** | `DEP-010` stealth absence | `c6d0214` + later commits | `browser.py`'s `create_stealth_page` now warns and raises `ExtractionError` when the stealth script is missing and `stealth_enabled` is true. The `exists()` guard is retained. |
+| **P16-B8** (X-01, X-02, X-03, X-05) | `DEP-011` statement + doc drift | `e6e6c68`, docs commits | `ffmpeg_not_found` hint rewritten to `_MERGE_HINT` (`"ffmpeg binary not found on PATH; segment merge will fail after download"` — names no `DownloadMethod` member). The `| ffmpeg |` row is gone from `configuration.md`'s method table; `--method ffmpeg` example is gone from `cli-reference-clean.md`; `vkdownloader-overview.md`'s option list already says `(yt-dlp, auto)`. |
+| **P16-B9** | `DEP-011` behaviour half | `e6e6c68 TRN-008` | Both `_merge_batch_segments` and `_perform_final_merge` now have `except OSError` arms that log `merge_spawn_failed` with `_MERGE_HINT`. The `check_ffmpeg_available()` return value is consumed at its single call site in `downloader.py` (`if not check_ffmpeg_available(): logger.warning(...)`). The probe itself is silent. |
+
+### Still open
+
+| Block | Finding | Current state |
+|-------|---------|---------------|
+| P16-B1 | `DEP-004` + `DEP-012` | **NOT done.** Eight `.gitignore` rules still carry `#` on the pattern line. Seven debris files still index-tracked. |
+| P16-B2 | `DEP-005` + `DEP-006` | **NOT done.** 19 untracked-and-unexcluded paths still unignored. `.kilo/.gitignore` still untracked. |
+| P16-B3 | `DEP-001` + `DEP-002` | **NOT done.** CI job still only runs `pytest tests/test_packaging.py -v`. No lint/format/mypy/coverage steps. |
+| P16-B4 | `DEP-008` | **NOT done.** `src/vkdownloader/py.typed` does not exist. |
+| P16-B5 | `DEP-009` | **NOT done.** No `LICENSE` file ships. |
+| P16-B6 | `DEP-007` | **NOT done.** `annotated-types` not declared in dev group. |
+| P16-B8 (docs) | ffmpeg requirement wording | **PARTIALLY done.** X-01/X-02/X-03/X-05 are fixed, but `README.md` and `docs/01-tools/installation.md` still state `Python 3.10+`/`3.12` and an unconditional `ffmpeg` prerequisite. `vkdownloader-overview.md`'s tree block (X-04) still says `~360 lines` and claims `progress parsing`. |
+| P16-B10 | `DEP-014` | **NOT done.** `pyproject.toml` still `requires-python = ">=3.12"`, `.python-version` still `3.12`, `target-version = "py312"`, `python_version = "3.12"`. |
+| P16-B11 | `DEP-016` | **NOT done.** `__version__` is still a literal `"0.1.0"`. |
+| P16-B12 | `DEP-003` | **NOT done.** No `.github/dependabot.yml`, no advisory scan step. |
+| P16-B13 | `DEP-015` | **NOT done.** `release: types: [published]` trigger still present. |
+| P16-B14 | `DEP-013` | **NOT done.** (no-commit block — census not yet recorded.) |
+| P16-B15 | 3.14 toolchain | **NOT done.** (no-commit block — not yet executed.) |
+| **D-8** | ffmpeg version floor | **Still open.** `check_ffmpeg_available` has no version preflight; no floor recorded anywhere. |
+| **X-04** | module description | **NOT done.** `vkdownloader-overview.md` still says `ffmpeg_utils.py (~360 lines) - FFmpeg commands, progress parsing, process management`; actual line count is 550 at HEAD and no progress parsing remains. |
+
+### Corrected baseline (HEAD `2289f6f`)
+
+| Metric | As planned (58bb7ce) | As measured (2289f6f) |
+|--------|----------------------|----------------------|
+| `ruff format --check src tests` | **RED** (1 file to reformat) | **GREEN** (all files formatted) — B0's precondition is gone |
+| `ruff check src tests` | exit 0 | exit 0 |
+| `mypy src` | 31 files, 0 issues | 31 files, 0 issues |
+| `test_packaging.py` | 14 passed | 14 passed |
+| `uv lock --check` | 41 packages | 41 packages |
+| `pytest -q -rs` | 752 passed, 3 skipped | ~1030+ passed, 3 skipped (grown by other phases' test additions) |
+| `EXPECTED_SDIST_ENTRIES` | 73 | 74 (`tests/test_import_graph.py` added by `e04659c`) |
+| `EXPECTED_WHEEL_ENTRIES` | 32 | 32 |
+| `EXPECTED_DIST_INFO_ENTRIES` | 4 | 4 |
+| `ffmpeg_utils.py` lines | 493 | 550 |
+| `LICENSE` | absent | absent |
+| `py.typed` | absent | absent |
+| `release:` trigger | present | present |
+| `annotated-types` in dev | absent | absent |
+
+> **The `docs/` folder at `C:\py_dev\mko_bazuna\docs` does not exist** in this
+> environment. Documentation problems are scoped to `C:\py_exp\mko_vkideo\docs/`
+> (the `vkdownloader` repository). No problem report is filed for a path that
+> does not exist; the doc issues that *are* in scope are captured in the table
+> above.
+
+### Adjusted dependency graph
+
+```
+B0 is MOOT (format gate already green; no commit needed)
+B1 → B2
+B3 → B12 → B13    (.github/workflows/packaging-check.yml, 3 writers)
+B4 → B5           (test_packaging.py frozensets, 2 writers)
+B8 → B10          (README.md requirements block, shared with B10)
+B6                (pyproject.toml + uv.lock, independent)
+B7 is DONE        (stealth diagnostic already in place)
+B8 (X-01..X-05) is DONE; B8 (docs wording + X-04) remains
+B9 is DONE        (OSError arms, consumed return value, corrected hint)
+B15 → B10         (3.14 verification, no-commit)
+B11               (version source, independent)
+B14               (bytecode tidy, no-commit, parallel-safe)
+```
+
+**Key changes to ordering:** B0 is removed (no longer a gate). B9 is removed (already done). B7 is removed (already done). The remaining critical path is B1 → B2, B3 → B12 → B13, B4 → B5, B15 → B10 → B11, with B6, B8 (remaining docs), and B14 parallel-safe. B10 no longer depends on B9 (B9 is done). D-8 remains open and B9's version-floor line in `installation.md` must be filled by measurement before B10 can complete."
 
 > **PRODUCT OWNER DECISIONS A, B AND C — BINDING ON THIS PLAN.** *ffmpeg (below), the
 > supported Python range, the publishing model and the licence are all decided. Where a
@@ -733,37 +821,49 @@ nothing is removable.**
 
 ## §3 Blocks
 
-**Sixteen blocks. Every block is one commit and independently revertible** — except
-**P16-B14**, a one-time local tidy with **no committed content**, and **P16-B15**, a
-verification gate whose output is a block report and a decision rather than a diff. Both
-are stated as such rather than hidden.
+**Thirteen remaining blocks (B7, B9, and the format-gate B0 are already resolved — §0).**
+Every block is one commit and independently revertible — except **P16-B14**, a one-time
+local tidy with **no committed content**, and **P16-B15**, a verification gate whose output
+is a block report and a decision rather than a diff. Both are stated as such rather than
+hidden.
 
 Block IDs are prefixed `P16-B<n>` because bare `B3` means something different in every
-plan from 05 to 14 (C10). `P16-B0` is numbered out of sequence **deliberately** so that
-`P16-B1`…`P16-B14` keep the IDs already published to the board; `P16-B15` is appended for
-the same reason.
+plan from 05 to 14 (C10). `P16-B1`…`P16-B15` keep the IDs already published to the board;
+the numbering has a one-gap (B0) because it was numbered out of sequence in the original
+plan and the original IDs are preserved for traceability with reviewers who saw them.
 
 ```
-P16-B0  unblock the format gate (ruff format --check is RED at HEAD)
-   │       │
-   ▼       │
-P16-B1  DEP-004+DEP-012 ──► P16-B2 DEP-005+006 ──┐
-   (index mutation)          (.gitignore rules)  │
-                                                   ├──► P16-B14 tidy (terminal, no commit)
-P16-B3  DEP-001+DEP-002(+TST-005) ───────────────┤   (ONE commit; gated on P16-B0)
-   (ONE commit, ONE step list)                   │
-                                                   │
-P16-B4  DEP-008 py.typed ──► P16-B5 DEP-009 LIC ─┤   (DIFFERENT frozenset pairs)
-P16-B6  DEP-007 annotated-types ─────────────────┤   (independent)
-P16-B7  DEP-010 stealth else ────────────────────┤   (independent)
-P16-B8  DEP-011a DECIDED + X-01..X-05 ──► P16-B9 DEP-011b
-   (STATE the ruling)              (ENFORCE it; load-bearing)
-                                                   │
-P16-B15 3.14 toolchain + shim inventory ──► P16-B10 DEP-014 (floor -> 3.14)
-   (VERIFY, no commit; decides D-13)     (IMPLEMENT the contract change)
-P16-B11 DEP-016                            │
-P16-B12 DEP-003 ──► P16-B13 DEP-015         │   (shared .github/**; NOT published)
+                                     ┌─► P16-B1  DEP-004+DEP-012 ──► P16-B2 DEP-005+006   ┐
+                                     │   (index mutation)              (.gitignore rules)   │
+                                     │                                                     │
+                                     ├─► P16-B3  DEP-001+DEP-002(+TST-005)                 │
+                                     │   (ONE commit, ONE step list)                      ├──► P16-B14 tidy (terminal, no commit)
+                                     │                                                    │
+B0 ALREADY DONE — format gate GREEN at 2289f6f  │                                               │
+                                     │                                                    │
+                                     ├─► P16-B4  DEP-008 py.typed ──► P16-B5 DEP-009 LIC    │   (DIFFERENT frozenset pairs)
+                                     │                                                     │
+                                     ├─► P16-B6  DEP-007 annotated-types                    │   (independent)
+                                     │                                                     │
+B7 ALREADY DONE — stealth diagnostic in browser.py        │                               │
+                                     │                                                    │
+B8 X-01..X-05 ALREADY DONE — B8 (docs wording + X-04) remains ──► B10 (shared README.md)     │
+                                     │                                                    │
+B9 ALREADY DONE — OSError arms, consumed return value, TRN-008      │                        │
+                                     │                                                    │
+                                     ├─► P16-B15 3.14 toolchain + shim inventory ──► P16-B10 DEP-014
+                                     │   (VERIFY, no commit; decides D-13)    (IMPLEMENT the contract change)
+                                     │                                                    │
+                                     ├─► P16-B11 DEP-016                          │
+                                     │                                                    │
+                                     └─► P16-B12 DEP-003 ──► P16-B13 DEP-015        │   (shared .github/**; NOT published)
 ```
+
+**B0, B7, and B9 are RESOLVED** (see §0). B8 is split: X-01, X-02, X-03, and X-05 are
+done; only the docs-wording half of B8 (conditional ffmpeg requirement in README.md and
+installation.md) plus X-04 remain. B9's version-floor line in `installation.md` is the
+line B8 leaves for B9 to fill — but B9 is already done, so the line is waiting on **D-8**
+being measured, not on B9 being implemented.
 
 ### P16-B15 — Verify the declared toolchain against a 3.14 target, and inventory the shims
 
