@@ -1084,11 +1084,16 @@ async def _run_download_session(
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
+    Creates the segments working directory ``segments_dir`` only after the
+    playlist is fetched and parsed — never before the first network round-trip
+    (P12-B7, ART-005 lifetime). The directory is not removed here; removal on
+    every non-success exit is the caller's responsibility.
+
     Args:
         m3u8_url: HLS playlist URL.
         headers: Request headers to use.
         settings: Application settings.
-        segments_dir: Directory for downloaded segments.
+        segments_dir: Directory for downloaded segments (created here, after parse).
         output_file: Final output file path.
         progress_callback: Optional callback for progress updates.
         video_url: Video URL for progress callback and coordinator keying.
@@ -1120,6 +1125,12 @@ async def _run_download_session(
 
         segments = _parse_m3u8_segments(playlist_result.playlist_text)
         logger.info("found_segments", count=len(segments))
+
+        # P12-B7 (ART-005 lifetime): the segments working directory is created
+        # only after the playlist is parsed and segments are enumerated — not
+        # in download_hls_with_resume before the fetch. Every non-success exit
+        # removes it via _cleanup_segments in download_hls_with_resume's finally.
+        segments_dir.mkdir(parents=True, exist_ok=True)
 
         _clear_stale_segments(segments_dir, segments)
 
@@ -1199,6 +1210,17 @@ async def download_hls_with_resume(
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.
+
+    Tree lifetime (P12-B7, ART-005):
+        The segments working directory (``segments_dir``) is created inside
+        ``_run_download_session`` only after the playlist is parsed and the
+        segment list is enumerated — not before the first network fetch. On every
+        non-success exit the ``finally`` block reports the tree's state via
+        ``_log_preserve_segments`` and then removes it via
+        ``_cleanup_segments``, so no working directory is left behind after a
+        failure. ``_cleanup_segments`` handles a non-existent directory
+        gracefully (the playlist-fetch-failure path returns before the tree is
+        ever created).
     """
     logger.info(
         "starting_segment_download",
@@ -1212,7 +1234,6 @@ async def download_hls_with_resume(
     output_file = validate_output_path(request.output_file)
 
     segments_dir = output_file.parent / f".{output_file.stem}_segments"
-    segments_dir.mkdir(parents=True, exist_ok=True)
 
     headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
@@ -1248,7 +1269,12 @@ async def download_hls_with_resume(
         return None
     finally:
         if not success:
+            # P12-B7 (ART-005 lifetime): report the tree's state, then remove it
+            # on every non-success exit. _log_preserve_segments runs first so the
+            # reporter sees the actual count; _cleanup_segments then removes the
+            # tree. _cleanup_segments handles a non-existent dir gracefully.
             _log_preserve_segments(segments_dir)
+            _cleanup_segments(segments_dir)
 
 
 def _log_preserve_segments(segments_dir: Path) -> None:

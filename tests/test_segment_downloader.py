@@ -1261,6 +1261,172 @@ class TestRefreshQualitySelection:
         assert spy.call_args.args[2] == "https://example.com/video.m3u8"
 
 
+class TestTreeLifetime:
+    """P12-B7 (ART-005 lifetime): the segments working directory lives only while
+    the merge needs it.
+
+    The tree is created inside ``_run_download_session`` after the playlist is
+    parsed, and every non-success exit removes it via ``_cleanup_segments`` in
+    ``download_hls_with_resume``'s finally block. These oracles drive the full
+    ``download_hls_with_resume`` entry point with ``_fetch_playlist_with_retry``
+    and ``_process_downloaded_segments`` mocked, asserting the file-system side
+    effect rather than the return value.
+    """
+
+    _PLAYLIST = "#EXTM3U\nseg1.ts"
+
+    def _request(self, output_file: Path) -> HLSDownloadRequest:
+        return HLSDownloadRequest(
+            video_url="https://vkvideo.ru/video-12345_67890",
+            m3u8_url="https://example.com/video.m3u8",
+            output_file=output_file,
+            quality="best",
+        )
+
+    @staticmethod
+    def _segments_dir(output_file: Path) -> Path:
+        return output_file.parent / f".{output_file.stem}_segments"
+
+    @pytest.mark.asyncio
+    async def test_no_tree_before_playlist_parsed(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """No working directory exists when the playlist fetch fails.
+
+        P12-B7: the tree is created only after the playlist is parsed, so a None
+        result from ``_fetch_playlist_with_retry`` must leave no directory behind.
+        This is the strongest oracle — it fails if the mkdir stayed in
+        ``download_hls_with_resume`` (i.e. before the fetch).
+        """
+        output_file = tmp_path / "video.mp4"
+        segments_dir = self._segments_dir(output_file)
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                AsyncMock(return_value=None),
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await download_hls_with_resume(
+                self._request(output_file),
+                settings=test_settings,
+            )
+
+        assert result is None
+        assert not segments_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_tree_removed_after_failed_session(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Tree is cleaned up when the session returns None (no merge produced).
+
+        ``_process_downloaded_segments`` returning None is a non-success exit;
+        the finally block must remove the working directory it just created.
+        """
+        output_file = tmp_path / "video.mp4"
+        segments_dir = self._segments_dir(output_file)
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                AsyncMock(
+                    return_value=PlaylistFetchResult(
+                        playlist_text=self._PLAYLIST,
+                        base_url="https://example.com/playlist.m3u8",
+                    )
+                ),
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._process_downloaded_segments",
+                AsyncMock(return_value=None),
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            result = await download_hls_with_resume(
+                self._request(output_file),
+                settings=test_settings,
+            )
+
+        assert result is None
+        assert not segments_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_tree_removed_after_merge_failure(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Tree is cleaned up when ``_process_downloaded_segments`` raises.
+
+        A ``RuntimeError`` propagates to the caller AND the finally block must
+        still remove the working directory it just created.
+        """
+        output_file = tmp_path / "video.mp4"
+        segments_dir = self._segments_dir(output_file)
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                AsyncMock(
+                    return_value=PlaylistFetchResult(
+                        playlist_text=self._PLAYLIST,
+                        base_url="https://example.com/playlist.m3u8",
+                    )
+                ),
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._process_downloaded_segments",
+                AsyncMock(side_effect=RuntimeError("merge failed")),
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            with pytest.raises(RuntimeError, match="merge failed"):
+                await download_hls_with_resume(
+                    self._request(output_file),
+                    settings=test_settings,
+                )
+
+        assert not segments_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_tree_removed_after_file_not_found(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Tree is cleaned up when ``_process_downloaded_segments`` raises
+        ``FileNotFoundError`` (the merge's existence check failing on a missing
+        segment file).
+
+        A ``FileNotFoundError`` propagates to the caller AND the finally block
+        must still remove the working directory it just created.
+        """
+        output_file = tmp_path / "video.mp4"
+        segments_dir = self._segments_dir(output_file)
+
+        with (
+            patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                AsyncMock(
+                    return_value=PlaylistFetchResult(
+                        playlist_text=self._PLAYLIST,
+                        base_url="https://example.com/playlist.m3u8",
+                    )
+                ),
+            ),
+            patch(
+                "vkdownloader.services.segment_downloader._process_downloaded_segments",
+                AsyncMock(side_effect=FileNotFoundError("missing segment")),
+            ),
+            patch("vkdownloader.services.segment_downloader.logger", MagicMock()),
+        ):
+            with pytest.raises(FileNotFoundError, match="missing segment"):
+                await download_hls_with_resume(
+                    self._request(output_file),
+                    settings=test_settings,
+                )
+
+        assert not segments_dir.exists()
+
+
 class TestSegmentFanoutCompletion:
     """CON-006 + CON-007 + CON-008, enforced by phase04/VAL-402.
 

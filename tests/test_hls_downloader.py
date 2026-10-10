@@ -60,10 +60,16 @@ class TestDownloadHlsWithResume:
     """Tests for download_hls_with_resume segment-level resume functionality."""
 
     @pytest.mark.asyncio
-    async def test_preserves_segments_on_playlist_fetch_failure(
+    async def test_removes_segments_on_session_failure(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test segments are preserved when playlist fetch fails for resume."""
+        """Test segments tree is removed on a non-success session exit (P12-B7).
+
+        P12-B7 changed the contract: the working directory is created only after
+        the playlist is parsed and removed on every non-success exit. Previously
+        this asserted the tree was preserved for resume; the new contract asserts
+        it is removed.
+        """
         output_path = tmp_path / "video.mp4"
         segments_dir = tmp_path / ".video_segments"
 
@@ -88,14 +94,20 @@ class TestDownloadHlsWithResume:
             )
 
         assert result is None
-        # Segments directory should be preserved for resume
-        assert segments_dir.exists(), "Segments directory should be preserved for resume"
+        # P12-B7: tree removed on every non-success exit.
+        assert not segments_dir.exists(), "Segments directory should be removed on failure"
 
     @pytest.mark.asyncio
-    async def test_preserves_segments_on_segment_download_failure(
+    async def test_removes_segments_on_segment_download_failure(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test segments are preserved when segment download fails for resume."""
+        """Test segments tree is removed when segment downloads fail (P12-B7).
+
+        P12-B7 changed the contract: a failed segment download triggers the
+        finally block's ``_cleanup_segments``, removing the working directory.
+        Previously this asserted the tree was preserved for resume; the new
+        contract asserts it is removed.
+        """
         output_path = tmp_path / "video.mp4"
         segments_dir = tmp_path / ".video_segments"
 
@@ -106,7 +118,7 @@ class TestDownloadHlsWithResume:
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
             return_value=PlaylistFetchResult(
-                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts",
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
                 base_url="https://example.com/playlist.m3u8",
             ),
         ):
@@ -124,8 +136,8 @@ class TestDownloadHlsWithResume:
                 )
 
         assert result is None
-        # Segments directory should be preserved for resume
-        assert segments_dir.exists(), "Segments directory should be preserved for resume"
+        # P12-B7: tree removed on every non-success exit.
+        assert not segments_dir.exists(), "Segments directory should be removed on failure"
 
     @pytest.mark.asyncio
     async def test_resume_with_all_segments_present_merges_without_download(
