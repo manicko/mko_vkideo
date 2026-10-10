@@ -1,6 +1,6 @@
 # Phase 07 — Filesystem Artefacts Fix Plan
 
-**Status**: PARTIALLY IMPLEMENTED — `P12-B1` (`12af960`), `P12-B2` (`5d264d4`), `P12-B3` (`12af960`), `P12-B4` (`aabfc46`), `P12-B5` (`cfe4ce8`), `P12-B6` (`40404e2`), `P12-B7` (`e2c5ad0`), `P12-B8` (`0c704de`), `P12-B10` (`1d09009`) done. Remaining: `P12-B9`, `P12-B11`, `P12-B12`.
+**Status**: PARTIALLY IMPLEMENTED — `P12-B1` (`12af960`), `P12-B2` (`5d264d4`), `P12-B3` (`12af960`), `P12-B4` (`aabfc46`), `P12-B5` (`cfe4ce8`), `P12-B6` (`40404e2`), `P12-B7` (`e2c5ad0`), `P12-B8` (`0c704de`), `P12-B9` (`767bb47`), `P12-B10` (`1d09009`) done. Remaining: `P12-B11`, `P12-B12`.
 **Audit input**: `.ai/audit/99-validation/07-filesystem-artifacts-validated-findings.md` (validated findings artifact, phase 07, audit `HEAD = 4bf9efb`)
 **Baseline re-verified by this Planner against live `HEAD = 58bb7ce`** (re-baselined after the loader retirement landed; the tree under `src` and `tests` is clean at that commit)
 **Binding decisions applied**:
@@ -1106,15 +1106,18 @@ A task specification is complete when the agent executing it can find every file
 
 ### 6.9 `P12-B9` — the probe and the cleanup name the right file
 
+**Status:** DONE — implemented, tested (1073 passed, 3 skipped), committed as `767bb47`. Execution position 9 (after `P12-B8`, plan terminus). Route (a) chosen.
+**Task file:** `.ai/tasks/p12-b9-partial-file-probe.yaml`
+
 **Semantic targets.**
-1. `services/ytdlp_downloader.py::download_with_ytdlp_with_resume_fallback` — the partial-file probe, which validates the output path and then tests the **final** name's existence and non-zero size.
+1. `services/ytdlp_downloader.py::download_with_ytdlp_with_resume_fallback` — the partial-file probe, repointed from the final name to yt-dlp's `.part` temp name.
 2. `services/ytdlp_downloader.py::_build_ytdlp_cli_command` — the command construction; measured **zero** occurrences of `no-part` in `src/`, so yt-dlp's `FileDownloader.temp_name` writes `<name>.part`.
-3. The `DF-008` cleanup at the end of the retry loop, which unlinks the **final** name.
+3. The `DF-008` cleanup at the end of the retry loop, repointed from the final name to the `.part` temp name.
 4. `tests/test_hls_downloader.py::TestYtdlpCliCommand` — route (b) only.
 
-**Do not touch.** The `output_file.unlink()` inside `_attempt_segment_resume` — it discards partial state to start the segment download clean, and whether discarding an existing final artefact on the retry path is acceptable is `ROLLOUT-1`'s risk to record, not this block's to fix. The retry loop's structure. The mislabels (`OUT-016`). The `--method ffmpeg` fallback arm (`P10-B10`'s).
+**Do not touch.** The `output_file.unlink()` inside `_attempt_segment_resume` — it discards partial state to start a segment download clean, and whether discarding an existing final artefact on the retry path is acceptable is `ROLLOUT-1`'s risk to record, not this block's to fix. The retry loop's structure. The mislabels (`OUT-016`). The `--method ffmpeg` fallback arm (`P10-B10`'s).
 
-**Mechanical verification.** (i) One helper derives the temp name; the probe and the `DF-008` cleanup both call it, asserted by test so they cannot diverge. (ii) The probe's contract is unchanged in shape — existence **and** non-zero size, with a zero-length `.part` explicitly not counting as progress. (iii) Exhausting the loop still logs and returns `None`. (iv) `TestYtDlpRetryBackoff` and `TestAttemptSegmentResumeQuality` pass unchanged. (v) The `.part` name is verified against the **installed** yt-dlp version's `FileDownloader.temp_name`, not against the artifact. `G1`, `G2`, `G4`, `G6` exit 0; `G5` non-increasing; `G3` unchanged from its red baseline; skip count 3.
+**Mechanical verification.** (i) One helper (`_ytdlp_temp_name`) derives the temp name; the probe and the `DF-008` cleanup both call it, asserted by test so they cannot diverge. (ii) The probe's contract is unchanged in shape — existence **and** non-zero size, with a zero-length `.part` explicitly not counting as progress. (iii) Exhausting the loop still logs and returns `None`. (iv) `TestYtDlpRetryBackoff`, `TestAttemptSegmentResumeQuality`, `TestB13ResumeErrorHandling`, `TestPerformDownload`, and `TestBatchDownloaderSemaphore` tests pass after updating their simulated partial files to `.part`. (v) The `.part` name is verified against the **installed** yt-dlp version's `FileDownloader.temp_name` in `TestYtdlpTempName`. `G1`, `G2`, `G4`, `G6` exit 0; `G5` non-increasing; `G3` unchanged from its red baseline; skip count 3.
 
 **Honest judgement required.** `D-5` — route (a) repoint, (b) `--no-part`, or (c) probe both. Criterion: route (b) removes the child's own resumability, replacing it with the segment path's resume, which needs a fresh browser token that `_attempt_segment_resume` forces. A reader should treat (a) as the default and (b) as requiring an explicit argument. Under (c), which name does `DF-008` remove, and does leaving the other behind recreate the residue problem?
 
