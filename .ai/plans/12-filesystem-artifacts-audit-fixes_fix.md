@@ -1083,6 +1083,9 @@ A task specification is complete when the agent executing it can find every file
 
 ### 6.8 `P12-B8` — space at both stages
 
+**Status:** DONE — implemented, tested (1068 passed, 3 skipped), committed as `0c704de`. Execution position 8 (after `P12-B7`, before `P12-B9`).
+**Task file:** `.ai/tasks/p12-b8-space-probe.yaml`
+
 **Semantic targets.**
 1. `services/segment_downloader.py` — a new download-stage free-space precondition ahead of the fan-out. Demand figure per §3.6's alternatives.
 2. `services/ffmpeg_utils.py::_required_merge_bytes` — the multiplier and the docstring's `2×` justification. **Arithmetic and docstring only** (`C4`: the module imports only `..exceptions` and `..utils.formatting`).
