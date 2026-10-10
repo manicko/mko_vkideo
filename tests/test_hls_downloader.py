@@ -681,7 +681,7 @@ class TestYtdlpCliCommand:
         idx = cmd.index("-f")
         assert "best[height<=720]" in cmd[idx + 1]
 
-    def test_cli_command_format_best_when_quality_not_digit(self, test_settings: Settings) -> None:
+    def test_cli_command_format_best_for_best_quality(self, test_settings: Settings) -> None:
         """Test format selector is 'best' when quality is non-numeric."""
         cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
@@ -695,6 +695,25 @@ class TestYtdlpCliCommand:
         assert "-f" in cmd
         idx = cmd.index("-f")
         assert cmd[idx + 1] == "best"
+
+    def test_cli_command_format_worst_for_worst_quality(self, test_settings: Settings) -> None:
+        """Test format selector is 'worst' when quality is the keyword 'worst'."""
+        from vkdownloader.services.ytdlp_downloader import _resolve_format_selector
+
+        assert _resolve_format_selector("worst") == "worst"
+
+        cmd, _ = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="worst",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=None,
+        )
+
+        assert "-f" in cmd
+        idx = cmd.index("-f")
+        assert cmd[idx + 1] == "worst"
 
     def test_cli_command_format_selector_for_non_standard_height(
         self, test_settings: Settings
@@ -1198,6 +1217,7 @@ class TestBoundedYtDlpTranscript:
             with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -1231,6 +1251,7 @@ class TestBoundedYtDlpTranscript:
             with patch("vkdownloader.services.ytdlp_downloader.logger"):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -1271,6 +1292,7 @@ class TestBoundedYtDlpTranscript:
                 # sites are covered by the bounding.
                 await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -1311,6 +1333,7 @@ class TestBoundedYtDlpTranscript:
             with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -1355,6 +1378,7 @@ class TestBoundedYtDlpTranscript:
             with patch("vkdownloader.services.ytdlp_downloader.logger", mock_logger):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -1580,6 +1604,7 @@ class TestBrowserCookiesIntegration:
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
             await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
                 output_file,
                 "720",
                 test_settings,
@@ -2017,6 +2042,7 @@ class TestDownloadMethodLogging:
             ):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -2028,6 +2054,40 @@ class TestDownloadMethodLogging:
         # Verify quality is in the log
         assert starting_logs[0]["kwargs"].get("quality") == "720"
         assert result == output_file
+
+    @pytest.mark.asyncio
+    async def test_child_receives_selected_address(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Verify yt-dlp's final positional argument is the m3u8_url, not the video_url."""
+        from vkdownloader.services.downloader import _download_with_ytdlp
+
+        output_file = tmp_path / "video.mp4"
+
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.pid = 12345
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        captured_cmd: list[str] = []
+
+        async def mock_create_subprocess_exec(*cmd: Any, **kwargs: Any) -> Any:
+            captured_cmd.extend(str(c) for c in cmd)
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+            with patch("vkdownloader.services.ytdlp_downloader.logger"):
+                await _download_with_ytdlp(
+                    "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
+                    output_file,
+                    "720",
+                    test_settings,
+                )
+
+        assert captured_cmd[-1] == "https://example.com/playlist.m3u8"
 
 
 class TestIterProcessLines:
@@ -3356,6 +3416,7 @@ class TestYtDlpSubprocessShutdown:
             ) as mock_cancel:
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -3392,6 +3453,7 @@ class TestYtDlpSubprocessShutdown:
                 with pytest.raises(asyncio.CancelledError):
                     await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -3418,6 +3480,7 @@ class TestYtDlpSubprocessShutdown:
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
                 output_file,
                 "720",
                 test_settings,
@@ -3446,6 +3509,7 @@ class TestYtDlpSubprocessShutdown:
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
                 output_file,
                 "720",
                 test_settings,
@@ -3486,6 +3550,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger"):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -3530,6 +3595,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger"):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -3571,6 +3637,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -3622,6 +3689,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -3670,6 +3738,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -3735,6 +3804,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -3806,6 +3876,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -3870,6 +3941,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -3936,6 +4008,7 @@ class TestYtDlpSubprocessShutdown:
                         with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                             result = await _download_with_ytdlp(
                                 "https://vkvideo.ru/video-12345_67890",
+                                "https://example.com/playlist.m3u8",
                                 output_file,
                                 "720",
                                 test_settings,
@@ -3997,6 +4070,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger.info"):
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -4064,6 +4138,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger"):
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -4131,6 +4206,7 @@ class TestYtDlpSubprocessShutdown:
                         with pytest.raises(asyncio.CancelledError):
                             await _download_with_ytdlp(
                                 "https://vkvideo.ru/video-12345_67890",
+                                "https://example.com/playlist.m3u8",
                                 output_file,
                                 "720",
                                 test_settings,
@@ -4187,6 +4263,7 @@ class TestYtDlpSubprocessShutdown:
                     with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                         await _download_with_ytdlp(
                             "https://vkvideo.ru/video-12345_67890",
+                            "https://example.com/playlist.m3u8",
                             output_file,
                             "720",
                             test_settings,
@@ -4349,6 +4426,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -4420,6 +4498,7 @@ class TestYtDlpSubprocessShutdown:
                 with patch("vkdownloader.services.ytdlp_downloader.logger") as mock_logger:
                     result = await _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         test_settings,
@@ -4494,6 +4573,7 @@ class TestYtDlpSubprocessShutdown:
                     with pytest.raises(asyncio.CancelledError):
                         await _download_with_ytdlp(
                             "https://vkvideo.ru/video-12345_67890",
+                            "https://example.com/playlist.m3u8",
                             output_file,
                             "720",
                             test_settings,
@@ -4543,6 +4623,7 @@ class TestYtDlpSubprocessShutdown:
             with patch("vkdownloader.services.ytdlp_downloader.logger"):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     test_settings,
@@ -4738,6 +4819,7 @@ class TestYtDlpStallTimeout:
             ) as mock_cancel:
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     settings,
@@ -4797,6 +4879,7 @@ class TestYtDlpStallTimeout:
             with patch("asyncio.create_subprocess_exec", return_value=mock_process):
                 result = await _download_with_ytdlp(
                     "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/playlist.m3u8",
                     output_file,
                     "720",
                     settings,
@@ -4837,6 +4920,7 @@ class TestYtDlpStallTimeout:
                 task = asyncio.create_task(
                     _download_with_ytdlp(
                         "https://vkvideo.ru/video-12345_67890",
+                        "https://example.com/playlist.m3u8",
                         output_file,
                         "720",
                         settings,
@@ -5224,6 +5308,7 @@ class TestB13DownloadMissingBinary:
         ):
             result = await _download_with_ytdlp(
                 "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
                 output_file,
                 "720",
                 test_settings,

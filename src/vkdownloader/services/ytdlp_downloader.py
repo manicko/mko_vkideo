@@ -703,6 +703,23 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
         sys.stderr.flush()
 
 
+def _resolve_format_selector(quality_str: str) -> str:
+    """Resolve a yt-dlp format selector string from a quality token.
+
+    A positive integer height selects ``best[height<=N]``; the keyword
+    ``worst`` selects ``worst``; everything else (including ``best``
+    and ``unknown``) selects ``best``.
+
+    This replaces the inline ternary that silently mapped ``worst`` -> ``best``
+    (NET-003).
+    """
+    if quality_str and quality_str.isdigit():
+        return f"best[height<={quality_str}]"
+    if quality_str == "worst":
+        return "worst"
+    return "best"
+
+
 def _build_ytdlp_cli_command(
     output_file: Path,
     quality_str: str,
@@ -730,9 +747,7 @@ def _build_ytdlp_cli_command(
         Tuple of (command list, cookie_file Path or None).
     """
     # Build format selector: use height filter for numeric quality, bare "best" otherwise
-    format_selector = (
-        f"best[height<={quality_str}]" if quality_str and quality_str.isdigit() else "best"
-    )
+    format_selector = _resolve_format_selector(quality_str)
 
     cmd: list[str] = [
         sys.executable,
@@ -845,6 +860,7 @@ async def download_with_ytdlp_with_resume_fallback(
     while retry_count <= settings.max_retries:
         result = await _download_with_ytdlp(
             video_url,
+            m3u8_url,
             output_file,
             quality,
             settings,
@@ -1082,6 +1098,7 @@ def _retain_transcript_line(output: bytearray, line: bytes) -> None:
 
 async def _download_with_ytdlp(
     video_url: str,
+    m3u8_url: str,
     output_file: Path,
     quality: str,
     settings: Settings,
@@ -1111,6 +1128,7 @@ async def _download_with_ytdlp(
 
     Args:
         video_url: VK video URL to download.
+        m3u8_url: HLS manifest URL passed as yt-dlp's target argument.
         output_file: Path to save the downloaded video.
         quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
             pixels the video offers, e.g. ``1072``).
@@ -1127,7 +1145,7 @@ async def _download_with_ytdlp(
     """
     logger.info(
         "starting_ytdlp_download",
-        url=_strip_auth_params(video_url),
+        url=_strip_auth_params(m3u8_url),
         output=str(output_file),
         quality=quality,
     )
@@ -1148,8 +1166,14 @@ async def _download_with_ytdlp(
         cookies,
         raw_cookies,
     )
+    logger.info(
+        "ytdlp_format_selected",
+        url=_strip_auth_params(m3u8_url),
+        format_selector=_resolve_format_selector(quality_str),
+        quality=quality_str,
+    )
     # yt-dlp takes the URL as its final positional argument
-    cmd.append(video_url)
+    cmd.append(m3u8_url)
 
     # yt-dlp writes progress and most output to stdout by default (confirmed
     # empirically). Using stdout=PIPE + stderr=STDOUT merges all output into a
