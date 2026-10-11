@@ -670,8 +670,15 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
     :func:`_is_ytdlp_progress_line` and :func:`_parse_ytdlp_progress` both read
     untransformed text, so the ``\\r`` rewrite and the reported
     ``downloaded`` / ``total`` figures are unaffected by the transform.
-    ``echo=False`` is evaluated BEFORE any transform, so nothing is
-    transformed, written, or logged for a non-progress line.
+
+    When ``echo=False`` nothing is written to stderr. Progress lines
+    (parseable by :func:`_parse_ytdlp_progress`) emit a compact
+    ``ytdlp_progress_suppressed`` debug record with their byte accounting.
+    Non-progress lines emit a single ``ytdlp_output_suppressed`` debug record
+    carrying the REDACTED text (``\\n``/``\\r`` stripped), so no child output
+    is silently lost without a log trace. The redaction processor in the
+    structlog chain (``redact_log_event``) provides defence-in-depth on top
+    of :func:`sanitize_text_for_log`.
 
     The transcript buffer still receives the RAW line
     (:func:`_retain_transcript_line` / ``output_chunks``): redaction here must
@@ -691,6 +698,11 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
                 "ytdlp_progress_suppressed",
                 downloaded=downloaded,
                 total=total,
+            )
+        else:
+            logger.debug(
+                "ytdlp_output_suppressed",
+                line=sanitize_text_for_log(line.rstrip("\n\r")),
             )
         return
     if _is_ytdlp_progress_line(line):

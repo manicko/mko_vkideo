@@ -1131,16 +1131,15 @@ class TestEchoYtdlpLine:
         assert "https://vk-cdn.net/***REDACTED***" in captured.err
         assert "sig=" not in captured.err
 
-    def test_echo_false_url_line_writes_nothing_and_logs_nothing(
+    def test_echo_false_url_line_writes_nothing_but_logs_suppressed(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``echo=False`` on a URL-bearing line writes nothing and logs nothing.
+        """``echo=False`` on a URL-bearing non-progress line writes nothing to stderr
+        but emits one ``ytdlp_output_suppressed`` debug record (D-8, Decision B).
 
-        The observable half of gate-before-transform: the ``if not echo`` gate is
-        evaluated before any transform, so a URL-bearing non-progress line
-        leaves stderr empty and emits no progress-suppressed debug record. Done
-        at ``_echo_ytdlp_line`` directly with ``capsys`` and a patched logger;
-        the existing subprocess-level ``echo=False`` test is not duplicated here.
+        The URL-bearing line is redacted by ``sanitize_text_for_log`` before the
+        record is emitted, so the debug log never leaks the raw URL. Done at
+        ``_echo_ytdlp_line`` directly with ``capsys`` and a patched logger.
         """
         line = (
             "[video] abc123: Downloading webpage: "
@@ -1152,7 +1151,13 @@ class TestEchoYtdlpLine:
 
         captured = capsys.readouterr()
         assert captured.err == ""
-        assert mock_logger.debug.call_count == 0
+        assert mock_logger.debug.call_count == 1
+        mock_logger.debug.assert_called_once()
+        args, kwargs = mock_logger.debug.call_args
+        assert args[0] == "ytdlp_output_suppressed"
+        assert "line" in kwargs
+        assert "***REDACTED***" in kwargs["line"]
+        assert "sig=" not in kwargs["line"]
         assert mock_logger.warning.call_count == 0
         assert mock_logger.error.call_count == 0
 
@@ -3698,10 +3703,15 @@ class TestYtDlpSubprocessShutdown:
         assert kwargs["downloaded"] == int(expected_total * 40.3 / 100)
 
     @pytest.mark.asyncio
-    async def test_ytdlp_echo_false_non_progress_line_no_output_no_log(
+    async def test_ytdlp_echo_false_suppresses_stderr_while_logging_non_progress(
         self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Test that echo=False on a non-progress line writes nothing and emits no debug log."""
+        """echo=False writes nothing to stderr; non-progress lines are logged once (D-8).
+
+        D-8 is CLOSED on Decision B: one record per dropped line carrying its
+        redacted text, stderr stays clean. The transcript buffer still receives
+        the RAW line via _retain_transcript_line.
+        """
         from vkdownloader.services.downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
@@ -3736,11 +3746,20 @@ class TestYtDlpSubprocessShutdown:
                     )
 
         assert result == output_file
+        # stderr must remain clean — the whole point of echo=False.
         captured = capsys.readouterr()
         assert captured.err == ""
-        assert len(debug_events) == 0, (
-            "No debug log events should be emitted for non-progress lines"
+
+        # Exactly one debug record for the non-progress line.
+        suppressed = [
+            (event, kwargs) for event, kwargs in debug_events if event == "ytdlp_output_suppressed"
+        ]
+        assert len(suppressed) == 1, (
+            f"Expected exactly 1 ytdlp_output_suppressed debug call, got {len(suppressed)}"
         )
+        _, kwargs = suppressed[0]
+        assert "line" in kwargs
+        assert "[download] Destination" in kwargs["line"]
 
     @pytest.mark.asyncio
     async def test_reader_line_overrun_recorded_when_no_progress_callback(
