@@ -124,6 +124,7 @@ class RichProgressReporter:
         self._progress: Progress | None = None
         self._tasks: dict[int, TaskID] = {}
         self._titles: dict[int, str] = {}
+        self._video_ids: dict[int, str] = {}
         self._last_values: dict[int, tuple[int, int]] = {}
         self._last_log_time: dict[int, float] = {}
         self._saved_handler_streams: list[
@@ -212,6 +213,7 @@ class RichProgressReporter:
             finally:
                 self._tasks.clear()
                 self._titles.clear()
+                self._video_ids.clear()
                 self._last_values.clear()
                 self._last_log_time.clear()
 
@@ -281,6 +283,10 @@ class RichProgressReporter:
         if index not in self._tasks:
             return
         self._progress.update(self._tasks[index], description=self._format_label(index))
+
+    def set_video_id(self, index: int, video_id: str) -> None:
+        """Record the VK video ID for ``index`` so structured log records carry it."""
+        self._video_ids[index] = video_id
 
     def update(self, index: int, downloaded: int, total: int) -> None:
         """Advance the progress line for ``index``.
@@ -469,6 +475,7 @@ class RichProgressReporter:
             "download_finished",
             video_index=index,
             video_label=label,
+            video_id=self._video_ids.get(index),
             status=status.value,
             downloaded=downloaded,
             total=total,

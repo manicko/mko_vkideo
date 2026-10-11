@@ -1,6 +1,7 @@
 """VK Video Extractor service for extracting stream URLs from video pages."""
 
 import asyncio
+import contextvars
 import re
 from pathlib import PurePosixPath
 from typing import Any, cast
@@ -19,6 +20,7 @@ from ..infrastructure.network_monitor import NetworkMonitor
 from ..models.enums import CookieSource, QualityLabel, StreamFormat
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
+from ..utils.correlation import get_correlation_id
 from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
@@ -317,6 +319,8 @@ class VKVideoExtractor:
                         "ytdlp_extraction_error",
                         error=str(e),
                         url=_strip_auth_params(url),
+                        video_id=video_id,
+                        correlation_id=get_correlation_id(),
                     )
                     raise ExtractionError(
                         f"Extraction failed for {_strip_auth_params(url)}: {e}"
@@ -333,16 +337,22 @@ class VKVideoExtractor:
         # applied to that path (CON-010).
         if self.backoff_coordinator is not None:
             await self.backoff_coordinator.wait_if_paused(url)
+        # D-5: capture-and-rebind — copy_context captures the correlation_id
+        # contextvar here; ctx.run rebinds it in the executor thread so log
+        # records emitted inside _sync_extract carry correlation_id. A plain
+        # loop.run_in_executor would NOT propagate contextvars.
         loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
         try:
             streams, title = await asyncio.wait_for(
-                loop.run_in_executor(None, _sync_extract),
+                loop.run_in_executor(None, ctx.run, _sync_extract),
                 timeout=self.settings.download_timeout,
             )
         except TimeoutError:
             logger.error(
                 "ytdlp_extraction_timeout",
                 url=_strip_auth_params(url),
+                video_id=video_id,
                 timeout=self.settings.download_timeout,
             )
             raise ExtractionError(

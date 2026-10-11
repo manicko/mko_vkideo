@@ -30,10 +30,15 @@ from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
-from ..services.extractor import VKVideoExtractor
+from ..services.extractor import VIDEO_ID_PATTERN, VKVideoExtractor, _extract_video_segment
 from ..services.progress_display import RichProgressReporter
 from ..services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
-from ..utils.correlation import bind_correlation_id, clear_correlation_id, generate_correlation_id
+from ..utils.correlation import (
+    bind_correlation_id,
+    clear_correlation_id,
+    generate_correlation_id,
+    get_correlation_id,
+)
 from ..utils.security import _resolve_output_file
 from ..utils.url_sanitizer import _strip_auth_params
 from .quality import QualitySelector
@@ -210,6 +215,7 @@ async def _download_single(
     # path where no context (and therefore no reporter) exists.
     def _on_progress(video_id: str, downloaded: int, total: int) -> None:
         if reporter is not None:
+            reporter.set_video_id(index, video_id)
             reporter.update(index, downloaded, total)
 
     def _on_title(sanitized_title: str) -> None:
@@ -275,9 +281,14 @@ async def _download_single(
         _finish(ProgressStatus.FAILED)
         return (url, "", e.status_label())
     except ExtractionError as e:
+        segment = _extract_video_segment(url)
+        match = VIDEO_ID_PATTERN.fullmatch(segment) if segment else None
+        extracted_video_id = match.group(2) if match else "unknown"
         logger.error(
             "extraction_error",
             url=_strip_auth_params(url),
+            video_id=extracted_video_id,
+            correlation_id=get_correlation_id(),
             **e.log_context(),
         )
         _finish(ProgressStatus.FAILED)

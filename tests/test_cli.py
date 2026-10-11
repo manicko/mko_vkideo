@@ -749,6 +749,7 @@ class TestBatchCommand:
             "download_finished",
             video_index=0,
             video_label="video_0: Test Title",
+            video_id="video_1",
             status="success",
             downloaded=50,
             total=100,
