@@ -285,7 +285,8 @@ class RichProgressReporter:
     def update(self, index: int, downloaded: int, total: int) -> None:
         """Advance the progress line for ``index``.
 
-        ``total <= 0`` means the size is unknown (the ffmpeg path); in that case
+        ``total <= 0`` means the size is unknown (the extractor could not
+        determine it); in that case
         the task stays indeterminate. ``total`` is only forwarded to rich when
         strictly positive, because rich treats ``total=0`` as an immediately
         finished task and breaks ``BarColumn``.

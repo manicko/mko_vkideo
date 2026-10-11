@@ -177,7 +177,7 @@ async def _download_single(
         url: Video URL to download.
         quality: Parsed quality request (keyword or exact stream label).
         output: Output directory for downloaded video.
-        method: Download method (yt-dlp, ffmpeg, or auto).
+        method: Download method (yt-dlp or auto).
         settings: Application settings with environment-loaded values.
         context: Optional context for batch download operations.
 
@@ -313,7 +313,7 @@ async def _run_batch_with_progress(
     Args:
         urls: List of video URLs to download.
         quality: Parsed quality request (keyword or exact stream label) for all downloads.
-        method: Download method (yt-dlp, ffmpeg, or auto).
+        method: Download method (yt-dlp or auto).
         settings: Application settings.
         output: Output directory for downloaded videos.
 
@@ -645,7 +645,7 @@ async def run_batch(
     Args:
         urls: List of validated video URLs to download.
         quality: Parsed quality request (keyword or exact stream label) for all downloads.
-        method: Download method (yt-dlp, ffmpeg, or auto).
+        method: Download method (yt-dlp or auto).
         settings: Application settings.
         output: Output directory for downloaded videos.
         skipped_count: Number of invalid URLs skipped during validation.
