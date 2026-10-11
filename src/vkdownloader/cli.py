@@ -304,12 +304,14 @@ def _validate_quality(ctx: typer.Context, param: typer.CallbackParam, value: str
 
 
 # The --method option accepts the values of DownloadMethod (yt-dlp and
-# auto). The help text lists the valid values but cannot name ffmpeg —
-# test_method_help_text_excludes_ffmpeg pins ffmpeg's absence from --help —
-# so the migration note that names the retired loader lives in the rejection
-# message, rendered from the constant below so it cannot drift from the
-# --method help text and the reference docs.
-_METHOD_OPTION_HELP = "Download method: yt-dlp or auto"
+# auto). The help text names the ffmpeg removal so users discover the
+# migration without triggering a rejection. test_method_help_text_names_ffmpeg_removal
+# pins ffmpeg's presence in --help output.
+_METHOD_OPTION_HELP = (
+    "Download method: yt-dlp or auto. "
+    "The ffmpeg download method was removed; "
+    "ffmpeg is still required to merge downloaded segments."
+)
 _METHOD_REJECTION_MESSAGE = (
     "Choose from 'yt-dlp' or 'auto'. "
     "The ffmpeg download method was removed; "

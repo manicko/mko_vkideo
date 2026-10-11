@@ -1858,12 +1858,18 @@ class TestMethodFfmpegRemoved:
 
         assert result.exit_code == 2
 
-    def test_method_help_text_excludes_ffmpeg(self) -> None:
-        """Verify ffmpeg is not listed in the --method help text."""
+    def test_method_help_text_names_ffmpeg_removal(self) -> None:
+        """Verify the --method help text names the ffmpeg removal (not excludes it).
+
+        The help text must carry the loader/merger distinction: ffmpeg as a download
+        transport was removed, while ffmpeg as the segment-merge engine is still
+        required. Asserting 'ffmpeg' IS present pins the migration note in the
+        option help, so users discover it without triggering a rejection.
+        """
         result = runner.invoke(app, ["download", "--help"])
 
         assert result.exit_code == 0
-        assert "ffmpeg" not in result.output.lower()
+        assert "ffmpeg" in result.output.lower()
 
     def test_method_option_still_present_in_download_help(self) -> None:
         """``--method`` still appears in ``download --help`` with both valid values.
