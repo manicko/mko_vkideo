@@ -68,8 +68,6 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         ".env.example",
         ".python-version",
         "README.md",
-        "docs/STRUCT.md",
-        "docs/error-handling-logging-research-2025-2026.md",
         "docs/00-overview/doc-maintenance-rules.md",
         "docs/01-tools/api-reference.md",
         "docs/01-tools/installation.md",
