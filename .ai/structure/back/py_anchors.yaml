@@ -3,472 +3,472 @@
   type: function_call
   value: get_logger
   stable_hash: 139fd03a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 7f1a40e0
   symbol_path: []
   type: function_call
   value: ProgressManager
   stable_hash: 7f1a40e0
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a443eb07
   symbol_path:
   - _create_progress_callback
   type: return_statement
   stable_hash: a443eb07
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 237d6b16
   symbol_path: []
   type: function_call
   value: VKVideoExtractor
   stable_hash: 237d6b16
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 86f8b9a9
   symbol_path: []
   type: function_call
   value: QualitySelector
   stable_hash: 86f8b9a9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: deb260dc
   symbol_path: []
   type: function_call
   value: str
   stable_hash: deb260dc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 02db0f3e
   symbol_path: []
   type: function_call
   value: Path
   stable_hash: 02db0f3e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a392d586
   symbol_path: []
   type: function_call
   value: validate_output_path
   stable_hash: a392d586
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: beac98b7
   symbol_path: []
   type: function_call
   value: _sanitize_title
   stable_hash: beac98b7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 1f18fec9
   symbol_path: []
   type: function_call
   value: perform_download
   stable_hash: 1f18fec9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: deb260dc
   symbol_path: []
   type: function_call
   value: str
   stable_hash: deb260dc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: deb260dc
   symbol_path: []
   type: function_call
   value: str
   stable_hash: deb260dc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 1062f3f6
   symbol_path: []
   type: function_call
   value: setup_signal_handlers
   stable_hash: 1062f3f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 4802677f
   symbol_path: []
   type: function_call
   value: URLBackoffCoordinator
   stable_hash: 4802677f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 1f073082
   symbol_path: []
   type: function_call
   value: _create_progress_callback
   stable_hash: 1f073082
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: '67933906'
   symbol_path: []
   type: function_call
   value: range
   stable_hash: '67933906'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: c7f73351
   symbol_path: []
   type: function_call
   value: len
   stable_hash: c7f73351
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 26647bc1
   symbol_path: []
   type: function_call
   value: _download_single
   stable_hash: 26647bc1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: dbc1c269
   symbol_path: []
   type: function_call
   value: DownloadContext
   stable_hash: dbc1c269
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 57c44837
   symbol_path: []
   type: function_call
   value: enumerate
   stable_hash: 57c44837
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: c7f73351
   symbol_path: []
   type: function_call
   value: len
   stable_hash: c7f73351
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 0c4f1466
   symbol_path: []
   type: function_call
   value: _format_progress
   stable_hash: 0c4f1466
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 0c4f1466
   symbol_path: []
   type: function_call
   value: _format_progress
   stable_hash: 0c4f1466
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: a36c4e05
   symbol_path: []
   type: return_statement
   stable_hash: a36c4e05
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: b0ff25a2
   symbol_path: []
   type: function_call
   value: isinstance
   stable_hash: b0ff25a2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 57c44837
   symbol_path: []
   type: function_call
   value: enumerate
   stable_hash: 57c44837
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 317d434b
   symbol_path:
   - _print_batch_summary
   type: function_call
   value: sum
   stable_hash: 317d434b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 7b939831
   symbol_path:
   - _print_batch_summary
   type: function_call
   value: len
   stable_hash: 7b939831
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 7b939831
   symbol_path:
   - _print_batch_summary
   type: function_call
   value: len
   stable_hash: 7b939831
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 81d0bee1
   symbol_path:
   - download
   type: function_call
   value: Settings
   stable_hash: 81d0bee1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 208b8a09
   symbol_path:
   - download
   type: function_call
   value: setup_logging
   stable_hash: 208b8a09
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 10e6b4d9
   symbol_path:
   - download
   type: function_call
   value: setup_signal_handlers
   stable_hash: 10e6b4d9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 87dc5089
   symbol_path:
   - download
   type: function_call
   value: VKVideoExtractor
   stable_hash: 87dc5089
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 82025e8c
   symbol_path:
   - download
   type: function_call
   value: len
   stable_hash: 82025e8c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 10e0a715
   symbol_path:
   - download
   type: function_call
   value: QualitySelector
   stable_hash: 10e0a715
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 10e0a715
   symbol_path:
   - download
   type: function_call
   value: QualitySelector
   stable_hash: 10e0a715
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 04e768a4
   symbol_path:
   - download
   type: function_call
   value: str
   stable_hash: 04e768a4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 26de8ad1
   symbol_path:
   - download
   type: function_call
   value: Path
   stable_hash: 26de8ad1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 33f374b8
   symbol_path:
   - download
   type: function_call
   value: validate_output_path
   stable_hash: 33f374b8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: eb721bf9
   symbol_path:
   - download
   type: function_call
   value: _sanitize_title
   stable_hash: eb721bf9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: dade51bb
   symbol_path:
   - download
   type: return_statement
   stable_hash: dade51bb
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 1991b513
   symbol_path:
   - download
   type: function_call
   value: perform_download
   stable_hash: 1991b513
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 04e768a4
   symbol_path:
   - download
   type: function_call
   value: str
   stable_hash: 04e768a4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 61661a9a
   symbol_path:
   - download
   type: function_call
   value: _download
   stable_hash: 61661a9a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 0f97a18b
   symbol_path:
   - batch_download
   type: function_call
   value: Settings
   stable_hash: 0f97a18b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 7270d5d8
   symbol_path:
   - batch_download
   type: function_call
   value: setup_logging
   stable_hash: 7270d5d8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 6d5c84b2
   symbol_path:
   - batch_download
   type: function_call
   value: _run_batch_with_progress
   stable_hash: 6d5c84b2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 9e15d907
   symbol_path:
   - batch_download
   type: function_call
   value: _print_batch_summary
   stable_hash: 9e15d907
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 535e4c46
   symbol_path:
   - cli
   type: function_call
   value: app
   stable_hash: 535e4c46
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
+  file: src/vkdownloader/cli.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 4303fc7c
   symbol_path:
   - Settings
   type: function_call
   value: Field
   stable_hash: 4303fc7c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 933bb9f7
   symbol_path:
   - Settings
   - expand_tilde_paths
   type: return_statement
   stable_hash: 933bb9f7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 933bb9f7
   symbol_path:
   - Settings
   - expand_tilde_paths
   type: return_statement
   stable_hash: 933bb9f7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: a0def7c4
   symbol_path:
   - Settings
@@ -476,7 +476,7 @@
   type: function_call
   value: field_validator
   stable_hash: a0def7c4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: c047a64a
   symbol_path:
   - Settings
@@ -484,21 +484,21 @@
   type: function_call
   value: isinstance
   stable_hash: c047a64a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: d1c6fc1c
   symbol_path:
   - Settings
   - normalize_log_level
   type: return_statement
   stable_hash: d1c6fc1c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: d1c6fc1c
   symbol_path:
   - Settings
   - normalize_log_level
   type: return_statement
   stable_hash: d1c6fc1c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: e93d2cf1
   symbol_path:
   - Settings
@@ -506,7 +506,7 @@
   type: function_call
   value: LogLevel
   stable_hash: e93d2cf1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 1ecd04ba
   symbol_path:
   - Settings
@@ -514,14 +514,14 @@
   type: function_call
   value: field_validator
   stable_hash: 1ecd04ba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 91ccab73
   symbol_path:
   - setup_logging
   type: function_call
   value: Settings
   stable_hash: 91ccab73
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
+  file: src/vkdownloader/config.py
 - id: 561322ed
   symbol_path:
   - QualityNotAvailableError
@@ -529,13 +529,13 @@
   type: function_call
   value: super
   stable_hash: 561322ed
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\exceptions.py
+  file: src/vkdownloader/exceptions.py
 - id: e28018cb
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: e28018cb
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: cdcb08c5
   symbol_path:
   - BrowserManager
@@ -543,7 +543,7 @@
   type: function_call
   value: Settings
   stable_hash: cdcb08c5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: 908e0eeb
   symbol_path:
   - BrowserManager
@@ -551,95 +551,95 @@
   type: function_call
   value: Path
   stable_hash: 908e0eeb
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: e016c62e
   symbol_path:
   - BrowserManager
   type: function_call
   value: async_playwright
   stable_hash: e016c62e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: 0086be28
   symbol_path:
   - BrowserManager
   type: return_statement
   stable_hash: 0086be28
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: 62dc44cc
   symbol_path:
   - BrowserManager
   type: function_call
   value: str
   stable_hash: 62dc44cc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: 0086be28
   symbol_path:
   - BrowserManager
   type: return_statement
   stable_hash: 0086be28
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
+  file: src/vkdownloader/infrastructure/browser.py
 - id: f55608d4
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: f55608d4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: b0245723
   symbol_path:
   - NetworkMonitor
   - _normalize_url
   type: return_statement
   stable_hash: b0245723
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: b0245723
   symbol_path:
   - NetworkMonitor
   - _normalize_url
   type: return_statement
   stable_hash: b0245723
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: b0245723
   symbol_path:
   - NetworkMonitor
   - _normalize_url
   type: return_statement
   stable_hash: b0245723
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: b0245723
   symbol_path:
   - NetworkMonitor
   - _normalize_url
   type: return_statement
   stable_hash: b0245723
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: bd12ceb2
   symbol_path:
   - NetworkMonitor
   type: function_call
   value: _strip_auth_params
   stable_hash: bd12ceb2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: bd12ceb2
   symbol_path:
   - NetworkMonitor
   type: function_call
   value: _strip_auth_params
   stable_hash: bd12ceb2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: bd12ceb2
   symbol_path:
   - NetworkMonitor
   type: function_call
   value: _strip_auth_params
   stable_hash: bd12ceb2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: '13472993'
   symbol_path:
   - NetworkMonitor
   type: function_call
   value: str
   stable_hash: '13472993'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 7cad8b09
   symbol_path:
   - NetworkMonitor
@@ -647,7 +647,7 @@
   type: function_call
   value: isinstance
   stable_hash: 7cad8b09
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 7cad8b09
   symbol_path:
   - NetworkMonitor
@@ -655,7 +655,7 @@
   type: function_call
   value: isinstance
   stable_hash: 7cad8b09
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 5673dd44
   symbol_path:
   - NetworkMonitor
@@ -663,7 +663,7 @@
   type: function_call
   value: _strip_auth_params
   stable_hash: 5673dd44
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 7cad8b09
   symbol_path:
   - NetworkMonitor
@@ -671,7 +671,7 @@
   type: function_call
   value: isinstance
   stable_hash: 7cad8b09
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 7cad8b09
   symbol_path:
   - NetworkMonitor
@@ -679,130 +679,130 @@
   type: function_call
   value: isinstance
   stable_hash: 7cad8b09
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
+  file: src/vkdownloader/infrastructure/network_monitor.py
 - id: 6353c06d
   symbol_path:
   - _cookies_to_netscape
   type: return_statement
   stable_hash: 6353c06d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
+  file: src/vkdownloader/services/cookies.py
 - id: ddbf3c30
   symbol_path:
   - _cookies_to_netscape
   type: function_call
   value: isinstance
   stable_hash: ddbf3c30
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
+  file: src/vkdownloader/services/cookies.py
 - id: 626d2bf4
   symbol_path:
   - _cookies_to_netscape
   type: function_call
   value: int
   stable_hash: 626d2bf4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
+  file: src/vkdownloader/services/cookies.py
 - id: 6353c06d
   symbol_path:
   - _cookies_to_netscape
   type: return_statement
   stable_hash: 6353c06d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
+  file: src/vkdownloader/services/cookies.py
 - id: 6353c06d
   symbol_path:
   - _cookies_to_netscape
   type: return_statement
   stable_hash: 6353c06d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
+  file: src/vkdownloader/services/cookies.py
 - id: 681d700a
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: 681d700a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 212e05ba
   symbol_path: []
   type: function_call
   value: Path
   stable_hash: 212e05ba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 212e05ba
   symbol_path: []
   type: function_call
   value: Path
   stable_hash: 212e05ba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: ce883746
   symbol_path:
   - _parse_quality_to_enum
   type: return_statement
   stable_hash: ce883746
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: cce43101
   symbol_path:
   - _parse_quality_to_enum
   type: function_call
   value: QualityEnum
   stable_hash: cce43101
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: ce883746
   symbol_path:
   - _parse_quality_to_enum
   type: return_statement
   stable_hash: ce883746
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: cce43101
   symbol_path:
   - _parse_quality_to_enum
   type: function_call
   value: QualityEnum
   stable_hash: cce43101
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 2f556253
   symbol_path:
   - _parse_quality_to_enum
   type: function_call
   value: ValueError
   stable_hash: 2f556253
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7e06b084
   symbol_path:
   - _build_ytdlp_options
   type: function_call
   value: str
   stable_hash: 7e06b084
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7d4d8519
   symbol_path:
   - _build_ytdlp_options
   type: function_call
   value: _cookies_to_netscape
   stable_hash: 7d4d8519
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7e06b084
   symbol_path:
   - _build_ytdlp_options
   type: function_call
   value: str
   stable_hash: 7e06b084
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7d4d8519
   symbol_path:
   - _build_ytdlp_options
   type: function_call
   value: _cookies_to_netscape
   stable_hash: 7d4d8519
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7e06b084
   symbol_path:
   - _build_ytdlp_options
   type: function_call
   value: str
   stable_hash: 7e06b084
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 207693c2
   symbol_path:
   - _build_ytdlp_options
@@ -810,7 +810,7 @@
   type: function_call
   value: progress_callback
   stable_hash: 207693c2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 207693c2
   symbol_path:
   - _build_ytdlp_options
@@ -818,13 +818,13 @@
   type: function_call
   value: progress_callback
   stable_hash: 207693c2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 5578c9ce
   symbol_path:
   - _build_ytdlp_options
   type: return_statement
   stable_hash: 5578c9ce
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 44420d47
   symbol_path:
   - HLSDownloader
@@ -832,706 +832,706 @@
   type: function_call
   value: Settings
   stable_hash: 44420d47
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 531d19b5
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _strip_auth_params
   stable_hash: 531d19b5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 31af41a9
   symbol_path:
   - HLSDownloader
   type: function_call
   value: str
   stable_hash: 31af41a9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: a8e3e741
   symbol_path:
   - HLSDownloader
   type: function_call
   value: bool
   stable_hash: a8e3e741
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: f27bcbfd
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _temp_headers_file
   stable_hash: f27bcbfd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 31af41a9
   symbol_path:
   - HLSDownloader
   type: function_call
   value: str
   stable_hash: 31af41a9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: b0cfaee8
   symbol_path:
   - HLSDownloader
   type: function_call
   value: get_shutdown_event
   stable_hash: b0cfaee8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 5cd91e3a
   symbol_path:
   - HLSDownloader
   type: function_call
   value: read_progress
   stable_hash: 5cd91e3a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 4afd2053
   symbol_path:
   - HLSDownloader
   type: function_call
   value: cancel_ffmpeg_process
   stable_hash: 4afd2053
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 98da3164
   symbol_path:
   - HLSDownloader
   type: function_call
   value: progress_callback
   stable_hash: 98da3164
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 4afd2053
   symbol_path:
   - HLSDownloader
   type: function_call
   value: cancel_ffmpeg_process
   stable_hash: 4afd2053
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: b02ba07b
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _monitor_progress
   stable_hash: b02ba07b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 2e954023
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _await_first_and_cancel_others
   stable_hash: 2e954023
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 5c46d0f5
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _drain_stderr
   stable_hash: 5c46d0f5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 2e954023
   symbol_path:
   - HLSDownloader
   type: function_call
   value: _await_first_and_cancel_others
   stable_hash: 2e954023
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 4afd2053
   symbol_path:
   - HLSDownloader
   type: function_call
   value: cancel_ffmpeg_process
   stable_hash: 4afd2053
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 0760fdfa
   symbol_path:
   - HLSDownloader
   type: return_statement
   stable_hash: 0760fdfa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 0760fdfa
   symbol_path:
   - HLSDownloader
   type: return_statement
   stable_hash: 0760fdfa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 31af41a9
   symbol_path:
   - HLSDownloader
   type: function_call
   value: str
   stable_hash: 31af41a9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 0760fdfa
   symbol_path:
   - HLSDownloader
   type: return_statement
   stable_hash: 0760fdfa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 3219e765
   symbol_path: []
   type: function_call
   value: Settings
   stable_hash: 3219e765
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: d3dedcf0
   symbol_path: []
   type: function_call
   value: _download_with_ytdlp
   stable_hash: d3dedcf0
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 7bcb9091
   symbol_path: []
   type: function_call
   value: validate_output_path
   stable_hash: 7bcb9091
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 1ca190d6
   symbol_path: []
   type: function_call
   value: _attempt_segment_resume
   stable_hash: 1ca190d6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6fc513af
   symbol_path: []
   type: function_call
   value: VKVideoExtractor
   stable_hash: 6fc513af
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 727f0770
   symbol_path: []
   type: function_call
   value: _parse_quality_to_enum
   stable_hash: 727f0770
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 9743fdba
   symbol_path: []
   type: function_call
   value: QualitySelector
   stable_hash: 9743fdba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 5b3e675a
   symbol_path: []
   type: function_call
   value: download_hls_with_resume
   stable_hash: 5b3e675a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 719e240f
   symbol_path: []
   type: function_call
   value: HLSDownloadRequest
   stable_hash: 719e240f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 50297c0b
   symbol_path: []
   type: function_call
   value: _strip_auth_params
   stable_hash: 50297c0b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 84d859d6
   symbol_path: []
   type: function_call
   value: get_shutdown_event
   stable_hash: 84d859d6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 58a694c9
   symbol_path: []
   type: function_call
   value: _build_ytdlp_options
   stable_hash: 58a694c9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 06b7b7b4
   symbol_path:
   - _download
   type: function_call
   value: RuntimeError
   stable_hash: 06b7b7b4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: fe4e714d
   symbol_path:
   - _download
   type: function_call
   value: _strip_auth_params
   stable_hash: fe4e714d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 4bf97002
   symbol_path:
   - _download
   type: return_statement
   stable_hash: 4bf97002
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 591a9274
   symbol_path:
   - _download
   type: function_call
   value: str
   stable_hash: 591a9274
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 591a9274
   symbol_path:
   - _download
   type: function_call
   value: str
   stable_hash: 591a9274
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 06b7b7b4
   symbol_path:
   - _download
   type: function_call
   value: RuntimeError
   stable_hash: 06b7b7b4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 591a9274
   symbol_path:
   - _download
   type: function_call
   value: str
   stable_hash: 591a9274
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 212e05ba
   symbol_path: []
   type: function_call
   value: Path
   stable_hash: 212e05ba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 727f0770
   symbol_path: []
   type: function_call
   value: _parse_quality_to_enum
   stable_hash: 727f0770
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 9743fdba
   symbol_path: []
   type: function_call
   value: QualitySelector
   stable_hash: 9743fdba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 50297c0b
   symbol_path: []
   type: function_call
   value: _strip_auth_params
   stable_hash: 50297c0b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 3219e765
   symbol_path: []
   type: function_call
   value: Settings
   stable_hash: 3219e765
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6fc513af
   symbol_path: []
   type: function_call
   value: VKVideoExtractor
   stable_hash: 6fc513af
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 50297c0b
   symbol_path: []
   type: function_call
   value: _strip_auth_params
   stable_hash: 50297c0b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 43e91e22
   symbol_path: []
   type: function_call
   value: _resolve_cookies
   stable_hash: 43e91e22
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 2d82d942
   symbol_path: []
   type: function_call
   value: download_with_ytdlp_with_resume_fallback
   stable_hash: 2d82d942
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 43e91e22
   symbol_path: []
   type: function_call
   value: _resolve_cookies
   stable_hash: 43e91e22
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: c44a1ac3
   symbol_path: []
   type: function_call
   value: HLSDownloader
   stable_hash: c44a1ac3
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 5b3e675a
   symbol_path: []
   type: function_call
   value: download_hls_with_resume
   stable_hash: 5b3e675a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 719e240f
   symbol_path: []
   type: function_call
   value: HLSDownloadRequest
   stable_hash: 719e240f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 43e91e22
   symbol_path: []
   type: function_call
   value: _resolve_cookies
   stable_hash: 43e91e22
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 2d82d942
   symbol_path: []
   type: function_call
   value: download_with_ytdlp_with_resume_fallback
   stable_hash: 2d82d942
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 6baa573f
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 6baa573f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 95223daa
   symbol_path: []
   type: return_statement
   stable_hash: 95223daa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
+  file: src/vkdownloader/services/downloader.py
 - id: 1c784f90
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: 1c784f90
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: e87d6cf7
   symbol_path: []
   type: function_call
   value: frozenset
   stable_hash: e87d6cf7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: e1a481b2
   symbol_path:
   - get_shutdown_event
   type: return_statement
   stable_hash: e1a481b2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: e1a481b2
   symbol_path:
   - get_shutdown_event
   type: return_statement
   stable_hash: e1a481b2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 64cbdf5c
   symbol_path:
   - URLBackoffCoordinator
   type: return_statement
   stable_hash: 64cbdf5c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: ca6ece14
   symbol_path:
   - URLBackoffCoordinator
   type: function_call
   value: get_shutdown_event
   stable_hash: ca6ece14
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 64cbdf5c
   symbol_path:
   - URLBackoffCoordinator
   type: return_statement
   stable_hash: 64cbdf5c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 64cbdf5c
   symbol_path:
   - URLBackoffCoordinator
   type: return_statement
   stable_hash: 64cbdf5c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 67854c72
   symbol_path:
   - ProgressManager
   type: function_call
   value: range
   stable_hash: 67854c72
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 3813f299
   symbol_path:
   - ProgressManager
   type: return_statement
   stable_hash: 3813f299
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 3813f299
   symbol_path:
   - ProgressManager
   type: return_statement
   stable_hash: 3813f299
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 3ca838bc
   symbol_path: []
   type: function_call
   value: _strip_auth_params
   stable_hash: 3ca838bc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 5d587076
   symbol_path: []
   type: function_call
   value: get_shutdown_event
   stable_hash: 5d587076
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: fdceace3
   symbol_path: []
   type: function_call
   value: range
   stable_hash: fdceace3
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 0ad8e2a7
   symbol_path: []
   type: function_call
   value: _parse_retry_after
   stable_hash: 0ad8e2a7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 326fffd6
   symbol_path: []
   type: function_call
   value: _compute_backoff_delay
   stable_hash: 326fffd6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: a7343d62
   symbol_path: []
   type: function_call
   value: _wait_with_shutdown
   stable_hash: a7343d62
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: b485c9f1
   symbol_path: []
   type: function_call
   value: str
   stable_hash: b485c9f1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: f864772f
   symbol_path:
   - _parse_retry_after
   type: return_statement
   stable_hash: f864772f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: f864772f
   symbol_path:
   - _parse_retry_after
   type: return_statement
   stable_hash: f864772f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 4ced42ba
   symbol_path:
   - _parse_retry_after
   type: function_call
   value: float
   stable_hash: 4ced42ba
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: f864772f
   symbol_path:
   - _parse_retry_after
   type: return_statement
   stable_hash: f864772f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: f864772f
   symbol_path:
   - _parse_retry_after
   type: return_statement
   stable_hash: f864772f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 74798d46
   symbol_path:
   - _compute_backoff_delay
   type: function_call
   value: min
   stable_hash: 74798d46
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: b27940f5
   symbol_path:
   - _compute_backoff_delay
   type: function_call
   value: max
   stable_hash: b27940f5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: 1049125f
   symbol_path:
   - _compute_backoff_delay
   type: return_statement
   stable_hash: 1049125f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: c62e7464
   symbol_path: []
   type: return_statement
   stable_hash: c62e7464
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
+  file: src/vkdownloader/services/downloader_throttle.py
 - id: a8d751ab
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: a8d751ab
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 55b2f968
   symbol_path:
   - VKVideoExtractor
@@ -1539,7 +1539,7 @@
   type: function_call
   value: Settings
   stable_hash: 55b2f968
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: abfc64de
   symbol_path:
   - VKVideoExtractor
@@ -1547,7 +1547,7 @@
   type: function_call
   value: ValueError
   stable_hash: abfc64de
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 94ea9c0a
   symbol_path:
   - VKVideoExtractor
@@ -1555,7 +1555,7 @@
   type: function_call
   value: _strip_auth_params
   stable_hash: 94ea9c0a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 94ea9c0a
   symbol_path:
   - VKVideoExtractor
@@ -1563,116 +1563,116 @@
   type: function_call
   value: _strip_auth_params
   stable_hash: 94ea9c0a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 003502c7
   symbol_path:
   - VKVideoExtractor
   - parse_video_id
   type: return_statement
   stable_hash: 003502c7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 4800b1db
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: _strip_auth_params
   stable_hash: 4800b1db
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 621aff34
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: VideoNotFoundError
   stable_hash: 621aff34
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 4800b1db
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: _strip_auth_params
   stable_hash: 4800b1db
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 7c1a45e9
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: len
   stable_hash: 7c1a45e9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 9d873d29
   symbol_path:
   - VKVideoExtractor
   type: return_statement
   stable_hash: 9d873d29
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: b8d6f105
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: VideoWithStreams
   stable_hash: b8d6f105
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 621aff34
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: VideoNotFoundError
   stable_hash: 621aff34
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 4800b1db
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: _strip_auth_params
   stable_hash: 4800b1db
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 7c1a45e9
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: len
   stable_hash: 7c1a45e9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 9d873d29
   symbol_path:
   - VKVideoExtractor
   type: return_statement
   stable_hash: 9d873d29
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: c387fa7f
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: NotImplementedError
   stable_hash: c387fa7f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 621aff34
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: VideoNotFoundError
   stable_hash: 621aff34
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 4800b1db
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: _strip_auth_params
   stable_hash: 4800b1db
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 7c1a45e9
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: len
   stable_hash: 7c1a45e9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 9d873d29
   symbol_path:
   - VKVideoExtractor
   type: return_statement
   stable_hash: 9d873d29
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 1273a816
   symbol_path:
   - VKVideoExtractor
@@ -1680,7 +1680,7 @@
   type: function_call
   value: ExtractionError
   stable_hash: 1273a816
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 918eddac
   symbol_path:
   - VKVideoExtractor
@@ -1688,7 +1688,7 @@
   type: function_call
   value: _strip_auth_params
   stable_hash: 918eddac
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 22295db0
   symbol_path:
   - VKVideoExtractor
@@ -1696,7 +1696,7 @@
   type: function_call
   value: Stream
   stable_hash: 22295db0
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 5253de39
   symbol_path:
   - VKVideoExtractor
@@ -1704,7 +1704,7 @@
   type: function_call
   value: int
   stable_hash: 5253de39
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 983f75de
   symbol_path:
   - VKVideoExtractor
@@ -1712,7 +1712,7 @@
   type: function_call
   value: str
   stable_hash: 983f75de
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 1273a816
   symbol_path:
   - VKVideoExtractor
@@ -1720,366 +1720,366 @@
   type: function_call
   value: ExtractionError
   stable_hash: 1273a816
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 2d5f3e92
   symbol_path:
   - VKVideoExtractor
   - _sync_extract
   type: return_statement
   stable_hash: 2d5f3e92
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 7c1a45e9
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: len
   stable_hash: 7c1a45e9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 9d873d29
   symbol_path:
   - VKVideoExtractor
   type: return_statement
   stable_hash: 9d873d29
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: f755f814
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: BrowserManager
   stable_hash: f755f814
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: d17d649a
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: NetworkMonitor
   stable_hash: d17d649a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 965aee6c
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: str
   stable_hash: 965aee6c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 4800b1db
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: _strip_auth_params
   stable_hash: 4800b1db
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 00a59a1b
   symbol_path:
   - VKVideoExtractor
   type: function_call
   value: Stream
   stable_hash: 00a59a1b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 9d873d29
   symbol_path:
   - VKVideoExtractor
   type: return_statement
   stable_hash: 9d873d29
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 2932522a
   symbol_path:
   - VKVideoExtractor
   - _format_cookies_for_ffmpeg
   type: return_statement
   stable_hash: 2932522a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
+  file: src/vkdownloader/services/extractor.py
 - id: 00f849e4
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: 00f849e4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 400c6bc5
   symbol_path: []
   type: function_call
   value: int
   stable_hash: 400c6bc5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8ef9299e
   symbol_path: []
   type: function_call
   value: float
   stable_hash: 8ef9299e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8ef9299e
   symbol_path: []
   type: function_call
   value: float
   stable_hash: 8ef9299e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 400c6bc5
   symbol_path: []
   type: function_call
   value: int
   stable_hash: 400c6bc5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 400c6bc5
   symbol_path: []
   type: function_call
   value: int
   stable_hash: 400c6bc5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 400c6bc5
   symbol_path: []
   type: function_call
   value: int
   stable_hash: 400c6bc5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 240a859b
   symbol_path: []
   type: function_call
   value: setattr
   stable_hash: 240a859b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8b2dc06e
   symbol_path:
   - ProgressParser
   - parse_line
   type: return_statement
   stable_hash: 8b2dc06e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8b2dc06e
   symbol_path:
   - ProgressParser
   - parse_line
   type: return_statement
   stable_hash: 8b2dc06e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 587bc226
   symbol_path: []
   type: function_call
   value: FfmpegProgress
   stable_hash: 587bc226
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 1e82876c
   symbol_path: []
   type: function_call
   value: handler
   stable_hash: 1e82876c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 587bc226
   symbol_path: []
   type: function_call
   value: FfmpegProgress
   stable_hash: 587bc226
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: e83b9681
   symbol_path:
   - _build_ffmpeg_concat_command
   type: function_call
   value: str
   stable_hash: e83b9681
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: e83b9681
   symbol_path:
   - _build_ffmpeg_concat_command
   type: function_call
   value: str
   stable_hash: e83b9681
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 78669e06
   symbol_path:
   - _build_ffmpeg_concat_command
   type: return_statement
   stable_hash: 78669e06
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 400c6bc5
   symbol_path: []
   type: function_call
   value: int
   stable_hash: 400c6bc5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 0b0c465f
   symbol_path: []
   type: function_call
   value: open
   stable_hash: 0b0c465f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: f08e8e5f
   symbol_path: []
   type: function_call
   value: _build_ffmpeg_concat_command
   stable_hash: f08e8e5f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 0b0c465f
   symbol_path: []
   type: function_call
   value: open
   stable_hash: 0b0c465f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: f08e8e5f
   symbol_path: []
   type: function_call
   value: _build_ffmpeg_concat_command
   stable_hash: f08e8e5f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 38b68235
   symbol_path: []
   type: function_call
   value: str
   stable_hash: 38b68235
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: c05e9e1a
   symbol_path: []
   type: function_call
   value: range
   stable_hash: c05e9e1a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 6b0ae5d9
   symbol_path: []
   type: function_call
   value: min
   stable_hash: 6b0ae5d9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: c05e9e1a
   symbol_path: []
   type: function_call
   value: range
   stable_hash: c05e9e1a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 463b9c61
   symbol_path: []
   type: function_call
   value: all
   stable_hash: 463b9c61
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: f4a4b40e
   symbol_path: []
   type: function_call
   value: FileNotFoundError
   stable_hash: f4a4b40e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 623f4b8e
   symbol_path: []
   type: function_call
   value: _merge_batch_segments
   stable_hash: 623f4b8e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: c76d0d7b
   symbol_path: []
   type: function_call
   value: _perform_final_merge
   stable_hash: c76d0d7b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: 8f7376f6
   symbol_path: []
   type: return_statement
   stable_hash: 8f7376f6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
+  file: src/vkdownloader/services/ffmpeg_utils.py
 - id: f116ebd7
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: f116ebd7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 370f00bf
   symbol_path:
   - QualitySelector
   - _find_quality_match
   type: return_statement
   stable_hash: 370f00bf
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 370f00bf
   symbol_path:
   - QualitySelector
   - _find_quality_match
   type: return_statement
   stable_hash: 370f00bf
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 1760b1be
   symbol_path:
   - QualitySelector
   - _get_fallback_stream
   type: return_statement
   stable_hash: 1760b1be
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: e7c8cbd5
   symbol_path:
   - QualitySelector
@@ -2087,7 +2087,7 @@
   type: function_call
   value: max
   stable_hash: e7c8cbd5
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: cd4ac7de
   symbol_path:
   - QualitySelector
@@ -2095,7 +2095,7 @@
   type: function_call
   value: ValueError
   stable_hash: cd4ac7de
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 2cf09bfa
   symbol_path:
   - QualitySelector
@@ -2103,7 +2103,7 @@
   type: function_call
   value: min
   stable_hash: 2cf09bfa
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 6c8ea544
   symbol_path:
   - QualitySelector
@@ -2111,7 +2111,7 @@
   type: function_call
   value: float
   stable_hash: 6c8ea544
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 75acf6a8
   symbol_path:
   - QualitySelector
@@ -2119,7 +2119,7 @@
   type: function_call
   value: str
   stable_hash: 75acf6a8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 8fb88b6d
   symbol_path:
   - QualitySelector
@@ -2127,7 +2127,7 @@
   type: function_call
   value: QualityNotAvailableError
   stable_hash: 8fb88b6d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 75acf6a8
   symbol_path:
   - QualitySelector
@@ -2135,14 +2135,14 @@
   type: function_call
   value: str
   stable_hash: 75acf6a8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: ea49006a
   symbol_path:
   - QualitySelector
   - select
   type: return_statement
   stable_hash: ea49006a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: ef36317e
   symbol_path:
   - QualitySelector
@@ -2150,7 +2150,7 @@
   type: function_call
   value: list
   stable_hash: ef36317e
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: fd839a02
   symbol_path:
   - QualitySelector
@@ -2158,7 +2158,7 @@
   - sort_key
   type: return_statement
   stable_hash: fd839a02
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: c6b842a1
   symbol_path:
   - QualitySelector
@@ -2167,7 +2167,7 @@
   type: function_call
   value: int
   stable_hash: c6b842a1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: fd839a02
   symbol_path:
   - QualitySelector
@@ -2175,753 +2175,753 @@
   - sort_key
   type: return_statement
   stable_hash: fd839a02
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: b010e907
   symbol_path:
   - QualitySelector
   - list_available_qualities
   type: return_statement
   stable_hash: b010e907
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
+  file: src/vkdownloader/services/quality.py
 - id: 36cc93ac
   symbol_path:
   - DownloadPolicy
   type: function_call
   value: Path
   stable_hash: 36cc93ac
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dbe8ffc6
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: dbe8ffc6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 2f9083c8
   symbol_path:
   - _parse_m3u8_segments
   type: return_statement
   stable_hash: 2f9083c8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 9e7aeeb3
   symbol_path: []
   type: function_call
   value: _retry_429_with_backoff
   stable_hash: 9e7aeeb3
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1e0b8a20
   symbol_path: []
   type: function_call
   value: open
   stable_hash: 1e0b8a20
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 6cb476a4
   symbol_path:
   - _is_retryable_status
   type: return_statement
   stable_hash: 6cb476a4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 4396d679
   symbol_path: []
   type: function_call
   value: _is_retryable_status
   stable_hash: 4396d679
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: c66fec61
   symbol_path:
   - _should_continue_on_retry
   type: return_statement
   stable_hash: c66fec61
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 8977bf0a
   symbol_path:
   - _should_continue_on_retry
   type: function_call
   value: _is_retryable_status
   stable_hash: 8977bf0a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1e0b8a20
   symbol_path: []
   type: function_call
   value: open
   stable_hash: 1e0b8a20
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 641b8e9c
   symbol_path: []
   type: function_call
   value: _notify_backoff_for_retryable_status
   stable_hash: 641b8e9c
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: cd6d2559
   symbol_path: []
   type: function_call
   value: _should_continue_on_retry
   stable_hash: cd6d2559
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 5d922a0b
   symbol_path: []
   type: function_call
   value: _run_parallel_download_with_backoff
   stable_hash: 5d922a0b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: b2d65420
   symbol_path: []
   type: function_call
   value: _do_parallel_download_attempt
   stable_hash: b2d65420
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '60366603'
   symbol_path: []
   type: function_call
   value: str
   stable_hash: '60366603'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: f26278b1
   symbol_path: []
   type: function_call
   value: get_shutdown_event
   stable_hash: f26278b1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 3c3f90af
   symbol_path: []
   type: function_call
   value: range
   stable_hash: 3c3f90af
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 01ed23c9
   symbol_path: []
   type: function_call
   value: _check_backoff_before_attempt
   stable_hash: 01ed23c9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 3e92ccaf
   symbol_path: []
   type: function_call
   value: _try_single_download_attempt
   stable_hash: 3e92ccaf
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: fcc2ce0a
   symbol_path: []
   type: function_call
   value: _download_segment_sequential
   stable_hash: fcc2ce0a
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: beb8f8a4
   symbol_path: []
   type: function_call
   value: _download_segment_parallel
   stable_hash: beb8f8a4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 754dddd2
   symbol_path:
   - _load_downloaded_count
   type: function_call
   value: open
   stable_hash: 754dddd2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: e50847fc
   symbol_path:
   - _load_downloaded_count
   type: return_statement
   stable_hash: e50847fc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: e50847fc
   symbol_path:
   - _load_downloaded_count
   type: return_statement
   stable_hash: e50847fc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: e50847fc
   symbol_path:
   - _load_downloaded_count
   type: return_statement
   stable_hash: e50847fc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 0c6efc1b
   symbol_path:
   - _save_downloaded_count
   type: function_call
   value: open
   stable_hash: 0c6efc1b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '60366603'
   symbol_path: []
   type: function_call
   value: str
   stable_hash: '60366603'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '60366603'
   symbol_path: []
   type: function_call
   value: str
   stable_hash: '60366603'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '60366603'
   symbol_path: []
   type: function_call
   value: str
   stable_hash: '60366603'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 2e3b65d4
   symbol_path: []
   type: function_call
   value: _refresh_token_and_retry
   stable_hash: 2e3b65d4
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 3c3f90af
   symbol_path: []
   type: function_call
   value: range
   stable_hash: 3c3f90af
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 58bce17b
   symbol_path: []
   type: function_call
   value: _fetch_single_playlist
   stable_hash: 58bce17b
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 4922d976
   symbol_path: []
   type: function_call
   value: _handle_token_refresh
   stable_hash: 4922d976
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: b10bca25
   symbol_path:
   - _create_connector
   type: return_statement
   stable_hash: b10bca25
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1e92c696
   symbol_path:
   - _create_connector
   type: function_call
   value: _strip_auth_params
   stable_hash: 1e92c696
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: b10bca25
   symbol_path:
   - _create_connector
   type: return_statement
   stable_hash: b10bca25
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 4a5f66ec
   symbol_path: []
   type: function_call
   value: _load_downloaded_count
   stable_hash: 4a5f66ec
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: c17931f2
   symbol_path: []
   type: function_call
   value: sum
   stable_hash: c17931f2
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 798c91ac
   symbol_path: []
   type: function_call
   value: _save_downloaded_count
   stable_hash: 798c91ac
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: f9288f72
   symbol_path: []
   type: function_call
   value: progress_callback
   stable_hash: f9288f72
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d88eecc
   symbol_path: []
   type: function_call
   value: len
   stable_hash: 1d88eecc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d88eecc
   symbol_path: []
   type: function_call
   value: len
   stable_hash: 1d88eecc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d88eecc
   symbol_path: []
   type: function_call
   value: len
   stable_hash: 1d88eecc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: f101ec0d
   symbol_path: []
   type: function_call
   value: _merge_segments_batched
   stable_hash: f101ec0d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d88eecc
   symbol_path: []
   type: function_call
   value: len
   stable_hash: 1d88eecc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 4cd3a160
   symbol_path: []
   type: function_call
   value: _cleanup_segments
   stable_hash: 4cd3a160
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 282fb997
   symbol_path: []
   type: function_call
   value: _await_and_cancel
   stable_hash: 282fb997
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: baca7f85
   symbol_path: []
   type: function_call
   value: _tally_and_merge
   stable_hash: baca7f85
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: f26278b1
   symbol_path: []
   type: function_call
   value: get_shutdown_event
   stable_hash: f26278b1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: fc0b8e12
   symbol_path: []
   type: function_call
   value: urljoin
   stable_hash: fc0b8e12
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: b04a0cb0
   symbol_path: []
   type: function_call
   value: _download_segment
   stable_hash: b04a0cb0
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 06da529d
   symbol_path:
   - _create_segment_download_tasks
   type: return_statement
   stable_hash: 06da529d
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 962e39fd
   symbol_path:
   - _create_segment_download_tasks
   type: function_call
   value: _download_segment_concurrent
   stable_hash: 962e39fd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: bee39485
   symbol_path:
   - _create_segment_download_tasks
   type: function_call
   value: SegmentTask
   stable_hash: bee39485
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: db7a6d78
   symbol_path:
   - _create_segment_download_tasks
   type: function_call
   value: enumerate
   stable_hash: db7a6d78
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 0f648d07
   symbol_path: []
   type: function_call
   value: _create_connector
   stable_hash: 0f648d07
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d984a33
   symbol_path: []
   type: function_call
   value: _fetch_playlist_with_retry
   stable_hash: 1d984a33
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 36306c74
   symbol_path: []
   type: function_call
   value: _parse_m3u8_segments
   stable_hash: 36306c74
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 4a5f66ec
   symbol_path: []
   type: function_call
   value: _load_downloaded_count
   stable_hash: 4a5f66ec
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 1d88eecc
   symbol_path: []
   type: function_call
   value: len
   stable_hash: 1d88eecc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: fb27b2b8
   symbol_path: []
   type: function_call
   value: DownloadPolicy
   stable_hash: fb27b2b8
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: e1e6bfe7
   symbol_path: []
   type: function_call
   value: _create_segment_download_tasks
   stable_hash: e1e6bfe7
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 6caa3c93
   symbol_path: []
   type: function_call
   value: _process_downloaded_segments
   stable_hash: 6caa3c93
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 87169f73
   symbol_path: []
   type: function_call
   value: _strip_auth_params
   stable_hash: 87169f73
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '60366603'
   symbol_path: []
   type: function_call
   value: str
   stable_hash: '60366603'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: ee771efd
   symbol_path: []
   type: function_call
   value: Settings
   stable_hash: ee771efd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: ff8071cf
   symbol_path: []
   type: function_call
   value: validate_output_path
   stable_hash: ff8071cf
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: dc12ac24
   symbol_path: []
   type: return_statement
   stable_hash: dc12ac24
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 08d0a908
   symbol_path: []
   type: function_call
   value: _run_download_session
   stable_hash: 08d0a908
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: '49303332'
   symbol_path: []
   type: function_call
   value: _log_preserve_segments
   stable_hash: '49303332'
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 63c3fdd1
   symbol_path:
   - _log_preserve_segments
   type: function_call
   value: len
   stable_hash: 63c3fdd1
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 98b5e173
   symbol_path:
   - _log_preserve_segments
   type: function_call
   value: list
   stable_hash: 98b5e173
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
+  file: src/vkdownloader/services/segment_downloader.py
 - id: 16ff1820
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: 16ff1820
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
+  file: src/vkdownloader/services/signal_handlers.py
 - id: 7a6ef955
   symbol_path:
   - setup_signal_handlers
   type: return_statement
   stable_hash: 7a6ef955
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
+  file: src/vkdownloader/services/signal_handlers.py
 - id: fd355cfc
   symbol_path:
   - setup_signal_handlers
   type: function_call
   value: get_shutdown_event
   stable_hash: fd355cfc
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
+  file: src/vkdownloader/services/signal_handlers.py
 - id: 6f2a8990
   symbol_path:
   - setup_signal_handlers
   type: function_call
   value: _handle_signal
   stable_hash: 6f2a8990
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
+  file: src/vkdownloader/services/signal_handlers.py
 - id: 6f2a8990
   symbol_path:
   - setup_signal_handlers
   type: function_call
   value: _handle_signal
   stable_hash: 6f2a8990
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
+  file: src/vkdownloader/services/signal_handlers.py
 - id: 414e20ef
   symbol_path: []
   type: function_call
   value: get_logger
   stable_hash: 414e20ef
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: c8bf9a88
   symbol_path:
   - _sanitize_title
   type: return_statement
   stable_hash: c8bf9a88
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: fc23a2bd
   symbol_path:
   - validate_output_path
   type: function_call
   value: str
   stable_hash: fc23a2bd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: a0a9131f
   symbol_path:
   - validate_output_path
   type: function_call
   value: DownloadError
   stable_hash: a0a9131f
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: e01387c6
   symbol_path:
   - validate_output_path
   type: function_call
   value: Path
   stable_hash: e01387c6
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: fc23a2bd
   symbol_path:
   - validate_output_path
   type: function_call
   value: str
   stable_hash: fc23a2bd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: fc23a2bd
   symbol_path:
   - validate_output_path
   type: function_call
   value: str
   stable_hash: fc23a2bd
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: 7fd34296
   symbol_path:
   - validate_output_path
   type: return_statement
   stable_hash: 7fd34296
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
+  file: src/vkdownloader/utils/security.py
 - id: 5a8fb1f9
   symbol_path:
   - _strip_auth_params
   type: function_call
   value: urlsplit
   stable_hash: 5a8fb1f9
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
+  file: src/vkdownloader/utils/url_sanitizer.py
 - id: b7eee429
   symbol_path:
   - _strip_auth_params
   type: return_statement
   stable_hash: b7eee429
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
+  file: src/vkdownloader/utils/url_sanitizer.py
 - id: b7eee429
   symbol_path:
   - _strip_auth_params
   type: return_statement
   stable_hash: b7eee429
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
+  file: src/vkdownloader/utils/url_sanitizer.py
 - id: b7eee429
   symbol_path:
   - _strip_auth_params
   type: return_statement
   stable_hash: b7eee429
-  file: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
+  file: src/vkdownloader/utils/url_sanitizer.py

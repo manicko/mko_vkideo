@@ -1,328 +1,334 @@
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\cli.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.cli
+# Regeneration command: uv run python .ai/structure/back/gen_py_map.py
+# Lists only top-level classes and functions per module (no __init__ re-exports).
+# Paths are repository-relative (checkout-reproducible).
+
+- path: src/vkdownloader/__init__.py
+  module: vkdownloader.__init__
   layer: unknown
-  imports:
-  - __future__
-  - collections.abc
-  - dataclasses
-  - pathlib
-  - structlog
-  - config
-  - exceptions
-  - models.enums
-  - services.downloader
-  - services.downloader_throttle
-  - services.extractor
-  - services.quality
-  - services.signal_handlers
-  - utils.security
+  classes: []
+  functions: []
+- path: src/vkdownloader/__main__.py
+  module: vkdownloader.__main__
+  layer: unknown
+  classes: []
+  functions: []
+- path: src/vkdownloader/cli.py
+  module: vkdownloader.cli
+  layer: unknown
   classes:
-  - DownloadContext
+  - _PreambleFailure
+  - _SettingsOverrides
   functions:
-  - _create_progress_callback
-  - callback
-  - _print_batch_summary
+  - _render_preamble_failure
+  - _is_logging_failure
+  - _log_env_file_path
+  - _build_settings
+  - _run_command_preamble
+  - _quality_option
+  - _validate_quality
+  - _validate_method
   - download
   - batch_download
   - cli
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\config.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.config
+- path: src/vkdownloader/config.py
+  module: vkdownloader.config
   layer: unknown
-  imports:
-  - pathlib
-  - pydantic
-  - pydantic_settings
-  - vkdownloader.models.enums
   classes:
   - Settings
+  - _EncodingSafeConsoleStream
+  - _EncodingSafeTextStream
+  - _ExcInfoClearingFormatter
   functions:
-  - expand_tilde_paths
-  - normalize_log_level
+  - _normalise_loc_to_env_var
+  - format_validation_error
+  - _range_error_message
+  - _build_valid_env_vars
+  - _scan_env_file
+  - _is_unknown_env_var
+  - warn_unknown_env_vars
+  - encoding_safe
   - setup_logging
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\exceptions.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.exceptions
+- path: src/vkdownloader/exceptions.py
+  module: vkdownloader.exceptions
   layer: unknown
-  imports: []
   classes:
   - VKDownloadError
   - VideoNotFoundError
+  - InvalidVideoUrlError
   - QualityNotAvailableError
+  - QualityParseError
   - ExtractionError
   - DownloadError
-  functions:
-  - __init__
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\__init__.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.__init__
+  functions: []
+- path: src/vkdownloader/infrastructure/__init__.py
+  module: vkdownloader.infrastructure.__init__
   layer: unknown
-  imports: []
   classes: []
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\browser.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.browser
+- path: src/vkdownloader/infrastructure/browser.py
+  module: vkdownloader.infrastructure.browser
   layer: unknown
-  imports:
-  - pathlib
-  - playwright.async_api
-  - structlog
-  - config
   classes:
   - BrowserManager
   functions:
-  - __init__
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\network_monitor.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.network_monitor
+  - _describe_launch_failure
+  - _extract_executable_path
+  - _extract_install_remedy
+  - _underlying_error_text
+- path: src/vkdownloader/infrastructure/network_monitor.py
+  module: vkdownloader.infrastructure.network_monitor
   layer: unknown
-  imports:
-  - playwright.async_api
-  - structlog
-  - utils.url_sanitizer
   classes:
+  - _PlaylistType
   - NetworkMonitor
-  functions:
-  - __init__
-  - _setup_interceptors
-  - _normalize_url
-  - _extract_urls_from_json
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\infrastructure\__init__.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.infrastructure.__init__
+  functions: []
+- path: src/vkdownloader/models/__init__.py
+  module: vkdownloader.models.__init__
   layer: unknown
-  imports:
-  - browser
-  - network_monitor
   classes: []
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\dtos.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.dtos
+- path: src/vkdownloader/models/dtos.py
+  module: vkdownloader.models.dtos
   layer: unknown
-  imports:
-  - __future__
-  - collections.abc
-  - pathlib
-  - pydantic
   classes:
   - HLSDownloadRequest
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\enums.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.enums
+- path: src/vkdownloader/models/enums.py
+  module: vkdownloader.models.enums
   layer: unknown
-  imports:
-  - enum
   classes:
-  - QualityEnum
+  - QualityKind
+  - QualityLabel
   - StreamFormat
   - LogLevel
   - DownloadMethod
   - CookieSource
-  - SegmentRetryResult
+  - ErrorCode
+  - ProgressStatus
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\video.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.video
+- path: src/vkdownloader/models/quality.py
+  module: vkdownloader.models.quality
   layer: unknown
-  imports:
-  - pydantic
-  - enums
+  classes:
+  - QualitySpec
+  functions: []
+- path: src/vkdownloader/models/video.py
+  module: vkdownloader.models.video
+  layer: unknown
   classes:
   - Video
   - Stream
   - VideoWithStreams
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\models\__init__.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.models.__init__
+- path: src/vkdownloader/services/__init__.py
+  module: vkdownloader.services.__init__
   layer: unknown
-  imports:
-  - dtos
-  - enums
-  - video
   classes: []
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\cookies.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.cookies
+- path: src/vkdownloader/services/batch_downloader.py
+  module: vkdownloader.services.batch_downloader
   layer: unknown
-  imports:
-  - __future__
-  - typing
-  - playwright.async_api
+  classes:
+  - ConcurrencyTracker
+  - _TrackedSemaphore
+  - DownloadContext
+  functions:
+  - _to_progress_status
+  - _classify_download_result
+  - _extract_video_id
+  - _download_single
+  - _run_batch_with_progress
+  - _print_batch_summary
+  - run_batch
+- path: src/vkdownloader/services/concurrency.py
+  module: vkdownloader.services.concurrency
+  layer: unknown
+  classes:
+  - SemaphoreLike
+  functions: []
+- path: src/vkdownloader/services/cookies.py
+  module: vkdownloader.services.cookies
+  layer: unknown
   classes: []
   functions:
+  - _sanitize_cookie_value
+  - _normalize_expiry
   - _cookies_to_netscape
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader
+- path: src/vkdownloader/services/downloader.py
+  module: vkdownloader.services.downloader
   layer: unknown
-  imports:
-  - __future__
-  - collections.abc
-  - contextlib
-  - pathlib
-  - typing
-  - playwright.async_api
-  - structlog
-  - config
-  - exceptions
-  - models.dtos
-  - models.enums
-  - models.video
-  - services.extractor
-  - utils.security
-  - utils.url_sanitizer
-  - cookies
-  - downloader_throttle
-  - ffmpeg_utils
-  - quality
-  - segment_downloader
-  - signal_handlers
-  - downloader_throttle
-  classes:
-  - HLSDownloader
+  classes: []
   functions:
-  - _parse_quality_to_enum
-  - _build_ytdlp_options
-  - _progress_hook
-  - __init__
-  - _download
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\downloader_throttle.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.downloader_throttle
+  - _semaphore_context
+  - perform_download
+  - download_video
+- path: src/vkdownloader/services/downloader_throttle.py
+  module: vkdownloader.services.downloader_throttle
   layer: unknown
-  imports:
-  - datetime
-  - structlog
-  - utils.url_sanitizer
   classes:
   - URLBackoffCoordinator
   - ProgressManager
   functions:
+  - build_client_timeout
+  - _resource_key
   - get_shutdown_event
-  - __init__
-  - __init__
-  - update_sync
+  - _retry_429_with_backoff
   - _parse_retry_after
   - _compute_backoff_delay
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\extractor.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.extractor
+  - _wait_with_shutdown
+- path: src/vkdownloader/services/extractor.py
+  module: vkdownloader.services.extractor
   layer: unknown
-  imports:
-  - playwright.async_api
-  - structlog
-  - config
-  - exceptions
-  - infrastructure.browser
-  - infrastructure.network_monitor
-  - models.enums
-  - models.video
-  - utils.url_sanitizer
   classes:
+  - _FormatDict
   - VKVideoExtractor
   functions:
-  - __init__
-  - parse_video_id
-  - _sync_extract
-  - _format_cookies_for_ffmpeg
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\ffmpeg_utils.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.ffmpeg_utils
+  - _extract_video_segment
+  - is_valid_video_url
+  - _classify_format
+  - _declares_video_codec
+  - _build_streams
+- path: src/vkdownloader/services/ffmpeg_utils.py
+  module: vkdownloader.services.ffmpeg_utils
   layer: unknown
-  imports:
-  - __future__
-  - collections.abc
-  - dataclasses
-  - pathlib
-  - structlog
-  classes:
-  - FfmpegProgress
-  - ProgressParser
+  classes: []
   functions:
-  - parse_line
+  - iter_process_lines
+  - check_ffmpeg_available
+  - cancel_subprocess
+  - _await_ffmpeg_with_timeout
   - _build_ffmpeg_concat_command
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\quality.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.quality
+  - _merge_batch_segments
+  - _perform_final_merge
+  - _required_merge_bytes
+  - _check_merge_space
+  - _merge_segments_batched
+- path: src/vkdownloader/services/progress_display.py
+  module: vkdownloader.services.progress_display
   layer: unknown
-  imports:
-  - structlog
-  - exceptions
-  - models.enums
-  - models.video
+  classes:
+  - _StatusColumn
+  - RichProgressReporter
+  functions:
+  - _format_outcome
+- path: src/vkdownloader/services/quality.py
+  module: vkdownloader.services.quality
+  layer: unknown
   classes:
   - QualitySelector
-  functions:
-  - _find_quality_match
-  - _get_fallback_stream
-  - select
-  - list_available_qualities
-  - sort_key
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\segment_downloader.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.segment_downloader
+  functions: []
+- path: src/vkdownloader/services/segment_downloader.py
+  module: vkdownloader.services.segment_downloader
   layer: unknown
-  imports:
-  - __future__
-  - collections.abc
-  - dataclasses
-  - pathlib
-  - typing
-  - urllib.parse
-  - structlog
-  - config
-  - models.enums
-  - utils.security
-  - utils.url_sanitizer
-  - downloader_throttle
-  - ffmpeg_utils
-  - models.dtos
-  - services.extractor
-  - downloader_throttle
   classes:
   - SegmentTask
+  - PlaylistFetchResult
   - DownloadPolicy
+  - _SegmentFanoutOutcome
+  - _SegmentFanoutResult
   functions:
   - _parse_m3u8_segments
+  - _compute_playlist_signature
+  - _clear_stale_segments
+  - _check_download_space
+  - _download_segment_sequential
   - _is_retryable_status
+  - _notify_backoff_for_retryable_status
   - _should_continue_on_retry
-  - _load_downloaded_count
-  - _save_downloaded_count
+  - _run_parallel_download_with_backoff
+  - _check_backoff_before_attempt
+  - _try_single_download_attempt
+  - _download_segment_parallel
+  - _download_segment
   - _cleanup_segments
+  - _refresh_token_and_retry
+  - _fetch_single_playlist
+  - _handle_token_refresh
+  - _fetch_playlist_with_retry
   - _create_connector
-  - _create_segment_download_tasks
+  - _cancel_and_settle
+  - _await_and_cancel
+  - _tally_and_merge
+  - _process_downloaded_segments
+  - _download_segment_concurrent
+  - _iter_pending_segment_tasks
+  - _run_download_session
+  - download_hls_with_resume
   - _log_preserve_segments
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\signal_handlers.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.signal_handlers
+- path: src/vkdownloader/services/signal_handlers.py
+  module: vkdownloader.services.signal_handlers
   layer: unknown
-  imports:
-  - __future__
-  - structlog
-  - downloader_throttle
   classes: []
   functions:
+  - _capture_previous_handler
+  - _restore_previous_handler
+  - _escalate_interrupt
   - setup_signal_handlers
-  - _handle_signal
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\services\__init__.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.services.__init__
+  - cleanup_signal_handlers
+- path: src/vkdownloader/services/ytdlp_downloader.py
+  module: vkdownloader.services.ytdlp_downloader
   layer: unknown
-  imports:
-  - downloader
-  - quality
+  classes: []
+  functions:
+  - _is_pid_alive
+  - _is_pid_probe_conclusive
+  - _read_owner_pid
+  - _purge_cookie_artifact_dir
+  - _remove_cookie_artifact_dir
+  - _cookie_artifact_dir_age_seconds
+  - _sweep_stale_cookie_dirs
+  - _create_cookie_artifact_dir
+  - _ensure_cookie_lifecycle_started
+  - _cleanup_cookie_artifact_dirs
+  - _create_temp_cookie_file
+  - _await_first_and_cancel_others
+  - _await_ytdlp_reap_with_timeout
+  - _is_ytdlp_progress_line
+  - _parse_ytdlp_progress
+  - _echo_ytdlp_line
+  - _resolve_format_selector
+  - _build_ytdlp_cli_command
+  - _ytdlp_temp_name
+  - download_with_ytdlp_with_resume_fallback
+  - _attempt_segment_resume
+  - _retain_transcript_line
+  - _download_with_ytdlp
+  - _resolve_cookies
+- path: src/vkdownloader/utils/__init__.py
+  module: vkdownloader.utils.__init__
+  layer: unknown
   classes: []
   functions: []
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\security.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.security
+- path: src/vkdownloader/utils/correlation.py
+  module: vkdownloader.utils.correlation
   layer: unknown
-  imports:
-  - pathlib
-  - structlog
-  - exceptions
   classes: []
   functions:
-  - _sanitize_title
-  - validate_output_path
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\url_sanitizer.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.url_sanitizer
+  - generate_correlation_id
+  - bind_correlation_id
+  - clear_correlation_id
+  - get_correlation_id
+- path: src/vkdownloader/utils/formatting.py
+  module: vkdownloader.utils.formatting
   layer: unknown
-  imports:
-  - urllib.parse
+  classes: []
+  functions:
+  - format_bytes
+- path: src/vkdownloader/utils/security.py
+  module: vkdownloader.utils.security
+  layer: unknown
+  classes: []
+  functions:
+  - sanitize_filename_component
+  - validate_output_path
+  - _resolve_output_file
+- path: src/vkdownloader/utils/url_sanitizer.py
+  module: vkdownloader.utils.url_sanitizer
+  layer: unknown
   classes: []
   functions:
   - _strip_auth_params
-- path: C:\py_exp\mko_vkideo\.ai\builders\..\..\src\vkdownloader\utils\__init__.py
-  module: C:_exp.mko_vkideo..ai.builders.......src.vkdownloader.utils.__init__
-  layer: unknown
-  imports:
-  - security
-  - url_sanitizer
-  classes: []
-  functions: []
+  - sanitize_text_for_log
+  - sanitize_url_for_log
+  - _sanitize_collection
+  - redact_log_event
