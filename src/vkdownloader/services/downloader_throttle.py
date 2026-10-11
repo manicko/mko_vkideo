@@ -48,7 +48,7 @@ _DEFAULT_BACKOFF_PAUSE_SECONDS: float = 10.0
 _TRANSPORT_FAILURE_STATUS: int = 500
 
 # Status codes that should trigger retry.
-# INT-008: widened to include 408 (Request Timeout) and 425 (Too Early) alongside
+# Widened to include 408 (Request Timeout) and 425 (Too Early) alongside
 # the existing 429 and 5xx transport failures.
 RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
@@ -305,7 +305,7 @@ async def _retry_429_with_backoff(
                 "segment_download_cancelled", segment_index=segment_index, url=sanitized_url
             )
             raise
-        # INT-006: Narrow exception handling to network-level errors only.
+        # Narrow exception handling to network-level errors only.
         # Previously caught broad ``Exception``, which swallowed programming
         # errors (TypeError, AttributeError, etc.) and treated them as
         # transient download failures. ``aiohttp.ClientError`` does not cover

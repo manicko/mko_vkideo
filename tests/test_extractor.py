@@ -193,7 +193,7 @@ class TestExtractionErrors:
 
     @pytest.mark.asyncio
     async def test_extract_with_ytdlp_propagates_settings_to_ydl_opts(self) -> None:
-        """INT-003: Settings fields are propagated to yt-dlp ydl_opts."""
+        """Settings fields are propagated to yt-dlp ydl_opts."""
         settings = Settings(max_retries=5, download_timeout=600, throttled_rate=50000)
         extractor = VKVideoExtractor(settings=settings)
         url = "https://vkvideo.ru/video-12345_67890"
@@ -212,7 +212,7 @@ class TestExtractionErrors:
 
     @pytest.mark.asyncio
     async def test_extract_with_ytdlp_timeout_raises_extraction_error(self) -> None:
-        """INT-003: asyncio.wait_for timeout raises ExtractionError."""
+        """asyncio.wait_for timeout raises ExtractionError."""
         settings = Settings(download_timeout=30)
         extractor = VKVideoExtractor(settings=settings)
         url = "https://vkvideo.ru/video-12345_67890"

@@ -242,7 +242,7 @@ class TestBrowserManager:
     async def test_browser_manager_context_exit_handles_close_timeout(
         self, test_settings: Settings
     ) -> None:
-        """INT-004: browser.close() timeout is caught and logged, playwright.stop() still runs."""
+        """browser.close() timeout is caught and logged, playwright.stop() still runs."""
         manager = BrowserManager(settings=test_settings)
         mock_browser = AsyncMock()
 
@@ -264,7 +264,7 @@ class TestBrowserManager:
     async def test_browser_manager_context_exit_handles_playwright_stop_timeout(
         self, test_settings: Settings
     ) -> None:
-        """INT-004: playwright.stop() timeout is caught and logged."""
+        """playwright.stop() timeout is caught and logged."""
         manager = BrowserManager(settings=test_settings)
         mock_browser = AsyncMock()
         manager.browser = mock_browser

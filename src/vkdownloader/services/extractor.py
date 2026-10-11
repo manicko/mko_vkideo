@@ -287,7 +287,7 @@ class VKVideoExtractor:
         Propagates relevant :class:`Settings` fields (``socket_timeout``,
         ``retries``, ``fragment_retries``, ``throttled_rate``) into the
         yt-dlp options dict and wraps the blocking extraction in
-        ``asyncio.wait_for`` with ``settings.download_timeout`` (INT-003).
+        ``asyncio.wait_for`` with ``settings.download_timeout``.
 
         The wrap bounds the EVENT LOOP, not the PROCESS: on expiry the
         asyncio future is cancelled, but the executor thread is not and
@@ -303,7 +303,7 @@ class VKVideoExtractor:
             "no_warnings": True,
             "extract_flat": False,
             "nocheckcertificate": not self.settings.ssl_verify,
-            # INT-003: propagate Settings to yt-dlp library-mode so it
+            # Propagate Settings to yt-dlp library-mode so it
             # respects the same timeout/retry/throttle config as the
             # subprocess CLI path (downloader.py _build_ytdlp_cli_command).
             "socket_timeout": self.settings.download_timeout,
@@ -344,7 +344,7 @@ class VKVideoExtractor:
 
             return found_streams, title
 
-        # Run in thread pool to avoid blocking, with a timeout (INT-003)
+        # Run in thread pool to avoid blocking, with a timeout
         # so a hung yt-dlp extraction cannot block the EVENT LOOP
         # indefinitely. It does not bound the PROCESS: on expiry only the
         # asyncio future is cancelled and the executor thread cannot be, so

@@ -916,7 +916,7 @@ async def download_with_ytdlp_with_resume_fallback(
             )
             return None
 
-        # Backoff between yt-dlp retry attempts (SRV-006):
+        # Backoff between yt-dlp retry attempts:
         # Without this, the retry loop hammers the VK origin on failure.
         # Use _compute_backoff_delay with a 500 base status (yt-dlp failures
         # don't carry an HTTP status at this level); _wait_with_shutdown

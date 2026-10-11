@@ -439,7 +439,7 @@ class TestRetry429WithBackoff:
 
     @pytest.mark.asyncio
     async def test_programming_error_not_swallowed_as_transient(self) -> None:
-        """INT-006: TypeError (programming error) is NOT caught as transient failure."""
+        """TypeError (programming error) is NOT caught as transient failure."""
 
         mock_session = AsyncMock()
         mock_session.get = MagicMock(side_effect=TypeError("unexpected type"))
@@ -458,7 +458,7 @@ class TestRetry429WithBackoff:
 
     @pytest.mark.asyncio
     async def test_timeout_error_handled_as_transient(self) -> None:
-        """INT-006: asyncio.TimeoutError is caught as a transient failure (not programming error)."""
+        """asyncio.TimeoutError is caught as a transient failure (not programming error)."""
 
         mock_session = AsyncMock()
         mock_session.get = MagicMock(side_effect=TimeoutError("socket timeout"))
@@ -903,7 +903,7 @@ class TestProgressManager:
 
         result = await manager.get_formatted_progress(1)
         assert "video_0: 12.1KB" in result
-        assert "100" not in result  # Should NOT show 100% (the SRV-003 bug)
+        assert "100" not in result  # Should NOT show 100% (when total is unknown)
 
 
 class TestClientTimeoutComposition:

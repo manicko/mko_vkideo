@@ -13,7 +13,7 @@ from ..models.enums import ErrorCode
 
 logger = get_logger(__name__)
 
-# Timeout for browser/playwright cleanup (INT-004).
+# Timeout for browser/playwright cleanup.
 # Prevents indefinite hang during teardown.
 _BROWSER_CLOSE_TIMEOUT = 10.0
 
@@ -98,7 +98,7 @@ class BrowserManager:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Close browser and stop Playwright with timeout safeguards (INT-004).
+        """Close browser and stop Playwright with timeout safeguards.
 
         Both releases run unconditionally whenever the handle exists: ``browser.close()``
         is wrapped in ``asyncio.wait_for`` with ``_BROWSER_CLOSE_TIMEOUT`` so a stop
@@ -118,7 +118,7 @@ class BrowserManager:
         # arm caught only TimeoutError, so a non-timeout driver failure escaped __aexit__
         # and replaced the exception already in flight. Both arms now catch
         # (PlaywrightError, TimeoutError) and log+suppress, so a release failure can never
-        # displace the failure that caused the exit. INT-006 in downloader_throttle.py
+        # displace the failure that caused the exit. The pattern in downloader_throttle.py
         # is the in-repo precedent for the typed set: a bare `except Exception` would
         # destroy the only signal that this module's teardown is broken. CancelledError,
         # KeyboardInterrupt and SystemExit are never suppressed. The finally guaranteeing

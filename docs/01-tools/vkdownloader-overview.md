@@ -36,7 +36,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | `perform_download()` | `services/downloader.py` | Main entry: download method routing (yt-dlp, auto); takes the quality as a plain token string, and the stream is pre-selected by the caller |
 | `download_video()` | `services/downloader.py` | Extract-select-download pipeline: extraction, quality selection from a `QualitySpec`, perform_download dispatch |
 | `download_hls_with_resume()` | `services/segment_downloader.py` | Segment-level download with token refresh and anti-detection throttling |
-| `download_with_ytdlp_with_resume_fallback()` | `services/ytdlp_downloader.py` | yt-dlp download with segment fallback on failure (SRV-006: includes inter-retry backoff) |
+| `download_with_ytdlp_with_resume_fallback()` | `services/ytdlp_downloader.py` | yt-dlp download with segment fallback on failure (includes inter-retry backoff) |
 
 ### Infrastructure
 
@@ -287,5 +287,5 @@ services/
 └── downloader_throttle.py - Rate limiting, progress management, backoff coordination
 ```
 
-The `downloader.py` module was split (SRV-001) into a focused orchestration layer and `ytdlp_downloader.py`. The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
+The `downloader.py` module was split into a focused orchestration layer and `ytdlp_downloader.py`. The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
 

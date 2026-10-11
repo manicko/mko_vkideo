@@ -3414,7 +3414,7 @@ class TestResolveCookies:
 
 
 class TestYtDlpSubprocessShutdown:
-    """Tests for INT-004: yt-dlp subprocess responds to shutdown signal."""
+    """Tests for yt-dlp subprocess responds to shutdown signal."""
 
     @pytest.mark.asyncio
     async def test_ytdlp_cancelled_on_shutdown_returns_none(
@@ -5092,7 +5092,7 @@ class TestAttemptSegmentResumeQuality:
 
 
 class TestFfmpegAvailabilityCheck:
-    """Tests for INT-007: ffmpeg availability probing."""
+    """Tests for ffmpeg availability probing."""
 
     def test_check_ffmpeg_available_returns_bool(self) -> None:
         """Test check_ffmpeg_available returns a boolean."""
@@ -5422,7 +5422,7 @@ class TestQualitySpecParsing:
 
 
 class TestYtDlpRetryBackoff:
-    """Tests for SRV-006: backoff between yt-dlp retry attempts."""
+    """Tests for backoff between yt-dlp retry attempts."""
 
     @pytest.mark.asyncio
     async def test_backoff_between_ytdlp_retries(

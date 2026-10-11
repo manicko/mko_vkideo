@@ -463,7 +463,7 @@ Download using yt-dlp with automatic segment-based resume fallback on failure.
 
 **Note:** Token refresh during resume always forces browser launch, regardless of `cookie_source` setting.
 
-**Backoff (SRV-006):** Between yt-dlp retry attempts, a jittered backoff delay is computed via `_compute_backoff_delay` and applied via `_wait_with_shutdown`. If a `backoff_coordinator` (URLBackoffCoordinator) is provided, its `wait_if_paused` method is also consulted before each retry.
+**Backoff:** Between yt-dlp retry attempts, a jittered backoff delay is computed via `_compute_backoff_delay` and applied via `_wait_with_shutdown`. If a `backoff_coordinator` (URLBackoffCoordinator) is provided, its `wait_if_paused` method is also consulted before each retry.
 
 ---
 
