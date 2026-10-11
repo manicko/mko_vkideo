@@ -559,6 +559,28 @@ def encoding_safe(stream: IO[str]) -> IO[str]:
     return cast(IO[str], _EncodingSafeTextStream(stream))
 
 
+class _ExcInfoClearingFormatter(logging.Formatter):
+    """Formatter that suppresses the stdlib's duplicate traceback render.
+
+    Structlog's ``format_exc_info`` processor already renders the traceback
+    into the event dict (as a JSON ``"exception"`` key or as console text).
+    However, when ``logger.exception()`` is called, the stdlib
+    ``Logger.exception`` method unconditionally sets ``exc_info=True`` on the
+    ``LogRecord``, so ``logging.Formatter.format`` appends a *second*
+    traceback after the message — breaking one-JSON-object-per-line parseability
+    of log files.
+
+    This formatter clears ``record.exc_info`` and ``record.exc_text`` before
+    delegating to the base ``Formatter``, so the traceback appears exactly once
+    — inside the structlog-rendered output.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.exc_info = None
+        record.exc_text = None
+        return super().format(record)
+
+
 def setup_logging(settings: Settings | None = None) -> None:
     """Configure structlog for the application.
 
@@ -604,14 +626,16 @@ def setup_logging(settings: Settings | None = None) -> None:
         else:
             log_path.chmod(0o600)
 
+    _formatter = _ExcInfoClearingFormatter(fmt="%(message)s")
+    if settings.log_file:
+        handler: logging.Handler = logging.FileHandler(settings.log_file)
+    else:
+        handler = logging.StreamHandler(encoding_safe(sys.stderr))
+    handler.setFormatter(_formatter)
+
     logging.basicConfig(
-        format="%(message)s",
         level=settings.log_level.value,
-        handlers=[
-            logging.StreamHandler(encoding_safe(sys.stderr))
-            if not settings.log_file
-            else logging.FileHandler(settings.log_file)
-        ],
+        handlers=[handler],
     )
 
     structlog.configure(

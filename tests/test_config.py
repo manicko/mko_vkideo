@@ -2,6 +2,7 @@
 
 import inspect
 import io
+import json
 import logging
 import os
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import IO, Any
 
 import pytest
+import structlog
 from pydantic import ValidationError
 
 from vkdownloader.config import (
@@ -1086,6 +1088,149 @@ class TestEnvFileValidationRendering:
             assert getattr(os.stat(log_file), "st_file_attributes", 0) & 0x1 == 0, (
                 "read-only attribute should be cleared after chmod(0o600)"
             )
+
+
+class TestExcInfoClearing:
+    """B3: exception tracebacks render exactly once in log output.
+
+    Structlog's ``format_exc_info`` processor formats the traceback into the
+    event dict (JSON key ``"exception"`` or console text).  The stdlib
+    ``Logger.exception`` method then sets ``exc_info=True`` on the LogRecord,
+    which would cause ``logging.Formatter`` to append a *second* traceback.
+
+    ``_ExcInfoClearingFormatter`` clears ``record.exc_info`` / ``record.exc_text``
+    before the base ``Formatter.format`` runs, so the traceback appears exactly
+    once — inside the structlog-rendered output.
+    """
+
+    @staticmethod
+    def _emit_exception(logger: structlog.stdlib.BoundLogger) -> None:
+        """Emit a single exception-carrying log record."""
+        try:
+            raise ValueError("synthetic test error")
+        except ValueError:
+            logger.exception("something went wrong")
+
+    def test_log_file_every_line_is_valid_json(self, tmp_path: Path) -> None:
+        """B3: every line in a log file with an exception-carrying record parses as JSON."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging(settings)
+            logger = structlog.get_logger("b3-test")
+            self._emit_exception(logger)
+
+            root.handlers = root.handlers  # flush
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1, f"expected exactly 1 log line, got {len(lines)}"
+        parsed = json.loads(lines[0])
+        assert isinstance(parsed, dict)
+
+    def test_traceback_appears_exactly_once_in_json(self, tmp_path: Path) -> None:
+        """B3: the traceback appears exactly once and as a JSON key, not as a text line."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging(settings)
+            logger = structlog.get_logger("b3-test")
+            self._emit_exception(logger)
+
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        parsed = json.loads(lines[0])
+
+        exc = parsed.get("exception")
+        assert exc is not None, "expected 'exception' key in JSON log record"
+        assert isinstance(exc, str)
+        # The traceback string contains the error class and message.
+        assert "ValueError" in exc
+        assert "synthetic test error" in exc
+        # 'Traceback' should appear once in the formatted exception string.
+        assert exc.count("Traceback") == 1
+
+    def test_non_exception_record_parses(self, tmp_path: Path) -> None:
+        """B3: non-exception records still parse as JSON with timestamp and level."""
+        log_file = tmp_path / "app.log"
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging(settings)
+            logger = structlog.get_logger("b3-test")
+            logger.info("plain message", video_id="abc123")
+
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        parsed = json.loads(lines[0])
+        assert parsed["event"] == "plain message"
+        assert parsed["level"] == "info"
+        # TimeStamper ISO/UTC stamp is present.
+        assert "timestamp" in parsed
+        assert "video_id" in parsed
+
+    def test_console_renderer_traceback_once(self) -> None:
+        """B3: ConsoleRenderer (stderr) path renders the traceback exactly once."""
+        buffer = io.StringIO()
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            # Redirect stderr so the StreamHandler writes to the buffer.
+            old_stderr = sys.stderr
+            sys.stderr = buffer
+            try:
+                setup_logging()  # ConsoleRenderer path: log_file=None
+            finally:
+                sys.stderr = old_stderr
+
+            logger = structlog.get_logger("b3-test")
+            self._emit_exception(logger)
+
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        output = buffer.getvalue()
+        # ConsoleRenderer renders the traceback once inside the event.
+        assert output.count("Traceback") == 1
 
 
 def _launch_dir(request: pytest.FixtureRequest) -> Path:
