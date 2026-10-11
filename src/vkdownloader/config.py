@@ -333,12 +333,13 @@ def format_validation_error(error: ValidationError) -> str:
         error: The ValidationError to format.
 
     Returns:
-        A human-readable string listing each field error with a hint to
-        check the .env file or environment variables.
+        A human-readable string listing each field error with its valid range
+        when the field carries ``Ge``/``Le`` constraints (e.g. ``max_retries`` →
+        ``1..10``).
     """
     lines = [
         "Configuration error: one or more settings have invalid values.",
-        "Check your .env file or VKDOWNLOADER_* environment variables:",
+        "Invalid setting(s):",
     ]
     valid_env_vars = sorted(_build_valid_env_vars())
     for err in error.errors():
@@ -359,11 +360,36 @@ def format_validation_error(error: ValidationError) -> str:
             else:
                 lines.append(f"    Valid variables: {', '.join(valid_env_vars)}")
         else:
+            range_msg = _range_error_message(loc)
+            if range_msg is not None:
+                msg = range_msg
             lines.append(f"  - {loc}: {msg}")
 
         lines.append("    Received: <redacted>")
     lines.append("Fix the offending value(s) and try again.")
     return "\n".join(lines)
+
+
+def _range_error_message(field_name: str) -> str | None:
+    """Return a concise range message for a field with ``Ge``/``Le`` bounds.
+
+    For a field like ``max_retries`` with ``ge=1, le=10``, returns
+    ``"must be in range 1..10"`` so the user sees both bounds in a single
+    statement instead of the raw Pydantic per-constraint message.
+
+    Returns ``None`` when the field has no both constraints, signalling the
+    caller to fall back on the original Pydantic ``msg``.
+    """
+    from annotated_types import Ge, Le
+
+    field = Settings.model_fields.get(field_name)
+    if field is None:
+        return None
+    ge = next((m for m in field.metadata if isinstance(m, Ge)), None)
+    le = next((m for m in field.metadata if isinstance(m, Le)), None)
+    if ge is None or le is None:
+        return None
+    return f"must be in range {ge.ge}..{le.le}"
 
 
 def _build_valid_env_vars() -> set[str]:

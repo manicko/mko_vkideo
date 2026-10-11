@@ -2608,6 +2608,118 @@ class TestMaxRetriesOptionDocumentation:
                 )
 
 
+class TestMaxRetriesValidation:
+    """B5: out-of-range and non-numeric --max-retries validation (exit 3 and 2).
+
+    Boundary-pinned: out-of-range values (0, -1, ceiling+1 read from the model
+    field's ``Le`` metadata) exit 3; a non-numeric value exits 2. Both cases
+    pin the boundary from both sides in the same class (D-6 boundary).
+    """
+
+    @staticmethod
+    def _ceiling_breaker() -> int:
+        """Return ceiling+1 derived from ``Settings.model_fields['max_retries']``."""
+        from annotated_types import Le
+
+        from vkdownloader.config import Settings
+
+        field = Settings.model_fields["max_retries"]
+        ceiling = next(m.le for m in field.metadata if isinstance(m, Le))
+        return ceiling + 1
+
+    def test_out_of_range_max_retries_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B5: out-of-range --max-retries (0, -1, ceiling+1) exits 3 in download."""
+        monkeypatch.chdir(tmp_path)
+        ceiling_breaker = self._ceiling_breaker()
+
+        for invalid_value in [0, -1, ceiling_breaker]:
+            with patch(
+                "vkdownloader.services.downloader.perform_download",
+            ) as mock_download:
+                result = runner.invoke(
+                    app,
+                    ["download", sample_video_url, "--max-retries", str(invalid_value)],
+                )
+
+                assert result.exit_code == 3, f"max_retries={invalid_value} should exit 3"
+                assert "max_retries" in result.output
+                assert "1..10" in result.output
+                assert "Traceback" not in result.output
+                assert mock_download.call_count == 0
+
+    def test_out_of_range_max_retries_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B5: out-of-range --max-retries (0, -1, ceiling+1) exits 3 in batch."""
+        monkeypatch.chdir(tmp_path)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+        ceiling_breaker = self._ceiling_breaker()
+
+        for invalid_value in [0, -1, ceiling_breaker]:
+            with patch(
+                "vkdownloader.services.batch_downloader.download_video",
+            ) as mock_dv:
+                result = runner.invoke(
+                    app,
+                    ["batch", str(urls_file), "--max-retries", str(invalid_value)],
+                )
+
+                assert result.exit_code == 3, f"max_retries={invalid_value} should exit 3"
+                assert "max_retries" in result.output
+                assert "1..10" in result.output
+                assert "Traceback" not in result.output
+                assert mock_dv.call_count == 0
+
+    def test_non_numeric_max_retries_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B5: non-numeric --max-retries (abc) exits 2 — boundary pinned from both sides."""
+        monkeypatch.chdir(tmp_path)
+
+        with patch(
+            "vkdownloader.services.downloader.perform_download",
+        ) as mock_download:
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url, "--max-retries", "abc"],
+            )
+
+            assert result.exit_code == 2
+            assert mock_download.call_count == 0
+
+    def test_non_numeric_max_retries_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B5: non-numeric --max-retries (abc) exits 2 in batch — boundary pinned."""
+        monkeypatch.chdir(tmp_path)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with patch(
+            "vkdownloader.services.batch_downloader.download_video",
+        ) as mock_dv:
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--max-retries", "abc"],
+            )
+
+            assert result.exit_code == 2
+            assert mock_dv.call_count == 0
+
+
 class TestBatchSummaryDocumentation:
     """B8 oracle: both reference docs describe the batch summary step with
     identical wording and both mention the skipped-invalid-URL count.
