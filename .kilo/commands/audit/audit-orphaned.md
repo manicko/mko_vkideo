@@ -36,6 +36,20 @@ Protect and exclude from the removal candidates:
 * Files referenced dynamically or through non-code mechanisms.
 * Files required by CI, Docker, package managers, build tools, templates, or external integrations.
 
+### PATH-BASED EXCLUSIONS (glob patterns)
+
+In addition to the category-based guard above, the following path-based patterns are excluded from removal candidates:
+
+* `.ai/audit/**` — audit pipeline's own output (findings, reports, validation stores).
+* `.kilo/commands/audit/**` — the audit command definitions themselves.
+* `.kilo/agents/**` — agent definition files.
+* `**/.kilo/worktrees/**` — all worktree directories (covers the removed/stale `southern-bandana/` corpus).
+* `.git/**` — git internals.
+* `.venv/**` — virtual environments.
+* `*.egg-info/**` and `dist/**` — build artifacts.
+* `**/.ruff_cache/**`, `**/.mypy_cache/**`, `**/.pytest_cache/**`, `**/__pycache__/**` — cache directories.
+* `.ai/audit/orphaned-files/` — the orphan audit's own output directory.
+
 ## Analysis Method
 
 Use multiple signals; never rely on a single check.

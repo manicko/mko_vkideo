@@ -18,14 +18,31 @@ If stop or break prefer resume old session not launching new agent.
 Read `.ai/context/commands.md` for verification commands.
 Read `.ai/context/python-code-standards.md` for project code standards.
 List documentation structure from `docs/` folder.
+Run `git rev-parse HEAD` and capture its output as `{COMMIT_SHA}`.
+Run `git status --porcelain` and capture its output as `{WORKTREE_STATUS}`.
 
 Set variables:
-- `{BASE_CONTEXT}` = summary of the above files
+- `{BASE_CONTEXT}` = summary of the above files, **including** `{COMMIT_SHA}` and the
+  working-tree state (clean if `{WORKTREE_STATUS}` is empty, dirty otherwise)
 - `{AUDIT_FILES}` = list of files in `.ai/audit/99-validation`
 
 Every file named in this step must exist. If one does not, name the missing file in the
 run's summary and continue with what is present — a read that silently yields nothing is the
 defect this step exists to prevent.
+
+## Refuse Dirty Tree (hard stop)
+
+Run `git status --porcelain -- src tests docs pyproject.toml`.
+
+If the output is non-empty, **STOP** — refuse to start:
+
+> **AUDIT REFUSED: working tree is dirty.** The audit pipeline measures a
+> resolved commit, not uncommitted changes. Commit or stash before starting.
+>
+> Dirty paths:
+> {lines from `git status --porcelain -- src tests docs pyproject.toml`}
+
+No phase may start against a dirty tree.
 
 <refine_loop>
 
