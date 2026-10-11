@@ -41,7 +41,7 @@ class BrowserManager:
         self.browser: Browser | None = None
         self._stealth_path = Path(__file__).parent.parent / "stealth.min.js"
 
-    async def __aenter__(self) -> "BrowserManager":
+    async def __aenter__(self) -> BrowserManager:
         """Start Playwright and launch the browser.
 
         When ``stealth_enabled`` is true, the ``stealth.min.js`` asset must be

@@ -1446,7 +1446,6 @@ class TestParallelSegmentsDownload:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that semaphore enforces max_concurrent_segments limit."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
@@ -1500,7 +1499,6 @@ class TestParallelSegmentsDownload:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that parallel download downloads all segments via gather."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
@@ -1705,7 +1703,6 @@ class TestSequentialDownloadMode:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that sequential mode applies 1.5s + jitter delay after semaphore release."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
@@ -1787,7 +1784,6 @@ class TestSequentialDownloadMode:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that sequential mode triggers _retry_429_with_backoff for 429 responses."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
@@ -1864,7 +1860,6 @@ class TestSequentialDownloadMode:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that parallel mode does not apply inter-segment delay."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 
@@ -2862,7 +2857,6 @@ class TestManifestBaseAddressFeedsSegments:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """PlaylistFetchResult.base_url feeds DownloadPolicy.m3u8_url for segment URL resolution."""
-        from typing import Any
 
         from vkdownloader.services.downloader import download_hls_with_resume
 

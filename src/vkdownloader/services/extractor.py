@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 import re
 from pathlib import PurePosixPath
-from typing import Any, cast
+from typing import TypedDict
 from urllib.parse import urlparse, urlsplit
 
 import yt_dlp
@@ -29,6 +29,22 @@ logger = get_logger(__name__)
 # Anchored (^…$) so fullmatch on a single path segment accepts only a
 # complete ``video-<owner>_<id>`` token, never a suffix of a longer token.
 VIDEO_ID_PATTERN = re.compile(r"^video-(-?\d+)_(\d+)$")
+
+
+class _FormatDict(TypedDict, total=False):
+    """Subset of yt-dlp Format dict keys consumed by this module.
+
+    yt-dlp's format dicts carry many keys that ``_build_streams`` and
+    ``_declares_video_codec`` never inspect; only the keys below are read.
+    ``total=False`` marks them all optional — yt-dlp omits some keys for
+    certain formats (e.g. ``vcodec`` appears only on video-bearing records).
+    """
+
+    vcodec: str
+    height: int
+    width: int
+    url: str
+    tbr: float
 
 
 def _extract_video_segment(url: str) -> str | None:
@@ -88,7 +104,7 @@ def _classify_format(url: str) -> StreamFormat:
     return StreamFormat.HLS if suffix == ".m3u8" else StreamFormat.MP4
 
 
-def _declares_video_codec(f: dict[str, Any]) -> bool:
+def _declares_video_codec(f: _FormatDict) -> bool:
     """Return True when a format dict declares a usable video codec (NET-017).
 
     A record is video-bearing only when the ``vcodec`` key is present, its value
@@ -106,7 +122,7 @@ def _declares_video_codec(f: dict[str, Any]) -> bool:
     return codec.lower() != "none"
 
 
-def _build_streams(formats: list[dict[str, Any]]) -> list[Stream]:
+def _build_streams(formats: list[_FormatDict]) -> list[Stream]:
     """Convert raw yt-dlp format dicts into the stream list, in input order.
 
     Filtering decisions (NET-017):
@@ -122,8 +138,8 @@ def _build_streams(formats: list[dict[str, Any]]) -> list[Stream]:
         # empty, or the audio-only literal).
         if not _declares_video_codec(f):
             continue
-        height = cast(int | None, f.get("height"))
-        width = cast(int | None, f.get("width"))
+        height = f.get("height")
+        width = f.get("width")
         format_url = f.get("url")
         # Skip formats without a usable URL.
         if not format_url:

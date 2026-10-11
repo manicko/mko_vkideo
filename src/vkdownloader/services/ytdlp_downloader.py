@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from playwright.async_api import Cookie
 from pydantic import SecretStr
@@ -470,8 +470,8 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
 
 
 async def _await_first_and_cancel_others(
-    *tasks: asyncio.Task[Any],
-) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
+    *tasks: asyncio.Task[object],
+) -> tuple[set[asyncio.Task[object]], set[asyncio.Task[object]]]:
     """Launch tasks concurrently, await first completion, cancel remaining.
 
     Args:
