@@ -71,6 +71,7 @@ class ErrorCode(StrEnum):
     VIDEO_NOT_FOUND = "video_not_found"
     INVALID_URL = "invalid_url"
     QUALITY_NOT_AVAILABLE = "quality_not_available"
+    NO_STREAMS = "no_streams"
     QUALITY_PARSE_ERROR = "quality_parse_error"
     EXTRACTION_ERROR = "extraction_error"
     DOWNLOAD_ERROR = "download_error"

@@ -54,7 +54,7 @@ class TestParse:
             QualitySpec.parse(token)
 
         assert exc_info.value.quality == token
-        assert exc_info.value.status_label() == "invalid_quality"
+        assert exc_info.value.status_label() == "quality_parse_error"
 
     def test_non_ascii_decimal_digit_normalises_to_its_height(self) -> None:
         """A decimal digit ``int()`` accepts is a height, rendered in ASCII.

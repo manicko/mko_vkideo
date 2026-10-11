@@ -2,13 +2,12 @@
 
 Every domain exception carries a machine-readable :class:`ErrorCode` and a
 polymorphic ``status_label()`` so that structured JSON logs and batch
-results can be filtered deterministically. The legacy
-``_map_exception_to_status()`` helper and ``_EXCEPTION_STATUS_HANDLERS``
-dict are retained for backward compatibility; new call sites should
-prefer ``status_label()`` directly.
+results can be filtered deterministically. ``status_label()`` returns the
+``value`` of the exception's :attr:`ErrorCode` member; the sole override is
+on :class:`QualityNotAvailableError`, which returns
+``ErrorCode.NO_STREAMS`` when no streams are available and
+``ErrorCode.QUALITY_NOT_AVAILABLE`` otherwise.
 """
-
-from collections.abc import Callable
 
 from vkdownloader.models.enums import ErrorCode
 from vkdownloader.utils.url_sanitizer import _strip_auth_params
@@ -46,11 +45,14 @@ class VKDownloadError(Exception):
     def status_label(self) -> str:
         """Return a short, machine-readable status label for batch results.
 
-        Format: ``"error: <error_code_value>"`` (e.g.,
-        ``"error: unexpected_error"``). Subclasses override to return
-        codes like ``"no_streams"``, ``"video_not_found"``, etc.
+        Returns the ``value`` of this exception's :attr:`ErrorCode`
+        member (e.g., ``"unexpected_error"`` for the base class). The sole
+        override is on :class:`QualityNotAvailableError`, which returns
+        ``ErrorCode.NO_STREAMS.value`` (``"no_streams"``) when no streams
+        are available and ``ErrorCode.QUALITY_NOT_AVAILABLE.value``
+        (``"quality_not_available"``) otherwise.
         """
-        return f"error: {self.error_code.value}"
+        return self.error_code.value
 
     def user_message(self) -> str:
         """Return a human-readable message for end users."""
@@ -73,10 +75,6 @@ class VideoNotFoundError(VKDownloadError):
 
     error_code = ErrorCode.VIDEO_NOT_FOUND
 
-    def status_label(self) -> str:
-        """Return status label for video-not-found errors."""
-        return "video_not_found"
-
 
 class InvalidVideoUrlError(VKDownloadError):
     """Raised when a URL does not match the VK video URL pattern.
@@ -96,10 +94,6 @@ class InvalidVideoUrlError(VKDownloadError):
         """
         self.url = url
         super().__init__(f"Invalid VK video URL: {_strip_auth_params(url)}")
-
-    def status_label(self) -> str:
-        """Return status label for invalid-URL errors."""
-        return "invalid_url"
 
 
 class QualityNotAvailableError(VKDownloadError):
@@ -137,12 +131,14 @@ class QualityNotAvailableError(VKDownloadError):
     def status_label(self) -> str:
         """Return status label based on whether streams are available.
 
-        Returns ``"no_streams"`` when the available list is empty,
-        otherwise ``"quality_not_available"``.
+        Returns ``ErrorCode.NO_STREAMS.value`` (``"no_streams"``) when
+        the available list is empty, otherwise
+        ``ErrorCode.QUALITY_NOT_AVAILABLE.value``
+        (``"quality_not_available"``).
         """
         if not self.available:
-            return "no_streams"
-        return "quality_not_available"
+            return ErrorCode.NO_STREAMS.value
+        return ErrorCode.QUALITY_NOT_AVAILABLE.value
 
 
 class QualityParseError(VKDownloadError):
@@ -163,10 +159,6 @@ class QualityParseError(VKDownloadError):
         """
         self.quality = quality
         super().__init__(f"Invalid quality value: {quality}")
-
-    def status_label(self) -> str:
-        """Return status label for parse errors."""
-        return "invalid_quality"
 
 
 class ExtractionError(VKDownloadError):
@@ -198,51 +190,8 @@ class ExtractionError(VKDownloadError):
         if error_code is not None:
             self.error_code = error_code
 
-    def status_label(self) -> str:
-        """Return status label for extraction errors."""
-        return "extraction_error"
-
 
 class DownloadError(VKDownloadError):
     """Raised when video download fails."""
 
     error_code = ErrorCode.DOWNLOAD_ERROR
-
-    def status_label(self) -> str:
-        """Return status label for download errors."""
-        return "download_error"
-
-
-def _map_exception_to_status(exc: Exception) -> str:
-    """Map exception to status label for batch results.
-
-    Args:
-        exc: The exception to map.
-
-    Returns:
-        Status label string (e.g., ``"no_streams: <message>"``,
-        ``"video_not_found: <message>"``, ``"download_error: <message>"``).
-    """
-    for exc_type, handler in _EXCEPTION_STATUS_HANDLERS.items():
-        if isinstance(exc, exc_type):
-            return handler(exc)
-    return f"unexpected_error: {type(exc).__name__}"
-
-
-def _quality_not_available_status(exc: QualityNotAvailableError) -> str:
-    if not exc.available and exc.requested:
-        return f"no_streams: {exc}"
-    return (
-        f"quality_not_available: requested {exc.requested}p, available: {', '.join(exc.available)}"
-    )
-
-
-_EXCEPTION_STATUS_HANDLERS: dict[type[Exception], Callable[..., str]] = {
-    ExtractionError: lambda e: f"extraction_error: {e}",
-    DownloadError: lambda e: f"download_error: {e}",
-    InvalidVideoUrlError: lambda e: f"invalid_url: {e}",
-    QualityNotAvailableError: _quality_not_available_status,
-    QualityParseError: lambda e: f"invalid_quality: {e.quality}",
-    VideoNotFoundError: lambda e: f"video_not_found: {e}",
-    VKDownloadError: lambda e: f"download_error: {e}",
-}

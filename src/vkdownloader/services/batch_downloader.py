@@ -299,8 +299,7 @@ async def _download_single(
     except Exception as e:
         # Log unexpected exceptions to surface bugs, then return as a status tuple.
         # VKDownloadError subclasses are already handled by the earlier
-        # except clauses which use exc.status_label() (the documented
-        # replacement for the legacy _map_exception_to_status helper).
+        # except clauses which use exc.status_label() directly.
         # Only non-domain exceptions reach here — label them with their type.
         logger.exception(
             "unexpected_error_in_batch_download",

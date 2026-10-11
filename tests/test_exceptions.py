@@ -1,4 +1,4 @@
-"""Tests for exception mapping utility."""
+"""Tests for exception hierarchy status labels and structured attributes."""
 
 from vkdownloader.exceptions import (
     DownloadError,
@@ -8,73 +8,8 @@ from vkdownloader.exceptions import (
     QualityParseError,
     VideoNotFoundError,
     VKDownloadError,
-    _map_exception_to_status,
 )
 from vkdownloader.models.enums import ErrorCode
-
-
-class TestMapExceptionToStatus:
-    """Tests for _map_exception_to_status exception-to-label mapping."""
-
-    def test_quality_not_available_no_streams(self) -> None:
-        """Test QualityNotAvailableError with empty available is mapped as no_streams."""
-        exc = QualityNotAvailableError("1080", [])
-        result = _map_exception_to_status(exc)
-        assert result.startswith("no_streams:")
-
-    def test_quality_not_available_missing_quality(self) -> None:
-        """Test QualityNotAvailableError with available qualities is mapped correctly."""
-        exc = QualityNotAvailableError("1440", ["1080", "720"])
-        result = _map_exception_to_status(exc)
-        assert result.startswith("quality_not_available:")
-        assert "1440" in result
-        assert "1080" in result
-        assert "720" in result
-
-    def test_video_not_found(self) -> None:
-        """Test VideoNotFoundError is mapped to video_not_found."""
-        exc = VideoNotFoundError("Video ID 12345 not found")
-        result = _map_exception_to_status(exc)
-        assert result.startswith("video_not_found:")
-        assert "not found" in result
-
-    def test_download_error(self) -> None:
-        """Test VKDownloadError (non-quality, non-not-found) is mapped to download_error."""
-        exc = VKDownloadError("Segment download failed")
-        result = _map_exception_to_status(exc)
-        assert result.startswith("download_error:")
-        assert "Segment download failed" in result
-
-    def test_unexpected_exception(self) -> None:
-        """Test generic Exception is mapped to unexpected_error with type name."""
-        exc = RuntimeError("Something went wrong")
-        result = _map_exception_to_status(exc)
-        assert result == "unexpected_error: RuntimeError"
-
-    def test_unexpected_exception_with_traceback(self) -> None:
-        """Test that unexpected exceptions include the type name in the status."""
-        exc = ValueError("Bad value")
-        result = _map_exception_to_status(exc)
-        assert result == "unexpected_error: ValueError"
-
-    def test_quality_not_available_with_requested_and_available(self) -> None:
-        """Test QualityNotAvailableError with both requested and available qualities."""
-        exc = QualityNotAvailableError("2160", ["1080"])
-        result = _map_exception_to_status(exc)
-        assert "quality_not_available" in result
-        assert "2160" in result
-
-    def test_quality_not_available_empty_available_no_requested(self) -> None:
-        """Test QualityNotAvailableError where available is empty and requested is empty."""
-        exc = QualityNotAvailableError("", [])
-        result = _map_exception_to_status(exc)
-        assert result.startswith("quality_not_available:")
-
-    def test_video_not_found_with_special_characters(self) -> None:
-        """Test VideoNotFoundError with special characters in message."""
-        exc = VideoNotFoundError("URL: https://vkvideo.ru/video-1_1")
-        result = _map_exception_to_status(exc)
-        assert "video_not_found" in result
 
 
 class TestStructuredAttributes:
@@ -94,6 +29,10 @@ class TestStructuredAttributes:
         """Test QualityNotAvailableError has QUALITY_NOT_AVAILABLE error_code."""
         exc = QualityNotAvailableError("1080", ["720"])
         assert exc.error_code == ErrorCode.QUALITY_NOT_AVAILABLE
+
+    def test_no_streams_error_code(self) -> None:
+        """Test ErrorCode has NO_STREAMS member."""
+        assert ErrorCode.NO_STREAMS == "no_streams"
 
     def test_quality_parse_error_code(self) -> None:
         """Test QualityParseError has QUALITY_PARSE_ERROR error_code."""
@@ -118,44 +57,88 @@ class TestStructuredAttributes:
     # --- status_label() tests ---
 
     def test_status_label_base(self) -> None:
-        """Test base exception status_label returns error: code."""
+        """Test base exception status_label returns error_code value."""
         exc = VKDownloadError("test")
-        assert exc.status_label() == "error: unexpected_error"
+        assert exc.status_label() == ErrorCode.UNEXPECTED_ERROR.value
 
     def test_status_label_video_not_found(self) -> None:
         """Test VideoNotFoundError status_label."""
         exc = VideoNotFoundError("test")
-        assert exc.status_label() == "video_not_found"
+        assert exc.status_label() == ErrorCode.VIDEO_NOT_FOUND.value
 
     def test_status_label_quality_not_available_with_available(self) -> None:
         """Test QualityNotAvailableError status_label when qualities exist."""
         exc = QualityNotAvailableError("1080", ["720"])
-        assert exc.status_label() == "quality_not_available"
+        assert exc.status_label() == ErrorCode.QUALITY_NOT_AVAILABLE.value
 
     def test_status_label_quality_not_available_no_streams(self) -> None:
         """Test QualityNotAvailableError status_label when no streams."""
         exc = QualityNotAvailableError("1080", [])
-        assert exc.status_label() == "no_streams"
+        assert exc.status_label() == ErrorCode.NO_STREAMS.value
 
     def test_status_label_quality_parse_error(self) -> None:
         """Test QualityParseError status_label."""
         exc = QualityParseError("bad")
-        assert exc.status_label() == "invalid_quality"
+        assert exc.status_label() == ErrorCode.QUALITY_PARSE_ERROR.value
 
     def test_status_label_extraction_error(self) -> None:
         """Test ExtractionError status_label."""
         exc = ExtractionError("test")
-        assert exc.status_label() == "extraction_error"
+        assert exc.status_label() == ErrorCode.EXTRACTION_ERROR.value
 
     def test_status_label_download_error(self) -> None:
         """Test DownloadError status_label."""
         exc = DownloadError("test")
-        assert exc.status_label() == "download_error"
+        assert exc.status_label() == ErrorCode.DOWNLOAD_ERROR.value
 
     def test_status_label_invalid_video_url(self) -> None:
         """Test InvalidVideoUrlError status_label."""
         exc = InvalidVideoUrlError("https://example.com")
-        assert exc.status_label() == "invalid_url"
+        assert exc.status_label() == ErrorCode.INVALID_URL.value
+
+    # --- invariant: every status_label() returns an ErrorCode member value ---
+
+    def test_status_label_invariant_all_classes(self) -> None:
+        """Every exception class's status_label() returns its error_code.value.
+
+        Closes QLT-010's oracle gap: no test previously asserted that
+        status_label() always equals error_code.value. QualityNotAvailableError
+        is the sole documented exception — it overrides status_label() to
+        return ErrorCode.NO_STREAMS.value when available is empty and
+        ErrorCode.QUALITY_NOT_AVAILABLE.value otherwise.
+        """
+        # Classes that derive status_label from error_code.value (no override).
+        direct_derivation_classes: list[type[VKDownloadError]] = [
+            VKDownloadError,
+            VideoNotFoundError,
+            InvalidVideoUrlError,
+            QualityParseError,
+            ExtractionError,
+            DownloadError,
+        ]
+        for exc_cls in direct_derivation_classes:
+            if exc_cls is InvalidVideoUrlError:
+                exc = exc_cls("https://example.com/invalid")
+            elif exc_cls is QualityParseError:
+                exc = exc_cls("bad")
+            else:
+                exc = exc_cls("test")
+            assert exc.status_label() == exc.error_code.value, (
+                f"{exc_cls.__name__}.status_label() should return error_code.value"
+            )
+
+        # ExtractionError allows a custom error_code at construction; the
+        # override must be reflected by status_label() too.
+        custom_exc = ExtractionError("msg", error_code=ErrorCode.STEALTH_ASSET_MISSING)
+        assert custom_exc.status_label() == ErrorCode.STEALTH_ASSET_MISSING.value
+
+        # QualityNotAvailableError: documented override with two branches.
+        # Branch 1: available is non-empty -> QUALITY_NOT_AVAILABLE.value.
+        exc_with_available = QualityNotAvailableError("1080", ["720"])
+        assert exc_with_available.status_label() == ErrorCode.QUALITY_NOT_AVAILABLE.value
+        # Branch 2: available is empty -> NO_STREAMS.value.
+        exc_no_streams = QualityNotAvailableError("1080", [])
+        assert exc_no_streams.status_label() == ErrorCode.NO_STREAMS.value
 
     # --- user_message() tests ---
 
@@ -195,31 +178,3 @@ class TestStructuredAttributes:
         url = "https://vkvideo.ru/video-12345_67890"
         exc = InvalidVideoUrlError(url)
         assert exc.url == url
-
-
-class TestExtractionErrorStatusMapping:
-    """Tests for ExtractionError status mapping via _map_exception_to_status."""
-
-    def test_extraction_error_mapped(self) -> None:
-        """Test ExtractionError is mapped to extraction_error status."""
-        exc = ExtractionError("extraction failed")
-        result = _map_exception_to_status(exc)
-        assert result.startswith("extraction_error:")
-        assert "extraction failed" in result
-
-    def test_extraction_error_status_label(self) -> None:
-        """Test ExtractionError.status_label() returns extraction_error."""
-        exc = ExtractionError("test")
-        assert exc.status_label() == "extraction_error"
-
-    def test_download_error_mapped(self) -> None:
-        """Test DownloadError is mapped to download_error status."""
-        exc = DownloadError("download failed")
-        result = _map_exception_to_status(exc)
-        assert result.startswith("download_error:")
-        assert "download failed" in result
-
-    def test_download_error_status_label(self) -> None:
-        """Test DownloadError.status_label() returns download_error."""
-        exc = DownloadError("test")
-        assert exc.status_label() == "download_error"
