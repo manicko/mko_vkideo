@@ -12,6 +12,23 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from .enums import QualityKind, QualityLabel
 
+# Import-form taxonomy (QLT-012). No project-wide convention document exists —
+# confirmed by searching .kilo/rules/, .ai/context/, docs/STRUCT.md (see
+# .ai/audit/99-validation/09-code-quality-validated-findings.md:554).
+#
+# Measured census of 26 non-__init__ modules:
+#   15 relative-only   (from . / from ..)
+#    3 absolute-only   (from vkdownloader.…)
+#    7 neither         (stdlib / third-party only)
+#    1 both            (this module — relative module-level + lazy absolute)
+#
+# This is the only module using both forms. The absolute lazy import below is
+# load-bearing: it breaks a cycle that the package __init__ does not (the
+# models package __init__ is empty, so an eager absolute import here would not
+# trigger a partial-init failure today, but it would close the edge
+# quality → exceptions → utils.security → models.video → models.quality the
+# moment any future change re-opens the utils.security → exceptions edge).
+
 
 class QualitySpec(BaseModel):
     """A validated quality request: a keyword or one exact stream label.
@@ -60,6 +77,18 @@ class QualitySpec(BaseModel):
         Raises:
             QualityParseError: If the token is not a keyword nor a positive height.
         """
+        # QLT-012: deferred to runtime to break an import cycle.
+        # An eager module-level import would close
+        # models.quality → exceptions → utils.security → models.video → models,
+        # because utils.security imports both exceptions.DownloadError and
+        # models.video.VideoWithStreams. The cycle is dormant today (exceptions
+        # imports url_sanitizer, a leaf, not utils.security), but this lazy form
+        # is a defensive barrier: moving it to module scope would reintroduce
+        # the ImportError the moment any cycle edge is re-added. The import is
+        # absolute rather than relative to make the cross-layer boundary
+        # (models → exceptions) explicit — the package __init__ does not
+        # re-export subpackage contents, so a relative form would hide the
+        # layer crossing. See config.py:621 (B6 RF-1) for the parallel case.
         from vkdownloader.exceptions import QualityParseError
 
         if raw is None or raw.strip() == "":
