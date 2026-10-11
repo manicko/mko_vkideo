@@ -17,6 +17,7 @@ from typer.testing import CliRunner, Result
 from vkdownloader import cli
 from vkdownloader.cli import app
 from vkdownloader.exceptions import (
+    DownloadError,
     QualityNotAvailableError,
     VideoNotFoundError,
 )
@@ -317,6 +318,51 @@ class TestDownloadCommand:
 
         assert result.exit_code == 130
         assert "cancelled" in result.output.lower()
+
+    def test_download_vkdownload_error_emits_structured_log(
+        self, tmp_path: Path, sample_video_url: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A VKDownloadError from download() emits a download_failed structured record.
+
+        The new ``VKDownloadError`` arm in the download ladder must log a
+        structured ``download_failed`` record carrying the sanitised URL and the
+        exception's ``log_context()`` fields (``error_code``, ``message``),
+        and echo the user-facing message to stderr.
+        """
+        error = DownloadError("download failed")
+
+        with (
+            patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ),
+            patch("vkdownloader.cli.Settings") as mock_settings_cls,
+        ):
+            mock_settings_cls.return_value = MagicMock(
+                max_concurrent_downloads=4,
+                download_dir=tmp_path,
+                log_file=None,
+            )
+
+            with caplog.at_level(logging.ERROR):
+                result = runner.invoke(
+                    app,
+                    ["download", sample_video_url],
+                    catch_exceptions=False,
+                )
+
+        assert result.exit_code == 1
+        assert error.user_message() in result.stderr
+        failed = [r for r in caplog.records if "download_failed" in r.getMessage()]
+        assert len(failed) == 1
+        rendered = failed[0].getMessage()
+        # URL is sanitised — only scheme+host is retained, path tokens redacted.
+        assert "https://vkvideo.ru/***REDACTED***" in rendered
+        assert "12345_67890" not in rendered
+        assert "error_code" in rendered
+        assert "download_error" in rendered
+        assert "download failed" in rendered
 
 
 class TestBatchCommand:
@@ -1630,6 +1676,53 @@ class TestBatchCommand:
         assert "Downloaded:" in result.output
         mock_download_video.assert_awaited_once()
         assert "SKIPPED" not in result.output
+
+    def test_batch_vkdownload_error_emits_structured_log(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A VKDownloadError from batch_download() emits a batch_download_failed structured record.
+
+        The new ``VKDownloadError`` arm in the batch ladder must log a
+        structured ``batch_download_failed`` record carrying ``url_file``,
+        ``url_count``, and the exception's ``log_context()`` fields
+        (``error_code``, ``message``), and echo the user-facing message
+        to stderr.
+        """
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
+        error = DownloadError("batch download failed")
+
+        with (
+            patch(
+                "vkdownloader.cli.run_batch",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ),
+            patch("vkdownloader.cli.Settings") as mock_settings_cls,
+        ):
+            mock_settings_cls.return_value = MagicMock(
+                max_concurrent_downloads=4,
+                download_dir=tmp_path,
+                log_file=None,
+                max_retries=3,
+            )
+
+            with caplog.at_level(logging.ERROR):
+                result = runner.invoke(
+                    app,
+                    ["batch", str(urls_file)],
+                    catch_exceptions=False,
+                )
+
+        assert result.exit_code == 1
+        assert error.user_message() in result.stderr
+        failed = [r for r in caplog.records if "batch_download_failed" in r.getMessage()]
+        assert len(failed) == 1
+        rendered = failed[0].getMessage()
+        assert str(urls_file) in rendered
+        assert "error_code" in rendered
+        assert "download_error" in rendered
+        assert "batch download failed" in rendered
 
 
 class TestQualityOptionValidation:

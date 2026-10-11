@@ -168,6 +168,25 @@ def _classify_download_result(result: Path | None) -> str:
     return ProgressStatus.FAILED.value
 
 
+def _extract_video_id(url: str) -> str:
+    """Extract the canonical video-id segment from a URL for structured logs.
+
+    Wraps the segment→pattern match that the ``ExtractionError`` arm of
+    ``_download_single`` performs inline, so every logging arm emits a
+    consistent ``video_id`` field without duplicating the pattern logic.
+
+    Args:
+        url: Video URL to extract an identifier from.
+
+    Returns:
+        The captured video-id group, or ``"unknown"`` when the segment
+        does not match ``VIDEO_ID_PATTERN``.
+    """
+    segment = _extract_video_segment(url)
+    match = VIDEO_ID_PATTERN.fullmatch(segment) if segment else None
+    return match.group(2) if match else "unknown"
+
+
 async def _download_single(
     url: str,
     quality: QualitySpec,
@@ -276,18 +295,29 @@ async def _download_single(
         raise
     except QualityNotAvailableError as e:
         _finish(ProgressStatus.FAILED)
+        logger.error(
+            "quality_not_available",
+            url=_strip_auth_params(url),
+            video_id=_extract_video_id(url),
+            correlation_id=get_correlation_id(),
+            **e.log_context(),
+        )
         return (url, "", e.status_label())
     except VideoNotFoundError as e:
         _finish(ProgressStatus.FAILED)
+        logger.error(
+            "video_not_found",
+            url=_strip_auth_params(url),
+            video_id=_extract_video_id(url),
+            correlation_id=get_correlation_id(),
+            **e.log_context(),
+        )
         return (url, "", e.status_label())
     except ExtractionError as e:
-        segment = _extract_video_segment(url)
-        match = VIDEO_ID_PATTERN.fullmatch(segment) if segment else None
-        extracted_video_id = match.group(2) if match else "unknown"
         logger.error(
             "extraction_error",
             url=_strip_auth_params(url),
-            video_id=extracted_video_id,
+            video_id=_extract_video_id(url),
             correlation_id=get_correlation_id(),
             **e.log_context(),
         )
@@ -295,6 +325,13 @@ async def _download_single(
         return (url, "", e.status_label())
     except VKDownloadError as e:
         _finish(ProgressStatus.FAILED)
+        logger.error(
+            "download_error",
+            url=_strip_auth_params(url),
+            video_id=_extract_video_id(url),
+            correlation_id=get_correlation_id(),
+            **e.log_context(),
+        )
         return (url, "", e.status_label())
     except Exception as e:
         # Log unexpected exceptions to surface bugs, then return as a status tuple.

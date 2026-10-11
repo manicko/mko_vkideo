@@ -33,6 +33,7 @@ from .exceptions import (
     QualityNotAvailableError,
     QualityParseError,
     VideoNotFoundError,
+    VKDownloadError,
 )
 from .models.enums import CookieSource, DownloadMethod, LogLevel
 from .models.quality import QualitySpec
@@ -483,6 +484,15 @@ def download(
         raise typer.Exit(code=3) from None
     except typer.Exit:
         raise
+    except VKDownloadError as e:
+        logger.error(
+            "download_failed",
+            url=sanitize_url_for_log(url),
+            **e.log_context(),
+            exc_info=True,
+        )
+        typer.echo(e.user_message(), err=True)
+        raise typer.Exit(code=1) from None
     except Exception:
         if _logging_configured:
             logger.exception("download_failed", url=sanitize_url_for_log(url))
@@ -606,6 +616,16 @@ def batch_download(
         raise typer.Exit(code=130) from None
     except typer.Exit:
         raise
+    except VKDownloadError as e:
+        logger.error(
+            "batch_download_failed",
+            url_file=str(urls_file),
+            url_count=len(valid_urls),
+            **e.log_context(),
+            exc_info=True,
+        )
+        typer.echo(e.user_message(), err=True)
+        raise typer.Exit(code=1) from None
     except Exception:
         if _logging_configured:
             logger.exception(
