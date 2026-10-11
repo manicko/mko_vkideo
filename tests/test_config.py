@@ -1233,6 +1233,121 @@ class TestExcInfoClearing:
         assert output.count("Traceback") == 1
 
 
+class TestConsoleRendererColors:
+    """B6: ConsoleRenderer receives colors explicitly derived from isatty().
+
+    When stderr is redirected (not a TTY) no ANSI escape sequences must
+    appear in the output. When stderr is a TTY, escape sequences must be present.
+    """
+
+    def test_colors_false_when_stderr_not_a_tty(self) -> None:
+        """B6: ConsoleRenderer has colors=False when stderr is not a terminal."""
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging()
+            # In a test process, sys.stderr is redirected, so isatty() is False.
+            assert sys.stderr.isatty() is False
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+    def test_no_escape_sequences_in_redirected_output(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B6: redirected stderr output contains zero ANSI escape sequences."""
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            sys,
+            "stderr",
+            type(
+                "_FakeStream",
+                (),
+                {
+                    "write": lambda self, data: buffer.write(data),
+                    "flush": lambda self: None,
+                    "isatty": lambda self: False,
+                    "encoding": "utf-8",
+                },
+            )(),
+        )
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging()
+            logger = structlog.get_logger("b6-test")
+            logger.info("plain message")
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        output = buffer.getvalue()
+        # ANSI escape sequence: ESC [ ...letter  — count via regex.
+        import re
+
+        escape_pattern = re.compile(r"\x1b\[[\d;]*m")
+        assert escape_pattern.findall(output) == [], (
+            f"expected zero ANSI escape sequences, found {escape_pattern.findall(output)!r}"
+        )
+
+    def test_escape_sequences_present_when_isatty_true(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B6: when stderr reports isatty=True, ANSI escapes appear in output."""
+        import re as re_module
+
+        class _TtyStream:
+            def __init__(self) -> None:
+                self.buffer: list[str] = []
+
+            def write(self, data: str) -> int:
+                self.buffer.append(data)
+                return len(data)
+
+            def flush(self) -> None:
+                pass
+
+            def isatty(self) -> bool:
+                return True
+
+            @property
+            def encoding(self) -> str:
+                return "utf-8"
+
+        stream = _TtyStream()
+        monkeypatch.setattr(sys, "stderr", stream)
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging()
+            logger = structlog.get_logger("b6-test")
+            logger.info("plain message")
+            for h in root.handlers:
+                h.flush()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        output = "".join(stream.buffer)
+        escape_pattern = re_module.compile(r"\x1b\[[\d;]*m")
+        assert escape_pattern.findall(output), "expected ANSI escape sequences when isatty=True"
+
+
 def _launch_dir(request: pytest.FixtureRequest) -> Path:
     """Return the directory the test session was launched from."""
     invocation_dir = request.config.invocation_params.dir

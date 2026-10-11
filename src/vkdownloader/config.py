@@ -648,7 +648,7 @@ def setup_logging(settings: Settings | None = None) -> None:
             redact_log_event,
             structlog.processors.JSONRenderer()
             if settings.log_file
-            else structlog.dev.ConsoleRenderer(),
+            else structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty()),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
