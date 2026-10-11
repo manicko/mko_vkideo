@@ -62,7 +62,7 @@ def _restore_previous_handler(sig: signal.Signals) -> None:
         return
     try:
         signal.signal(sig, previous)
-    except (OSError, ValueError, RuntimeError):
+    except OSError, ValueError, RuntimeError:
         # Ignore errors if the signal is not restorable from this thread or context
         pass
 
@@ -194,7 +194,7 @@ def cleanup_signal_handlers() -> None:
         for sig in list(_registered_signals):
             try:
                 loop.remove_signal_handler(sig)
-            except (NotImplementedError, KeyError, RuntimeError):
+            except NotImplementedError, KeyError, RuntimeError:
                 # Ignore errors if handler wasn't registered or loop closed
                 pass
 

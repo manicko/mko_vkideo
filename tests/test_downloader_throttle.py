@@ -783,6 +783,7 @@ class TestBackoffCoordinatorPause:
 
         # Mock wait_for so we don't actually sleep
         async def mock_wait_for(coro: Coroutine[Any, Any, Any], timeout: float | None) -> Any:
+            coro.close()  # Prevent unawaited-coroutine warning (GC-timing artifact)
             raise TimeoutError()
 
         with patch(

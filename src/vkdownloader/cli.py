@@ -454,7 +454,7 @@ def download(
             err=True,
         )
         raise typer.Exit(code=1) from None
-    except (KeyboardInterrupt, asyncio.CancelledError):
+    except KeyboardInterrupt, asyncio.CancelledError:
         typer.echo("\nDownload cancelled by user", err=True)
         raise typer.Exit(code=130) from None
     except QualityNotAvailableError as e:
@@ -611,7 +611,7 @@ def batch_download(
     except _PreambleFailure as exc:
         _render_preamble_failure(exc)
         raise typer.Exit(code=3) from None
-    except (KeyboardInterrupt, asyncio.CancelledError):
+    except KeyboardInterrupt, asyncio.CancelledError:
         typer.echo("\nDownload cancelled by user", err=True)
         raise typer.Exit(code=130) from None
     except typer.Exit:

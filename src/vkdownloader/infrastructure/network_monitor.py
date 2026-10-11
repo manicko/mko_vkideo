@@ -127,7 +127,7 @@ class NetworkMonitor:
             return _PlaylistType.UNCLASSIFIED
         try:
             text = body.decode("utf-8", errors="replace")
-        except (UnicodeDecodeError, AttributeError):
+        except UnicodeDecodeError, AttributeError:
             return _PlaylistType.UNCLASSIFIED
         if any(tag in text for tag in _MASTER_PLAYLIST_TAGS):
             return _PlaylistType.MASTER

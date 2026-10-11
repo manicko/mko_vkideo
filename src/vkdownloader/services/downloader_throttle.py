@@ -354,7 +354,7 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
         if seconds <= 0:
             return None
         return seconds
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         pass
 
     # Try parsing as HTTP date (IMF-fixdate, RFC 850, asctime)
@@ -367,7 +367,7 @@ def _parse_retry_after(response: aiohttp.ClientResponse) -> float | None:
             if delta > 0:
                 return delta
             return None  # Past date — ignored per spec (criterion 6)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
 
     return None

@@ -215,7 +215,7 @@ def _read_owner_pid(cookie_dir: Path) -> int | None:
     owner_file = cookie_dir / _OWNER_PID_FILENAME
     try:
         return int(owner_file.read_text().strip())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 
@@ -548,7 +548,7 @@ async def _await_ytdlp_reap_with_timeout(
     try:
         returncode = await asyncio.wait_for(process.wait(), timeout=timeout)
         return returncode
-    except (TimeoutError, asyncio.CancelledError):
+    except TimeoutError, asyncio.CancelledError:
         await cancel_subprocess(process)
         raise
 

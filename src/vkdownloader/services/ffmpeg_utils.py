@@ -315,7 +315,7 @@ async def _await_ffmpeg_with_timeout(
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         return stdout, stderr
-    except (TimeoutError, asyncio.CancelledError):
+    except TimeoutError, asyncio.CancelledError:
         await cancel_ffmpeg_process(process)
         raise
 

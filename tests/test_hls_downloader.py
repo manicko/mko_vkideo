@@ -4769,7 +4769,7 @@ class TestProcessBoundaryDescendant:
                 # 9 is SIGKILL on POSIX; on Windows os.kill(pid, 9) maps to
                 # TerminateProcess (signal.SIGKILL is absent at runtime there).
                 os.kill(grandchild_pid, 9)
-            except (ProcessLookupError, PermissionError, OSError):
+            except ProcessLookupError, PermissionError, OSError:
                 pass
 
     @pytest.mark.asyncio
