@@ -75,7 +75,6 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "docs/01-tools/vkdownloader-overview.md",
         "docs/11-guides/configuration.md",
         "docs/11-guides/vkdownloader-limitations.md",
-        "docs/99-reference/cli-reference-clean.md",
         "docs/99-reference/cli-reference.md",
         "pyproject.toml",
         "src/vkdownloader/__init__.py",

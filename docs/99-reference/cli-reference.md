@@ -67,7 +67,7 @@ vkdownloader download [OPTIONS] URL
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
-| `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+| `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
 The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
 
@@ -136,7 +136,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
-| `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+| `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
 The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
 

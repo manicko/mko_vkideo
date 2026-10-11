@@ -15,7 +15,7 @@ Mandatory reference for agents and guidance for humans when creating, updating, 
 
 ## Main Concepts
 
-- **Single source of truth:** Each fact lives in exactly one file.
+- **Single source of truth:** Each fact lives in exactly one file. (Scope: all documents under `docs/`. A byte-derivative copy that shares a frontmatter `id` must not be introduced without a back-reference to the canonical file; the canonical file is the one at the canonical path, and any fork is a defect.)
 - **Translate on touch:** All docs are English-only.
 - **No silent dropping:** Unclear content goes to `docs/.tmp/`.
 - **Frontmatter is contract:** Every domain doc starts with YAML frontmatter.

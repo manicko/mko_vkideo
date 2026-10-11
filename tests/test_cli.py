@@ -72,7 +72,7 @@ _PRE_PASS_EXTRACT_STREAMS_PATCH = patch(
 )
 
 _REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-reference"
-_REFERENCE_DOC_NAMES = ("cli-reference.md", "cli-reference-clean.md")
+_REFERENCE_DOC_NAMES = ("cli-reference.md",)
 _COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
 _EXIT_TABLE_DATA_ROW = re.compile(r"^\|\s*`")
@@ -2821,13 +2821,13 @@ class TestMaxRetriesValidation:
 
 
 class TestBatchSummaryDocumentation:
-    """B8 oracle: both reference docs describe the batch summary step with
-    identical wording and both mention the skipped-invalid-URL count.
+    """B9 oracle: cli-reference.md describes the batch summary step with
+    identical wording and mentions the skipped-invalid-URL count.
 
     B8 reconciled a divergence where ``cli-reference.md`` numbered the step 7 and
-    mentioned the skipped count while ``cli-reference-clean.md`` numbered it 6 and
-    omitted the clause; this oracle keeps that reconciliation a checked contract
-    rather than a one-off prose edit.
+    mentioned the skipped count while ``cli-reference-clean.md`` (now deleted
+    by B9) numbered it 6 and omitted the clause. B9 deleted the damaged
+    fork, so this oracle now checks the survivor alone.
     """
 
     def test_batch_summary_step_is_consistent_and_mentions_skipped_urls(self) -> None:
@@ -2836,12 +2836,9 @@ class TestBatchSummaryDocumentation:
             for doc_name in _REFERENCE_DOC_NAMES
         }
 
-        # Reconciled wording: the step text must be identical across both files,
-        # so the item number and the clause cannot drift apart again.
-        assert steps["cli-reference.md"] == steps["cli-reference-clean.md"], steps
-
-        # Both must mention the skipped-invalid-URL count, because that is what
-        # _print_batch_summary prints ("Skipped (invalid URLs): {skipped_count}").
+        # The survivor must mention the skipped-invalid-URL count, because
+        # that is what _print_batch_summary prints
+        # ("Skipped (invalid URLs): {skipped_count}").
         for doc_name, step in steps.items():
             assert "invalid URL" in step, (doc_name, step)
 
