@@ -23,6 +23,7 @@ from vkdownloader.exceptions import (
 from vkdownloader.models.enums import (
     TERMINAL_STATUSES,
     CookieSource,
+    LogLevel,
     ProgressStatus,
     StreamFormat,
 )
@@ -75,6 +76,7 @@ _COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
 _EXIT_TABLE_DATA_ROW = re.compile(r"^\|\s*`")
 _MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
+_LOG_LEVEL_OPTION_ROW = re.compile(r"^\|\s*`--log-level`\s*\|", re.MULTILINE)
 _BATCH_SUMMARY_STEP = re.compile(r"^\s*\d+\.\s+Prints summary of successful and failed downloads")
 
 
@@ -3071,7 +3073,7 @@ class TestCommandPreamble:
             patch("vkdownloader.cli._log_env_file_path") as mock_log_env,
         ):
             settings = cli._run_command_preamble(
-                cookie_source=None, ssl_verify=None, max_retries=None
+                cookie_source=None, ssl_verify=None, max_retries=None, log_level=None
             )
 
         mock_warn.assert_called_once()
@@ -3416,3 +3418,272 @@ class TestPreambleFailureRendering:
         assert download_result.exit_code == 3
         assert batch_result.exit_code == 3
         assert download_result.stderr == batch_result.stderr
+
+
+class TestLogLevelOption:
+    """Tests for the ``--log-level`` CLI option (P13-B2).
+
+    Covers: help-text identity across both commands, supplied value changing
+    verbosity, unsupplied value leaving env/.env reachable, absence of a
+    ``--log-file`` option in help, and the Live-1 hint-message structural fix.
+    """
+
+    # The help text must be byte-identical between download and batch (C4).
+    _LOG_LEVEL_HELP = (
+        "Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL "
+        "(effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)"
+    )
+
+    # ------------------------------------------------------------------
+    # C4: --log-level declared byte-identically in both commands
+    # ------------------------------------------------------------------
+
+    def test_log_level_appears_in_both_help_with_identical_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--log-level`` appears in BOTH ``download --help`` and ``batch --help``
+        with byte-identical help text (C4)."""
+        monkeypatch.setenv("COLUMNS", "500")
+
+        download_help = runner.invoke(app, ["download", "--help"])
+        batch_help = runner.invoke(app, ["batch", "--help"])
+
+        assert download_help.exit_code == 0
+        assert batch_help.exit_code == 0
+        assert "--log-level" in download_help.output
+        assert "--log-level" in batch_help.output
+
+        # The full help text must appear as a contiguous string in both.
+        assert self._LOG_LEVEL_HELP in download_help.output
+        assert self._LOG_LEVEL_HELP in batch_help.output
+
+        # The complete --log-level line must be byte-identical between commands.
+        download_line = next(
+            (ln for ln in download_help.output.splitlines() if "log-level" in ln), ""
+        )
+        batch_line = next((ln for ln in batch_help.output.splitlines() if "log-level" in ln), "")
+        assert download_line == batch_line, (
+            "download and batch --log-level lines differ:\n"
+            f"  download: {download_line!r}\n"
+            f"  batch:    {batch_line!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Supplied → changes verbosity
+    # ------------------------------------------------------------------
+
+    def test_log_level_supplied_changes_verbosity_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Supplying ``--log-level DEBUG`` changes the log level from the default INFO."""
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.cli._log_env_file_path"),
+            patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "video.mp4",
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url, "--log-level", "DEBUG"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_setup.call_args[0][0]
+        assert settings_arg.log_level == LogLevel.DEBUG
+
+    def test_log_level_supplied_changes_verbosity_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Supplying ``--log-level WARNING`` changes the log level in batch too."""
+        monkeypatch.chdir(tmp_path)
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.cli._log_env_file_path"),
+            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0),
+        ):
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--log-level", "WARNING"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_setup.call_args[0][0]
+        assert settings_arg.log_level == LogLevel.WARNING
+
+    # ------------------------------------------------------------------
+    # Unsupplied → env/.env reachable
+    # ------------------------------------------------------------------
+
+    def test_log_level_unsupplied_env_reachable_download(
+        self,
+        tmp_path: Path,
+        sample_video_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without ``--log-level``, ``VKDOWNLOADER_LOG_LEVEL`` env var is reachable."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("VKDOWNLOADER_LOG_LEVEL", "WARNING")
+
+        with (
+            patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.cli._log_env_file_path"),
+            patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "video.mp4",
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["download", sample_video_url],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_setup.call_args[0][0]
+        assert settings_arg.log_level == LogLevel.WARNING
+
+    def test_log_level_unsupplied_env_reachable_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """In batch, ``VKDOWNLOADER_LOG_LEVEL`` env var is reachable without ``--log-level``."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("VKDOWNLOADER_LOG_LEVEL", "ERROR")
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with (
+            patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
+            patch("vkdownloader.cli.setup_logging") as mock_setup,
+            patch("vkdownloader.cli._log_env_file_path"),
+            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0),
+        ):
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        settings_arg = mock_setup.call_args[0][0]
+        assert settings_arg.log_level == LogLevel.ERROR
+
+    # ------------------------------------------------------------------
+    # No --log-file option (D-1 / decision C: --log-level only)
+    # ------------------------------------------------------------------
+
+    def test_no_log_file_option_in_help(self) -> None:
+        """Neither ``download --help`` nor ``batch --help`` mentions ``--log-file``."""
+        download_help = runner.invoke(app, ["download", "--help"])
+        batch_help = runner.invoke(app, ["batch", "--help"])
+
+        assert download_help.exit_code == 0
+        assert batch_help.exit_code == 0
+
+        assert "--log-file" not in download_help.output
+        assert "--log-file" not in batch_help.output
+
+    # ------------------------------------------------------------------
+    # Live-1: hint message names no option that doesn't resolve to --help
+    # ------------------------------------------------------------------
+
+    def test_hint_message_option_tokens_resolve_against_help(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Live-1: every option-looking token in the hint resolves to a real --help option.
+
+        The log-configuration-failure hint must not name a CLI option that does
+        not exist in ``--help``. After the fix the hint contains no
+        ``--<option>`` tokens at all; if one is reintroduced, this test
+        catches it by checking every ``--word`` token in the rendered message
+        against the union of both commands' ``--help`` option tokens.
+        """
+        option_token_re = re.compile(r"--[a-z][\w-]*")
+
+        # Capture --help output for both commands (wide enough to avoid wrapping).
+        monkeypatch.setenv("COLUMNS", "500")
+        download_help = runner.invoke(app, ["download", "--help"])
+        batch_help = runner.invoke(app, ["batch", "--help"])
+        assert download_help.exit_code == 0
+        assert batch_help.exit_code == 0
+        help_options = set(option_token_re.findall(download_help.output))
+        help_options.update(option_token_re.findall(batch_help.output))
+
+        # Trigger a logging setup failure: VKDOWNLOADER_LOG_FILE points at a
+        # path whose parent is a regular file, so mkdir fails inside setup_logging.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        monkeypatch.setenv("VKDOWNLOADER_LOG_FILE", str(blocker / "app.log"))
+
+        urls_file = tmp_path / "urls.txt"
+        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
+
+        with patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]):
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 3
+        stderr = result.stderr
+        assert "Logging configuration failed" in stderr
+
+        # Every option-looking token in the hint must resolve to a real --help option.
+        hint_tokens = set(option_token_re.findall(stderr))
+        unresolved = hint_tokens - help_options
+        assert not unresolved, f"option tokens in hint not found in --help: {unresolved}"
+
+        # Live-1 by construction: the hint names no CLI option token, names
+        # VKDOWNLOADER_LOG_FILE and .env.
+        assert "--log-file" not in stderr
+        assert "VKDOWNLOADER_LOG_FILE" in stderr
+        assert ".env" in stderr
+
+    # ------------------------------------------------------------------
+    # Reference docs carry --log-level row + stated limitation
+    # ------------------------------------------------------------------
+
+    def test_log_level_documented_in_both_reference_docs(self) -> None:
+        """Both reference docs carry the ``--log-level`` option row and the
+        stated-limitation note that the log destination is environment-only."""
+        for doc_name in _REFERENCE_DOC_NAMES:
+            doc_path = _REFERENCE_DOCS / doc_name
+            content = doc_path.read_text(encoding="utf-8")
+
+            # The --log-level row must appear in BOTH command option tables.
+            matches = _LOG_LEVEL_OPTION_ROW.findall(content)
+            assert len(matches) == 2, (
+                f"{doc_name}: expected 2 --log-level rows (download + batch), got {len(matches)}"
+            )
+
+            # The stated-limitation note must be present.
+            assert "environment-configured only" in content, (
+                f"{doc_name}: missing 'environment-configured only' limitation note"
+            )
+            assert "no `--log-file` CLI option" in content, (
+                f"{doc_name}: missing 'no --log-file CLI option' limitation note"
+            )

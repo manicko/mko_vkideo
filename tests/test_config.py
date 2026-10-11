@@ -1202,6 +1202,7 @@ class TestConditionalOverridesConstruction:
                 cookie_source=None,
                 ssl_verify=None,
                 max_retries=floor - 1,
+                log_level=None,
             )
         assert "max_retries" in str(exc_info.value)
 
@@ -1211,6 +1212,7 @@ class TestConditionalOverridesConstruction:
                 cookie_source=None,
                 ssl_verify=None,
                 max_retries=ceiling + 1,
+                log_level=None,
             )
         assert "max_retries" in str(exc_info.value)
 
@@ -1219,6 +1221,7 @@ class TestConditionalOverridesConstruction:
             cookie_source=None,
             ssl_verify=None,
             max_retries=floor,
+            log_level=None,
         )
         assert settings.max_retries == floor
 
@@ -1227,6 +1230,7 @@ class TestConditionalOverridesConstruction:
             cookie_source=None,
             ssl_verify=None,
             max_retries=ceiling,
+            log_level=None,
         )
         assert settings.max_retries == ceiling
 

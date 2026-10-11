@@ -34,7 +34,7 @@ from .exceptions import (
     QualityParseError,
     VideoNotFoundError,
 )
-from .models.enums import CookieSource, DownloadMethod
+from .models.enums import CookieSource, DownloadMethod, LogLevel
 from .models.quality import QualitySpec
 from .services.batch_downloader import run_batch
 from .services.downloader import download_video
@@ -88,7 +88,7 @@ def _render_preamble_failure(exc: BaseException) -> None:
         message = (
             "Logging configuration failed; cannot continue. "
             f"{cause_str} "
-            "Check the --log-file option or VKDOWNLOADER_LOG_FILE environment variable."
+            "Check the VKDOWNLOADER_LOG_FILE environment variable or your .env file."
         )
     else:
         message = f"Command preamble failed; cannot continue. {cause_str}"
@@ -134,6 +134,7 @@ class _SettingsOverrides(TypedDict, total=False):
     cookie_source: CookieSource
     ssl_verify: bool
     max_retries: int
+    log_level: LogLevel
 
 
 def _build_settings(
@@ -141,6 +142,7 @@ def _build_settings(
     cookie_source: CookieSource | None,
     ssl_verify: bool | None,
     max_retries: int | None,
+    log_level: LogLevel | None,
 ) -> Settings:
     """Construct the one Settings object a command invocation runs on.
 
@@ -157,6 +159,8 @@ def _build_settings(
         overrides["ssl_verify"] = ssl_verify
     if max_retries is not None:
         overrides["max_retries"] = max_retries
+    if log_level is not None:
+        overrides["log_level"] = log_level
     return Settings(**overrides)
 
 
@@ -165,6 +169,7 @@ def _run_command_preamble(
     cookie_source: CookieSource | None,
     ssl_verify: bool | None,
     max_retries: int | None,
+    log_level: LogLevel | None,
 ) -> Settings:
     """Run the shared four-step command bootstrap and return the constructed Settings.
 
@@ -212,7 +217,10 @@ def _run_command_preamble(
                     err=True,
                 )
         settings = _build_settings(
-            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+            cookie_source=cookie_source,
+            ssl_verify=ssl_verify,
+            max_retries=max_retries,
+            log_level=log_level,
         )
     except OSError as exc:
         raise _PreambleFailure(
@@ -377,6 +385,11 @@ def download(
         "-r",
         help="Maximum retry attempts for failed downloads",
     ),
+    log_level: LogLevel | None = typer.Option(
+        None,
+        "--log-level",
+        help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -416,7 +429,10 @@ def download(
         # argument parsing, so this cannot fail; it produces the typed request.
         quality_spec = QualitySpec.parse(quality)
         settings = _run_command_preamble(
-            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+            cookie_source=cookie_source,
+            ssl_verify=ssl_verify,
+            max_retries=max_retries,
+            log_level=log_level,
         )
         result = asyncio.run(_download())
 
@@ -510,6 +526,11 @@ def batch_download(
         "-r",
         help="Maximum retry attempts for failed segment downloads",
     ),
+    log_level: LogLevel | None = typer.Option(
+        None,
+        "--log-level",
+        help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
@@ -524,7 +545,10 @@ def batch_download(
         # argument parsing, so this cannot fail; it produces the typed request.
         quality_spec = QualitySpec.parse(quality)
         settings = _run_command_preamble(
-            cookie_source=cookie_source, ssl_verify=ssl_verify, max_retries=max_retries
+            cookie_source=cookie_source,
+            ssl_verify=ssl_verify,
+            max_retries=max_retries,
+            log_level=log_level,
         )
 
         # Read the URL file narrowly so a read failure produces the precise

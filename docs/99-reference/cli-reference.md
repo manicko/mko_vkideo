@@ -62,11 +62,14 @@ vkdownloader download [OPTIONS] URL
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
+| `--log-level` | | str | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (env: `VKDOWNLOADER_LOG_LEVEL`) |
 | `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+
+The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
 
 **Behavior:**
 
@@ -128,11 +131,14 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
+| `--log-level` | | str | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (env: `VKDOWNLOADER_LOG_LEVEL`) |
 | `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `verify` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
+
+The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
 
 **Environment Variables:**
 
