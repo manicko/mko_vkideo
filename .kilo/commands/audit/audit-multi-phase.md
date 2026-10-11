@@ -42,9 +42,12 @@ From `{SELECTED_PHASES}` parse each remaining filename (`NN-audit-name.md`) to e
 Read `.ai/context/commands.md` for verification commands.
 Read `.ai/context/python-code-standards.md` for project code standards.
 List documentation structure from `docs/` folder.
+Run `git rev-parse HEAD` and capture its output as `{COMMIT_SHA}`.
+Run `git status --porcelain` and capture its output as `{WORKTREE_STATUS}`.
 
 Set variables:
-- `{BASE_CONTEXT}` = summary of the above files
+- `{BASE_CONTEXT}` = summary of the above files, **including** `{COMMIT_SHA}` and the
+  working-tree state (clean if `{WORKTREE_STATUS}` is empty, dirty otherwise)
 - `{REPORT_TEMPLATE_PATH}` = `.ai/audit/templates/audit-findings.md`
 
 *DO NOT* Read executor role or executor tasks and templates, just provide links
@@ -53,6 +56,21 @@ Set variables:
 Every file named in this step must exist. If one does not, name the missing file in the
 run's closing output and continue with what is present — a read that silently yields nothing
 is the defect this step exists to prevent.
+
+
+## Refuse Dirty Tree (hard stop)
+
+Run `git status --porcelain -- src tests docs pyproject.toml`.
+
+If the output is non-empty, **STOP** — refuse to start phases:
+
+> **AUDIT REFUSED: working tree is dirty.** The audit pipeline measures a
+> resolved commit, not uncommitted changes. Commit or stash before starting.
+>
+> Dirty paths:
+> {lines from `git status --porcelain -- src tests docs pyproject.toml`}
+
+No phase may start against a dirty tree.
 
 
 ## 2. Execute Phase Loop
@@ -176,3 +194,16 @@ report for each phase whose validator did not.
 - Max 2 retry per phase (3 total attempts maximum)
 - On second failure: escalate to user with structured failure report (phase number, error, missing outputs)
 </retry_rules>
+
+## Conflict Record — Plan 11 B3 Acceptance Criteria
+
+**Conflict:** CF-6 / Conflict-8 — Plan 11 B3's acceptance criteria.
+
+| Criterion | Status | Detail |
+|---|---|---|
+| AC1 | Stale | Baseline states 4 oracles; audit finds 3. |
+| AC4 | Unsatisfiable | Enumerates four oracles, one already retired by `d572d96`. |
+| AC6 | Unsatisfiable | Requires co-editing a clause alongside a deletion already in history. |
+
+This is **RECORD-ONLY**: Plan 11's block is **not amended** by B14. The correction
+belongs to Plan 11's owner.

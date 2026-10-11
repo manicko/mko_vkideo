@@ -12,6 +12,9 @@ alwaysApply: false
 **Template:** {phase-template-file}
 **Status:** {pending|in-progress|complete}
 **Validated:** {yes|no}
+**Commit measured:** {commit_sha}
+**Working-tree state:** {clean|dirty}
+**Dirty paths:** {none | path1, path2, ...}
 
 ---
 
