@@ -82,7 +82,7 @@ VK Video Downloader is an async Python module for downloading videos from vkvide
 | Function | Module | Responsibility |
 |----------|--------|----------------|
 | `validate_output_path()` | `utils/security.py` | Prevents path traversal attacks |
-| `sanitize_title()` | `utils/security.py` | Sanitizes titles for filesystem safety |
+| `sanitize_filename_component()` | `utils/security.py` | Sanitizes titles for filesystem safety |
 | `_strip_auth_params()` | `utils/url_sanitizer.py` | Strips tokens from URLs in logs |
 | `sanitize_url_for_log()` | `utils/url_sanitizer.py` | Public alias for `_strip_auth_params` (used by CLI entry layer) |
 
@@ -151,7 +151,7 @@ Both commands support:
 - Authentication token stripping from logged URLs
 - SSL verification enabled by default
 - Opt-in browser stealth configuration (`stealth_enabled`, off by default)
-- Title sanitization for filesystem safety via `sanitize_title()`
+- Title sanitization for filesystem safety via `sanitize_filename_component()`
 - **Secret-safe cookie passing**: VK session cookies are written to a temporary Netscape cookie file (requested at `0o600`, owner-only on POSIX only, with the same Windows caveat as above) inside a private per-run directory under the system temp directory, and passed to the yt-dlp subprocess as `--cookies <path>` in argv. Only the file **path** appears in process listings (`ps`, `/proc/<pid>/cmdline`, `htop`, `docker inspect`); the **contents** (signed CDN URLs and session tokens) do not. That exposure was tracked by phase 06's `SEC-006`, now closed: the artefact path is redacted out of child output before it reaches the console and out of every log record by the central redaction processor, so the process listing is the only place it is still readable — and it is moot for this single-user desktop deployment (D1). The cookie file and its directory are removed when the download ends, including on failure and cancellation; after a hard kill the residue is reclaimed by the next run's sweep, and that sweep's default-deny criterion and its deliberate retentions are in the [limitations guide](vkdownloader-limitations.md#cookie-artefact-lifecycle)
 - **Subprocess process boundary**: every subprocess spawn (yt-dlp and ffmpeg merge stages) starts a new process session/group (`start_new_session=True` on POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows). On POSIX this lets the termination ladder signal descendants via `os.killpg`; on Windows the group is console-signal routing only and descendants the child started for itself can survive — see the [limitations guide](vkdownloader-limitations.md#subprocess-process-boundary-trn-003) for the Windows residual and how to clean up manually.
 
@@ -280,13 +280,12 @@ The downloader module has been refactored into focused components per project ru
 
 ```
 services/
-├── downloader.py          (~350 lines)  - Orchestration (perform_download, download_video)
-├── ytdlp_downloader.py    (~722 lines)  - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
-├── segment_downloader.py  (~901 lines) - Segment download, playlist fetching, merging
-├── ffmpeg_utils.py        (~360 lines) - FFmpeg commands, process management
+├── downloader.py          - Orchestration (perform_download, download_video)
+├── ytdlp_downloader.py    - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
+├── segment_downloader.py  - Segment download, playlist fetching, merging
+├── ffmpeg_utils.py        - FFmpeg commands, availability probe, merge engine
 └── downloader_throttle.py - Rate limiting, progress management, backoff coordination
 ```
 
-The `downloader.py` module was split (SRV-001) into a focused orchestration layer and `ytdlp_downloader.py` (~722 lines). The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
+The `downloader.py` module was split (SRV-001) into a focused orchestration layer and `ytdlp_downloader.py`. The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.
 
-All modules export their public APIs through `downloader.py` for backward compatibility.
