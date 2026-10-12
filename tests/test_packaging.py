@@ -67,6 +67,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
     {
         ".env.example",
         ".python-version",
+        "LICENSE",
         "README.md",
         "docs/00-overview/doc-maintenance-rules.md",
         "docs/01-tools/api-reference.md",
@@ -90,6 +91,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "src/vkdownloader/models/enums.py",
         "src/vkdownloader/models/quality.py",
         "src/vkdownloader/models/video.py",
+        "src/vkdownloader/py.typed",
         "src/vkdownloader/services/__init__.py",
         "src/vkdownloader/services/batch_downloader.py",
         "src/vkdownloader/services/concurrency.py",
@@ -157,6 +159,7 @@ EXPECTED_WHEEL_ENTRIES = frozenset(
         "vkdownloader/models/enums.py",
         "vkdownloader/models/quality.py",
         "vkdownloader/models/video.py",
+        "vkdownloader/py.typed",
         "vkdownloader/services/__init__.py",
         "vkdownloader/services/batch_downloader.py",
         "vkdownloader/services/concurrency.py",
@@ -180,7 +183,9 @@ EXPECTED_WHEEL_ENTRIES = frozenset(
     }
 )
 
-EXPECTED_DIST_INFO_ENTRIES = frozenset({"METADATA", "RECORD", "WHEEL", "entry_points.txt"})
+EXPECTED_DIST_INFO_ENTRIES = frozenset(
+    {"METADATA", "RECORD", "WHEEL", "entry_points.txt", "licenses/LICENSE"}
+)
 
 # Trees and files that must never ship. Each was measured in the source
 # distribution before the manifest declared an allow-list.
