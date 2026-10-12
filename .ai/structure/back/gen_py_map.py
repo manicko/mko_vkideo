@@ -3,6 +3,7 @@
 Run:  uv run python .ai/structure/back/gen_py_map.py
 Output: writes .ai/structure/back/py_map.yaml with repository-relative paths.
 """
+
 import ast
 import os
 
@@ -28,12 +29,14 @@ for dirpath, dirnames, filenames in os.walk(ROOT):
                 classes.append(node.name)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append(node.name)
-        modules.append({
-            "path": f"src/vkdownloader/{rel_posix}",
-            "module": f"vkdownloader.{module_dotted}",
-            "classes": classes,
-            "functions": functions,
-        })
+        modules.append(
+            {
+                "path": f"src/vkdownloader/{rel_posix}",
+                "module": f"vkdownloader.{module_dotted}",
+                "classes": classes,
+                "functions": functions,
+            }
+        )
 
 lines = [
     "# Regeneration command: uv run python .ai/structure/back/gen_py_map.py",
