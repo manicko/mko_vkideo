@@ -804,6 +804,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "annotated-types" },
     { name = "coverage" },
     { name = "mypy" },
     { name = "pytest" },
@@ -826,6 +827,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "annotated-types", specifier = ">=0.7.0" },
     { name = "coverage", specifier = ">=7.16.2" },
     { name = "mypy", specifier = ">=2.0.0" },
     { name = "pytest", specifier = ">=8.4.0" },
