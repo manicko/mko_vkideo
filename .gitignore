@@ -54,13 +54,32 @@ urls.txt
 .kilo/node_modules/
 
 # Root debris from earlier tool runs. None of it is part of the project; every
-# entry below is currently tracked and is listed so the reason is recorded here
-# and so the files cannot come back once they are untracked.
-%PYFILE%                    # empty file left by an unexpanded %PYFILE% variable
-Continue                    # PowerShell pipeline fragment: `Continue` with no argument
-Continue=SilentlyContinue   # PowerShell pipeline fragment
-ErrorPreference=SilentlyContinue  # PowerShell pipeline fragment
-cli_ruff_output.txt         # captured ruff output
-temp_tests_output.txt       # captured test output
-stage_and_commit.bat        # one-off staging script
-Shows/                      # empty directory left behind by a stray shell command
+# entry below was left behind by a previous tool run and is listed here so the
+# reason is recorded and so the files cannot come back once they are removed
+# from the index. Only `stage_and_commit.bat` was tracked in git; it has been
+# removed from the index with `git rm --cached`. The remaining rules are
+# preventive and the patterns are kept here to document the debris and block
+# accidental re-introduction.
+# empty file left by an unexpanded %PYFILE% variable
+%PYFILE%
+
+# PowerShell pipeline fragment: `Continue` with no argument
+Continue
+
+# PowerShell pipeline fragment
+Continue=SilentlyContinue
+
+# PowerShell pipeline fragment
+ErrorPreference=SilentlyContinue
+
+# captured ruff output
+cli_ruff_output.txt
+
+# captured test output
+temp_tests_output.txt
+
+# one-off staging script; previously tracked, now removed from the index
+stage_and_commit.bat
+
+# empty directory left behind by a stray shell command
+Shows/
