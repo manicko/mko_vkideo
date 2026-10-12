@@ -42,12 +42,24 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install dependencies
         run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Format check
+        run: uv run ruff format --check src tests
+      - name: Type check
+        run: uv run mypy src
+      - name: Behavioural tests
+        run: uv run pytest tests/ -rs
+      - name: Coverage measurement
+        run: uv run coverage run -m pytest tests/
+      - name: Coverage report
+        run: uv run coverage report
       - name: Build artefacts and assert they match the manifest
         run: uv run pytest tests/test_packaging.py -v
