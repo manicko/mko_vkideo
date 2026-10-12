@@ -149,12 +149,10 @@ All domain errors inherit from `VKDownloadError` and carry a machine-readable `E
 | `InvalidVideoUrlError` | `INVALID_URL` | `invalid_url` | URL does not match VK video pattern. |
 | `VideoNotFoundError` | `VIDEO_NOT_FOUND` | `video_not_found` | Video not found or no streams returned. |
 | `QualityNotAvailableError` | `QUALITY_NOT_AVAILABLE` | `quality_not_available` / `no_streams` | Requested quality not in available streams. |
-| `QualityParseError` | `QUALITY_PARSE_ERROR` | `invalid_quality` | Quality string cannot be parsed. |
+| `QualityParseError` | `QUALITY_PARSE_ERROR` | `quality_parse_error` | Quality string cannot be parsed. |
 | `ExtractionError` | `EXTRACTION_ERROR` | `extraction_error` | Stream extraction failed (yt-dlp or browser). |
 | `DownloadError` | `DOWNLOAD_ERROR` | `download_error` | Download or path-safety failure. |
 | `DownloadError(ErrorCode.PATH_TRAVERSAL)` | `PATH_TRAVERSAL` | `download_error` | Output path contains path traversal. |
-
-The legacy `_map_exception_to_status()` helper and `_EXCEPTION_STATUS_HANDLERS` dict are retained for backward compatibility. New code paths use `status_label()` directly on exception instances.
 
 ### Logging
 
