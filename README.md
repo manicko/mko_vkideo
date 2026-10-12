@@ -121,9 +121,9 @@ asyncio.run(download_video())
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.14+
 - ffmpeg — required for the segment download path (HLS segment download and MP4 merge); not needed for single-stream yt-dlp downloads
-- Playwright browsers (auto-installed)
+- Playwright browsers (manual install — see Installation Guide)
 
 ## Architecture
 

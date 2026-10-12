@@ -17,9 +17,11 @@ This guide covers installation and setup of VK Video Downloader for development 
 
 ## Prerequisites
 
-- Python 3.12 or higher
+- Python 3.14 or higher
 - ffmpeg — required for the segment download path (HLS segment download and MP4 merge); not needed for single-stream yt-dlp downloads
 - Windows, macOS, or Linux operating system
+
+**Python 3.12 and 3.13 are no longer supported.** This package declares `requires-python = ">=3.14"`, so attempting to install it on 3.12 or 3.13 will fail with a resolution error. This is a deliberate narrowing, not a documentation oversight.
 
 ## System Requirements
 
