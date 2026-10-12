@@ -1,0 +1,624 @@
+# Implementation task for P14-B4
+# Block 4 in the phased execution order (external gates P12-B6/B7/B8 and P11-B2/B5 resolved)
+# Source plan: .ai/plans/14-code-quality-audit-fixes_fix.md §3.4 (B4 block), §6.6 (B4 task spec)
+# Execution spec: .ai/plans/23-plan-14-execution.md §3.2 (adapted to current state at HEAD 56a1854)
+# Decisions: D7 (default — new module retry_policies.py, downloader_throttle.py keeps its name)
+#            D8 (default — RETRYABLE_STATUS_CODES moves, api-reference.md corrected in same commit)
+#
+# Context: downloader_throttle.py (447 lines) holds 5 retry-policy symbols and 5
+# residue symbols (shutdown signalling + URLBackoffCoordinator + ProgressManager).
+# The retry symbols have 4 production importers + 1 test importer; the residue has
+# 7 importers (the 7-most-imported module in the tree after exceptions.py).
+# This is a spine-module narrowing, not an unused-module extraction (§2.5 correction 5).
+# 15 patch() strings bind the retry symbols: 3 break on a move, 12 are move-robust.
+# The retirement d572d96 introduced a facade defect in downloader.py (§2.5 correction 12):
+# the symbol-ownership comment lost 4 groups and _attempt_segment_resume is named but
+# unexported — a live mypy src tests error. B4 fixes it because B4 already edits
+# both the comment and __all__.
+
+id: p14-b4
+
+title: P14-B4 — split downloader_throttle.py at the retry-policy concern boundary (QLT-011)
+
+priority: high
+
+depends_on:
+  - p12-b6  # segment_downloader.py track — committed (e2c5ad0, 40404e2, 767bb47)
+  - p12-b7  # committed (4138e84)
+  - p12-b8  # committed
+  - p11-b2  # ytdlp_downloader.py track — committed
+  - p11-b5  # committed
+
+status: complete
+
+assignee: Implementer
+
+# ── Plan / Audit source ──
+source_reference: .ai/plans/14-code-quality-audit-fixes_fix.md
+source_section: "§3.4 B4 — split downloader_throttle.py at the concern that has no caller of its own"
+source_task_spec: ".ai/plans/23-plan-14-execution.md §3.2 B4"
+
+# ── Task description (returned to Tech Lead) ──
+description: >
+  Split downloader_throttle.py into two modules at the concern boundary between
+  HTTP retry policy and process-wide shutdown signalling / coordination.
+
+  The five retry-policy symbols move to a NEW module (D7 default: services/retry_policies.py;
+  downloader_throttle.py keeps its name). The five residue symbols —
+  get_shutdown_event, URLBackoffCoordinator, ProgressManager, _resource_key, _shutdown_event_ctx —
+  stay in downloader_throttle.py.
+
+  Then fix the facade defect the ffmpeg retirement introduced: services/downloader.py's
+  symbol-ownership comment lost four groups (segment_downloader, downloader_throttle, cookies,
+  signal_handlers) while __all__ still exports 10 names those modules own, and _attempt_segment_resume
+  is named in the comment but ABSENT from __all__ — a live mypy src tests error
+  ("Module does not explicitly export attribute _attempt_segment_resume").
+
+  Acceptance: all 12 importers (7 residue + 5 retry) import correctly; exactly 3 patch()
+  strings repoint to the new module; 12 move-robust patches unchanged; api-reference.md's
+  RETRYABLE_STATUS_CODES row corrected to the live 7-member set; packaging frozensets
+  updated in the same commit if a new file is created; _compute_backoff_delay arithmetic
+  byte-identical; git diff over ffmpeg_utils.py is empty.
+
+# ── Goals ──
+goals:
+  - The five retry symbols (RETRYABLE_STATUS_CODES, _retry_429_with_backoff, _parse_retry_after,
+    _compute_backoff_delay, _wait_with_shutdown) defined in exactly one module — the new retry module
+  - The five residue symbols (get_shutdown_event, URLBackoffCoordinator, ProgressManager,
+    _resource_key, _shutdown_event_ctx) stay in downloader_throttle.py
+  - All 7 residue importers (cli.py, batch_downloader.py, downloader.py, extractor.py,
+    segment_downloader.py, ytdlp_downloader.py, signal_handlers.py) unchanged and import successfully
+  - All 5 retry-policy importers (segment_downloader.py, ytdlp_downloader.py, downloader.py,
+    test_downloader_throttle.py, retry_policies.py itself) import correctly from the new module
+  - Exactly 3 patch() strings changed (the downloader_throttle.* namespace ones);
+    12 move-robust patch() strings unchanged
+  - services/downloader.py's symbol-ownership comment restored to name every module that
+    owns an exported name; _attempt_segment_resume present in __all__ OR absent from comment (must agree)
+  - api-reference.md's RETRYABLE_STATUS_CODES row states the live 7-member set {408, 425, 429, 500, 502, 503, 504}
+  - _compute_backoff_delay arithmetic byte-identical — max() floor semantics intact
+  - downloader_throttle.py module docstring updated to reflect post-split contents
+  - retry_policies.py gets a module docstring describing the retry logic
+  - git diff over services/ffmpeg_utils.py is empty
+  - Packaging frozensets updated in the same commit if a new file is created
+
+# ── Decisions (D7, D8) ──
+decisions:
+
+  - id: D7
+    question: >
+      How to split — new module for the retry policy, or rename the residue?
+    default: "New module named for retrying (services/retry_policies.py); downloader_throttle.py keeps its name."
+    criterion: >
+      The residue has 7 importers — among the most-imported names in the tree, and
+      cli.py (the entry layer) imports it. Renaming the residue converts a 5-importer
+      change into a 12-importer change and puts cli.py, signal_handlers.py,
+      batch_downloader.py and extractor.py in the blast radius for a name change that is
+      not the finding. Renaming only pays if the residue's honest name is worth 7 extra
+      import edits — a vocabulary judgement the project has not made.
+    resolution: >
+      Default chosen: new module services/retry_policies.py for the retry symbols;
+      downloader_throttle.py keeps its name and keeps the residue. This is the 5-to-7
+      cost asymmetry in action.
+
+  - id: D8
+    question: >
+      Does RETRYABLE_STATUS_CODES move with the retry policy, or stay behind?
+    default: "Moves with the retry policy; api-reference.md corrected in the same commit."
+    criterion: >
+      A constant travels with the code that uses it — it is used by _retry_429_with_backoff,
+      which moves. TestRetryableStatusCodes asserts 9 membership facts including 408 and
+      425 (both in the live set, both absent from the stale doc). A doc edit in the same
+      commit is not optional tidiness — it is the only way the documented value stays
+      true while the constant is being moved. "Fix the doc later" lets the drift recur.
+    resolution: >
+      Moves with the retry policy. api-reference.md's RETRYABLE_STATUS_CODES row is
+      corrected from the stale 5-member set to the live 7-member set in the same commit.
+
+# ── Preconditions ──
+preconditions:
+  - "P12-B6, P12-B7, P12-B8 have landed (segment_downloader.py track committed)"
+  - "P11-B2 and P11-B5 have landed (ytdlp_downloader.py track committed)"
+  - "External gate P11 RESOLVED per .ai/audit/problems/14-b4-unblock-report.md"
+  - "Working tree clean under src/ and tests/ before editing"
+  - "Re-derive the block's premise: measure the residue's importer count and the
+    retry surface's importer count before acting. Do NOT inherit the artifact's
+    'no caller' claim — §2.5 correction 5 refutes it."
+  - "Re-census the 15 patch() strings. Do NOT inherit 15 — count again."
+
+# ── Implementation sequence ──
+implementation_sequence:
+
+  - step: 1
+    action: research
+    target: ".ai/plans/23-plan-14-execution.md §3.2 step 1"
+    description: >
+      Re-derive the block's premise. Measure downloader_throttle.py's residue importers
+      (expect 7) and retry-symbol importers (expect 5 symbols across 4 production
+      importers + 1 test importer). Record the figures in the report.
+
+  - step: 2
+    action: research
+    target: ".ai/plans/23-plan-14-execution.md §3.2 step 2"
+    description: >
+      Re-census the 15 patch() strings. Categorise each as break-on-move (names
+      downloader_throttle's own namespace — expect 3) or move-robust (names an
+      importing module's re-exported attribute — expect 12). Record both counts.
+
+  - step: 3
+    action: decide
+    target: "D7 and D8"
+    description: >
+      Settle D7 (default: new module retry_policies.py; downloader_throttle.py keeps name)
+      and D8 (default: RETRYABLE_STATUS_CODES moves; api-reference.md corrected same commit).
+      Record with reasons per §4.5.
+
+  - step: 4
+    action: add_code
+    target: src/vkdownloader/services/retry_policies.py
+    description: >
+      Create the new module with the five moved symbols — RETRYABLE_STATUS_CODES,
+      _retry_429_with_backoff, _parse_retry_after, _compute_backoff_delay, _wait_with_shutdown —
+      byte-identical to their current definitions in downloader_throttle.py. Add a module
+      docstring describing the retry policy. No ffmpeg symbol moves.
+
+  - step: 5
+    action: modify_code
+    target: src/vkdownloader/services/segment_downloader.py
+    description: >
+      Update the import block to import all 5 retry symbols from .retry_policies instead
+      of .downloader_throttle. Verify all 5 call sites still resolve.
+
+  - step: 6
+    action: modify_code
+    target: src/vkdownloader/services/ytdlp_downloader.py
+    description: >
+      Update the import block to import _compute_backoff_delay and _wait_with_shutdown
+      from .retry_policies instead of .downloader_throttle. Verify both call sites resolve.
+
+  - step: 7
+    action: modify_code
+    target: src/vkdownloader/services/downloader.py
+    description: >
+      Update the re-export: import _retry_429_with_backoff from .retry_policies instead
+      of .downloader_throttle, keep it in __all__ (noqa: F401). Update the symbol-ownership
+      comment's downloader_throttle.py group → retry_policies.py for this symbol. Then fix
+      the facade defect: restore the 4 ownership groups (segment_downloader, downloader_throttle,
+      cookies, signal_handlers) that the retirement dropped, and make _attempt_segment_resume's
+      presence in the comment agree with its presence in __all__.
+
+  - step: 8
+    action: modify_tests
+    target: tests/test_downloader_throttle.py
+    description: >
+      Update the single from-import block naming the 5 moved symbols to import from
+      vkdownloader.services.retry_policies. Repoint exactly 3 patch() strings:
+      downloader_throttle._wait_with_shutdown → retry_policies._wait_with_shutdown.
+      Verify the other 12 patch() strings are untouched.
+
+  - step: 9
+    action: modify_tests
+    target: tests/test_hls_downloader.py
+    description: >
+      Repoint exactly 2 patch() strings: downloader_throttle._wait_with_shutdown →
+      retry_policies._wait_with_shutdown (at the two locations from the census).
+      Verify no other patch target in this file changes.
+
+  - step: 10
+    action: modify_docs
+    target: docs/01-tools/api-reference.md (L182)
+    description: >
+      Correct the RETRYABLE_STATUS_CODES row from the stale 5-member set
+      {429, 500, 502, 503, 504} to the live 7-member set {408, 425, 429, 500, 502, 503, 504}.
+      Also update any Location references to retry symbols from downloader_throttle to
+      retry_policies. Per D8, done in the same commit as the constant move.
+
+  - step: 11
+    action: modify_tests
+    target: tests/test_packaging.py
+    description: >
+      If a new file was created (D7 default: yes), edit EXPECTED_SDIST_ENTRIES
+      (69→70) and EXPECTED_WHEEL_ENTRIES (32→33) in the same commit, adding
+      src/vkdownloader/services/retry_policies.py and vkdownloader/services/retry_policies.py
+      respectively. Report the new counts.
+
+  - step: 12
+    action: verify
+    target: "_compute_backoff_delay arithmetic"
+    description: >
+      Confirm _compute_backoff_delay's max(backoff, retry_after) floor semantics are
+      byte-identical. Run TestComputeBackoffDelay::test_retry_after_overrides_delay and
+      test_retry_after_ignored_when_smaller — both must pass with no expectation change.
+
+  - step: 13
+    action: verify
+    target: "git diff over ffmpeg_utils.py"
+    description: >
+      Confirm git diff over src/vkdownloader/services/ffmpeg_utils.py is empty.
+      Per ruling A the module is permanent product code (group A subprocess infra,
+      check_ffmpeg_available, group C merge engine) and outside this block's split.
+
+  - step: 14
+    action: verify
+    target: "standing gate §7.1"
+    description: >
+      Run uv run pytest -q -rs (expect exactly 3 skipped, <=1 warning, no new failures;
+      specifically green: test_downloader_throttle.py, test_hls_downloader.py,
+      test_segment_downloader.py, test_ffmpeg_utils.py, test_cli.py), ruff check src tests,
+      ruff format --check src tests, mypy src — all clean.
+
+# ── Architectural constraints ──
+architectural_constraints:
+
+  byte_identical_move: >
+    The 5 retry symbols are MOVED, not rewritten. _compute_backoff_delay's max()
+    floor semantics and every other symbol's body must be byte-identical after the move.
+    G/P-1: test_retry_after_overrides_delay and test_retry_after_ignored_when_smaller
+    pin the floor by name and assertion — a "fix the comment to match the name" refactor
+    that replaces max() with the header value would turn a correct 429 wait into one
+    shorter than its own backoff schedule. Both tests must pass with no name or expectation
+    change.
+
+  three_patch_rewrites_only: >
+    Exactly 3 patch() strings change — the three naming downloader_throttle._wait_with_shutdown
+    (the old module's own namespace). The 12 naming importing-module re-exported attributes
+    (segment_downloader.* and ytdlp_downloader.*) must NOT be changed. Rewriting them would
+    be churn that also breaks tests patching those attributes for reasons unrelated to location.
+    A git diff on the test files must show no other patch-target rewrite.
+
+  no_ffmpeg_symbol_moves: >
+    No ffmpeg symbol is moved, deleted, or even referenced across the new module boundary.
+    Per ruling A, ffmpeg_utils.py is permanent product code with a fixed three-part shape
+    (group A subprocess infra, check_ffmpeg_available, group C merge engine). B4 moves
+    symbols between two modules and has no reason to touch a third. git diff over
+    ffmpeg_utils.py must be EMPTY.
+
+  progress_manager_not_dead: >
+    ProgressManager is documented-as-retained, exercised by 6 test instantiations, and
+    tests/test_cli.py asserts its ABSENCE from batch_downloader. G-9: it is never filed as
+    dead and never deleted. It stays in downloader_throttle.py.
+
+  facade_is_not_the_fix: >
+    services/downloader.py is a re-export facade. Per §2.4 item 5 and plan 12, editing a
+    re-export line is never the remedy — the owning module is. B4 moves the owner and
+    updates the facade as a CONSEQUENCE, not as a substitute. The facade's __all__ length
+    stays at 19 entries (all unique).
+
+  frozenset_in_same_commit: >
+    If a new file is created under src/ (D7 default: services/retry_policies.py),
+    tests/test_packaging.py's EXPECTED_SDIST_ENTRIES (69→70) and EXPECTED_WHEEL_ENTRIES
+    (32→33) must be edited in the SAME commit. §2.4 item 1: the packaging frozensets are
+    a single-writer shared anchor; a missed edit turns the suite red for a reason that
+    reads like "the fix broke packaging."
+
+  module_docstring_updated: >
+    downloader_throttle.py's module docstring (currently "Throttle utilities for VK Video
+    Downloader with retry logic for rate limiting.") describes both concerns. After the
+    split it must describe only the residue (shutdown signalling + coordination), or it
+    is deleted if it becomes inaccurate. retry_policies.py must have its own module
+    docstring describing the retry policy.
+
+  english_only: >
+    All comments, logs, docstrings, error messages, and documentation must be in clear
+    English. Per project rule 1.
+
+# ── Files ──
+files:
+
+  - path: src/vkdownloader/services/retry_policies.py
+    status: new_file
+    targets:
+      - type: module
+        name: retry_policies
+      - type: constant
+        name: RETRYABLE_STATUS_CODES
+      - type: function
+        name: _retry_429_with_backoff
+      - type: function
+        name: _parse_retry_after
+      - type: function
+        name: _compute_backoff_delay
+      - type: function
+        name: _wait_with_shutdown
+    changes:
+      - action: add_code
+        description: >
+          Create the new module. Paste the five retry symbols byte-identical to
+          their current definitions in downloader_throttle.py. Include the imports
+          they depend on (asyncio, logging, time, timedelta, Final, and any stdlib
+          types the type hints reference). Add a module docstring describing the
+          retry policy. Do NOT add ffmpeg_utils imports.
+
+  - path: src/vkdownloader/services/downloader_throttle.py
+    targets:
+      - type: module
+        name: downloader_throttle
+      - type: function
+        name: get_shutdown_event
+      - type: function
+        name: URLBackoffCoordinator
+      - type: function
+        name: ProgressManager
+      - type: function
+        name: _resource_key
+      - type: function
+        name: _shutdown_event_ctx
+    changes:
+      - action: remove_code
+        target: RETRYABLE_STATUS_CODES
+        description: Removed — moved to retry_policies.py (D8).
+      - action: remove_code
+        target: _retry_429_with_backoff
+        description: Removed — moved to retry_policies.py.
+      - action: remove_code
+        target: _parse_retry_after
+        description: Removed — moved to retry_policies.py.
+      - action: remove_code
+        target: _compute_backoff_delay
+        description: Removed — moved to retry_policies.py.
+      - action: remove_code
+        target: _wait_with_shutdown
+        description: Removed — moved to retry_policies.py.
+      - action: add_code
+        target: import_block
+        description: >
+          Add import of the 5 retry symbols from .retry_policies, OR re-export them
+          (if any residue importer still needs them). Check each of the 7 residue
+          importers — none of them import the retry symbols (they import get_shutdown_event
+          and/or URLBackoffCoordinator only), so NO re-export is needed. Delete the
+          retry symbols' local definitions only.
+      - action: modify_docstring
+        target: module_docstring
+        description: >
+          Remove "with retry logic for rate limiting" from the module docstring so
+          it describes only the residue (throttle/coordinator/shutdown). If the
+          only accurate description is "shutdown signalling and backoff coordination",
+          state that.
+
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: import_block
+    changes:
+      - action: modify_import
+        description: >
+          Repoint the import of all 5 retry symbols from .downloader_throttle to
+          .retry_policies. Verify all 5 call sites in this module still resolve
+          after the move.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: import_block
+    changes:
+      - action: modify_import
+        description: >
+          Repoint the import of _compute_backoff_delay and _wait_with_shutdown
+          from .downloader_throttle to .retry_policies. These are imported under
+          TYPE_CHECKING. Verify both call sites resolve.
+
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: import
+        name: _retry_429_with_backoff
+      - type: all_list
+      - type: comment
+        name: symbol_ownership_comment
+    changes:
+      - action: modify_import
+        description: >
+          Repoint the import of _retry_429_with_backoff from .downloader_throttle
+          to .retry_policies (keep the noqa: F401 re-export).
+      - action: update_comment
+        target: symbol_ownership_comment
+        description: >
+          Update the downloader_throttle.py ownership group to point at retry_policies.py
+          for _retry_429_with_backoff. Restore the 4 groups the retirement dropped:
+          segment_downloader.py, downloader_throttle.py, cookies.py, signal_handlers.py.
+          Reconcile _attempt_segment_resume: it is named in the comment as owned by
+          ytdlp_downloader.py but is ABSENT from __all__ — a live mypy src tests error
+          ("Module does not explicitly export attribute"). Either add it to __all__
+          (if ytdlp_downloader.py deliberately re-exports it) or remove it from the
+          comment — the two must agree.
+
+  - path: tests/test_downloader_throttle.py
+    targets:
+      - type: import_block
+      - type: class
+        name: TestRetry429WithBackoff
+      - type: class
+        name: TestParseRetryAfter
+      - type: class
+        name: TestComputeBackoffDelay
+      - type: class
+        name: TestWaitWithShutdown
+      - type: class
+        name: TestRetryableStatusCodes
+    changes:
+      - action: modify_import
+        description: >
+          Repoint the from-import block of the 5 retry symbols from
+          vkdownloader.services.downloader_throttle to vkdownloader.services.retry_policies.
+          Missing one is an ImportError at collection — fails the whole file.
+      - action: modify_patch_string
+        description: >
+          Repoint exactly 3 patch() strings: downloader_throttle._wait_with_shutdown →
+          retry_policies._wait_with_shutdown. These are the only 3 naming the old module's
+          own namespace. The other 12 patch() strings (naming segment_downloader.* and
+          ytdlp_downloader.* re-exported attributes) must be UNTOUCHED.
+
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: class
+        name: TestYtdlpRetryBackoff
+    changes:
+      - action: modify_patch_string
+        description: >
+          Repoint exactly 2 patch() strings: downloader_throttle._wait_with_shutdown →
+          retry_policies._wait_with_shutdown. These are the two naming the old module's
+          own namespace in this file. Verify no other patch target in this file changes.
+
+  - path: docs/01-tools/api-reference.md
+    targets:
+      - type: table_row
+        name: RETRYABLE_STATUS_CODES
+    changes:
+      - action: update_row
+        description: >
+          Correct the RETRYABLE_STATUS_CODES row (L182) from the stale 5-member set
+          {429, 500, 502, 503, 504} to the live 7-member set {408, 425, 429, 500, 502, 503, 504}.
+          Update other retry-symbol Location rows from vkdownloader.services.downloader_throttle
+          to vkdownloader.services.retry_policies. Per D8, same commit as the constant move.
+
+  - path: tests/test_packaging.py
+    targets:
+      - type: frozenset
+        name: EXPECTED_SDIST_ENTRIES
+      - type: frozenset
+        name: EXPECTED_WHEEL_ENTRIES
+    changes:
+      - action: modify_frozenset
+        description: >
+          If a new file was created (D7 default: services/retry_policies.py), add
+          src/vkdownloader/services/retry_policies.py to EXPECTED_SDIST_ENTRIES (69→70)
+          and vkdownloader/services/retry_policies.py to EXPECTED_WHEEL_ENTRIES (32→33).
+          In the SAME commit. If no new file, no edit.
+
+# ── Required tests ──
+required_tests:
+
+  test_retryable_status_codes_unchanged: >
+    TestRetryableStatusCodes (9 membership assertions including 408 and 425) passes
+    unchanged after RETRYABLE_STATUS_CODES moves. This is G-3 — the block's best oracle
+    because the constant's 7 members are asserted in 9 places while the doc's 5 are not.
+
+  backoff_floor_tests_unchanged: >
+    test_retry_after_overrides_delay and test_retry_after_ignored_when_smaller both pass
+    with NO change to name or expectation. P-1: these pin the max(backoff, retry_after)
+    floor by name and assertion. If either changes, the floor was broken.
+
+  test_downloader_throttle_collection: >
+    tests/test_downloader_throttle.py collects and passes after the from-import block
+    is repointed to vkdownloader.services.retry_policies. G-2: the single from-import
+    block naming 5 symbols must move all 5 at once or the whole file fails at collection.
+
+  no_other_patch_target_rewrites: >
+    git diff on tests/test_downloader_throttle.py and tests/test_hls_downloader.py shows
+    exactly 3 + 2 = 5 patch-target rewrites total (all downloader_throttle._wait_with_shutdown),
+    and NO other patch target changes. G-1: the 12 move-robust patches (segment_downloader.*
+    and ytdlp_downloader.*) must be untouched.
+
+  facade_defect_resolved: >
+    mypy src tests no longer reports "Module vkdownloader.services.downloader does not
+    explicitly export attribute _attempt_segment_resume". The ownership comment names
+    every module that owns a name in __all__, and _attempt_segment_resume's presence in
+    the comment agrees with its presence in __all__.
+
+  ffmpeg_diff_empty: >
+    git diff --stat over src/vkdownloader/services/ffmpeg_utils.py shows zero changes.
+    G-7b (prohibition I-7): the module is permanent product code per ruling A.
+
+  packaging_green: >
+    tests/test_packaging.py passes — EXPECTED_SDIST_ENTRIES and EXPECTED_WHEEL_ENTRIES
+    match a real uv build after the new file is added.
+
+  standing_gate: >
+    G1 (pytest -q -rs): 3 skipped, <=1 warning, no new failures. Specifically green:
+    test_downloader_throttle.py, test_hls_downloader.py, test_segment_downloader.py,
+    test_ffmpeg_utils.py, test_cli.py.
+    G2 (ruff check src tests): exit 0.
+    G3 (ruff format --check src tests): N files already formatted.
+    G4 (ruff check .): exit 0.
+    G5 (mypy src): clean, 31 source files.
+
+# ── Out of scope ──
+out_of_scope:
+  - "ProgressManager — not dead code, not moved, not renamed, not deleted (G-9, prohibition 4)"
+  - "_resource_key's origin-key normalisation semantics — it stays in downloader_throttle.py"
+  - "URLBackoffCoordinator's pause policy — it stays in downloader_throttle.py"
+  - "downloader_throttle.py's response-type classification used by segment_downloader (is_retryable_status) — not moving"
+  - "Every ffmpeg symbol, including the merge engine that still spawns ffmpeg (prohibition 2, I-7)"
+  - "Plan 12's ART-012 merge-multiplier change — declared breaking change to 3 exact assertions in test_ffmpeg_utils.py::TestMergeFreeSpaceProbe"
+  - "segment_downloader.py's concurrency work (phase 04, landed)"
+  - "docs/STRUCT.md — B6 owns that row, after B4 (per §4.2, position 8)"
+  - "Any B3-FU format gate work — narrow fixes only in TestYtDlpSubprocessShutdown per §2.2b"
+  - "Any other module's docstring or comment beyond the 3 named (downloader_throttle.py, retry_policies.py, downloader.py ownership)"
+
+# ── Honest judgement required ──
+honest_judgement:
+
+  split_boundary:
+    question: >
+      Is the boundary between retry policy and shutdown signalling the correct seam,
+      or should ProgressManager or _resource_key move with the retry symbols?
+    criterion: >
+      ProgressManager is documented-as-retained with 6 test instantiations and tests/test_cli.py
+      asserts its absence from batch_downloader — it is coordination infrastructure, not retry
+      policy. _resource_key normalises URLBackpressureCoordinator's key, not retry behavior.
+      The artifact's own premise is that these four concerns "share no state and no caller" —
+      but §2.5 correction 5 refutes "no caller" (7 importers). The seam is still correct:
+      retry policy is HTTP-status + backoff + Retry-After; everything else is shutdown/coordination.
+    resolution: >
+      The 5-symbol split is correct. ProgressManager and _resource_key stay with the
+      coordinator and shutdown event.
+
+  retry_policies_vs_policies_naming:
+    question: >
+      D7's default names the new module retry_policies.py. Is "policies" too abstract
+      for what is really backoff+retry logic, or is retry_policies the project's
+      established vocabulary?
+    criterion: >
+      The project uses dense decision-carrying comments with D-/SEC-/INT-/STR- tags. There
+      is no existing "policies" module to align with. retry_policies.py named for retrying
+      is the default. The alternative (renaming the residue) is rejected by the 7:5
+      importer cost asymmetry.
+    resolution: >
+      retry_policies.py per D7 default. The name states the concern clearly; no evidence
+      contradicts the project's vocabulary.
+
+# ── Deliverable ──
+deliverable:
+  shape: One commit
+  scope: >
+    src/vkdownloader/services/retry_policies.py (NEW — 5 symbols moved byte-identical),
+    src/vkdownloader/services/downloader_throttle.py (5 symbols removed; module docstring updated),
+    src/vkdownloader/services/segment_downloader.py (import repoint, 5 symbols),
+    src/vkdownloader/services/ytdlp_downloader.py (import repoint, 2 symbols under TYPE_CHECKING),
+    src/vkdownloader/services/downloader.py (import repoint + re-export + ownership comment + facade defect fix),
+    tests/test_downloader_throttle.py (from-import block + 3 patch string repoints),
+    tests/test_hls_downloader.py (2 patch string repoints),
+    docs/01-tools/api-reference.md (RETRYABLE_STATUS_CODES row 5→7 members + Location references),
+    tests/test_packaging.py (frozensets IF a new file is created)
+  commit_constraints:
+    - One commit only
+    - No ffmpeg symbol moved or referenced across the new boundary
+    - Exactly 3 + 2 = 5 patch-string rewrites; no others
+    - _compute_backoff_delay arithmetic byte-identical (max() floor intact)
+    - __all__ in downloader.py stays at 19 entries, all unique
+    - If new file created: frozensets updated in the SAME commit (69→70, 32→33)
+    - _attempt_segment_resume presence in comment agrees with presence in __all__
+    - git diff over ffmpeg_utils.py is empty
+    - "Commit subject: {type}(throttle): {description} — describes the behaviour, not a file:line"
+
+# ── Dependency metadata ──
+blocked_by:
+  - p12-b6   # segment_downloader.py track
+  - p12-b7   # committed 4138e84
+  - p12-b8   # committed
+  - p11-b2   # ytdlp_downloader.py track
+  - p11-b5   # committed
+blocks: B6 (STRUCT.md throttle row — waits for post-split description)
+risk_tier: High
+risk_notes: >
+  A module move of retry policy out of the 3rd-most-imported module in the tree
+  (downloader_throttle.py, imported by 7 of 31 modules). The 15 patch-string census
+  has moved 9→13→15 across the artifact lifecycle; 3 are break-on-move and 12 are
+  move-robust. The facade defect inherited from d572d96 (§2.5 correction 12) is a
+  live mypy src tests error that rides into this block — _attempt_segment_resume is
+  named in the ownership comment but absent from __all__. G-1 (patch-string blast
+  radius), G-2 (collection-time ImportError if one symbol is missed), G-3 (the
+  TestRetryableStatusCodes 9-assertion oracle), I-5 (runtime, not collection, failure
+  for the 7 residue importers), I-6 (the re-export-facade failure mode), I-7b (the
+  facade defect), C-3 (the ownership comment vs __all__ disagreement), P-1 (floor
+  semantics), P-3 (ProgressManager not treated as dead).
+agent_roster:
+  - Planner
+  - Implementor
+  - Validator

@@ -284,7 +284,8 @@ services/
 ├── ytdlp_downloader.py    - yt-dlp subprocess management, cookie-file lifecycle, retry-with-fallback
 ├── segment_downloader.py  - Segment download, playlist fetching, merging
 ├── ffmpeg_utils.py        - FFmpeg commands, availability probe, merge engine
-└── downloader_throttle.py - Rate limiting, progress management, backoff coordination
+├── retry_policies.py      - HTTP retry backoff for 429/5xx responses (AWS Full Jitter)
+└── downloader_throttle.py - Shutdown signalling, URLBackoffCoordinator, ProgressManager
 ```
 
 The `downloader.py` module was split into a focused orchestration layer and `ytdlp_downloader.py`. The `__all__` re-export facade in `downloader.py` preserves all public symbol paths for backward compatibility with 30+ test import sites.

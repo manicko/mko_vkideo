@@ -1551,10 +1551,11 @@ Stated plainly so the end-of-plan report does not overclaim:
 **Rulings folded in:** A (ffmpeg — segment merge and subprocess infrastructure are permanent), B (Python floor `>=3.14`, enforcement evidence here), C (exit-code contract, recorded), D (not published, recorded). §1.0, §1.6, §2.9.
 **Blocks:** 13 — `B1`–`B13`
 **Order:** `B13 → B1 → B2 → B3 → B12 → B5 → [external gates] → B4 → B6 → B7 → B10 → B9 → B8 → B11`
-**Findings closed:** 11 of 13 `QLT-` findings, plus `VAL-903`'s ordering constraint
+**Findings closed:** 12 of 13 `QLT-` findings (`QLT-011` closed by `B4`), plus `VAL-903`'s ordering constraint
 **Findings escalated, not closed:** `VAL-901` (CRITICAL), `VAL-902`, plus all 6 recorded warnings
-**Open decisions:** `D1`–`D16`, each with a default and a criterion — §4.5
-**Corrections to the artifact, the brief, and the rulings:** 16, all measured — §2.5
+**Open decisions:** `D1`–`D6`, `D9`–`D16`, each with a default and a criterion — §4.5. `D7` and `D8` resolved by `B4` (commit `723cb16`).
+**Corrections to the artifact, the brief, and the rulings:** 17, all measured — §2.5 (correction 17: B3-FU format-gate + warning-count fix, commit `e4889fe`)
+**B4 executed:** Landed in commit `723cb16` — retry-policy symbols moved to `services/retry_policies.py`; `api-reference.md` RETRYABLE_STATUS_CODES corrected in the same commit.
 **Yielded to another plan:** `docs/STRUCT.md`'s `ffmpeg_utils.py` row — §4.3, strengthened by ruling A
 **Resolved three-way disagreement:** `check_ffmpeg_available` stays; plan 12 was wrong — §4.4 row 24
 **Newly found and assigned:** the facade defect `d572d96` introduced in `services/downloader.py` — §2.5 correction 12, `B4`, §4.4 row 25

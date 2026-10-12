@@ -181,6 +181,8 @@ Rate limiting utilities with AWS Full Jitter exponential backoff for handling VK
 |------|-------|-------------|
 | `RETRYABLE_STATUS_CODES` | {408, 425, 429, 500, 502, 503, 504} | HTTP status codes that trigger retry with backoff |
 
+> **Note:** `RETRYABLE_STATUS_CODES` is defined in `vkdownloader.services.retry_policies`.
+
 #### `_retry_429_with_backoff(session: aiohttp.ClientSession, segment_url: str, headers: dict[str, str], segment_index: int, max_retries: int = 3) -> bytes | None`
 
 Location: `vkdownloader.services.retry_policies`
