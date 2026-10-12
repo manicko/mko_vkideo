@@ -130,4 +130,5 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "coverage>=7.16.2",
     "annotated-types>=0.7.0",
+    "pip-audit",
 ]
