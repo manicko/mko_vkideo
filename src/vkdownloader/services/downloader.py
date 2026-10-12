@@ -24,9 +24,6 @@ from ..utils.security import _resolve_output_file, sanitize_filename_component
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
 from .cookies import _cookies_to_netscape  # noqa: F401 — backward-compat re-export
-from .downloader_throttle import (
-    _retry_429_with_backoff,  # noqa: F401 — backward-compat re-export
-)
 from .ffmpeg_utils import (
     _MERGE_HINT,
     _build_ffmpeg_concat_command,
@@ -35,6 +32,9 @@ from .ffmpeg_utils import (
     check_ffmpeg_available,
 )
 from .quality import QualitySelector
+from .retry_policies import (
+    _retry_429_with_backoff,  # noqa: F401 — backward-compat re-export
+)
 from .segment_downloader import (
     _cleanup_segments,
     _download_segment,
@@ -46,7 +46,9 @@ from .segment_downloader import (
 )
 from .signal_handlers import setup_signal_handlers
 from .ytdlp_downloader import (
-    _attempt_segment_resume,  # noqa: F401 — backward-compat re-export
+    _attempt_segment_resume as _attempt_segment_resume,  # noqa: F401 — backward-compat re-export
+)
+from .ytdlp_downloader import (
     _await_first_and_cancel_others,
     _build_ytdlp_cli_command,  # noqa: F401 — backward-compat re-export
     _create_temp_cookie_file,  # noqa: F401 — backward-compat re-export

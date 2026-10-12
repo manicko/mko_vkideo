@@ -9,15 +9,17 @@ import pytest
 
 from vkdownloader.services.downloader_throttle import (
     _DEFAULT_BACKOFF_PAUSE_SECONDS,
-    RETRYABLE_STATUS_CODES,
     ProgressManager,
     URLBackoffCoordinator,
+    _resource_key,
+    build_client_timeout,
+)
+from vkdownloader.services.retry_policies import (
+    RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
     _parse_retry_after,
-    _resource_key,
     _retry_429_with_backoff,
     _wait_with_shutdown,
-    build_client_timeout,
 )
 
 
@@ -470,7 +472,7 @@ class TestRetry429WithBackoff:
             ),
             patch("vkdownloader.services.downloader_throttle.get_shutdown_event") as mock_se,
             patch(
-                "vkdownloader.services.downloader_throttle._wait_with_shutdown",
+                "vkdownloader.services.retry_policies._wait_with_shutdown",
                 new_callable=AsyncMock,
             ) as mock_wait,
         ):

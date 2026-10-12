@@ -179,9 +179,11 @@ Rate limiting utilities with AWS Full Jitter exponential backoff for handling VK
 **Constants:**
 | Name | Value | Description |
 |------|-------|-------------|
-| `RETRYABLE_STATUS_CODES` | {429, 500, 502, 503, 504} | HTTP status codes that trigger retry with backoff |
+| `RETRYABLE_STATUS_CODES` | {408, 425, 429, 500, 502, 503, 504} | HTTP status codes that trigger retry with backoff |
 
 #### `_retry_429_with_backoff(session: aiohttp.ClientSession, segment_url: str, headers: dict[str, str], segment_index: int, max_retries: int = 3) -> bytes | None`
+
+Location: `vkdownloader.services.retry_policies`
 
 Download segment with AWS Full Jitter backoff for 429/5xx errors.
 
@@ -209,7 +211,7 @@ Download segment with AWS Full Jitter backoff for 429/5xx errors.
 
 ### _parse_retry_after
 
-Location: `vkdownloader.services.downloader_throttle`
+Location: `vkdownloader.services.retry_policies`
 
 Parse Retry-After header from HTTP response for delay calculation.
 

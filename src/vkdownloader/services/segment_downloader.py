@@ -29,16 +29,18 @@ from .concurrency import SemaphoreLike
 from .downloader_throttle import (
     _TRANSPORT_FAILURE_STATUS,
     DEFAULT_DOWNLOAD_TIMEOUT,
-    RETRYABLE_STATUS_CODES,
-    _compute_backoff_delay,
-    _parse_retry_after,
-    _retry_429_with_backoff,
-    _wait_with_shutdown,
     build_client_timeout,
     get_shutdown_event,
 )
 from .ffmpeg_utils import _merge_segments_batched
 from .quality import QualitySelector
+from .retry_policies import (
+    RETRYABLE_STATUS_CODES,
+    _compute_backoff_delay,
+    _parse_retry_after,
+    _retry_429_with_backoff,
+    _wait_with_shutdown,
+)
 
 if TYPE_CHECKING:
     from ..models.dtos import HLSDownloadRequest

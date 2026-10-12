@@ -30,11 +30,7 @@ from ..models.dtos import HLSDownloadRequest
 from ..models.enums import CookieSource, QualityKind
 from ..models.quality import QualitySpec
 from ..services.cookies import _cookies_to_netscape
-from ..services.downloader_throttle import (
-    _compute_backoff_delay,
-    _wait_with_shutdown,
-    get_shutdown_event,
-)
+from ..services.downloader_throttle import get_shutdown_event
 from ..services.extractor import VKVideoExtractor
 from ..services.ffmpeg_utils import (
     _SPAWN_BOUNDARY_KWARGS,
@@ -42,6 +38,10 @@ from ..services.ffmpeg_utils import (
     iter_process_lines,
 )
 from ..services.quality import QualitySelector
+from ..services.retry_policies import (
+    _compute_backoff_delay,
+    _wait_with_shutdown,
+)
 from ..services.segment_downloader import download_hls_with_resume
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log

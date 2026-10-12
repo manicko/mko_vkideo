@@ -2638,9 +2638,7 @@ class TestDownloadSegmentRealExecution:
         mock_session = MagicMock()
         mock_session.get = mock_get
 
-        with patch(
-            "vkdownloader.services.downloader_throttle._wait_with_shutdown", return_value=False
-        ):
+        with patch("vkdownloader.services.retry_policies._wait_with_shutdown", return_value=False):
             result = await _download_segment_sequential(
                 mock_session,
                 segment_url,
@@ -2803,9 +2801,7 @@ class TestDownloadSegmentRealExecution:
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_response)
 
-        with patch(
-            "vkdownloader.services.downloader_throttle._wait_with_shutdown", return_value=False
-        ):
+        with patch("vkdownloader.services.retry_policies._wait_with_shutdown", return_value=False):
             result = await _download_segment(
                 mock_session,
                 segment_url,
