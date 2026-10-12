@@ -28,8 +28,6 @@ on:
       - "src/**"
       - "tests/**"
       - "docs/**"
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -75,5 +73,13 @@ jobs:
             echo "::warning::Advisory database or scanner error (exit $rc) — audit skipped"
           fi
           rm -f /tmp/vkr.txt
+      - name: Build distribution artefacts
+        run: uv build --out-dir dist/
+      - name: Upload distribution artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vkdownloader-distribution
+          path: dist/
+          retention-days: 1
       - name: Build artefacts and assert they match the manifest
         run: uv run pytest tests/test_packaging.py -v
