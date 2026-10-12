@@ -40,18 +40,25 @@ old_downloader_tmp.txt
 .temp/
 .ai/builders/
 
+# Root-level scratch from earlier audit/planning sessions (preventive; paths are
+# anchored so a nested tmp/ elsewhere is unaffected)
+/tmp/
+/tmp_old_sec.md
+/tmp_old_sec2.md
+
 # User data: the URL list a user passes to `vkdownloader batch`. It holds the
 # user's own video links, so it must stay out of version control and out of the
 # published artefacts.
 urls.txt
 
-# Agent worktrees: each holds a complete second copy of src/vkdownloader/.
+# Agent tooling artifacts. The build backend reads this root .gitignore, not
+# .kilo/.gitignore, so these paths are excluded here as well.
+# Keep this list specific - a broad .kilo/ rule would swallow .kilo/skills/
+# which is tracked and deliberate.
 .kilo/worktrees/
-
-# Vendored Node dependency tree installed for the agent tooling. Ignored here
-# as well as in .kilo/.gitignore because the build backend reads this file, not
-# the nested one, when it selects the files to package.
 .kilo/node_modules/
+.kilo/agent-manager.json
+.kilo/.gitignore
 
 # Root debris from earlier tool runs. None of it is part of the project; every
 # entry below was left behind by a previous tool run and is listed here so the
