@@ -6662,3 +6662,120 @@ class TestB7SessionCarrierProtection:
             f"wire Cookie header must carry the unwrapped canary value; "
             f"got Cookie={captured_cookies[0]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestCleanLegacyCookieFiles:
+    """SEC-002 residue (R3, §9 Q1 Option D): explicit operator-requested cleanup.
+
+    Removes legacy bare ``vk_cookies_*.cookies.txt`` files from the shared
+    temp root when the operator explicitly asks. The function is NOT automatic
+    and performs NO PID probe — the operator takes responsibility for knowing
+    no concurrent instance is using those files.
+    """
+
+    def test_removes_legacy_bare_cookie_files(self, tmp_path: Path) -> None:
+        """Bare vk_cookies_*.cookies.txt files are unlinked and counted."""
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_PREFIX,  # vk_cookies_
+            _COOKIE_ARTIFACT_SUFFIX,  # .cookies.txt
+            clean_legacy_cookie_files,
+        )
+
+        # Create legacy bare files
+        file1 = tmp_path / f"{_COOKIE_ARTIFACT_PREFIX}abc123{_COOKIE_ARTIFACT_SUFFIX}"
+        file2 = tmp_path / f"{_COOKIE_ARTIFACT_PREFIX}xyz789{_COOKIE_ARTIFACT_SUFFIX}"
+        file1.write_text("session data")
+        file2.write_text("session data")
+
+        # Create a non-artifact file that must survive
+        innocent = tmp_path / "other_file.txt"
+        innocent.write_text("keep me")
+
+        removed = clean_legacy_cookie_files(temp_dir=tmp_path)
+
+        assert removed == 2
+        assert not file1.exists()
+        assert not file2.exists()
+        assert innocent.exists()
+
+    def test_does_not_touch_cookie_dirs(self, tmp_path: Path) -> None:
+        """vk_cookies__dir* directories are never touched by the legacy cleanup."""
+        import tempfile as _tempfile
+
+        from vkdownloader.services.ytdlp_downloader import (
+            _ARTEFACT_DIR_SUFFIX,
+            _COOKIE_ARTIFACT_PREFIX,
+            clean_legacy_cookie_files,
+        )
+
+        dir_prefix = _COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX
+        cookie_dir = Path(_tempfile.mkdtemp(prefix=dir_prefix, dir=str(tmp_path)))
+
+        removed = clean_legacy_cookie_files(temp_dir=tmp_path)
+
+        assert removed == 0
+        assert cookie_dir.exists(), "directory must survive legacy cleanup untouched"
+
+        import shutil
+
+        shutil.rmtree(cookie_dir, ignore_errors=True)
+
+    def test_returns_zero_when_no_legacy_files(self, tmp_path: Path) -> None:
+        """An empty temp directory yields zero removals."""
+        from vkdownloader.services.ytdlp_downloader import clean_legacy_cookie_files
+
+        result = clean_legacy_cookie_files(temp_dir=tmp_path)
+        assert result == 0
+
+    def test_continues_on_unlink_error(self, tmp_path: Path) -> None:
+        """A file that cannot be unlinked is skipped without aborting the batch.
+
+        The operator-facing command must not crash on a single locked file; the
+        failure is logged as a warning and the count reflects only what was
+        successfully removed.
+        """
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_PREFIX,
+            _COOKIE_ARTIFACT_SUFFIX,
+            clean_legacy_cookie_files,
+        )
+
+        target = tmp_path / f"{_COOKIE_ARTIFACT_PREFIX}locked{_COOKIE_ARTIFACT_SUFFIX}"
+        target.write_text("locked")
+
+        with patch.object(Path, "unlink", side_effect=OSError("permission denied")):
+            removed = clean_legacy_cookie_files(temp_dir=tmp_path)
+
+        assert removed == 0, "locked file must not be counted as removed"
+        assert target.exists(), "locked file must survive the failed unlink"
+
+    def test_only_matches_legacy_prefix(self, tmp_path: Path) -> None:
+        """Files not starting with vk_cookies_ are never considered."""
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_PREFIX,
+            clean_legacy_cookie_files,
+        )
+
+        innocent = tmp_path / f"other_{_COOKIE_ARTIFACT_PREFIX}foo.cookies.txt"
+        innocent.write_text("not ours")
+
+        removed = clean_legacy_cookie_files(temp_dir=tmp_path)
+        assert removed == 0
+        assert innocent.exists()
+
+    def test_file_with_wrong_suffix_is_not_removed(self, tmp_path: Path) -> None:
+        """A vk_cookies_ file without the .cookies.txt suffix is skipped."""
+        from vkdownloader.services.ytdlp_downloader import (
+            _COOKIE_ARTIFACT_PREFIX,
+            clean_legacy_cookie_files,
+        )
+
+        wrong = tmp_path / f"{_COOKIE_ARTIFACT_PREFIX}abc123.txt"
+        wrong.write_text("wrong suffix")
+
+        removed = clean_legacy_cookie_files(temp_dir=tmp_path)
+        assert removed == 0
+        assert wrong.exists()

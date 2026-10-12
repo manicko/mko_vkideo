@@ -365,6 +365,69 @@ def _sweep_stale_cookie_dirs() -> None:
             _COOKIE_ARTIFACT_DIRS.discard(cookie_dir)
 
 
+def clean_legacy_cookie_files(temp_dir: Path | None = None) -> int:
+    """Remove legacy bare cookie files from the shared temp root (R3 / SEC-002 residue).
+
+    Earlier versions wrote the borrowed session cookie straight into the system
+    temp folder as ``vk_cookies_<tail>.cookies.txt`` and never reclaimed it.
+    The per-run fix (R1) only recognises the private ``vk_cookies__dir*`` folders
+    it created, so those legacy bare files are invisible to the automatic sweep
+    and accumulate indefinitely.
+
+    This function reclaims them **only when the operator explicitly asks** (§9 Q1,
+    Option D): it scans ``temp_dir`` (the system temp root by default) for files
+    matching the legacy cookie-file shape and unlinks each one. It is **not**
+    automatic and runs only when invoked by the ``clean-cookies`` CLI command.
+
+    **Liveness.** A bare legacy file carries no ``owner.pid`` record, so the
+    product cannot distinguish "abandoned" from "in use right now". Option D
+    places that decision with the operator: the operator invokes the command
+    knowing no concurrent instance is using those files. The function therefore
+    performs no PID probe — it would be a false safety that could silently
+    preserve residue while implying protection.
+
+    **Scope.** Only bare *files* matching ``vk_cookies_<tail>.cookies.txt`` are
+    considered. The ``vk_cookies__dir*`` directories owned by a live run are never
+    touched here — they have their own lifecycle and the sweep in
+    :func:`_sweep_stale_cookie_dirs` reclaims their dead-PID residue.
+
+    Args:
+        temp_dir: Directory to scan. Defaults to ``tempfile.gettempdir()``.
+
+    Returns:
+        The number of files removed.
+    """
+    if temp_dir is None:
+        temp_dir = Path(tempfile.gettempdir())
+
+    removed = 0
+    try:
+        for entry in temp_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if not entry.name.startswith(_COOKIE_ARTIFACT_PREFIX):
+                continue
+            if not entry.name.endswith(_COOKIE_ARTIFACT_SUFFIX):
+                continue
+            # Skip directory-shaped artefacts: those are ``vk_cookies__dir*``
+            # and belong to the automatic sweep, not this explicit command.
+            if entry.name.startswith(_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX):
+                continue
+            try:
+                entry.unlink()
+                removed += 1
+                logger.info("legacy_cookie_file_removed", path=str(entry))
+            except OSError as exc:
+                logger.warning(
+                    "legacy_cookie_file_cleanup_failed",
+                    path=str(entry),
+                    error=str(exc),
+                )
+    except OSError:
+        return removed
+    return removed
+
+
 def _create_cookie_artifact_dir() -> Path:
     """Create a private per-run directory for cookie artefacts.
 

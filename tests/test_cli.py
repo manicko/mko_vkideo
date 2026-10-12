@@ -73,7 +73,7 @@ _PRE_PASS_EXTRACT_STREAMS_PATCH = patch(
 
 _REFERENCE_DOCS = Path(__file__).resolve().parent.parent / "docs" / "99-reference"
 _REFERENCE_DOC_NAMES = ("cli-reference.md",)
-_COMMAND_HEADING = re.compile(r"^### \d+\. `([a-z]+)`")
+_COMMAND_HEADING = re.compile(r"^### \d+\. `([\w-]+)`")
 _EXIT_CODE_ROW = re.compile(r"^\|\s*`(\d+)`\s*\|")
 _EXIT_TABLE_DATA_ROW = re.compile(r"^\|\s*`")
 _MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
@@ -3876,17 +3876,18 @@ class TestLogLevelOption:
     # Reference docs carry --log-level row + stated limitation
     # ------------------------------------------------------------------
 
-    def test_log_level_documented_in_both_reference_docs(self) -> None:
-        """Both reference docs carry the ``--log-level`` option row and the
+    def test_log_level_documented_in_all_reference_docs(self) -> None:
+        """All command reference docs carry the ``--log-level`` option row and the
         stated-limitation note that the log destination is environment-only."""
         for doc_name in _REFERENCE_DOC_NAMES:
             doc_path = _REFERENCE_DOCS / doc_name
             content = doc_path.read_text(encoding="utf-8")
 
-            # The --log-level row must appear in BOTH command option tables.
+            # The --log-level row must appear in every command option table.
             matches = _LOG_LEVEL_OPTION_ROW.findall(content)
-            assert len(matches) == 2, (
-                f"{doc_name}: expected 2 --log-level rows (download + batch), got {len(matches)}"
+            assert len(matches) == 3, (
+                f"{doc_name}: expected 3 --log-level rows "
+                f"(download + batch + clean-cookies), got {len(matches)}"
             )
 
             # The stated-limitation note must be present.
@@ -3896,3 +3897,132 @@ class TestLogLevelOption:
             assert "no `--log-file` CLI option" in content, (
                 f"{doc_name}: missing 'no --log-file CLI option' limitation note"
             )
+
+
+class TestCleanCookiesCommand:
+    """R3 (§9 Q1 Option D): the ``clean-cookies`` CLI command.
+
+    Verifies invocation, preamble delegation, output messaging, exit codes
+    (0 on success, 1 on cleanup error, 3 on preamble failure), and that
+    ``clean_legacy_cookie_files`` is patched so the test never touches the
+    real system temp root.
+    """
+
+    # ------------------------------------------------------------------
+    # Help / registration
+    # ------------------------------------------------------------------
+
+    def test_clean_cookies_help(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``clean-cookies --help`` renders and names the legacy cleanup."""
+        monkeypatch.setenv("COLUMNS", "500")
+        result = runner.invoke(app, ["clean-cookies", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "clean-cookies" in result.output
+        assert "legacy" in result.output.lower() or "cookie" in result.output.lower()
+
+    def test_clean_cookies_appears_in_main_help(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``vkdownloader --help`` lists ``clean-cookies`` among commands."""
+        monkeypatch.setenv("COLUMNS", "500")
+        result = runner.invoke(app, ["--help"])
+
+        assert result.exit_code == 0
+        assert "clean-cookies" in result.output
+
+    # ------------------------------------------------------------------
+    # Success path
+    # ------------------------------------------------------------------
+
+    def test_invokes_preamble_once_and_cleans(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``clean-cookies`` delegates to the preamble once and calls cleanup
+        once, echoing the reported count."""
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.clean_legacy_cookie_files") as mock_clean,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+            mock_clean.return_value = 5
+
+            result = runner.invoke(app, ["clean-cookies"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_preamble.call_count == 1
+        mock_clean.assert_called_once()
+        assert "Removed 5 legacy cookie file" in result.output
+
+    def test_no_files_found_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When zero files are removed, the operator sees a reassuring message."""
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.clean_legacy_cookie_files", return_value=0) as mock_clean,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+
+            result = runner.invoke(app, ["clean-cookies"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_clean.call_count == 1
+        assert "No legacy cookie files found." in result.output
+        assert "Removed" not in result.output
+
+    # ------------------------------------------------------------------
+    # Error paths
+    # ------------------------------------------------------------------
+
+    def test_preamble_failure_exits_3(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A preamble failure (e.g. logging setup error) exits 3, not 1."""
+        monkeypatch.chdir(tmp_path)
+        # Force a logging-setup failure via VKDOWNLOADER_LOG_FILE inside a file.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        monkeypatch.setenv("VKDOWNLOADER_LOG_FILE", str(blocker / "app.log"))
+
+        result = runner.invoke(app, ["clean-cookies"], catch_exceptions=False)
+
+        assert result.exit_code == 3
+        assert "Logging configuration failed" in result.stderr
+
+    def test_cleanup_error_exits_1(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An exception from ``clean_legacy_cookie_files`` exits 1."""
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch(
+                "vkdownloader.cli.clean_legacy_cookie_files",
+                side_effect=RuntimeError("disk on fire"),
+            ),
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+
+            result = runner.invoke(app, ["clean-cookies"], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert "An error occurred while cleaning cookie files" in result.stderr
+
+    def test_log_level_option_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``clean-cookies`` accepts ``--log-level`` like the other commands."""
+        monkeypatch.setenv("COLUMNS", "500")
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+            patch("vkdownloader.cli.clean_legacy_cookie_files", return_value=0),
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+
+            result = runner.invoke(
+                app, ["clean-cookies", "--log-level", "DEBUG"], catch_exceptions=False
+            )
+
+        assert result.exit_code == 0
+        # The preamble received log_level=DEBUG (LogLevel.DEBUG).
+        call_kwargs = mock_preamble.call_args.kwargs
+        assert call_kwargs["log_level"] == LogLevel.DEBUG

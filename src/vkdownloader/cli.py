@@ -42,6 +42,7 @@ from .services.downloader import download_video
 from .services.downloader_throttle import get_shutdown_event
 from .services.extractor import is_valid_video_url
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
+from .services.ytdlp_downloader import clean_legacy_cookie_files
 from .utils.url_sanitizer import sanitize_url_for_log
 
 logger = get_logger(__name__)
@@ -640,6 +641,50 @@ def batch_download(
 def cli() -> None:
     """Entry point for CLI execution."""
     app()
+
+
+@app.command("clean-cookies")
+def clean_cookies(
+    log_level: LogLevel | None = typer.Option(
+        None,
+        "--log-level",
+        help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)",
+    ),
+) -> None:
+    """Remove legacy bare cookie files from the shared temp directory.
+
+    Earlier versions of the product wrote borrowed session cookies directly
+    into the OS temp root as ``vk_cookies_*.cookies.txt`` and never reclaimed
+    them. This command removes those legacy files when run explicitly.
+
+    The cleanup is **not automatic**: it runs only when you invoke this command,
+    so you retain full control over when it happens. Do not run it while another
+    instance of the product is actively downloading with cookie harvesting enabled.
+
+    See the operator guide for details.
+    """
+    try:
+        _run_command_preamble(
+            cookie_source=None,
+            ssl_verify=None,
+            max_retries=None,
+            log_level=log_level,
+        )
+    except _PreambleFailure as exc:
+        _render_preamble_failure(exc)
+        raise typer.Exit(code=3) from None
+
+    try:
+        removed = clean_legacy_cookie_files()
+        if removed:
+            typer.echo(f"Removed {removed} legacy cookie file(s) from the temp directory.")
+        else:
+            typer.echo("No legacy cookie files found.")
+    except Exception:
+        if _logging_configured:
+            logger.exception("clean_cookies_failed")
+        typer.echo("An error occurred while cleaning cookie files", err=True)
+        raise typer.Exit(code=1) from None
 
 
 if __name__ == "__main__":

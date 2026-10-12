@@ -203,6 +203,50 @@ vkdownloader batch urls.txt --quality 1080 -o "./downloads"
 
 ---
 
+### 3. `clean-cookies` — Remove legacy cookie files
+
+Remove legacy bare cookie files (`vk_cookies_*.cookies.txt`) left behind by earlier versions of the product in the OS temp directory.
+
+Earlier versions wrote borrowed session cookies directly into the shared temp folder as `vk_cookies_*.cookies.txt` and never reclaimed them. These files are invisible to the product's automatic per-run cleanup (which only manages private `vk_cookies__dir*` folders), so they accumulate indefinitely. This command reclaims them **only when you explicitly invoke it**.
+
+**Source:** `vkdownloader/cli.py` → `clean_cookies()`
+
+```bash
+vkdownloader clean-cookies [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--log-level` | | str | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (env: `VKDOWNLOADER_LOG_LEVEL`) |
+
+The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
+
+**Safety note:** This command deletes files from the shared OS temp directory. Because legacy bare files carry no ownership record, the product cannot distinguish "abandoned" from "in use by a concurrent download." **Do not run this command while another instance of vkdownloader is actively downloading with cookie harvesting enabled.** The operator is the decision point for reclamation (§9 Q1, Option D).
+
+**Exit codes:**
+
+| Code | Condition |
+|------|-----------|
+| `0` | Success — the command ran and completed (files removed or none found). |
+| `1` | Clean error — an exception occurred while cleaning cookie files. |
+| `3` | Configuration error — a preamble failure (malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |
+| `130` | Interrupted by user (Ctrl+C). |
+| `2`, `4`-`129`, `131`+ | Not produced by this command; reserved for future use. |
+
+**Examples:**
+
+```bash
+# Remove all legacy bare cookie files from the temp directory
+vkdownloader clean-cookies
+
+# Inspect what will happen first (dry run: just count)
+ls "$(python -c 'import tempfile; print(tempfile.gettempdir())')" | grep '^vk_cookies_'
+```
+
+---
+
 ## Download Method Options
 
 Available method values for `--method` option:
