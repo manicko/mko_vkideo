@@ -4,9 +4,10 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from os import PathLike
 from pathlib import Path
-from typing import Any
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -349,7 +350,7 @@ class TestCookiesToNetscape:
             {"name": "vk", "value": "abc\r\nSet-Cookie: evil=hack", "domain": ".vkvideo.ru"},
             {"name": "session", "value": "xyz", "domain": ".vkvideo.ru"},
         ]
-        result = _cookies_to_netscape(cookies)
+        result = _cookies_to_netscape(cookies)  # type: ignore[arg-type]
 
         # Should have exactly 2 cookie lines, no injected line
         lines = result.split("\n")
@@ -458,8 +459,8 @@ class TestCreateTempCookieFile:
 
             _original_mkstemp = _tempfile.mkstemp
 
-            def _ro_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
-                fd, path = _original_mkstemp(*args, **kwargs)
+            def _ro_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
+                fd, path = _original_mkstemp(*args, **kwargs)  # type: ignore[call-overload]
                 os.chmod(path, 0o444)
                 return fd, path
 
@@ -1221,12 +1222,12 @@ class TestBoundedYtDlpTranscript:
 
     @staticmethod
     def _recording_logger(
-        errors: list[tuple[str, dict[str, Any]]],
+        errors: list[tuple[str, dict[str, object]]],
     ) -> MagicMock:
         """Return a MagicMock logger whose ``error`` calls are recorded."""
         logger_mock = MagicMock()
 
-        def capture_error(event: str, **kwargs: Any) -> None:
+        def capture_error(event: str, **kwargs: object) -> None:
             errors.append((event, kwargs))
 
         logger_mock.error.side_effect = capture_error
@@ -1247,7 +1248,7 @@ class TestBoundedYtDlpTranscript:
         overlong_line = b"x" * 4090 + b"\n"
         readline_lines = [overlong_line] * 200
 
-        error_records: list[tuple[str, dict[str, Any]]] = []
+        error_records: list[tuple[str, dict[str, object]]] = []
         mock_logger = self._recording_logger(error_records)
 
         mock_process = AsyncMock()
@@ -1270,7 +1271,7 @@ class TestBoundedYtDlpTranscript:
         assert result is None
         failed = [r for r in error_records if r[0] == "download_failed"]
         assert len(failed) == 1
-        error_msg = failed[0][1]["error"]
+        error_msg = cast(str, failed[0][1]["error"])
         assert len(error_msg) <= _MAX_CHILD_OUTPUT_BYTES
 
     @pytest.mark.asyncio
@@ -1317,7 +1318,7 @@ class TestBoundedYtDlpTranscript:
             prefix = f"LINE_{i:04d}:".encode()
             readline_lines.append(prefix + b"." * (1024 - len(prefix) - 1) + b"\n")
 
-        error_records: list[tuple[str, dict[str, Any]]] = []
+        error_records: list[tuple[str, dict[str, object]]] = []
         mock_logger = self._recording_logger(error_records)
 
         mock_process = AsyncMock()
@@ -1345,7 +1346,7 @@ class TestBoundedYtDlpTranscript:
 
         failed = [r for r in error_records if r[0] == "download_failed"]
         assert len(failed) == 1
-        error_msg = failed[0][1]["error"]
+        error_msg = cast(str, failed[0][1]["error"])
         assert "LINE_1000" in error_msg
         assert "LINE_0001" not in error_msg
 
@@ -1363,7 +1364,7 @@ class TestBoundedYtDlpTranscript:
             b"third line and final\n",
         ]
 
-        error_records: list[tuple[str, dict[str, Any]]] = []
+        error_records: list[tuple[str, dict[str, object]]] = []
         mock_logger = self._recording_logger(error_records)
 
         mock_process = AsyncMock()
@@ -1386,7 +1387,7 @@ class TestBoundedYtDlpTranscript:
         assert result is None
         failed = [r for r in error_records if r[0] == "download_failed"]
         assert len(failed) == 1
-        error_msg = failed[0][1]["error"]
+        error_msg = cast(str, failed[0][1]["error"])
         assert "first line" in error_msg
         assert "second line" in error_msg
         assert "third line and final" in error_msg
@@ -1408,7 +1409,7 @@ class TestBoundedYtDlpTranscript:
         overlong_line = b"x" * 4090 + b"\n"
         readline_lines = [overlong_line] * 200
 
-        error_records: list[tuple[str, dict[str, Any]]] = []
+        error_records: list[tuple[str, dict[str, object]]] = []
         mock_logger = self._recording_logger(error_records)
 
         mock_process = AsyncMock()
@@ -1434,7 +1435,7 @@ class TestBoundedYtDlpTranscript:
         assert captured.err == ""
         failed = [r for r in error_records if r[0] == "download_failed"]
         assert len(failed) == 1
-        error_msg = failed[0][1]["error"]
+        error_msg = cast(str, failed[0][1]["error"])
         assert len(error_msg) <= _MAX_CHILD_OUTPUT_BYTES
 
 
@@ -1456,11 +1457,11 @@ class TestParallelSegmentsDownload:
         download_count = 0
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             nonlocal download_count
             download_count += 1
@@ -1507,11 +1508,11 @@ class TestParallelSegmentsDownload:
         download_count = 0
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             nonlocal download_count
             download_count += 1
@@ -1564,11 +1565,11 @@ class TestParallelSegmentsDownload:
         download_count = 0
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             nonlocal download_count
             download_count += 1
@@ -1605,7 +1606,7 @@ class TestParallelSegmentsDownload:
                                 output_file=output_path,
                             ),
                             settings=test_settings,
-                            video_semaphore=video_semaphore,
+                            video_semaphore=video_semaphore,  # type: ignore[arg-type]
                         ),
                         timeout=10,
                     )
@@ -1639,7 +1640,7 @@ class TestBrowserCookiesIntegration:
         # Track the command that was passed to create_subprocess_exec
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
@@ -1713,11 +1714,11 @@ class TestSequentialDownloadMode:
         wait_for_calls: list[float] = []
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             # Simulate successful download
             output_path.write_bytes(b"segment data")
@@ -1725,7 +1726,7 @@ class TestSequentialDownloadMode:
 
         # Mock wait_for to capture delay and raise TimeoutError (simulating normal completion)
         # We must await the passed coroutine (shutdown_event.wait()) to avoid unawaited warning
-        async def mock_wait_for(coro: Any, timeout: float) -> None:
+        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float) -> None:
             """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
             wait_for_calls.append(timeout)
             # Await the coroutine to avoid RuntimeWarning
@@ -1794,11 +1795,11 @@ class TestSequentialDownloadMode:
         backoff_calls: list[tuple[str, int]] = []
 
         async def mock_backoff(
-            session: Any,
+            session: object,
             segment_url: str,
             headers: dict[str, str],
             segment_index: int,
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bytes:
             backoff_calls.append((segment_url, segment_index))
             return b"segment content"
@@ -1815,7 +1816,7 @@ class TestSequentialDownloadMode:
                 side_effect=mock_backoff,
             ):
 
-                async def mock_wait_for(coro: Any, timeout: float) -> None:
+                async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float) -> None:
                     # Simulate timeout - no shutdown
                     # Await the coroutine to avoid RuntimeWarning about unawaited coroutine
                     try:
@@ -1870,18 +1871,18 @@ class TestSequentialDownloadMode:
         wait_for_calls: list[float] = []
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             output_path.write_bytes(b"segment data")
             return True
 
         # Mock wait_for to capture delay and raise TimeoutError (simulating normal completion)
         # We must await the passed coroutine (shutdown_event.wait()) to avoid unawaited warning
-        async def mock_wait_for(coro: Any, timeout: float) -> None:
+        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float) -> None:
             """Mock wait_for to capture delay values. Raises TimeoutError to simulate completion."""
             wait_for_calls.append(timeout)
             # Await the coroutine to avoid RuntimeWarning
@@ -1945,9 +1946,9 @@ class TestDownloadMethodLogging:
         from vkdownloader.services.downloader import perform_download
 
         # Capture log messages
-        log_messages: list[dict[str, Any]] = []
+        log_messages: list[dict[str, object]] = []
 
-        def capture_log(msg: str, **kwargs: Any) -> None:
+        def capture_log(msg: str, **kwargs: object) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
 
         output_file = tmp_path / "video_720p.mp4"
@@ -1982,7 +1983,7 @@ class TestDownloadMethodLogging:
 
         assert result == output_file
         # Check that starting_download was logged with method
-        starting_logs = [m for m in log_messages if m["kwargs"].get("method") == "yt-dlp"]
+        starting_logs = [m for m in log_messages if cast(dict[str, object], m["kwargs"]).get("method") == "yt-dlp"]
         assert len(starting_logs) >= 1, "Should log starting_download with method=yt-dlp"
 
     @pytest.mark.asyncio
@@ -1990,9 +1991,9 @@ class TestDownloadMethodLogging:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that download_hls_with_resume logs the segment download method."""
-        log_messages: list[dict[str, Any]] = []
+        log_messages: list[dict[str, object]] = []
 
-        def capture_log(msg: str, **kwargs: Any) -> None:
+        def capture_log(msg: str, **kwargs: object) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
 
         output_file = tmp_path / "video.mp4"
@@ -2009,11 +2010,11 @@ class TestDownloadMethodLogging:
             ) as mock_download:
                 # Create a side effect that writes segment files (needed for on-disk count)
                 def download_side_effect(
-                    session: Any,
+                    session: object,
                     segment_url: str,
                     output_path: Path,
                     headers: dict[str, str],
-                    **kwargs: Any,
+                    **kwargs: object,
                 ) -> bool:
                     output_path.write_bytes(b"segment data")
                     return True
@@ -2051,7 +2052,7 @@ class TestDownloadMethodLogging:
 
         assert result == output_file
         # Check that starting_segment_download was logged
-        starting_logs = [m for m in log_messages if "starting_segment_download" in m["message"]]
+        starting_logs = [m for m in log_messages if "starting_segment_download" in cast(str, m["message"])]
         assert len(starting_logs) >= 1, "Should log starting_segment_download"
 
     @pytest.mark.asyncio
@@ -2061,9 +2062,9 @@ class TestDownloadMethodLogging:
         """Test that _download_with_ytdlp logs starting_ytdlp_download."""
         from vkdownloader.services.downloader import _download_with_ytdlp
 
-        log_messages: list[dict[str, Any]] = []
+        log_messages: list[dict[str, object]] = []
 
-        def capture_log(msg: str, **kwargs: Any) -> None:
+        def capture_log(msg: str, **kwargs: object) -> None:
             log_messages.append({"message": msg, "kwargs": kwargs})
 
         output_file = tmp_path / "video.mp4"
@@ -2088,10 +2089,10 @@ class TestDownloadMethodLogging:
                 )
 
         # Check that starting_ytdlp_download was logged
-        starting_logs = [m for m in log_messages if "starting_ytdlp_download" in m["message"]]
+        starting_logs = [m for m in log_messages if "starting_ytdlp_download" in cast(str, m["message"])]
         assert len(starting_logs) >= 1, "Should log starting_ytdlp_download"
         # Verify quality is in the log
-        assert starting_logs[0]["kwargs"].get("quality") == "720"
+        assert cast(dict[str, object], starting_logs[0]["kwargs"]).get("quality") == "720"
         assert result == output_file
 
     @pytest.mark.asyncio
@@ -2112,7 +2113,7 @@ class TestDownloadMethodLogging:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: Any, **kwargs: Any) -> Any:
+        async def mock_create_subprocess_exec(*cmd: object, **kwargs: object) -> object:
             captured_cmd.extend(str(c) for c in cmd)
             return mock_process
 
@@ -2341,7 +2342,7 @@ class TestIterProcessLines:
         async for line in gen:
             consumed.append(line)
             break  # consumer stops mid-stream
-        await gen.aclose()  # finalize the generator so the finally runs
+        await cast(AsyncGenerator[bytes], gen).aclose()  # finalize the generator so the finally runs
 
         assert consumed == [b"line1\n"]
         assert callback_calls == []
@@ -2362,7 +2363,7 @@ class TestIterProcessLines:
         gen = iter_process_lines(stream, shutdown_event, on_shutdown=on_shutdown)
         first = await gen.__anext__()
         assert first == b"line one\n"
-        await gen.aclose()
+        await cast(AsyncGenerator[bytes], gen).aclose()
 
         assert callback_calls == []
         leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
@@ -2556,6 +2557,7 @@ class TestIterProcessLines:
             stderr=asyncio.subprocess.STDOUT,
         )
         shutdown_event = asyncio.Event()
+        assert process.stdout is not None
         try:
             with pytest.raises(DownloadError):
                 async for _ in iter_process_lines(process.stdout, shutdown_event):
@@ -2861,11 +2863,11 @@ class TestManifestBaseAddressFeedsSegments:
         captured_urls: list[str] = []
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             output_path: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             captured_urls.append(segment_url)
             output_path.write_bytes(b"segment data")
@@ -3023,7 +3025,7 @@ class TestSetupSignalHandlers:
 
         from vkdownloader.services import signal_handlers
 
-        captured: dict[int, Any] = {}
+        captured: dict[int, object] = {}
 
         class _FakeLoop:
             def add_signal_handler(self, sig: object, handler: object) -> None:
@@ -3041,7 +3043,7 @@ class TestSetupSignalHandlers:
 
             shutdown_event = get_shutdown_event()
             shutdown_event.clear()
-            handler = captured[signal_module.SIGINT]
+            handler = cast(Callable[[int, object], object], captured[signal_module.SIGINT])
             handler(signal_module.SIGINT, None)
             assert shutdown_event.is_set()
 
@@ -3196,7 +3198,7 @@ class TestSetupSignalHandlers:
             signal_module.signal(signal_module.SIGINT, _displaced)
             signal_handlers.setup_signal_handlers()
 
-            installed = signal_module.getsignal(signal_module.SIGINT)
+            installed = cast(Callable[[int, object], object], signal_module.getsignal(signal_module.SIGINT))
             if installed is _displaced:
                 pytest.fail("setup_signal_handlers did not displace the stand-in handler")
 
@@ -3244,7 +3246,7 @@ class TestSetupSignalHandlers:
 
         token = _shutdown_event_ctx.set(asyncio.Event())
 
-        registered: dict[int, Any] = {}
+        registered: dict[int, object] = {}
 
         class _SucceedingLoop:
             def add_signal_handler(self, sig: int, callback: object) -> None:
@@ -3262,7 +3264,7 @@ class TestSetupSignalHandlers:
                     assert mock_signal.call_count == 0
 
             # The loop-path callback takes no arguments.
-            callback = registered[signal_module.SIGINT]
+            callback = cast(Callable[[], None], registered[signal_module.SIGINT])
 
             with patch.object(signal_handlers, "logger") as mock_logger:
                 # Fire 1: requests a stop, one record.
@@ -3658,9 +3660,9 @@ class TestYtDlpSubprocessShutdown:
         mock_process.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
         mock_process.wait = AsyncMock(return_value=0)
 
-        debug_events: list[tuple[str, dict[str, Any]]] = []
+        debug_events: list[tuple[str, dict[str, object]]] = []
 
-        def capture_debug(event: str, **kwargs: Any) -> None:
+        def capture_debug(event: str, **kwargs: object) -> None:
             debug_events.append((event, kwargs))
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -3715,9 +3717,9 @@ class TestYtDlpSubprocessShutdown:
         mock_process.stdout.readline = AsyncMock(side_effect=[non_progress_line, b""])
         mock_process.wait = AsyncMock(return_value=0)
 
-        debug_events: list[tuple[str, dict[str, Any]]] = []
+        debug_events: list[tuple[str, dict[str, object]]] = []
 
-        def capture_debug(event: str, **kwargs: Any) -> None:
+        def capture_debug(event: str, **kwargs: object) -> None:
             debug_events.append((event, kwargs))
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -3749,7 +3751,7 @@ class TestYtDlpSubprocessShutdown:
         )
         _, kwargs = suppressed[0]
         assert "line" in kwargs
-        assert "[download] Destination" in kwargs["line"]
+        assert "[download] Destination" in cast(str, kwargs["line"])
 
     @pytest.mark.asyncio
     async def test_reader_line_overrun_recorded_when_no_progress_callback(
@@ -3909,11 +3911,11 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
-        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
             raise PermissionError("simulated indexer lock")
 
         with patch(
@@ -3974,11 +3976,11 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
-        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
             raise PermissionError("simulated indexer lock")
 
         with patch(
@@ -4036,11 +4038,11 @@ class TestYtDlpSubprocessShutdown:
 
             captured_cmd: list[str] = []
 
-            async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+            async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
                 captured_cmd.extend(cmd)
                 return mock_process
 
-            def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
                 raise PermissionError("simulated indexer lock")
 
             with patch(
@@ -4098,13 +4100,13 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
-        debug_events: list[tuple[str, dict[str, Any]]] = []
+        debug_events: list[tuple[str, dict[str, object]]] = []
 
-        def capture_debug(event: str, **kwargs: Any) -> None:
+        def capture_debug(event: str, **kwargs: object) -> None:
             debug_events.append((event, kwargs))
 
         with patch(
@@ -4170,11 +4172,11 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
-        def recording_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        def recording_unlink(self: Path, *args: object, **kwargs: object) -> None:
             ordering.append("cookie_unlink")
             raise PermissionError("simulated indexer lock")
 
@@ -4234,7 +4236,7 @@ class TestYtDlpSubprocessShutdown:
 
             cancel_call_count = 0
 
-            def mock_cancel_side_effect(proc: Any) -> bool:
+            def mock_cancel_side_effect(proc: MagicMock) -> bool:
                 nonlocal cancel_call_count
                 cancel_call_count += 1
                 if cancel_call_count == 1:
@@ -4466,7 +4468,7 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
@@ -4529,11 +4531,11 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
-        def raising_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
             raise PermissionError("simulated indexer lock")
 
         import shutil
@@ -4607,7 +4609,7 @@ class TestYtDlpSubprocessShutdown:
 
         captured_cmd: list[str] = []
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             return mock_process
 
@@ -4656,7 +4658,7 @@ class TestYtDlpSubprocessShutdown:
         captured_cmd: list[str] = []
         cookie_file_path: Path | None = None
 
-        async def mock_create_subprocess_exec(*cmd: str, **kwargs: Any) -> AsyncMock:
+        async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
             # Simulate yt-dlp consuming the cookie file so it vanishes before
             # the finally block runs.
@@ -5437,7 +5439,7 @@ class TestYtDlpRetryBackoff:
 
         call_count = {"n": 0}
 
-        async def mock_download_ytdlp(*args: Any, **kwargs: Any) -> Path | None:
+        async def mock_download_ytdlp(*args: object, **kwargs: object) -> Path | None:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return None  # First attempt fails
@@ -5492,7 +5494,7 @@ class TestYtDlpRetryBackoff:
 
         call_count = {"n": 0}
 
-        async def mock_download_ytdlp(*args: Any, **kwargs: Any) -> Path | None:
+        async def mock_download_ytdlp(*args: object, **kwargs: object) -> Path | None:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return None

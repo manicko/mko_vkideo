@@ -8,8 +8,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, cast
 
 import pytest
 import structlog
@@ -88,7 +89,7 @@ def test_settings_accepts_valid_fields() -> None:
         ssl_verify=False,
         max_concurrent_downloads=8,
         max_concurrent_segments=12,
-        log_level="DEBUG",
+        log_level="DEBUG",  # type: ignore[arg-type]
     )
 
     assert settings.user_agent == "CustomAgent/1.0"
@@ -105,7 +106,7 @@ def test_settings_accepts_valid_fields() -> None:
 def test_settings_rejects_unknown_keys() -> None:
     """Test Settings rejects unknown configuration keys with ValidationError."""
     with pytest.raises(ValidationError) as exc_info:
-        Settings(unknown_key="test_value")
+        Settings(unknown_key="test_value")  # type: ignore[call-arg]
 
     error = exc_info.value
     assert "Extra inputs are not permitted" in str(error)
@@ -117,7 +118,7 @@ def test_settings_rejects_multiple_unknown_keys() -> None:
     with pytest.raises(ValidationError) as exc_info:
         Settings(
             max_retries=3,
-            invalid_field="value",
+            invalid_field="value",  # type: ignore[call-arg]
             another_invalid="another",
         )
 
@@ -141,11 +142,11 @@ def test_cookie_source_validation() -> None:
     settings = Settings(cookie_source=CookieSource.NONE)
     assert settings.cookie_source == CookieSource.NONE
 
-    # Test string input for valid modes
-    settings = Settings(cookie_source="browser")
+        # Test string input for valid modes
+    settings = Settings(cookie_source="browser")  # type: ignore[arg-type]
     assert settings.cookie_source == CookieSource.BROWSER
 
-    settings = Settings(cookie_source="none")
+    settings = Settings(cookie_source="none")  # type: ignore[arg-type]
     assert settings.cookie_source == CookieSource.NONE
 
 
@@ -231,16 +232,16 @@ def test_log_level_validation() -> None:
     """Test log_level rejects invalid values and accepts valid ones."""
     # Valid log levels - case insensitive
     for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        s = Settings(log_level=level)
+        s = Settings(log_level=level)  # type: ignore[arg-type]
         assert s.log_level == LogLevel[level]
 
     # Lowercase input also works
-    s = Settings(log_level="info")
+    s = Settings(log_level="info")  # type: ignore[arg-type]
     assert s.log_level == LogLevel.INFO
 
     # Invalid log level raises ValidationError
     with pytest.raises(ValidationError) as exc_info:
-        Settings(log_level="INVALID")
+        Settings(log_level="INVALID")  # type: ignore[arg-type]
     assert "log_level" in str(exc_info.value)
 
 
@@ -295,7 +296,7 @@ class TestWarnUnknownEnvVars:
     def test_validation_error_hides_input_values(self) -> None:
         """Validation errors should not leak raw input values."""
         with pytest.raises(ValidationError) as exc_info:
-            Settings(max_retries="not_a_number")
+            Settings(max_retries="not_a_number")  # type: ignore[arg-type]
         error_str = str(exc_info.value)
         assert "not_a_number" not in error_str
         assert "max_retries" in error_str
@@ -306,7 +307,7 @@ class TestDownloadDirEmptyString:
 
     def test_download_dir_empty_string_uses_default(self) -> None:
         """Settings(download_dir='') should use the default, not crash."""
-        settings = Settings(download_dir="")
+        settings = Settings(download_dir="")  # type: ignore[arg-type]
         expected_default = Settings.model_fields["download_dir"].default
         # Should be the default path, resolved to absolute
         assert settings.download_dir == expected_default.expanduser().resolve()
@@ -329,7 +330,7 @@ class TestDownloadDirEmptyString:
 
     def test_log_file_empty_string_still_uses_none(self) -> None:
         """Settings(log_file='') should still produce None (unchanged behavior)."""
-        settings = Settings(log_file="")
+        settings = Settings(log_file="")  # type: ignore[arg-type]
         assert settings.log_file is None
 
 
@@ -360,7 +361,7 @@ class TestEmptyFreeTextSettings:
         from a request for the default.
         """
         with pytest.raises(ValidationError) as exc_info:
-            Settings(**{field_name: bad_value})
+            Settings(**{field_name: bad_value})  # type: ignore[arg-type]
 
         formatted = format_validation_error(exc_info.value)
         # The setting is named in the rendered output...
@@ -829,7 +830,7 @@ class TestFormatValidationError:
         suggest ``VKDOWNLOADER_MAX_RETRIES`` — the field the user actually meant.
         """
         with pytest.raises(ValidationError) as exc_info:
-            Settings(maxretries="9")  # typo: missing underscore
+            Settings(maxretries="9")  # type: ignore[call-arg]  # typo: missing underscore
         formatted = format_validation_error(exc_info.value)
         assert "Configuration error" in formatted
         # The location is rendered in the normalised environment-variable namespace
@@ -846,7 +847,7 @@ class TestFormatValidationError:
         valid-name list rather than receiving a confident (and wrong) pointer.
         """
         with pytest.raises(ValidationError) as exc_info:
-            Settings(unknown_key="test_value")
+            Settings(unknown_key="test_value")  # type: ignore[call-arg]
         formatted = format_validation_error(exc_info.value)
         assert "VKDOWNLOADER_UNKNOWN_KEY" in formatted
         assert "Extra inputs are not permitted" in formatted
@@ -990,7 +991,7 @@ class TestEnvFileValidationRendering:
     def test_log_file_created_when_absent(self, tmp_path: Path) -> None:
         """SEC-003: setup_logging creates the configured log file."""
         log_file = tmp_path / "app.log"
-        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")  # type: ignore[arg-type]
 
         setup_logging(settings)
 
@@ -1010,7 +1011,7 @@ class TestEnvFileValidationRendering:
         attribute, not POSIX-style permission bits.
         """
         log_file = tmp_path / "app.log"
-        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")  # type: ignore[arg-type]
 
         if os.name != "nt":
             setup_logging(settings)
@@ -1019,18 +1020,18 @@ class TestEnvFileValidationRendering:
             assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
         else:
             # Alt A: spy on the creation branch with a local recorder (no mock import).
-            touch_calls: list[Any] = []
-            chmod_calls: list[Any] = []
+            touch_calls: list[object] = []
+            chmod_calls: list[object] = []
             original_touch = Path.touch
             original_chmod = Path.chmod
 
-            def _recording_touch(self: Path, *args: Any, **kwargs: Any) -> None:
+            def _recording_touch(self: Path, *args: object, **kwargs: object) -> None:
                 touch_calls.append((self, args, kwargs))
-                return original_touch(self, *args, **kwargs)
+                original_touch(self, *args, **kwargs)  # type: ignore[arg-type]
 
-            def _recording_chmod(self: Path, *args: Any, **kwargs: Any) -> None:
+            def _recording_chmod(self: Path, *args: object, **kwargs: object) -> None:
                 chmod_calls.append((self, args, kwargs))
-                return original_chmod(self, *args, **kwargs)
+                original_chmod(self, *args, **kwargs)  # type: ignore[arg-type]
 
             Path.touch = _recording_touch  # type: ignore[method-assign]
             Path.chmod = _recording_chmod  # type: ignore[method-assign]
@@ -1042,7 +1043,8 @@ class TestEnvFileValidationRendering:
 
             # Assert the creation branch was taken as expected.
             assert len(touch_calls) == 1, f"Expected exactly one touch call, got {len(touch_calls)}"
-            touch_kwargs = touch_calls[0][2]
+            touch_call = cast(tuple[Path, tuple[object, ...], dict[str, object]], touch_calls[0])
+            touch_kwargs = touch_call[2]
             assert touch_kwargs.get("mode") == 0o600, (
                 f"Expected touch(mode=0o600), got mode={touch_kwargs.get('mode')!r}"
             )
@@ -1077,7 +1079,7 @@ class TestEnvFileValidationRendering:
         else:
             os.chmod(log_file, 0o444)
 
-        settings = Settings(log_file=str(log_file), log_level="DEBUG")
+        settings = Settings(log_file=str(log_file), log_level="DEBUG")  # type: ignore[arg-type]
         setup_logging(settings)
 
         if os.name != "nt":
@@ -1114,7 +1116,7 @@ class TestExcInfoClearing:
     def test_log_file_every_line_is_valid_json(self, tmp_path: Path) -> None:
         """B3: every line in a log file with an exception-carrying record parses as JSON."""
         log_file = tmp_path / "app.log"
-        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))  # type: ignore[arg-type]
 
         root = logging.getLogger()
         saved_handlers = root.handlers[:]
@@ -1141,7 +1143,7 @@ class TestExcInfoClearing:
     def test_traceback_appears_exactly_once_in_json(self, tmp_path: Path) -> None:
         """B3: the traceback appears exactly once and as a JSON key, not as a text line."""
         log_file = tmp_path / "app.log"
-        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))  # type: ignore[arg-type]
 
         root = logging.getLogger()
         saved_handlers = root.handlers[:]
@@ -1175,7 +1177,7 @@ class TestExcInfoClearing:
     def test_non_exception_record_parses(self, tmp_path: Path) -> None:
         """B3: non-exception records still parse as JSON with timestamp and level."""
         log_file = tmp_path / "app.log"
-        settings = Settings(log_level="DEBUG", log_file=str(log_file))
+        settings = Settings(log_level="DEBUG", log_file=str(log_file))  # type: ignore[arg-type]
 
         root = logging.getLogger()
         saved_handlers = root.handlers[:]
@@ -1453,8 +1455,8 @@ class TestConditionalOverridesConstruction:
         from vkdownloader.cli import _build_settings
 
         field = Settings.model_fields["max_retries"]
-        floor = next(m.ge for m in field.metadata if isinstance(m, Ge))
-        ceiling = next(m.le for m in field.metadata if isinstance(m, Le))
+        floor = int(cast(int, next(m.ge for m in field.metadata if isinstance(m, Ge))))
+        ceiling = int(cast(int, next(m.le for m in field.metadata if isinstance(m, Le))))
 
         # Below the floor → ValidationError naming max_retries
         with pytest.raises(ValidationError) as exc_info:
@@ -1773,7 +1775,7 @@ class TestDownloadTimeoutSingleSource:
             _perform_final_merge,
         ],
     )
-    def test_consumer_default_equals_constant(self, consumer: Any) -> None:
+    def test_consumer_default_equals_constant(self, consumer: Callable[..., object]) -> None:  # type: ignore[explicit-any]
         """Each ``download_timeout`` default equals the single constant.
 
         Introspected via ``inspect.signature`` rather than by reading source, so

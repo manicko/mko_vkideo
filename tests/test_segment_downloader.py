@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -375,7 +375,7 @@ class TestSequentialSharesThePause:
         """Sequential download checks wait_if_paused with the resource key."""
         segment_url = "https://cdn.example.com/seg1.ts"
         coordinator = URLBackoffCoordinator()
-        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)
+        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)  # type: ignore[method-assign]
 
         with patch(
             "vkdownloader.services.segment_downloader._retry_429_with_backoff",
@@ -401,7 +401,7 @@ class TestSequentialSharesThePause:
         """
         segment_url = "https://cdn.example.com/seg1.ts"
         coordinator = URLBackoffCoordinator()
-        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)
+        coordinator.wait_if_paused = AsyncMock(wraps=coordinator.wait_if_paused)  # type: ignore[method-assign]
 
         with patch(
             "vkdownloader.services.segment_downloader._retry_429_with_backoff",
@@ -683,7 +683,7 @@ class TestBackoffCoordinatorNormalizesInternally:
         url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
         url_b = "https://cdn.example.com/path2/seg.ts"
 
-        async def mock_wait_for(coro: object, timeout: float | None) -> object:
+        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
             coro.close()
             raise TimeoutError()
 
@@ -703,7 +703,7 @@ class TestBackoffCoordinatorNormalizesInternally:
         coordinator = URLBackoffCoordinator(pause_seconds=10.0)
         raw_url = "https://user:pass@cdn.example.com:8080/path/seg.ts?token=abc"
 
-        async def mock_wait_for(coro: object, timeout: float | None) -> object:
+        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
             coro.close()
             raise TimeoutError()
 

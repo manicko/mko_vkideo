@@ -735,7 +735,7 @@ def _failed_process() -> MagicMock:
     return mock_process
 
 
-def _failing_exec(fail_on: str) -> Callable[..., MagicMock]:
+def _failing_exec(fail_on: str) -> Callable[..., MagicMock]:  # type: ignore[explicit-any]
     """Build a process-launch stub that fails the named concat list only.
 
     Materialises the output path the real child would write, so the batch

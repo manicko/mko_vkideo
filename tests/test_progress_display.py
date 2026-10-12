@@ -124,6 +124,7 @@ class TestRichProgressReporter:
         reporter.start()
         reporter.start_task(0)
         reporter.update(0, 5000, 0)
+        assert reporter._progress is not None
         task = reporter._progress.tasks[reporter._tasks[0]]
         assert task.total is None
         assert not task.finished
@@ -134,6 +135,7 @@ class TestRichProgressReporter:
         reporter.start()
         reporter.update(0, 5000, 0)
         reporter.update(0, 5000, 10000)
+        assert reporter._progress is not None
         task = reporter._progress.tasks[reporter._tasks[0]]
         assert task.total == 10000
         reporter.stop()

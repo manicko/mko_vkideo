@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -65,7 +64,7 @@ def _browser_streams() -> list[Stream]:
     ]
 
 
-def _make_mock_extract_streams() -> Any:
+def _make_mock_extract_streams() -> object:
     """Return an async mock that yields a unique VideoWithStreams per URL."""
 
     async def mock_extract_streams(url: str) -> VideoWithStreams:
@@ -79,15 +78,15 @@ def _make_mock_extract_streams() -> Any:
     return mock_extract_streams
 
 
-def _make_mock_download_segment() -> Any:
+def _make_mock_download_segment() -> object:
     """Return an async mock for _download_segment that writes a dummy segment."""
 
     async def mock_download_segment(
-        session: Any,
+        session: object,
         segment_url: str,
         output_path: Path,
         headers: dict[str, str],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> bool:
         output_path.write_bytes(b"segment data")
         return True
@@ -106,7 +105,7 @@ def _batch_urls(count: int) -> list[str]:
     return [f"https://vkvideo.ru/video-12345_{i:05d}" for i in range(count)]
 
 
-def _make_batch_download(outcomes: Mapping[str, Path | None | BaseException]) -> Any:
+def _make_batch_download(outcomes: Mapping[str, Path | None | BaseException]) -> object:
     """Return an async ``download_video`` stand-in replaying per-URL outcomes.
 
     An outcome of ``None`` means "the transfer returned no file", an outcome
@@ -126,7 +125,7 @@ def _make_batch_download(outcomes: Mapping[str, Path | None | BaseException]) ->
 
 
 @contextmanager
-def _batch_runtime(download: Any) -> Iterator[None]:
+def _batch_runtime(download: object) -> Iterator[None]:
     """Patch only the batch's process boundary for the duration of one run.
 
     Deliberately does NOT patch the classification helper, the shutdown
@@ -246,11 +245,11 @@ class TestBatchDownloaderSemaphore:
         initial_value = video_semaphore._value
 
         async def mock_download_segment(
-            session: Any,
+            session: object,
             segment_url: str,
             seg_output: Path,
             headers: dict[str, str],
-            **kwargs: Any,
+            **kwargs: object,
         ) -> bool:
             seg_output.write_bytes(b"segment data")
             return True
@@ -282,7 +281,7 @@ class TestBatchDownloaderSemaphore:
                         output_file=output_path,
                     ),
                     settings=settings,
-                    video_semaphore=video_semaphore,
+                    video_semaphore=video_semaphore,  # type: ignore[arg-type]
                 ),
                 timeout=10,
             )
@@ -807,7 +806,9 @@ class TestBatchLiveTaskBounding:
             live = sum(
                 1
                 for t in asyncio.all_tasks()
-                if not t.done() and t.get_coro().__qualname__ == "_download_single"
+                if not t.done()
+                and (coro := t.get_coro()) is not None
+                and coro.__qualname__ == "_download_single"
             )
             current_live = live
             peak_live = max(peak_live, current_live)
@@ -909,11 +910,11 @@ class TestBatchLiveTaskBounding:
         acquire_count = 0
         release_count = 0
 
-        class _CountingTrackedSemaphore(original_cls):  # type: ignore[misc]
+        class _CountingTrackedSemaphore(original_cls):  # type: ignore[misc,valid-type]
             async def acquire(self) -> bool:
                 nonlocal acquire_count
                 acquire_count += 1
-                return await super().acquire()
+                return await super().acquire()  # type: ignore[no-any-return]
 
             def release(self) -> None:
                 nonlocal release_count

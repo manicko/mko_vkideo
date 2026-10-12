@@ -20,7 +20,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import structlog
 
@@ -114,7 +114,7 @@ def _real_chain(log_file: Path) -> Iterator[structlog.stdlib.BoundLogger]:
         structlog.reset_defaults()
 
 
-def _read_real_chain_records(log_file: Path) -> list[dict[str, Any]]:
+def _read_real_chain_records(log_file: Path) -> list[dict[str, object]]:
     """Read every JSON record the real chain just emitted to ``log_file``."""
     for handler in logging.getLogger().handlers:
         handler.flush()
@@ -766,7 +766,7 @@ class TestRedactLogEventProcessor:
         by leg (b).
         """
         secret_tokens = ("SECRET123", "ABC")
-        shapes: list[dict[str, Any]] = [
+        shapes: list[dict[str, object]] = [
             {"event": "url_in_error", "error": f"fetch {self.SIGNED_URL} failed"},
             {"event": "url_in_url_field", "url": self.SIGNED_URL},
             {"event": "url_in_message", "message": f"fetch {self.SIGNED_URL}"},
@@ -802,14 +802,14 @@ class TestRedactLogEventProcessor:
         """A ``None`` value (real input: ``ytdlp_not_found``'s ``path=exc.filename``)
         is passed through unchanged without raising.
         """
-        event_dict: dict[str, Any] = {"event": "ytdlp_not_found", "path": None}
+        event_dict: dict[str, object] = {"event": "ytdlp_not_found", "path": None}
         result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
         assert result["path"] is None
 
     def test_non_string_value_passes_through(self) -> None:
         """int, bool, float values pass through unchanged without raising."""
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "segment_done",
             "bytes": 1024,
             "success": True,
@@ -843,11 +843,11 @@ class TestRedactLogEventProcessor:
         but nested non-strings (int, None) pass through, and the original list is
         not mutated in place (structlog's shallow copy would otherwise share it).
         """
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "captured_m3u8_urls",
             "urls": [self.SIGNED_URL, "https://b.example.com/y", None, 4096],
         }
-        original_list = event_dict["urls"]
+        original_list: list[str | None | int] = cast(list[str | None | int], event_dict["urls"])
         result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
         # Each string element redacted; non-strings preserved
@@ -863,7 +863,7 @@ class TestRedactLogEventProcessor:
 
     def test_tuple_values_are_depth1_sanitised_and_return_tuple(self) -> None:
         """A ``tuple`` value is sanitised depth-1 and returned as a tuple."""
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "some_event",
             "paths": (self.SIGNED_URL, "plain text"),
         }
@@ -878,14 +878,14 @@ class TestRedactLogEventProcessor:
         are preserved byte-identical (they are data, not structlog's structural
         keys), and the original dict is not mutated in place.
         """
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "some_event",
             "metadata": {
                 "url_key": self.SIGNED_URL,
                 "count": 42,
             },
         }
-        original_dict = event_dict["metadata"]
+        original_dict: dict[str, object] = cast(dict[str, object], event_dict["metadata"])
         result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
         assert "SECRET123" not in result["metadata"]["url_key"]
@@ -896,8 +896,8 @@ class TestRedactLogEventProcessor:
         assert set(result["metadata"].keys()) == {"url_key", "count"}
 
         # Original dict unchanged (no in-place mutation)
-        assert original_dict["url_key"] == self.SIGNED_URL
-        assert "SECRET123" in original_dict["url_key"]
+        assert cast(str, original_dict["url_key"]) == self.SIGNED_URL
+        assert "SECRET123" in cast(str, original_dict["url_key"])
 
     def test_captured_m3u8_urls_record_through_hand_rolled_chain(self) -> None:
         """Fast unit: a hand-rolled copy of the processor list (not
@@ -962,7 +962,7 @@ class TestRedactLogEventProcessor:
 
         source = inspect.getsource(_sanitize_collection)
         assert ": list[Any]" not in source
-        assert ": dict[str, Any]" not in source
+        assert ": dict[str, object]" not in source
         assert "tuple[Any" not in source
         assert "list[Any]" not in source
 
@@ -990,14 +990,14 @@ class TestStructuralKeysDenylist:
         measured = set(record) - {"probe"}
         assert _STRUCTURAL_KEYS == measured
         # The user key's secret value WAS redacted — only structural keys are shielded.
-        assert "SECRET123" not in record["probe"]
-        assert "cdn.example.com" in record["probe"]
+        assert "SECRET123" not in cast(str, record["probe"])
+        assert "cdn.example.com" in cast(str, record["probe"])
 
     def test_structural_keys_are_not_redacted(self) -> None:
         """Values under structural keys are never redacted, even if they
         contain a URL or artefact token.
         """
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "https://cdn.example.com/x?token=SECRET",
             "level": "https://cdn.example.com/y?token=SECRET2",
             "timestamp": "https://cdn.example.com/z?token=SECRET3",
@@ -1018,7 +1018,7 @@ class TestRedactLogEventDirect:
 
     def test_redacts_url_value(self) -> None:
         """A URL in any string value is redacted to scheme://host.***REDACTED***."""
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "some_event",
             "url": "https://cdn.example.com/seg.m3u8?token=SECRET",
         }
@@ -1031,7 +1031,7 @@ class TestRedactLogEventDirect:
         """An artefact path in any string value is redacted."""
         cookie_file = _create_temp_cookie_file("session=test")
         try:
-            event_dict: dict[str, Any] = {
+            event_dict: dict[str, object] = {
                 "event": "some_event",
                 "path": str(cookie_file),
             }
@@ -1044,7 +1044,7 @@ class TestRedactLogEventDirect:
 
     def test_redacts_multiple_string_values(self) -> None:
         """Every string value in the dict is independently redacted."""
-        event_dict: dict[str, Any] = {
+        event_dict: dict[str, object] = {
             "event": "multi_field",
             "url_a": "https://a.example.com/x?tok=AAA",
             "url_b": "https://b.example.com/y?tok=BBB",
@@ -1095,10 +1095,11 @@ class TestRealConfiguredChain:
 
         record = records[-1]
         assert "exception" in record
-        assert "Traceback" in record["exception"]
-        assert "SECRET123" not in record["exception"]
-        assert "ABC" not in record["exception"]
-        assert "cdn.example.com" in record["exception"]
+        exception = cast(str, record["exception"])
+        assert "Traceback" in exception
+        assert "SECRET123" not in exception
+        assert "ABC" not in exception
+        assert "cdn.example.com" in exception
 
     # AC-3: the three named record shapes, through the real chain.
     def test_real_chain_redacts_cookie_file_cleanup_failed_both_fields(
@@ -1122,10 +1123,10 @@ class TestRealConfiguredChain:
             _remove_cookie_artifact_dir(cookie_file.parent)
 
         record = records[-1]
-        assert record["path"] == REDACTED
-        assert "cannot delete" in record["error"]
-        assert cookie_file.name not in record["path"]
-        assert cookie_file.name not in record["error"]
+        assert cast(str, record["path"]) == REDACTED
+        assert "cannot delete" in cast(str, record["error"])
+        assert cookie_file.name not in cast(str, record["path"])
+        assert cookie_file.name not in cast(str, record["error"])
 
     def test_real_chain_redacts_cookie_file_cleaned_up_path(self, tmp_path: Path) -> None:
         """``cookie_file_cleaned_up``'s success-path ``path`` is redacted through
@@ -1142,8 +1143,8 @@ class TestRealConfiguredChain:
             _remove_cookie_artifact_dir(cookie_file.parent)
 
         record = records[-1]
-        assert record["path"] == REDACTED
-        assert cookie_file.name not in record["path"]
+        assert cast(str, record["path"]) == REDACTED
+        assert cookie_file.name not in cast(str, record["path"])
 
     # Record-specific traceback-field shapes: error= and path=exc.filename.
     def test_real_chain_redacts_error_field_traceback_shape(self, tmp_path: Path) -> None:
@@ -1157,9 +1158,9 @@ class TestRealConfiguredChain:
             records = _read_real_chain_records(log_file)
 
         record = records[-1]
-        assert "SECRET123" not in record["error"]
-        assert "ABC" not in record["error"]
-        assert "cdn.example.com" in record["error"]
+        assert "SECRET123" not in cast(str, record["error"])
+        assert "ABC" not in cast(str, record["error"])
+        assert "cdn.example.com" in cast(str, record["error"])
 
     def test_real_chain_redacts_path_filename_traceback_shape(self, tmp_path: Path) -> None:
         """``ytdlp_not_found`` carries ``path=exc.filename`` (``str`` or ``None``).
@@ -1174,6 +1175,6 @@ class TestRealConfiguredChain:
 
         str_record = records[-2]
         none_record = records[-1]
-        assert "SECRET123" not in str_record["path"]
-        assert "cdn.example.com" in str_record["path"]
+        assert "SECRET123" not in cast(str, str_record["path"])
+        assert "cdn.example.com" in cast(str, str_record["path"])
         assert none_record["path"] is None

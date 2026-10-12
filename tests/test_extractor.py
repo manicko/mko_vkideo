@@ -1,7 +1,6 @@
 """Tests for VKVideoExtractor service."""
 
 import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -219,7 +218,7 @@ class TestExtractionErrors:
 
         # Mock asyncio.wait_for to raise TimeoutError, simulating a hang
         # in the yt-dlp extraction thread.
-        async def fake_wait_for(coro: object, timeout: float | None) -> tuple[list[Any], None]:
+        async def fake_wait_for(coro: object, timeout: float | None) -> tuple[list[object], None]:
             raise TimeoutError("simulated timeout")
 
         with patch("asyncio.wait_for", side_effect=fake_wait_for):
@@ -233,7 +232,7 @@ class TestExtractionErrors:
 
         # Test with single cookie
         cookies = [{"name": "session_id", "value": "abc123"}]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
         assert result == "session_id=abc123"
 
         # Test with multiple cookies
@@ -241,7 +240,7 @@ class TestExtractionErrors:
             {"name": "session_id", "value": "abc123"},
             {"name": "user_token", "value": "xyz789"},
         ]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
         assert "session_id=abc123" in result
         assert "user_token=xyz789" in result
         assert "; " in result
@@ -252,12 +251,12 @@ class TestExtractionErrors:
 
         # Test with cookies with empty name/value (includes them as-is)
         cookies = [{"name": "", "value": "val"}, {"name": "name", "value": ""}]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
         assert "=val; name=" == result
 
         # Test CRLF sanitization - prevents header injection
         cookies = [{"name": "session\nmalicious", "value": "abc\r123"}]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
         assert "\n" not in result
         assert "\r" not in result
         assert "sessionmalicious" in result
@@ -265,7 +264,7 @@ class TestExtractionErrors:
 
         # Test CRLF in both name and value
         cookies = [{"name": "bad\r\nname", "value": "val\nue\r\n"}]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
         assert "\r" not in result
         assert "\n" not in result
         assert "badname" in result
@@ -277,7 +276,7 @@ class TestExtractionErrors:
 
         # Create 50 cookies to verify no limit
         cookies = [{"name": f"c{i}", "value": f"v{i}"} for i in range(50)]
-        result = extractor._format_cookies_for_ffmpeg(cookies)
+        result = extractor._format_cookies_for_ffmpeg(cookies)  # type: ignore[arg-type]
 
         # All cookies should be present (no 20-cookie truncation)
         assert result.count("=") == 50  # 50 cookies
@@ -329,7 +328,7 @@ class TestExtractionErrors:
             {"name": "token", "value": "xyz", "domain": ".userapi.com"},
             {"name": "user", "value": "123", "domain": "vkvideo.ru"},
         ]
-        result = _cookies_to_netscape(cookies)
+        result = _cookies_to_netscape(cookies)  # type: ignore[arg-type]
 
         # Verify each cookie has its correct domain preserved
         assert ".vk.com" in result
@@ -373,6 +372,7 @@ class TestExtractionErrors:
 
             assert len(streams) == 1
             assert streams[0].format == StreamFormat.HLS
+            assert cookies is not None
             assert "session_id=abc123" in cookies
             assert "user_token=xyz789" in cookies
             assert raw is not None
@@ -579,7 +579,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 2
         assert streams[0].height == 720
@@ -591,7 +591,7 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/stream.m3u8", "height": 720},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.HLS
@@ -602,7 +602,7 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/video.mp4", "height": 720},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.MP4
@@ -613,7 +613,7 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/720.mp4", "height": 720},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert streams[0].quality == "720p"
         assert streams[0].height == 720
@@ -624,7 +624,7 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/idx.mp4"},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert streams[0].quality == "unknown"
         assert streams[0].height is None
@@ -640,7 +640,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert streams[0].resolution == "1920x1080"
 
@@ -653,8 +653,8 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/h.mp4", "height": 720},
         ]
 
-        assert _build_streams(width_only)[0].resolution is None
-        assert _build_streams(height_only)[0].resolution is None
+        assert _build_streams(width_only)[0].resolution is None  # type: ignore[arg-type]
+        assert _build_streams(height_only)[0].resolution is None  # type: ignore[arg-type]
 
     def test_build_streams_bitrate_present(self) -> None:
         """D-12: a present tbr yields bitrate 2500."""
@@ -667,7 +667,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert streams[0].bitrate == 2500
 
@@ -685,8 +685,8 @@ class TestBuildStreams:
             },
         ]
 
-        assert _build_streams(absent)[0].bitrate is None
-        assert _build_streams(zero)[0].bitrate is None
+        assert _build_streams(absent)[0].bitrate is None  # type: ignore[arg-type]
+        assert _build_streams(zero)[0].bitrate is None  # type: ignore[arg-type]
 
     def test_build_streams_excludes_falsy_url(self) -> None:
         """D-12: a format with a falsy/empty URL is excluded."""
@@ -696,7 +696,7 @@ class TestBuildStreams:
             {"vcodec": "h264", "url": "https://example.com/ok.mp4", "height": 480},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].url == "https://example.com/ok.mp4"
@@ -776,7 +776,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.MP4
@@ -791,7 +791,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.MP4
@@ -806,7 +806,7 @@ class TestBuildStreams:
             },
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.HLS
@@ -817,7 +817,7 @@ class TestBuildStreams:
             {"url": "https://example.com/video.mp4", "height": 720, "width": 1280},
         ]
 
-        streams = _build_streams(formats)
+        streams = _build_streams(formats)  # type: ignore[arg-type]
 
         assert streams == []
 

@@ -32,7 +32,7 @@ class TestStructuredAttributes:
 
     def test_no_streams_error_code(self) -> None:
         """Test ErrorCode has NO_STREAMS member."""
-        assert ErrorCode.NO_STREAMS == "no_streams"
+        assert ErrorCode.NO_STREAMS.value == "no_streams"
 
     def test_quality_parse_error_code(self) -> None:
         """Test QualityParseError has QUALITY_PARSE_ERROR error_code."""
@@ -117,6 +117,7 @@ class TestStructuredAttributes:
             DownloadError,
         ]
         for exc_cls in direct_derivation_classes:
+            exc: VKDownloadError
             if exc_cls is InvalidVideoUrlError:
                 exc = exc_cls("https://example.com/invalid")
             elif exc_cls is QualityParseError:

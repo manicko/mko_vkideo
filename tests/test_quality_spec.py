@@ -159,4 +159,4 @@ class TestValidation:
         spec = QualitySpec.parse("1072")
 
         with pytest.raises(ValueError):
-            spec.label = "1610p"  # type: ignore[misc]
+            spec.label = "1610p"

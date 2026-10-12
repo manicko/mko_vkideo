@@ -301,7 +301,7 @@ class TestPerformDownload:
                 settings=settings,
                 video_data=_VIDEO,
                 selected_stream=_STREAM,
-                semaphore=semaphore,
+                semaphore=semaphore,  # type: ignore[arg-type]
             )
 
         assert result == output_file

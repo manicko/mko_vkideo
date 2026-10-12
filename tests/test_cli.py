@@ -4,10 +4,10 @@ import asyncio
 import locale
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,7 +37,7 @@ from vkdownloader.services.progress_display import RichProgressReporter
 runner = CliRunner()
 
 
-def _make_pre_pass_extract_streams() -> Any:
+def _make_pre_pass_extract_streams() -> Callable[[str], Coroutine[object, object, VideoWithStreams]]:
     """Return an async ``extract_streams`` mock for the B10 pre-pass.
 
     The pre-pass in ``_run_batch_with_progress`` calls ``extract_streams`` on
@@ -2725,7 +2725,7 @@ class TestMaxRetriesValidation:
 
         field = Settings.model_fields["max_retries"]
         ceiling = next(m.le for m in field.metadata if isinstance(m, Le))
-        return ceiling + 1
+        return int(cast(float, ceiling)) + 1
 
     def test_out_of_range_max_retries_download(
         self,
