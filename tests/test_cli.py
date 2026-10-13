@@ -392,6 +392,56 @@ class TestDownloadCommand:
         assert "download_error" in rendered
         assert "download failed" in rendered
 
+    def test_download_video_not_found_exits_1(
+        self, tmp_path: Path, sample_video_url: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """VideoNotFoundError arm: exit 1 + stderr message; log gap documented.
+
+        The single-URL ``download`` command catches ``VideoNotFoundError`` and
+        exits 1 with a stderr message. Unlike the ``VKDownloadError`` arm
+        (which emits a structured ``download_failed`` record) and unlike the
+        batch path (which emits ``video_not_found`` at batch_downloader.py:308),
+        this arm emits **no structlog event** — only ``typer.echo`` to stderr.
+
+        Finding (P15-B5): the VideoNotFoundError arm in the single-URL
+        download command is observable only via exit code and stderr text,
+        not via a named log event. The batch equivalent logs ``video_not_found``;
+        the single-URL path does not. Zero lines changed under ``src/``.
+        """
+        with (
+            patch(
+                "vkdownloader.cli.download_video",
+                new_callable=AsyncMock,
+                side_effect=VideoNotFoundError("No streams found for video"),
+            ),
+            patch("vkdownloader.cli.Settings") as mock_settings_cls,
+        ):
+            mock_settings_cls.return_value = MagicMock(
+                max_concurrent_downloads=4,
+                download_dir=tmp_path,
+                log_file=None,
+            )
+
+            with caplog.at_level(logging.DEBUG):
+                result = runner.invoke(
+                    app,
+                    ["download", sample_video_url],
+                    catch_exceptions=False,
+                )
+
+        assert result.exit_code == 1
+        assert "Video not found" in result.stderr
+
+        # The batch command logs ``video_not_found``; the single-URL download
+        # command does not. This asserts the absence so the gap is visible and
+        # a future instrumentation change turns this into a failure (announcing
+        # the fix).
+        video_not_found_events = [r for r in caplog.records if "video_not_found" in r.getMessage()]
+        assert len(video_not_found_events) == 0, (
+            "VideoNotFoundError arm in single-URL download command emitted a "
+            "log event — the P15-B5 gap is closed; update the assertion."
+        )
+
 
 class TestBatchCommand:
     """Tests for the batch CLI command."""
