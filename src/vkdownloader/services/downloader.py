@@ -101,7 +101,7 @@ def _semaphore_context(
 #       download_hls_with_resume, _cleanup_segments, _download_segment,
 #       _download_segment_parallel, _download_segment_sequential,
 #       _fetch_playlist_with_retry, _parse_m3u8_segments
-#   * downloader_throttle.py:
+#   * retry_policies.py:
 #       _retry_429_with_backoff
 #   * cookies.py:
 #       _cookies_to_netscape

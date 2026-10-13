@@ -6637,7 +6637,7 @@ class TestB7SessionCarrierProtection:
         app.router.add_get("/{segment}", handle_segment)
 
         # --- Mock the context-var-based shutdown event ---
-        # Both segment_downloader (6 call sites) and downloader_throttle
+        # Both segment_downloader (6 call sites) and retry_policies
         # (_retry_429_with_backoff) call get_shutdown_event, so patch both.
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.return_value = False
