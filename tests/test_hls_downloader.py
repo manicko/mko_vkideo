@@ -6805,3 +6805,184 @@ class TestCleanLegacyCookieFiles:
         removed = clean_legacy_cookie_files(temp_dir=tmp_path)
         assert removed == 0
         assert wrong.exists()
+
+
+class TestGracefulDegradation:
+    """Tests for the TST-016 / TST-006 graceful-degradation arms.
+
+    Coverage census (8 arms; 2 ceded to P10-B14):
+
+    TST-016 (6 arms):
+      1. ``_await_first_and_cancel_others`` (ytdlp_downloader.py:535) — COVERED
+      2. ``cancel_subprocess`` guards (ytdlp_downloader.py:1296, 1413) — COVERED
+      3. ``shutdown`` branch (ytdlp_downloader.py:1380-1382) — COVERED
+      4. ``ExtractionError`` arm (ytdlp_downloader.py:1151) — COVERED (TestB13ResumeErrorHandling)
+      5. ``QualityNotAvailableError`` arm (ytdlp_downloader.py:1125) — THIS CLASS (arm 4)
+      6. ``QualityParseError`` arm (ytdlp_downloader.py:1162) — THIS CLASS (arm 5b)
+
+    Ceded to P10-B14 (2 arms — not implemented here):
+      - ``batch_merge_timeout`` (ffmpeg_utils.py:305-307)
+      - ``final_merge_timeout`` (ffmpeg_utils.py:352-354)
+
+    TST-006 residual (2 arms, both COVERED):
+      - ``_await_and_cancel`` body (ytdlp_downloader.py:86-108)
+      - ``_parse_retry_after`` HTTP-date branch
+
+    Note: ``config.py:360-361`` (Valid fields branch) is covered by
+    ``test_config.py:940``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_quality_not_available_in_browser_streams_logged_and_raised(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Arm 4 (TST-016): ``QualityNotAvailableError`` from
+        ``QualitySelector.select`` is logged as
+        ``requested_quality_not_available_in_browser_streams`` and re-raised.
+
+        ``_attempt_segment_resume`` forces browser extraction, which returns
+        streams labelled ``"best"`` (height=None). For a BEST request the
+        ``QualitySelector`` is invoked; if no suitable stream is found it
+        raises ``QualityNotAvailableError``. This arm must log the event with
+        the available qualities and propagate the exception unchanged — the
+        caller (the retry loop in ``download_with_ytdlp_with_resume_fallback``)
+        decides whether to retry.
+        """
+        from vkdownloader.services.downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
+        # temp file (P12-B9 route (a)).
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], None, None)
+        )
+
+        class _FailingSelector:
+            def select(
+                self, streams: list[Stream], quality: QualitySpec
+            ) -> Stream:
+                raise QualityNotAvailableError("best", ["1080p", "720p"])
+
+        with (
+            patch(
+                "vkdownloader.services.ytdlp_downloader.QualitySelector",
+                _FailingSelector,
+            ),
+            patch(
+                "vkdownloader.services.ytdlp_downloader.logger.error"
+            ) as mock_error,
+            patch(
+                "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
+                new_callable=AsyncMock,
+            ) as mock_hls,
+        ):
+            with pytest.raises(QualityNotAvailableError):
+                await _attempt_segment_resume(
+                    "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/stale.m3u8",
+                    output_file,
+                    "best",
+                    retry_count=1,
+                    extractor=mock_extractor,
+                    settings=test_settings,
+                    backoff_coordinator=None,
+                    video_semaphore=None,
+                )
+
+        # The QualityNotAvailableError arm logs and re-raises.
+        error_events = [
+            c
+            for c in mock_error.call_args_list
+            if "requested_quality_not_available_in_browser_streams" in c[0]
+        ]
+        assert len(error_events) == 1, (
+            "QualityNotAvailableError arm must emit exactly one "
+            "requested_quality_not_available_in_browser_streams event"
+        )
+        assert error_events[0].kwargs["quality"] == "best"
+        assert "best" in error_events[0].kwargs["available"]
+
+        # Segment download must NOT proceed — the exception propagates before.
+        mock_hls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_quality_for_browser_streams_logged_and_raised(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Arm 5b (TST-016): ``QualityParseError`` from
+        ``QualitySpec.parse`` is logged as
+        ``invalid_quality_for_browser_streams`` and re-raised.
+
+        When ``quality`` is neither a keyword (``best``/``worst``/``unknown``)
+        nor a positive height, ``QualitySpec.parse`` raises
+        ``QualityParseError``. The inner ``try`` only catches
+        ``QualityNotAvailableError``, so ``QualityParseError`` propagates to the
+        outer handler which logs and re-raises — surfacing the parse failure
+        to the caller rather than swallowing it as a token-refresh issue.
+        """
+        from vkdownloader.exceptions import QualityParseError
+        from vkdownloader.services.downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(
+            return_value=([stream], None, None)
+        )
+
+        with (
+            patch(
+                "vkdownloader.services.ytdlp_downloader.logger.error"
+            ) as mock_error,
+            patch(
+                "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
+                new_callable=AsyncMock,
+            ) as mock_hls,
+        ):
+            with pytest.raises(QualityParseError):
+                await _attempt_segment_resume(
+                    "https://vkvideo.ru/video-12345_67890",
+                    "https://example.com/stale.m3u8",
+                    output_file,
+                    "not_a_valid_quality",
+                    retry_count=1,
+                    extractor=mock_extractor,
+                    settings=test_settings,
+                    backoff_coordinator=None,
+                    video_semaphore=None,
+                )
+
+        # The QualityParseError arm logs and re-raises. Note: this arm does NOT
+        # pass ``quality`` as a separate kwarg — the quality string is embedded
+        # in the ``error`` field via ``str(e)``.
+        error_events = [
+            c
+            for c in mock_error.call_args_list
+            if "invalid_quality_for_browser_streams" in c[0]
+        ]
+        assert len(error_events) == 1, (
+            "QualityParseError arm must emit exactly one "
+            "invalid_quality_for_browser_streams event"
+        )
+        assert "not_a_valid_quality" in error_events[0].kwargs["error"]
+
+        # Segment download must NOT proceed — the exception propagates before.
+        mock_hls.assert_not_called()
