@@ -2923,7 +2923,12 @@ class TestMergeSegmentsBatchedRealExecution:
 
     @pytest.mark.asyncio
     async def test_merge_segments_batched_success(self, tmp_path: Path) -> None:
-        """Test successful merge of segments with mocked ffmpeg."""
+        """Test successful merge of segments with mocked ffmpeg.
+
+        The exec stub materialises the output file the real ffmpeg child would
+        write, so the test asserts on the artefact's existence, not just the
+        returned path.
+        """
         output = tmp_path / "output.ts"
 
         for i in range(5):
@@ -2938,13 +2943,18 @@ class TestMergeSegmentsBatchedRealExecution:
 
         mock_process.communicate = mock_communicate
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            batch_output = tmp_path / "batch_00000.ts"
-            batch_output.write_bytes(b"batch data")
+        def exec_stub(*args: str, **kwargs: object) -> MagicMock:
+            # Materialise the output path the real child would write, mirroring
+            # _failing_exec in test_ffmpeg_utils.py (line 750).
+            Path(args[-1]).write_bytes(b"merged data")
+            return mock_process
 
+        with patch("asyncio.create_subprocess_exec", side_effect=exec_stub):
             result = await _merge_segments_batched(tmp_path, output, 5)
 
         assert result == output
+        assert output.exists()
+        assert output.read_bytes() == b"merged data"
 
     @pytest.mark.asyncio
     async def test_merge_segments_batched_raises_on_missing_files(self, tmp_path: Path) -> None:
