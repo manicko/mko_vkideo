@@ -249,12 +249,13 @@ class TestValidateOutputPathTraversal:
         result = validate_output_path(resolved, warning=False)
         assert result == resolved
 
-    def test_validate_output_path_rejects_traversal_even_if_resolved(self) -> None:
-        """SEC-006: post-resolution guard catches '..' in resolved path.
+    def test_pre_resolution_rejects_traversal_in_unresolved_path(self) -> None:
+        """SEC-006: pre-resolution guard catches '..' in unresolved path.
 
-        Constructs a path object whose string representation contains '..'
-        even after resolve (simulated via string Path), verifying the
-        post-resolution check fires.
+        The input path carries '..' components, so the pre-resolution
+        check fires before resolution. On Windows resolve() strips '..'
+        from the path, so this exercises the pre-resolution guard, not the
+        post-resolution one (that guard has its own oracle).
         """
         # Build a path whose str() still contains ".." — this simulates
         # an already-resolved path that somehow retains ".." segments.
