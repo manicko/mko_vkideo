@@ -41,6 +41,8 @@ Protect and exclude from the removal candidates:
 In addition to the category-based guard above, the following path-based patterns are excluded from removal candidates:
 
 * `.ai/audit/**` — audit pipeline's own output (findings, reports, validation stores).
+* `.ai/context/**` — the phase catalogue: plan context definitions and standards.
+* `.ai/plans/**` — the phase catalogue: execution plans, work breakdowns, and done/ archives.
 * `.kilo/commands/audit/**` — the audit command definitions themselves.
 * `.kilo/agents/**` — agent definition files.
 * `**/.kilo/worktrees/**` — all worktree directories (covers the removed/stale `southern-bandana/` corpus).
