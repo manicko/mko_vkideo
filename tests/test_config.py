@@ -142,7 +142,7 @@ def test_cookie_source_validation() -> None:
     settings = Settings(cookie_source=CookieSource.NONE)
     assert settings.cookie_source == CookieSource.NONE
 
-        # Test string input for valid modes
+    # Test string input for valid modes
     settings = Settings(cookie_source="browser")  # type: ignore[arg-type]
     assert settings.cookie_source == CookieSource.BROWSER
 

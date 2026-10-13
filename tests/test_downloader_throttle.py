@@ -522,7 +522,9 @@ class TestURLBackoffCoordinator:
         mock_event = MagicMock()
         mock_event.is_set.return_value = True
 
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             # Simulate shutdown triggered - wait_for returns successfully
             return None
 
@@ -565,7 +567,9 @@ class TestParseRetryAfter:
             ("", None),  # empty string
         ],
     )
-    def test_retry_after_header_forms(self, header_value: str | None, expected: float | str | None) -> None:
+    def test_retry_after_header_forms(
+        self, header_value: str | None, expected: float | str | None
+    ) -> None:
         """Thirteen-row header-form table covering integer, IMF-fixdate, RFC 850,
         asctime, lower-case, negative, zero, whitespace-padded, past, absent,
         and invalid inputs."""
@@ -640,7 +644,9 @@ class TestWaitWithShutdown:
         """Test returns False when delay completes without shutdown."""
         mock_event = MagicMock()
 
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             # Simulate timeout (no shutdown)
             raise TimeoutError()
 
@@ -656,7 +662,9 @@ class TestWaitWithShutdown:
         """Test returns True when shutdown is triggered."""
         mock_event = MagicMock()
 
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             # Simulate shutdown triggered - return immediately
             return None
 
@@ -783,7 +791,9 @@ class TestBackoffCoordinatorPause:
         await coordinator.pause(url, 0.01)
 
         # Mock wait_for so we don't actually sleep
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             coro.close()  # Prevent unawaited-coroutine warning (GC-timing artifact)
             raise TimeoutError()
 
@@ -830,7 +840,9 @@ class TestBackoffPauseSharedState:
 
         # wait_if_paused should return True for url2 because the key is the same.
         # Mock asyncio.wait_for so the test does not actually sleep 10 seconds.
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             coro.close()  # Prevent unawaited-coroutine warning
             raise TimeoutError()
 

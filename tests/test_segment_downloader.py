@@ -683,7 +683,9 @@ class TestBackoffCoordinatorNormalizesInternally:
         url_a = "https://user:pass@cdn.example.com/path1/seg.ts?token=abc"
         url_b = "https://cdn.example.com/path2/seg.ts"
 
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             coro.close()
             raise TimeoutError()
 
@@ -703,7 +705,9 @@ class TestBackoffCoordinatorNormalizesInternally:
         coordinator = URLBackoffCoordinator(pause_seconds=10.0)
         raw_url = "https://user:pass@cdn.example.com:8080/path/seg.ts?token=abc"
 
-        async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float | None) -> object:
+        async def mock_wait_for(
+            coro: Coroutine[object, object, object], timeout: float | None
+        ) -> object:
             coro.close()
             raise TimeoutError()
 

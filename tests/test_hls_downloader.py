@@ -1816,7 +1816,9 @@ class TestSequentialDownloadMode:
                 side_effect=mock_backoff,
             ):
 
-                async def mock_wait_for(coro: Coroutine[object, object, object], timeout: float) -> None:
+                async def mock_wait_for(
+                    coro: Coroutine[object, object, object], timeout: float
+                ) -> None:
                     # Simulate timeout - no shutdown
                     # Await the coroutine to avoid RuntimeWarning about unawaited coroutine
                     try:
@@ -1983,7 +1985,11 @@ class TestDownloadMethodLogging:
 
         assert result == output_file
         # Check that starting_download was logged with method
-        starting_logs = [m for m in log_messages if cast(dict[str, object], m["kwargs"]).get("method") == "yt-dlp"]
+        starting_logs = [
+            m
+            for m in log_messages
+            if cast(dict[str, object], m["kwargs"]).get("method") == "yt-dlp"
+        ]
         assert len(starting_logs) >= 1, "Should log starting_download with method=yt-dlp"
 
     @pytest.mark.asyncio
@@ -2052,7 +2058,9 @@ class TestDownloadMethodLogging:
 
         assert result == output_file
         # Check that starting_segment_download was logged
-        starting_logs = [m for m in log_messages if "starting_segment_download" in cast(str, m["message"])]
+        starting_logs = [
+            m for m in log_messages if "starting_segment_download" in cast(str, m["message"])
+        ]
         assert len(starting_logs) >= 1, "Should log starting_segment_download"
 
     @pytest.mark.asyncio
@@ -2089,7 +2097,9 @@ class TestDownloadMethodLogging:
                 )
 
         # Check that starting_ytdlp_download was logged
-        starting_logs = [m for m in log_messages if "starting_ytdlp_download" in cast(str, m["message"])]
+        starting_logs = [
+            m for m in log_messages if "starting_ytdlp_download" in cast(str, m["message"])
+        ]
         assert len(starting_logs) >= 1, "Should log starting_ytdlp_download"
         # Verify quality is in the log
         assert cast(dict[str, object], starting_logs[0]["kwargs"]).get("quality") == "720"
@@ -2342,7 +2352,9 @@ class TestIterProcessLines:
         async for line in gen:
             consumed.append(line)
             break  # consumer stops mid-stream
-        await cast(AsyncGenerator[bytes], gen).aclose()  # finalize the generator so the finally runs
+        await cast(
+            AsyncGenerator[bytes], gen
+        ).aclose()  # finalize the generator so the finally runs
 
         assert consumed == [b"line1\n"]
         assert callback_calls == []
@@ -3198,7 +3210,9 @@ class TestSetupSignalHandlers:
             signal_module.signal(signal_module.SIGINT, _displaced)
             signal_handlers.setup_signal_handlers()
 
-            installed = cast(Callable[[int, object], object], signal_module.getsignal(signal_module.SIGINT))
+            installed = cast(
+                Callable[[int, object], object], signal_module.getsignal(signal_module.SIGINT)
+            )
             if installed is _displaced:
                 pytest.fail("setup_signal_handlers did not displace the stand-in handler")
 
