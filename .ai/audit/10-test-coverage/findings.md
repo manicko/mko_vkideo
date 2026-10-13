@@ -862,7 +862,7 @@ the table and the order.
 | batch/final merge timeout arms, `ffmpeg_utils.py:305-307, 352-354` (03) | 0 | 2 | 1 | bodies unexecuted |
 | redaction backstop, `url_sanitizer.py:29-30` (06) | 0 | 3 | 2 | body unexecuted |
 | `format_validation_error` suggestion name (02) | 0 | 1 | 2 | the assertion is a disjunction; no test constrains the name |
-| log-file format contract (08) | 0 | 1 | 2 | 0 tests read the log file's content; only `.exists()` and modes |
+| log-file format contract (08) | 0 | 1 | 2 | see `OUT-002`; structlog `BoundLogger` path (`vkdownloader.services.downloader.logger`); one test reads content & asserts ABSENCE; B2 (`ca25ad8`) adds PRESENCE |
 
 Applying the comparator: the four `O=0, C=3` bodies lead, then the three `Oв‰¤1, C=3`, then the `O=2`
 rows. **The list is non-empty, and nothing in the repository gates it** вЂ” that is the finding, filed
@@ -878,15 +878,25 @@ the measurement and files the absence of the oracle, once each, in TST-001 throu
   `Settings(**{bad: "1"})` with the resulting `ValidationError` handed to `format_validation_error`.
   Result: **0 of 25** produced a name absent from `Settings.model_fields`. The *test-side* fact that
   the assertion cannot detect this is filed as TST-009; the *behaviour* is not reproduced here.
-* **"The log file declared JSON is not JSON."** Input: `setup_logging(Settings(log_file=..., log_level="DEBUG"))`,
-  then three events through the product's own logger (`vkdownloader.services.downloader.logger`, the
-  object every module obtains) plus one through `structlog.get_logger`. Result: **4 of 4 physical
-  lines parse as JSON**, because `config.py:365-367` selects `JSONRenderer` when `log_file` is set and
-  every product call site goes through structlog. The mixed-format case is reached only when a raw
-  stdlib `logging` call shares the file вЂ” which is a question about *which* logger a code path uses,
-  not about the renderer, and I did not observe a product path that does it. What **is** established:
-  **no test reads the log file's content at all** (`test_config.py:328-370` asserts `.exists()` and
-  two modes). The coverage gap is filed; the defect claim is not reproduced by this phase.
+* **Measured shape table for the log-file format contract (`VAL-120`; D-6 branch (a) taken: the
+   phase 10 report is a working artefact and editable).** Input: `setup_logging(Settings(log_file=...,
+   log_level="DEBUG"))`, then events through the product’s own logger — a structlog `BoundLogger` at
+   `vkdownloader.services.downloader.logger`, the object every module obtains — for the
+   success path, one single-link `logger.exception` record, and one two-link chained record:
+
+   | Scenario | Total non-empty lines | Parseable-JSON lines |
+   |---|---|---|
+   | success path | 1 | 1 |
+   | single-link `logger.exception` record | 1 | 1 |
+   | two-link chained exception record | 1 | 1 |
+
+   All three produce 100 % parseable JSON. Phase-08’s `OUT-002` remains the surviving
+   finding for the failure-path record shape; `_ExcInfoClearingFormatter` (`config.py:365-367`,
+   commit `65d1c0a`, P13-B3) clears `exc_info` before `JSONRenderer` serialises, eliminating
+   the non-JSON lines that path observed. One test reads the log file’s content and asserts
+   ABSENCE; B2 (`ca25ad8`) now adds a positive oracle asserting PRESENCE. The gap was: no
+   test asserted that a record the product emitted was present in the log file —
+   this is now closed.
 * **The four permission skips.** Reproduced as reported skips, and their stated reason verified
   independently (see TST-013, R10). Not re-filed as anything other than the form of the oracle.
 
