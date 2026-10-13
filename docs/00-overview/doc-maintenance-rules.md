@@ -6,7 +6,7 @@ tags:
   - governance
   - rules
 related:
-  - overview.md
+  - vkdownloader-overview
 ---
 
 ## Purpose
@@ -98,9 +98,9 @@ Required fields: `id`, `domain`, `tags`, `related`.
 
 ## Output Guidelines
 
-- Use `logger = logging.getLogger(__name__)` for all service layer output in `core/`
-- Use `console.print()` (Rich) for CLI user-facing output in `app.py`
-- Use `rich.progress.track()` for terminal progress bars — never use `print()` with `\r` manipulation
+- Use `logger = get_logger(__name__)` for all service layer output in `src/vkdownloader/services/`
+- Use `console.print()` (Rich) for CLI user-facing output in `cli.py`
+- Use `RichProgressReporter` from `services/progress_display.py` for terminal progress bars — never use `print()` with `\r` manipulation
 - Progress bars and user interaction belong to the CLI layer, not business logic
 
 ## Agent Enforcement

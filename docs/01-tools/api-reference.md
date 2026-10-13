@@ -771,14 +771,14 @@ validated_path = validate_output_path(Path("./output/video.mp4"))
 
 ---
 
-### sanitize_title
+### sanitize_filename_component
 
 Location: `vkdownloader.utils.security`
 
 Sanitizes video titles for filesystem safety by removing invalid characters.
 
 ```python
-def sanitize_title(title: str) -> str:
+def sanitize_filename_component(title: str) -> str:
     ...
 ```
 

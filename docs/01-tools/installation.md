@@ -98,13 +98,13 @@ uv run pytest tests/
 ### Run Linting
 
 ```bash
-uv run ruff check src/
+uv run ruff check src tests
 ```
 
 ### Run Formatting Check
 
 ```bash
-uv run ruff format --check src/
+uv run ruff format --check src tests
 ```
 
 ### Run Type Check

@@ -13,7 +13,7 @@ related:
 
 ## Purpose
 
-VK Video Downloader is an async Python module for downloading videos from vkvideo.ru with intelligent quality selection. It combines yt-dlp for stream extraction with ffmpeg for direct HLS-to-MP4 conversion, featuring segment-level resume on token expiration.
+VK Video Downloader is an async Python module for downloading videos from vkvideo.ru with intelligent quality selection. It combines yt-dlp for stream extraction with ffmpeg as the merge engine for stitching downloaded segments, featuring segment-level resume on token expiration.
 
 ## Main Concepts
 
@@ -127,10 +127,11 @@ The `Settings` class in `config.py` provides:
 
 ## CLI Interface
 
-The CLI (`cli.py`) provides two commands:
+The CLI (`cli.py`) provides three commands:
 
 - `download`: Download single video with quality and method selection
 - `batch`: Download multiple videos from a URL file
+- `clean-cookies`: Remove legacy bare cookie files from the shared temp directory
 
 Both commands support:
 
