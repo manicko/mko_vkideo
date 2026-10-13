@@ -6863,14 +6863,10 @@ class TestGracefulDegradation:
         )
 
         mock_extractor = MagicMock()
-        mock_extractor.extract_streams_with_cookies = AsyncMock(
-            return_value=([stream], None, None)
-        )
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
 
         class _FailingSelector:
-            def select(
-                self, streams: list[Stream], quality: QualitySpec
-            ) -> Stream:
+            def select(self, streams: list[Stream], quality: QualitySpec) -> Stream:
                 raise QualityNotAvailableError("best", ["1080p", "720p"])
 
         with (
@@ -6878,9 +6874,7 @@ class TestGracefulDegradation:
                 "vkdownloader.services.ytdlp_downloader.QualitySelector",
                 _FailingSelector,
             ),
-            patch(
-                "vkdownloader.services.ytdlp_downloader.logger.error"
-            ) as mock_error,
+            patch("vkdownloader.services.ytdlp_downloader.logger.error") as mock_error,
             patch(
                 "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
                 new_callable=AsyncMock,
@@ -6944,14 +6938,10 @@ class TestGracefulDegradation:
         )
 
         mock_extractor = MagicMock()
-        mock_extractor.extract_streams_with_cookies = AsyncMock(
-            return_value=([stream], None, None)
-        )
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
 
         with (
-            patch(
-                "vkdownloader.services.ytdlp_downloader.logger.error"
-            ) as mock_error,
+            patch("vkdownloader.services.ytdlp_downloader.logger.error") as mock_error,
             patch(
                 "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
                 new_callable=AsyncMock,
@@ -6974,13 +6964,10 @@ class TestGracefulDegradation:
         # pass ``quality`` as a separate kwarg — the quality string is embedded
         # in the ``error`` field via ``str(e)``.
         error_events = [
-            c
-            for c in mock_error.call_args_list
-            if "invalid_quality_for_browser_streams" in c[0]
+            c for c in mock_error.call_args_list if "invalid_quality_for_browser_streams" in c[0]
         ]
         assert len(error_events) == 1, (
-            "QualityParseError arm must emit exactly one "
-            "invalid_quality_for_browser_streams event"
+            "QualityParseError arm must emit exactly one invalid_quality_for_browser_streams event"
         )
         assert "not_a_valid_quality" in error_events[0].kwargs["error"]
 
