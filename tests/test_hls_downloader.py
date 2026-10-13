@@ -366,7 +366,7 @@ class TestCookiesToNetscape:
 
 
 class TestCreateTempCookieFile:
-    """Direct unit tests for _create_temp_cookie_file (TST-004)."""
+    """Direct unit tests for _create_temp_cookie_file (TR-004)."""
 
     def test_writes_netscape_format_content(self) -> None:
         """Test that the file contains valid Netscape HTTP Cookie File format."""
@@ -3433,7 +3433,7 @@ class TestYtDlpSubprocessShutdown:
         mock_process.stdout = AsyncMock()
         mock_stdout_line: list[bytes] = []
 
-        # TST-006: Use named function instead of fragile
+        # RA-006: Use named function instead of fragile
         # `(_ for _ in ()).throw(asyncio.CancelledError())` lambda hack
         async def mock_readline() -> bytes:
             if not mock_stdout_line:

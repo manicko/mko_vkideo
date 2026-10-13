@@ -499,7 +499,7 @@ class TestBatchCommand:
         assert "Peak concurrent videos:" in result.output
         assert "Successful:" in result.output
         assert "Failed:" in result.output
-        # TST-002: Assert error reasons appear in Failed URLs section
+        # CK-002: Assert error reasons appear in Failed URLs section
         assert "Failed URLs:" in result.output
         assert "video_not_found" in result.output
         assert "video-2_2" in result.output
