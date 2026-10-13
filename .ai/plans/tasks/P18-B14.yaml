@@ -2,7 +2,7 @@
 
 **Source plan:** none (created by `DEC-Z`, binding Tech Lead decision §2.1)
 **Priority:** high (blocking W6 and W7)
-**Status:** IN PROGRESS at `468d6dd`
+**Status:** DONE at `151ea9f` (Phase 1: `__all__` extended to 25 names; Phase 2: 172 residual errors resolved — mypy src tests → 0)
 **Depends on:** none
 **Agents:** Auditor, Researcher, Planner, Validator
 **Estimated effort:** 6–10 hours (Phase 1: 30 min; Phase 2: per-file 5–15 min each)

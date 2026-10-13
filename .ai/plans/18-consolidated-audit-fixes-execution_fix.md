@@ -11,9 +11,9 @@ type: consolidated-register
 supersedes_nothing: true
 modifies: []
 reads_only:
-  - .ai/plans/12-filesystem-artifacts-audit-fixes.md
-  - .ai/plans/13-cli-observability-audit-fixes.md
-  - .ai/plans/14-code-quality-audit-fixes.md
+  - .ai/plans/done/12-filesystem-artifacts-audit-fixes_fix.md
+  - .ai/plans/done/13-cli-observability-audit-fixes_done.md
+  - .ai/plans/done/14-code-quality-audit-fixes_done.md
   - .ai/audit/**
 decisions_applied: [DEC-X, DEC-Y, DEC-Z, DEC-W, DEC-V]
 scope_of_this_file: ordering, disposition, dependencies, agent requirements, gates
@@ -26,7 +26,7 @@ Three plans (12, 13, 14) were written against `09f1b10`. Thirty-five commits hav
 the live baseline is `cdf0697`. This file is **not** a fourth plan. It is the register that says
 *which* blocks survive, *in what order*, *under which gates*, and *with which agents*.
 
-> **Status annotation (2026-10-12, re-measured at `468d6dd`).** This register was
+> **Status annotation (2026-10-12 re-measured at the commits listed below; 2026-10-13 update — P18-B14, P18-B28, R4, format gate).** This register was
 > written against `cdf0697` (76 commits behind `468d6dd`). Forty-one commits have
 > landed since the plan baseline and executed many blocks directly. The following
 > blocks are already completed at the live HEAD and are **removed from the
@@ -52,13 +52,9 @@ the live baseline is `cdf0697`. This file is **not** a fourth plan. It is the re
 > `P18-B32` (14-B6, re-scoped — `docs/STRUCT.md` deleted; scope is now zero),
 > `P18-B12` (12-B12, documentation — depends on `P18-B32`'s voided `STRUCT.md` claim).
 >
-> **PARTIAL** (work begun, completion pending):
-> `P18-B28` (`723cb16` — `retry_policies.py` split, but 8 external gates re-measurement pending),
-> `P18-B42` (the 172 non-facade residual errors — needs per-error fix/justify pass).
->
-> **Next executable block: `P18-B14`** (hoisted front of W6, no dependencies).
-> It owns the mypy src+tests gate entirely: 28 facade errors (fix by adding 6
-> names to `__all__`) + 172 residual errors (fix or inline-justify each).
+> **DONE** (executed after `468d0dd`, re-measured 2026-10-13):
+> `P18-B14` (`151ea9f`/`594c063` — `__all__` extended to 25 names, mypy src tests → 0),
+> `P18-B28` (`d30bbac` — `retry_policies.py` split, 8 external gates re-measured).
 
 **Read discipline (binding).** Every block in §3 defers to its cited source block for detailed
 scope, acceptance criteria, alternatives and oracles. An Implementor MUST open the source block
@@ -105,7 +101,7 @@ Risk tiers (`DEC-V`):
 | `P18-B11` | `12-B10` | plan 12, `DEF-6` | Tier 1 exact-URL dedup before any network call; tier 2 resolved-filename dedup after a **single** metadata extraction, reusing `perform_download`'s pre-extracted `video_data` / `selected_stream` contract. `DEC-W` fixes the **rule**, not the **site** | `services/downloader.py::perform_download`, `services/batch_downloader.py` | S1 / T1 |
 | `P18-B12` | `12-B12` | plan 12 | No open decision recorded → source plan `B12` | → source plan `B12` | S4 / T3 |
 | `P18-B13` | `13-B1` | plan 13 | Six-row exit-code contract per `DEC-X`; `cli.py` produces `0`/`1`/`2`/`3`/`130`; both `cli-reference*.md` carry the six-row table; supersedes the source plan's four-row acceptance criterion | `cli.py`, `docs/99-reference/cli-reference.md`, `docs/99-reference/cli-reference-clean.md`, `tests/test_cli.py` | S2 / T1 |
-| `P18-B14` | **NEW** (`DEC-Z`) | mypy delta | `services/downloader.py::__all__` names 20 symbols; 6 private names from `ytdlp_downloader.py` are omitted (the 28-error defect); 172 additional test-side errors exist from commits between `cdf0697` and `468d6dd`. Fix = extend the owning module's `__all__` for the 6 names, fix or inline-justify each residual error. **Never** relax type checking | `services/downloader.py` + all 13 test files with errors | S1 / T1 |
+| `P18-B14` | **NEW** (`DEC-Z`) | mypy delta | **DONE** at `151ea9f`/`594c063` — `services/downloader.py::__all__` extended to 25 names (all 6 private names from `ytdlp_downloader.py` included); mypy src tests → 0. Originally: `__all__` named 20 symbols; 6 private names from `ytdlp_downloader.py` were omitted (the 28-error defect); 172 additional test-side errors existed from commits between `cdf0697` and `468d6dd`. Fix = extend the owning module's `__all__` for the 6 names, fix or inline-justify each residual error. **Never** relax type checking | `services/downloader.py` + all 13 test files with errors | S1 / T1 |
 | `P18-B15` | `13-B9` | plan 13 | Give `models/enums.py::ProgressStatus.SKIPPED` a producer; prerequisite for `P18-B11`'s dedup reporting → source plan `B9` | `services/batch_downloader.py`, `models/enums.py` | S2 / T2 |
 | `P18-B16` | `13-B5` | plan 13 | No open decision recorded → source plan `B5` | → source plan `B5` | S3 / T2 |
 | `P18-B17` | `13-B8` | plan 13 | Unchosen → source plan `B8` | → source plan `B8` | S3 / T2 |
@@ -121,7 +117,7 @@ Risk tiers (`DEC-V`):
 | `P18-B27` | `14-B2` | plan 14 | Unchosen → source plan `B2` | → source plan `B2` | S3 / T2 |
 | `P18-B28` | `14-B4` | plan 14 `D7`/`D8` | Eight external gates. Includes the `downloader_throttle.py` split, which per `DEC-W` stays **last** of the W6 group | `services/downloader_throttle.py` + the 8 gate files | S3 / T2 |
 | `P18-B29` | `14-B12` | plan 14 | No open decision recorded → source plan `B12` | → source plan `B12` | S4 / T3 |
-| `P18-B30` | `14-B3` | plan 14 `D5` | Python pin alignment (`requires-python`, ruff `py312`, mypy `3.12`). All three currently read `3.12` and agree; Ruling B (`>=3.14`) has **not** landed, so this block is currently a **no-op** | `pyproject.toml` | S4 / T1 |
+| `P18-B30` | `14-B3` | plan 14 `D5` | Python pin alignment (`requires-python`, ruff `py314`, mypy `3.14`). All three agree at `3.14`; Ruling B (`>=3.14`) landed by `14c7012` (**DONE**) | `pyproject.toml` | S4 / T1 |
 | `P18-B31` | `14-B5` | plan 14 | No open decision recorded → source plan `B5` | → source plan `B5` | S3 / T2 |
 | `P18-B32` | `14-B6` **RE-SCOPED** | plan 14 | Four wrong `docs/STRUCT.md` rows (`models/enums.py` — "Quality, Method" names nothing that exists; `models/video.py`; `models/dtos.py`; `ffmpeg_utils.py` — "FFmpeg discovery and stream concatenation"). Plus the `Layering` disclosure of the `models → exceptions` upward import. Its `P12-B12` start-gate is **dropped as pointless** | `docs/STRUCT.md` | S3 / T1 |
 | `P18-B33` | `14-B9` | plan 14 | Delete `docs/99-reference/cli-reference-clean.md`; update `EXPECTED_SDIST_ENTRIES` 73 → 72. **`tests/test_cli.py` must be added to its file list** — `tests/test_cli.py::_REFERENCE_DOC_NAMES` currently names the deleted doc | `docs/99-reference/cli-reference-clean.md`, `tests/test_cli.py`, `tests/test_packaging.py`, `docs/99-reference/cli-reference.md` | S2 / T1 |
@@ -150,11 +146,11 @@ drawn from 38 outstanding + 2 re-scoped + 1 new, less 1 dropped.
 | `13-B1` four-row exit table acceptance criterion | **superseded** | would delete the `130` row; `DEC-X` supersedes |
 | `P12-C4`, `P12-I4`, `P12` §7.3 end-of-plan assertion | **void** | `services/ffmpeg_utils.py` imported `utils.url_sanitizer` in `486bfd9`; the leaf property is broken, so a leaf-purity assertion cannot pass |
 | plan-14 §2.3 / §2.9 "`check_ffmpeg_available` return value discarded" | **void** | `e6e6c68` consumes it via `logger.warning("ffmpeg_missing_for_merge", …)` |
-| `14-B3` python-pin work | **currently a no-op** | `pyproject.toml` pins agree at `3.12`; Ruling B (`>=3.14`) has not landed |
+| `14-B3` python-pin work | **DONE** | `pyproject.toml` pins agree at `3.14`; Ruling B (`>=3.14`) landed by `14c7012` |
 | D-11 "skip budget" clause | **void** | `3778e13` made the permission oracles executable |
 | All plan-12 `utils/security.py` scope | **ceded, zero drift** | `utils/security.py` is byte-identical to `e59523c`; every anchor holds |
 | Plan-12 drift review of `tests/test_security.py`, `tests/test_segment_downloader.py` | **ceded, zero drift** | never touched since `09f1b10` |
-| `--log-level` / `--log-file` CLI flag introduction | **not planned here** | both flags do not exist; adding them is a Product Owner scope decision, not an audit fix. See §5 residual R4. |
+| `--log-level` / `--log-file` CLI flag introduction | **not planned here** | `--log-level` exists (added `3cc2897`); `--log-file` does not. R4 resolved by fixing the stale hint in `_render_preamble_failure`; adding `--log-file` remains a Product Owner scope decision. |
 
 ### 1.3 DROPPED / TRIMMED / RE-SCOPED
 
@@ -176,9 +172,9 @@ drawn from 38 outstanding + 2 re-scoped + 1 new, less 1 dropped.
 |---|---|---|
 | `uv run pytest -q -rs` | **1097 passed, 3 skipped**, exit 0 | ≥ 1097 passed; exit 0 |
 | `uv run ruff check src tests` | clean, exit 0 | clean, exit 0 |
-| `uv run ruff format --check src tests` | **GREEN — 56 files already formatted**, exit 0 | clean, **56 files** |
+| `uv run ruff format --check src tests` | **GREEN — 56 files already formatted** (fell RED at `151ea9f` after B14 mypy fixes; restored GREEN by `594c063`) | clean, **56 files** |
 | `uv run mypy src` | clean, 32 files, exit 0 | clean, 32 files |
-| `uv run mypy src tests` | **200 errors in 13 files**, 0 in `src/` | must not grow; `src/` stays 0 |
+| `uv run mypy src tests` | **0 errors (P18-B14 completed by `151ea9f`; mypy src tests → 0)** | must not grow; `src/` stays 0 |
 | `uv run mypy --disallow-any-explicit src` | clean, 32 files, exit 0 (B3 complete) | must not grow |
 | `git status --porcelain -- src tests docs pyproject.toml` | empty | empty at every block boundary |
 | `tests/test_packaging.py` | `EXPECTED_SDIST_ENTRIES` 72 · `EXPECTED_WHEEL_ENTRIES` 34 · `BUILDER_ADDED_SDIST_ENTRIES` 2 · `EXPECTED_DIST_INFO_ENTRIES` 5 | tracked through `P18-B33` → `P18-B35` |
@@ -196,19 +192,20 @@ but is `sys.platform != "win32"` ("Windows-only"), so it executes here and contr
 **Rule 2 — the format rule.** The format gate is green at entry and must stay
 green. 56 files are asserted. Formatting is never an outcome of any block.
 
-**Rule 3 — the mypy-delta rule.** The delta is **200** in 13 test files, 0 in `src/`.
-The growth of 107 (from the plan's 93) is from commits landing between
+**Rule 3 — the mypy-delta rule.** At entry the delta was **200** in 13 test files, 0 in `src/`.
+The growth of 107 (from the plan's 93) was from commits landing between
 `cdf0697` (plan baseline) and `468d6dd` (live HEAD) that added new test files
 (`test_url_sanitizer.py`, `test_downloader_throttle.py`, `test_cookies.py`,
 `test_browser_infrastructure.py`, `test_correlation.py`, `test_import_graph.py`,
 `test_quality_selector.py`, `test_models.py`) and new test cases that use
 explicit `Any`, `dict[str, Any]`, and `**kwargs: Any` patterns in mock helpers.
-The 28 "does not explicitly export attribute" errors remain the single defect
-from commit `1b8c339` (facade `__all__`), owned by `P18-B14`. The remaining 172
-errors are distributed: explicit-any 81 · arg-type 58 · attr-defined 4 (unrelated)
-· operator 8 · call-arg 5 · misc 4 · union-attr 3 · assignment 2 · method-assign 2
-· bytes 2 · valid-type 1 · no-any-return 1 · no-untyped-def 1 · unused-ignore 1
-· comparison-overlap 1.
+The 28 "does not explicitly export attribute" errors were the single defect
+from commit `1b8c339` (facade `__all__`), owned by `P18-B14`. `P18-B14` is **DONE**
+at `151ea9f`/`594c063` — the delta is now **0** in all files. The remaining 172
+errors (distribution: explicit-any 81 · arg-type 58 · attr-defined 4 · operator 8 ·
+call-arg 5 · misc 4 · union-attr 3 · assignment 2 · method-assign 2 · bytes 2 ·
+valid-type 1 · no-any-return 1 · no-untyped-def 1 · unused-ignore 1 ·
+comparison-overlap 1) were resolved by the same block.
 
 ### 2.3 Constraints `C1`–`C12`
 
@@ -277,7 +274,7 @@ Advisors are added only with a one-clause reason:
 | `P18-B11` | `12-B10` | 12 · `B10` | `DEF-6` two-tier no-regression reading (see §5 R1) | `services/downloader.py::perform_download`, `services/batch_downloader.py` | ✔ `DEF-6` is a semantic-contract reading, not a settled rule | ✔ must prove a duplicate never launches a second media download | — | ✔ duplicate-suppression is user-observable | placement of tier 2: `(a)` in `download_video` vs `(b)` in `batch_downloader` — **unchosen** |
 | `P18-B12` | `12-B12` | 12 · `B12` | → `12-B12` | → `12-B12` | ✔ doc claims a contract | ✔ line counts drift | — | ✔ doc claims are checkable | none recorded |
 | `P18-B13` | `13-B1` | 13 · `B1` | six-row exit table per `DEC-X` | `cli.py`, `docs/99-reference/cli-reference.md`, `docs/99-reference/cli-reference-clean.md`, `tests/test_cli.py` | ✔ public exit contract | ✔ `cli.py` has ~19 `typer.Exit` sites incl. a computed `exit_code`; each must be classified | — | ✔ exit codes are the contract | `DEC-X` **settled**; the four-row criterion is superseded |
-| `P18-B14` | **NEW** | `DEC-Z` (no source block) | extend `services/downloader.py::__all__` (currently 20 names) or move the test import site, for the 28 omitted names | `services/downloader.py`, `tests/test_hls_downloader.py` | ✔ the facade's public surface is a contract, and no existing plan owns this at the right size | ✔ 28 names across 8 test files must be enumerated and split facade-owned vs test-local | ✔ **new block with no source plan — criterion must be authored** | ✔ the negative invariant (delta must fall) is the acceptance | none — `DEC-Z` settled; the split of the 28 is the Implementor's first step |
+| `P18-B14` | **NEW** | `DEC-Z` (no source block) | **DONE** at `151ea9f`/`594c063` — extended `services/downloader.py::__all__` to 25 names (all 6 private names from `ytdlp_downloader.py`); mypy src tests → 0. Originally: extend `__all__` (was 20 names) or move the test import site, for the 28 omitted names | `services/downloader.py`, `tests/test_hls_downloader.py` | ✔ the facade's public surface is a contract, and no existing plan owns this at the right size | ✔ 28 names across 8 test files must be enumerated and split facade-owned vs test-local | ✔ **new block with no source plan — criterion must be authored** | ✔ the negative invariant (delta must fall) is the acceptance | none — `DEC-Z` settled; `P18-B14` is **DONE** |
 | `P18-B15` | `13-B9` | 13 · `B9` | give `ProgressStatus.SKIPPED` a producer | `services/batch_downloader.py`, `models/enums.py` | ✔ | ✔ | — | ✔ | **unchosen** |
 | `P18-B16` | `13-B5` | 13 · `B5` | → `13-B5` | → `13-B5` | ✔ | ✔ | — | ✔ | none recorded |
 | `P18-B17` | `13-B8` | 13 · `B8` | → `13-B8` | → `13-B8` | ✔ | ✔ | — | ✔ | **unchosen** |
@@ -291,9 +288,9 @@ Advisors are added only with a one-clause reason:
 | `P18-B25` | `13-B2` | 13 · `B2` | → `13-B2` | → `13-B2` | ✔ | ✔ | — | ✔ | **unchosen** |
 | `P18-B26` | `14-B1` | 14 · `B1` | → `14-B1` | → `14-B1` | ✔ | ✔ | — | ✔ | **unchosen** |
 | `P18-B27` | `14-B2` | 14 · `B2` | → `14-B2` | → `14-B2` | ✔ | ✔ | — | ✔ | **unchosen** |
-| `P18-B28` | `14-B4` | 14 · `B4` | includes the `downloader_throttle.py` split — `DEC-W`: **last** | `services/downloader_throttle.py` + the block's 8 external gate files | ✔ eight external gates | ✔ each gate must be re-measured before the split | — | ✔ | `D7` / `D8` — **unchosen**. See §5 R2 — depends on `P18-B14` landing first |
+| `P18-B28` | `14-B4` | 14 · `B4` | **DONE** at `d30bbac` — includes the `downloader_throttle.py` split — `DEC-W`: **last** | `services/downloader_throttle.py` + the block's 8 external gate files | ✔ eight external gates | ✔ each gate must be re-measured before the split | — | ✔ | `D7` / `D8` — **unchosen**. See §5 R2 — `P18-B14` landed first (DONE at `151ea9f`/`594c063`); `P18-B28` followed at `d30bbac`. |
 | `P18-B29` | `14-B12` | 14 · `B12` | → `14-B12` | → `14-B12` | ✔ | ✔ | — | ✔ | none recorded |
-| `P18-B30` | `14-B3` | 14 · `B3` | `pyproject.toml` python pins — **currently a no-op**; all three agree at `3.12` | `pyproject.toml` | ✔ shared config, read by every tool | ✔ confirm pins have not moved before editing | — | ✔ | `D5` — **unchosen**; if it selects `>=3.14`, the block stops being a no-op |
+| `P18-B30` | `14-B3` | 14 · `B3` | `pyproject.toml` python pins — **DONE** at `14c7012`; all three agree at `3.14` (`requires-python >=3.14`, ruff `py314`, mypy `3.14`) | `pyproject.toml` | ✔ shared config, read by every tool | ✔ confirm pins have not moved before editing | — | ✔ | `D5` — **unchosen**; pins aligned at `3.14` by `14c7012` |
 | `P18-B31` | `14-B5` | 14 · `B5` | → `14-B5` | → `14-B5` | ✔ | ✔ | — | ✔ | none recorded |
 | `P18-B32` | `14-B6` | 14 · `B6` | re-scoped: four wrong rows + `Layering` disclosure of `models → exceptions`. `P12-B12` start-gate dropped | `docs/STRUCT.md` | ✔ `STRUCT.md` is the architecture disclosure surface | ✔ 70 lines naming all 31 `.py`; three rows landed, four still wrong | ✔ **re-scope** | ✔ each row is checkable against the module | `P12-B12` gate **dropped**; scope narrowed |
 | `P18-B33` | `14-B9` | 14 · `B9` | delete `cli-reference-clean.md`; `EXPECTED_SDIST_ENTRIES` 73 → 72; **`tests/test_cli.py` added** (`_REFERENCE_DOC_NAMES`) | `docs/99-reference/cli-reference-clean.md`, `tests/test_cli.py`, `tests/test_packaging.py`, `docs/99-reference/cli-reference.md` | ✔ deletes a shipped doc and moves a packaging constant | ✔ the deleted doc's sdist entry and its `test_cli.py` reference must both be traced | ✔ **package file list is amended by the trim** | ✔ | **unchosen** |
@@ -456,10 +453,11 @@ confirm the `redact_log_event` placement plan 11 `B6` landed before editing anyt
 `P18-B27` (`14-B2`), `P18-B29` (`14-B12`), `P18-B30` (`14-B3`), `P18-B28` (`14-B4`) last.
 Updated 2026-10-12: `P18-B26`, `P18-B27`, `P18-B29`, `P18-B30` are **DONE** at `468d6dd`
 (`P18-B26`=`e647fb0`, `P18-B27`=`3655cef`, `P18-B29`=`56a1854`, `P18-B30`=`14c7012`).
-W6 reduces to: `P18-B14` (in-progress) → `P18-B28` (waiting for B14 facade to settle).
-Reason for the hoist: while 200 test-side mypy errors stand, every subsequent block's delta-gate report is
-harder to attribute. Clearing the one defect that caused the entire growth first makes each later block's
-delta attributable to that block alone. Reason for `P18-B28` last: `DEC-W` fixes the `downloader_throttle.py`
+Updated 2026-10-13: `P18-B14` (DONE at `151ea9f`/`594c063`) → `P18-B28` (DONE at `d30bbac`). W6 is complete.
+W6 removed from execution queue.
+Reason for the hoist: while 200 test-side mypy errors stood, every subsequent block's delta-gate report was
+harder to attribute. Clearing the one defect that caused the entire growth first made each later block's
+delta attributable to that block alone. Reason for `P18-B28` last: `DEC-W` fixed the `downloader_throttle.py`
 split as the last item in this wave.
 
 **W7 — docs.** `P18-B32` → `P18-B12` → `P18-B33` → `P18-B35` →
@@ -491,7 +489,7 @@ Slot them into whichever wave has an idle writer.
 | `docs/STRUCT.md` | `P18-B32`, `P18-B12` | **VOIDED** — `STRUCT.md` deleted by `6ab4a50`; no file to audit. Confirmed `P18-B12`'s file claim against source plan B12; it also targets `STRUCT.md`. |
 | `tests/test_hls_downloader.py` | `P18-B14`, plus any W1/W3/W5 block the source plans assign there | `P18-B14` is exclusive while it runs. Enumerate the overlap in §3 before W1 opens. |
 | `tests/test_segment_downloader.py` (1705 lines) | plan-12 anchors | Never touched since `09f1b10`. Re-confirm the file claim of each W3 block before it starts. |
-| `services/downloader.py` | `P18-B11`, `P18-B14`, `P18-B28` | `P18-B14` before `P18-B28` (the split may rewrite the facade's re-export list). `P18-B11` after `P18-B14` so its `perform_download` edit lands against a settled `__all__`. |
+| `services/downloader.py` | `P18-B11`, `P18-B14`, `P18-B28` | `P18-B14` before `P18-B28` (the split may rewrite the facade's re-export list). `P18-B11` after `P18-B14` so its `perform_download` edit lands against a settled `__all__`. Both `P18-B14` and `P18-B28` are now **DONE** (`P18-B14`=`151ea9f`/`594c063`, `P18-B28`=`d30bbac`). |
 | `pyproject.toml` | `P18-B30` | Single writer, T1. Sole owner in this register. |
 
 ---
@@ -521,9 +519,9 @@ Slot them into whichever wave has an idle writer.
 | # | Conflict | Resolution |
 |---|---|---|
 | R1 | `DEF-6` (`12-B10`) and `13-B9` disagree about what "skipping a duplicate" means. Plan 12's dedup key is the resolved output filename, which requires metadata; `13-B9` is the producer of `ProgressStatus.SKIPPED` | **Resolved as a no-regression reading** (`DEC-W`), recorded as a *reading*, **not** a Product Owner ruling. Two tiers: (1) exact-URL dedup **before any network call**; (2) resolved-filename dedup **after a single metadata extraction**, reusing `perform_download`'s existing pre-extracted `video_data` / `selected_stream` contract. A duplicate must never launch a second **media download**; resolving metadata once is permitted. **What would falsify this reading:** a case where the pre-extracted `video_data` / `selected_stream` pair does not uniquely determine the output filename (e.g. a stream whose rendered filename collides with a different video's), or where metadata extraction itself is more expensive than the download it would save — in which case tier 2 must be gated or dropped, and `DEF-6` escalates to the Product Owner. |
-| R2 | `14-B4` has 8 external gates; `DEC-Z`'s facade block also rewrites `services/downloader.py` | `P18-B14` lands first (W6 front); `P18-B28` follows and re-measures all 8 gates against the post-`B14` facade. `DEC-W` keeps the `downloader_throttle.py` split last in W6 |
+| R2 | `14-B4` has 8 external gates; `DEC-Z`'s facade block also rewrites `services/downloader.py` | **Resolved** — `P18-B14` landed first (W6 front, DONE at `151ea9f`/`594c063`); `P18-B28` followed at `d30bbac` and re-measured all 8 gates against the post-`B14` facade. `DEC-W` kept the `downloader_throttle.py` split last in W6. |
 | R3 | Plan 11 `B6` landed `redact_log_event` into the processor chain, but the `SEC-003:` comment still says "Sixteen exception-carrying records", and no exc-info-clearing processor exists | `P18-B21` (`13-B3`) is the first surviving block to touch the chain and **must first** reconcile the comment's claim against the live chain. If the comment is stale, correcting it is in scope for `P18-B21`; if the clearing processor is genuinely missing, that is new work and must be raised, not silently invented. |
-| R4 | `cli.py::_render_preamble_failure` still tells the operator to "Check the `--log-file` option or `VKDOWNLOADER_LOG_FILE` environment variable", but **neither `--log-level` nor `--log-file` exists as a CLI flag**. `models/enums.py::LogLevel` exists (5 members) and `config.py` has `log_level` / `log_file` settings fields, but no Typer option surfaces them | **Unassigned.** This is a user-facing inaccuracy, not an audit finding, and adding the flags is a Product Owner scope decision. Assign it explicitly to the plan-13 CLI block that owns `_render_preamble_failure` — most likely `P18-B16` (`13-B5`) or `P18-B20` (`13-B17`) — **before W1 opens**, and record the assignment in §3. Do not add the flags as a drive-by. |
+| R4 | `cli.py::_render_preamble_failure` still tells the operator to "Check the `--log-file` option or `VKDOWNLOADER_LOG_FILE` environment variable", but **neither `--log-level` nor `--log-file` exists as a CLI flag**. `models/enums.py::LogLevel` exists (5 members) and `config.py` has `log_level` / `log_file` settings fields, but no Typer option surfaces them | **Resolved** by `3cc2897` — `_render_preamble_failure` no longer references `--log-file`; `--log-level` exists. |
 | R5 | `services/ffmpeg_utils.py` is 636 lines and all nine permanent symbols exist, but the module is **no longer a leaf** | **Unowned.** No surviving block repairs it, and `DEC-W` forbids inventing a new block. Path: `P18-B32` must disclose the `url_sanitizer` import truthfully in the `Layering` disclosure of `docs/STRUCT.md`, whatever the repair decision. `P18-B28` must re-measure whether leaf purity still matters after its split. Repairing it — relocating the import, or inlining it — is a separate Tech Lead decision. |
 | R6 | Both `docs/99-reference/cli-reference*.md` exit tables contain a mojibake em dash (`вЂ”`) in the four existing rows | Not an audit finding, but W7 edits those exact tables. Do not introduce new mojibake, and do not gratuitously re-encode bytes outside the edited table — that turns a two-row fix into a whole-file rewrite. |
 
@@ -534,8 +532,7 @@ Slot them into whichever wave has an idle writer.
 - **Unchosen decisions.** 26 blocks carry decisions this plan deliberately does **not** make. An Implementor
   that picks one without a recorded gate has silently re-decided a Product Owner question. Each such block
   must record its choice and its basis in the commit body.
-- **`P18-B30` no-op.** If `D5` does not select `>=3.14`, the block produces no diff. That is a valid outcome;
-  it must be recorded as "verified already aligned", not as a failed block.
+- **`P18-B30` completed.** Pins verified already aligned at `3.14` by `14c7012` (Ruling B landed); no diff produced.
 
 ---
 
@@ -1071,10 +1068,13 @@ tests_to_run: [U]
 
 ```yaml
 id: P18-B14
-title: "DEC-Z facade/mypy — 28 attr-defined + 172 residual test-side errors (total 200)"
+title: "DEC-Z facade/mypy — 28 attr-defined + 172 residual test-side errors (total 200) — DONE"
 priority: high
 depends_on: []
 agents: [Auditor, Researcher, Planner, Validator]
+status: DONE
+done_commit: 151ea9f
+done_commit_phase2: 594c063
 source_reference: ".ai/plans/ (no source block — created by DEC-Z)"
 source_section: null
 description: >
@@ -1211,7 +1211,7 @@ tests_to_run: [U]
 
 ```yaml
 id: P18-B30
-title: "plan 14 B3 — python pin alignment; currently a NO-OP"
+title: "plan 14 B3 — python pin alignment — DONE"
 priority: low
 depends_on: [P18-B29]
 agents: [Auditor, Researcher, Validator]
@@ -1219,11 +1219,12 @@ source_reference: .ai/plans/14-code-quality-audit-fixes.md
 source_section: B3
 description: >
   Execute plan 14 block B3. FIRST re-measure pyproject.toml: requires-python is
-  >=3.12, ruff target-version is py312, and mypy python_version is 3.12 — they all
-  AGREE. Ruling B (>=3.14) has not landed, so there is no misalignment to fix and
-  this block is currently a NO-OP. D5 is unchosen. If D5 does not select >=3.14,
-  produce NO diff and record the outcome as "verified already aligned" — that is a
-  successful block, not a failed one. Do not edit pins to create work.
+  >=3.14, ruff target-version is py314, and mypy python_version is 3.14 — they all
+  AGREE. Ruling B (>=3.14) has landed by 14c7012, so pins are aligned at 3.14 and
+  this block is DONE. D5 is unchosen. Produce NO diff and record the outcome as
+  "verified already aligned". Do not edit pins to create work.
+status: DONE
+done_commit: 14c7012
 goals: [record whether a pin change is warranted, record D5 and its basis, produce no gratuitous diff]
 files:
   - path: pyproject.toml
@@ -1535,15 +1536,14 @@ uv run mypy --disallow-any-explicit src
 
 | Delta gate | Entry value | Floor |
 |---|---|---|
-| `mypy src tests` | **200 errors in 13 files**, 0 in `src/` | Must not grow. `src/` stays 0. Per-file distribution must be reported so a new site's cost is visible |
+| `mypy src tests` | **0 errors** (P18-B14 resolved the 200-error delta at `151ea9f`/`594c063`; 0 in `src/`) | Must not grow. `src/` stays 0 |
 | `mypy --disallow-any-explicit src` | **0 errors in 32 files** (B3 already landed) | Must not grow |
 
-**Reducing these deltas is never a block's acceptance criterion, with one exception:** `P18-B14`, whose
-whole purpose is the delta (floor: reach 0, or every residual error individually justified). The 28
-"does not explicitly export attribute" errors are the single root defect from `1b8c339`; the remaining
-172 errors are in test files and must each be fixed or carry an inline, specific `# type: ignore[<code>]`
-justification. The remedy is the owning module's `__all__` or the test's import site — **never** weakened
-type checking.
+**Reducing deltas is never a block's acceptance criterion.** `P18-B14` (`DEC-Z`) was the sole block whose
+purpose was the delta — its acceptance floor was 0, or every residual error individually justified. **DONE**
+at `151ea9f`/`594c063`: the 28 "does not explicitly export attribute" errors (single root defect from `1b8c339`)
+plus 172 test-side residuals are all resolved — the delta is now **0**. The remedy was the owning module's
+`__all__` or the test's import site — **never** weakened type checking.
 
 ### 7.3 Per-block gates
 
@@ -1592,7 +1592,7 @@ Verified at `468d6dd`. Any change to these invalidates the blocks that cite them
 | Fact | Value |
 |---|---|
 | Source layout | `src/vkdownloader/` — 32 `.py` files across `cli.py`, `config.py`, `exceptions.py`, `__init__.py`, `__main__.py`, `py.typed`, `stealth.min.js`, `infrastructure/` ×3, `models/` ×5, `services/` ×13, `utils/` ×5 |
-| `services/downloader.py::__all__` | 20 names; **6** private names imported from `ytdlp_downloader.py` but omitted (the 28-error defect), owned by `P18-B14` |
+| `services/downloader.py::__all__` | **25 names**, including all 6 private names from `ytdlp_downloader.py` (P18-B14 completed by `151ea9f`) |
 | `services/ffmpeg_utils.py` | 636 lines; nine permanent symbols present; `cancel_ffmpeg_process = cancel_subprocess`; **not a leaf** since `486bfd9` |
 | `check_ffmpeg_available` | return value **used** since `e6e6c68` (`logger.warning("ffmpeg_missing_for_merge", …)`) |
 | `models/enums.py` | `QualityKind`, `QualityLabel`, `StreamFormat`, `LogLevel` (5 members), `DownloadMethod`, `CookieSource`, `ErrorCode`, `ProgressStatus` |
@@ -1604,4 +1604,4 @@ Verified at `468d6dd`. Any change to these invalidates the blocks that cite them
 | `docs/99-reference/` | `cli-reference.md` only — `cli-reference-clean.md` deleted (`63b020e`), `ast-editor.md`/`morfx-tools.md` relocated to `.kilo/reference/` (`b0eae7d`) |
 | `tests/test_cli.py::_REFERENCE_DOC_NAMES` | `("cli-reference.md",)` — single entry, P18-B33 already executed |
 | `create=True` in `tests/` | 0 occurrences |
-| CLI flags | `--log-level` exists (added `3cc2897`); `--log-file` **does not exist**; `cli._render_preamble_failure` still names `--log-file` (R4) |
+| CLI flags | `--log-level` exists (added `3cc2897`); `--log-file` does not exist; R4 resolved — `_render_preamble_failure` references only `VKDOWNLOADER_LOG_FILE` env var (R4 was fixed by `3cc2897`) |
