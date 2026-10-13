@@ -1,6 +1,7 @@
 """Tests for CLI commands using typer.testing.CliRunner."""
 
 import asyncio
+import json
 import locale
 import logging
 import re
@@ -11,6 +12,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
 from rich.console import Console
 from typer.testing import CliRunner, Result
 
@@ -37,7 +39,9 @@ from vkdownloader.services.progress_display import RichProgressReporter
 runner = CliRunner()
 
 
-def _make_pre_pass_extract_streams() -> Callable[[str], Coroutine[object, object, VideoWithStreams]]:
+def _make_pre_pass_extract_streams() -> Callable[
+    [str], Coroutine[object, object, VideoWithStreams]
+]:
     """Return an async ``extract_streams`` mock for the B10 pre-pass.
 
     The pre-pass in ``_run_batch_with_progress`` calls ``extract_streams`` on
@@ -79,6 +83,30 @@ _EXIT_TABLE_DATA_ROW = re.compile(r"^\|\s*`")
 _MAX_RETRIES_OPTION_ROW = re.compile(r"^\|\s*`--max-retries`\s*\|")
 _LOG_LEVEL_OPTION_ROW = re.compile(r"^\|\s*`--log-level`\s*\|", re.MULTILINE)
 _BATCH_SUMMARY_STEP = re.compile(r"^\s*\d+\.\s+Prints summary of successful and failed downloads")
+
+# NEW-07 partition table: (description, args, expected_code, category).
+# Each configuration failure maps to 3, each download failure to 1,
+# each usage error to 2 — and no code is shared across categories.
+_EXIT_CODE_PARTITION: list[tuple[str, list[str], int, str]] = [
+    (
+        "config: --max-retries 0 rejected by Settings model",
+        ["download", "https://vkvideo.ru/video-12345_67890", "--max-retries", "0"],
+        3,
+        "config",
+    ),
+    (
+        "usage: --max-retries non-integer rejected by Typer parser",
+        ["download", "https://vkvideo.ru/video-12345_67890", "--max-retries", "abc"],
+        2,
+        "usage",
+    ),
+    (
+        "download: perform_download raises VideoNotFoundError",
+        ["download", "https://vkvideo.ru/video-12345_67890"],
+        1,
+        "download",
+    ),
+]
 
 
 def _documented_exit_codes(doc_path: Path) -> dict[str, set[int]]:
@@ -2660,6 +2688,64 @@ class TestExitCodeContract:
             "an out-of-range --max-retries must exit 3 (configuration error), not 1"
         )
 
+    def test_exit_code_partition(self, tmp_path: Path) -> None:
+        """NEW-07: exit codes partition into disjoint categories.
+
+        Each configuration failure maps to 3, each download failure to 1, and
+        each usage error to 2 — and no code is shared across categories. The
+        table is asserted non-empty so a filter bug cannot masquerade as a
+        clean partition.
+        """
+        # Guard against a vacuous pass on an empty enumeration (Risk I-15).
+        assert _EXIT_CODE_PARTITION, "exit-code partition table must be non-empty"
+
+        codes_by_category: dict[str, set[int]] = {}
+        for description, args, expected_code, category in _EXIT_CODE_PARTITION:
+            if category == "download":
+                # Reach perform_download without touching the network or
+                # the real Settings model.
+                with (
+                    patch(
+                        "vkdownloader.services.downloader.VKVideoExtractor"
+                    ) as mock_extractor_cls,
+                    patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+                    patch("vkdownloader.services.downloader.perform_download") as mock_download,
+                    patch(
+                        "vkdownloader.utils.security.validate_output_path", return_value=tmp_path
+                    ),
+                    patch("vkdownloader.cli.Settings") as mock_settings_cls,
+                ):
+                    mock_extractor = MagicMock()
+                    mock_extractor.extract_streams = AsyncMock(
+                        return_value=MagicMock(
+                            id="12345_67890",
+                            streams=[
+                                MagicMock(url="https://example.com/1080.m3u8", quality="1080")
+                            ],
+                        )
+                    )
+                    mock_extractor_cls.return_value = mock_extractor
+                    mock_selector = MagicMock()
+                    mock_selector.list_available_qualities.return_value = ["1080"]
+                    mock_selector.select.return_value = MagicMock(quality="1080")
+                    mock_selector_cls.return_value = mock_selector
+                    mock_download.side_effect = VideoNotFoundError()
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
+                    result = runner.invoke(app, args, catch_exceptions=False)
+            else:
+                result = runner.invoke(app, args, catch_exceptions=False)
+
+            assert result.exit_code == expected_code, description
+            codes_by_category.setdefault(category, set()).add(expected_code)
+
+        # Partition property: no expected_code value appears in more than
+        # one category — a shared code would collapse the contract.
+        seen: set[int] = set()
+        for codes in codes_by_category.values():
+            overlap = seen & codes
+            assert not overlap, f"partition violated: code(s) {overlap} shared across categories"
+            seen |= codes
+
 
 class TestMaxRetriesOptionDocumentation:
     """B5 (doc half of OUT-005): the ``--max-retries`` option-table row must exist
@@ -3406,15 +3492,44 @@ class TestPreSinkDiagnostic:
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("", encoding="utf-8")
 
-        result = runner.invoke(
-            app,
-            ["batch", str(urls_file)],
-            catch_exceptions=False,
-        )
+        # Clear root logger handlers so setup_logging's basicConfig can attach
+        # the FileHandler (basicConfig is a no-op when handlers already exist,
+        # e.g. from pytest's log-capture handler).  Patch the CLI module logger
+        # with a fresh proxy so it resolves with setup_logging's JSONRenderer
+        # rather than a ConsoleRenderer cached from an earlier test.
+        _root = logging.getLogger()
+        _saved_handlers = _root.handlers[:]
+        _saved_level = _root.level
+        _root.handlers.clear()
+        try:
+            with patch.object(cli, "logger", structlog.get_logger("vkdownloader.cli")):
+                result = runner.invoke(
+                    app,
+                    ["batch", str(urls_file)],
+                    catch_exceptions=False,
+                )
+        finally:
+            for _h in _root.handlers:
+                _h.flush()
+                _h.close()
+            _root.handlers = _saved_handlers
+            _root.setLevel(_saved_level)
 
         assert "download_dir_empty_string_using_default" not in result.stdout
         log_contents = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         assert "download_dir_empty_string_using_default" not in log_contents
+
+        # VAL-120 positive oracle: parse the log file into JSON records and
+        # assert the event the run provably emits is present with an expected
+        # field value — not just the event name, but its INFO level. Every
+        # non-empty line must be valid JSON (the comprehension raises on any
+        # unparseable line).
+        records = [json.loads(line) for line in log_contents.splitlines() if line.strip()]
+        assert any(
+            record["event"] == "env_file_not_found_using_environment_or_defaults"
+            and record["level"] == "info"
+            for record in records
+        ), "env_file_not_found INFO record not present in log"
 
     # ---- CFG-008: the env-file resolution report is emitted at INFO --------
 
