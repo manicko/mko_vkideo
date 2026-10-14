@@ -47,6 +47,15 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: uv sync --locked
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The job runs with contents:read only; disable the comment and SARIF
+          # artefact features that need pull-requests/actions write scopes so
+          # this is a pure detect-and-fail gate (DEP-003 secret-scan class).
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
       - name: Lint
         run: uv run ruff check src tests
       - name: Format check

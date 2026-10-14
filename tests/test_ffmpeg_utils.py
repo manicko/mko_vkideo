@@ -17,12 +17,14 @@ from vkdownloader.services.downloader_throttle import DEFAULT_DOWNLOAD_TIMEOUT
 from vkdownloader.services.ffmpeg_utils import (
     _MERGE_SPACE_MARGIN_BYTES,
     _MERGE_STAGE_TIMEOUT,
+    MINIMUM_FFMPEG_VERSION,
     _build_ffmpeg_concat_command,
     _merge_batch_segments,
     _merge_segments_batched,
     _perform_final_merge,
     _required_merge_bytes,
     cancel_subprocess,
+    check_ffmpeg_version,
 )
 
 # Mirrors the shape of the value shutil.disk_usage returns (a named tuple of
@@ -1234,3 +1236,118 @@ class TestMergeBudgetSeparatedFromDownload:
         default = sig.parameters["download_timeout"].default
         assert default is _MERGE_STAGE_TIMEOUT
         assert default is not DEFAULT_DOWNLOAD_TIMEOUT
+
+
+class TestCheckFfmpegVersion:
+    """Tests for the ffmpeg version preflight (DEP-011)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_version_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reset the write-once version cache so each test probes fresh.
+
+        ``check_ffmpeg_version`` caches its result for the whole process, so
+        without a reset a probe performed by one test would be returned by every
+        later test and the stubbed ``subprocess.run`` would not be exercised.
+        ``monkeypatch`` also restores the original values on teardown, so the
+        cache never leaks into other test modules.
+        """
+        monkeypatch.setattr("vkdownloader.services.ffmpeg_utils._ffmpeg_version_checked", False)
+        monkeypatch.setattr("vkdownloader.services.ffmpeg_utils._ffmpeg_version", None)
+
+    @staticmethod
+    def _make_run(stdout: str = "") -> MagicMock:
+        """Build a CompletedProcess-like mock returned by a stubbed subprocess.run."""
+        result = MagicMock()
+        result.stdout = stdout
+        result.stderr = ""
+        result.returncode = 0
+        return result
+
+    @staticmethod
+    def _stub_run(monkeypatch: pytest.MonkeyPatch, stdout: str) -> MagicMock:
+        """Patch ``subprocess.run`` to return ``stdout`` on its next call."""
+        run_mock = MagicMock(return_value=TestCheckFfmpegVersion._make_run(stdout))
+        monkeypatch.setattr("subprocess.run", run_mock)
+        return run_mock
+
+    def test_parses_version_with_build_suffix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The release token is extracted with the distro/build suffix stripped."""
+        self._stub_run(
+            monkeypatch,
+            "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers\n",
+        )
+
+        assert check_ffmpeg_version() == "4.4.2"
+
+    def test_parses_bare_version_without_suffix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A release token with no build suffix is returned untouched."""
+        self._stub_run(monkeypatch, "ffmpeg version 7.1.1 Copyright (c) 2024\n")
+
+        assert check_ffmpeg_version() == "7.1.1"
+
+    def test_below_minimum_triggers_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A version below MINIMUM_FFMPEG_VERSION emits a single structured warning."""
+        self._stub_run(monkeypatch, "ffmpeg version 3.5.1 Copyright (c) 2023\n")
+
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            result = check_ffmpeg_version()
+
+        assert result == "3.5.1"
+        mock_logger.warning.assert_called_once_with(
+            "ffmpeg_version_below_minimum",
+            version="3.5.1",
+            minimum=MINIMUM_FFMPEG_VERSION,
+        )
+
+    def test_at_minimum_does_not_warn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A version equal to the floor satisfies it and stays silent."""
+        self._stub_run(monkeypatch, "ffmpeg version 4.4 Copyright (c) 2021\n")
+
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            result = check_ffmpeg_version()
+
+        assert result == "4.4"
+        mock_logger.warning.assert_not_called()
+
+    def test_above_minimum_does_not_warn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A version above the floor satisfies it and stays silent."""
+        self._stub_run(monkeypatch, "ffmpeg version 7.1.1 Copyright (c) 2024\n")
+
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            result = check_ffmpeg_version()
+
+        assert result == "7.1.1"
+        mock_logger.warning.assert_not_called()
+
+    def test_missing_ffmpeg_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When ffmpeg is not on PATH, FileNotFoundError is swallowed -> None, no warning."""
+        monkeypatch.setattr(
+            "subprocess.run", MagicMock(side_effect=FileNotFoundError("ffmpeg not found"))
+        )
+
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            result = check_ffmpeg_version()
+
+        assert result is None
+        mock_logger.warning.assert_not_called()
+
+    def test_unparseable_version_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Output without a recognizable version token yields None, no warning."""
+        self._stub_run(monkeypatch, "some unrelated banner output without a version\n")
+
+        with patch("vkdownloader.services.ffmpeg_utils.logger") as mock_logger:
+            result = check_ffmpeg_version()
+
+        assert result is None
+        mock_logger.warning.assert_not_called()
+
+    def test_result_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The write-once cache returns the same value without re-running subprocess."""
+        run_mock = self._stub_run(monkeypatch, "ffmpeg version 5.0 Copyright (c) 2021\n")
+
+        first = check_ffmpeg_version()
+        second = check_ffmpeg_version()
+
+        assert first == "5.0"
+        assert second == "5.0"
+        run_mock.assert_called_once()

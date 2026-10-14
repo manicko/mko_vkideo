@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Final
 
+from packaging.version import InvalidVersion, Version
 from structlog import get_logger
 
 from ..exceptions import DownloadError
@@ -53,6 +55,23 @@ _SPAWN_BOUNDARY_KWARGS: Final[dict[str, int | bool]] = (
 
 # Module-level cache: PATH lookup happens only once per process lifetime
 _ffmpeg_available: bool | None = None
+
+# Minimum ffmpeg build the product is verified against (DEP-011). ffmpeg is a
+# native binary, so no entry in pyproject.toml can express this floor; this
+# constant is the single written record of it, surfaced as a warning (never a
+# refusal) by check_ffmpeg_version below.
+MINIMUM_FFMPEG_VERSION: Final[str] = "4.4"
+
+# Version-token pattern for ``ffmpeg -version``'s first line, e.g.
+# "ffmpeg version 4.4.2-0ubuntu0.22.04.1 ..." captures "4.4.2-0ubuntu0.22.04.1".
+_FFMPEG_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"ffmpeg version (\S+)")
+
+# Write-once cache for check_ffmpeg_version, mirroring the cache in
+# check_ffmpeg_available. _ffmpeg_version_checked is the "computed" latch so a
+# genuine ``None`` result (ffmpeg absent or version unparseable) is cached and
+# not re-probed on every call.
+_ffmpeg_version: str | None = None
+_ffmpeg_version_checked: bool = False
 
 # Hint text naming the missing dependency and the consequence, reused by every
 # arm that reports a missing muxer so the install step is named once and
@@ -221,6 +240,81 @@ def check_ffmpeg_available() -> bool:
     if _ffmpeg_available is None:
         _ffmpeg_available = shutil.which("ffmpeg") is not None
     return _ffmpeg_available
+
+
+def _parse_ffmpeg_version(stdout: str) -> str | None:
+    """Extract the upstream release version from ``ffmpeg -version`` output.
+
+    The first output line looks like::
+
+        ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers
+
+    Returns the release token (``"4.4.2"``) with any distributional/build
+    suffix (``-0ubuntu0.22.04.1``) stripped, or ``None`` when the line does not
+    carry a recognizable version token.
+    """
+    first_line = stdout.splitlines()[0] if stdout else ""
+    match = _FFMPEG_VERSION_RE.search(first_line)
+    if match is None:
+        return None
+    # Strip the build/distro suffix so "4.4.2-0ubuntu0.22.04.1" compares as the
+    # upstream release "4.4.2" against MINIMUM_FFMPEG_VERSION.
+    return match.group(1).split("-")[0]
+
+
+def check_ffmpeg_version() -> str | None:
+    """Check the installed ffmpeg version against :data:`MINIMUM_FFMPEG_VERSION`.
+
+    Runs ``ffmpeg -version`` once per process and caches the result, mirroring
+    the write-once cache used by :func:`check_ffmpeg_available`. A version older
+    than :data:`MINIMUM_FFMPEG_VERSION` emits a single
+    ``ffmpeg_version_below_minimum`` warning — never a hard failure — so a user
+    on an older distro build gets a clear message instead of a refusal to run
+    (DEP-011).
+
+    Returns:
+        The parsed version string (e.g. ``"4.4.2"``) when ffmpeg is present and
+        its version is parseable, or ``None`` when ffmpeg is not on ``PATH`` or
+        its version line cannot be parsed.
+    """
+    global _ffmpeg_version, _ffmpeg_version_checked
+    if _ffmpeg_version_checked:
+        return _ffmpeg_version
+    _ffmpeg_version_checked = True
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        # ffmpeg is not on PATH; cache the absence with no warning, since the
+        # call site already reports a missing binary via check_ffmpeg_available.
+        _ffmpeg_version = None
+        return _ffmpeg_version
+
+    parsed = _parse_ffmpeg_version(result.stdout or "")
+    if parsed is None:
+        _ffmpeg_version = None
+        return _ffmpeg_version
+
+    try:
+        comparable = Version(parsed)
+    except InvalidVersion:
+        # Token present but not a PEP 440 version; treat as a parse failure.
+        _ffmpeg_version = None
+        return _ffmpeg_version
+
+    _ffmpeg_version = parsed
+    if comparable < Version(MINIMUM_FFMPEG_VERSION):
+        logger.warning(
+            "ffmpeg_version_below_minimum",
+            version=parsed,
+            minimum=MINIMUM_FFMPEG_VERSION,
+        )
+    return _ffmpeg_version
 
 
 async def cancel_subprocess(

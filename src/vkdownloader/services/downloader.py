@@ -26,6 +26,7 @@ from .concurrency import SemaphoreLike
 from .ffmpeg_utils import (
     _MERGE_HINT,
     check_ffmpeg_available,
+    check_ffmpeg_version,
 )
 from .quality import QualitySelector
 from .ytdlp_downloader import (
@@ -114,6 +115,13 @@ async def perform_download(
             "ffmpeg_missing_for_merge",
             hint=_MERGE_HINT,
         )
+
+    # Preflight the installed ffmpeg version against MINIMUM_FFMPEG_VERSION.
+    # check_ffmpeg_version emits the warning itself (a version below the floor
+    # warns, never refuses, so an older distro build still functions); a missing
+    # binary short-circuits to None here and was already reported above
+    # (DEP-011).
+    check_ffmpeg_version()
 
     if extractor is None:
         extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)

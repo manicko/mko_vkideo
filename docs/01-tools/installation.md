@@ -18,7 +18,7 @@ This guide covers installation and setup of VK Video Downloader for development 
 ## Prerequisites
 
 - Python 3.14 or higher
-- ffmpeg — required for the segment download path (HLS segment download and MP4 merge); not needed for single-stream yt-dlp downloads
+- ffmpeg 4.4 or later — required for the segment download path (HLS segment download and MP4 merge); not needed for single-stream yt-dlp downloads
 - Windows, macOS, or Linux operating system
 
 **Python 3.12 and 3.13 are no longer supported.** This package declares `requires-python = ">=3.14"`, so attempting to install it on 3.12 or 3.13 will fail with a resolution error. This is a deliberate narrowing, not a documentation oversight.
@@ -27,7 +27,7 @@ This guide covers installation and setup of VK Video Downloader for development 
 
 ### ffmpeg
 
-ffmpeg is **required for the segment download path** (HLS segment download and MP4 merge to MP4). It is **not required for every download** — single-stream yt-dlp downloads work without it; only segment-based downloads will fail at merge time if it is absent.
+ffmpeg **4.4 or later is required** for the segment download path (HLS segment download and MP4 merge to MP4). It is **not required for every download** — single-stream yt-dlp downloads work without it; only segment-based downloads will fail at merge time if it is absent or older than the supported floor.
 
 Install it as follows for your platform:
 
@@ -50,6 +50,8 @@ Verify installation:
 ```bash
 ffmpeg -version
 ```
+
+The version reported must be 4.4 or later — this is the minimum build the product is verified against (DEP-011). An older ffmpeg still handles single-stream downloads, but the segment path emits a runtime warning when the discovered version falls below the floor.
 
 ## Installation Steps
 
