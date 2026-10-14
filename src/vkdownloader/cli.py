@@ -37,8 +37,6 @@ from .exceptions import (
 )
 from .models.enums import CookieSource, DownloadMethod, LogLevel
 from .models.quality import QualitySpec
-from .services.batch_downloader import run_batch
-from .services.downloader import download_video
 from .services.downloader_throttle import get_shutdown_event
 from .services.extractor import is_valid_video_url
 from .services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
@@ -54,13 +52,14 @@ _logging_configured: bool = False
 
 
 class _PreambleFailure(Exception):
-    """Raised when the shared preamble encounters an OSError.
+    """Raised when the shared preamble encounters an OSError or UnicodeError.
 
-    Wraps OSErrors from env scanning, settings construction, or logging
-    setup so both commands can route them to a single renderer instead of
-    their own catch-alls. The ``logging_related`` flag records whether the
-    cause originated from the logging step, so the renderer can append the
-    log-file hint only for logging-related failures.
+    Wraps OSErrors (and ``UnicodeDecodeError``/``UnicodeError`` from a malformed
+    ``.env``) from env scanning, settings construction, or logging setup so both
+    commands can route them to a single renderer instead of their own
+    catch-alls. The ``logging_related`` flag records whether the cause
+    originated from the logging step, so the renderer can append the log-file
+    hint only for logging-related failures.
     """
 
     def __init__(self, message: str, *, logging_related: bool = False) -> None:
@@ -137,6 +136,7 @@ class _SettingsOverrides(TypedDict, total=False):
     ssl_verify: bool
     max_retries: int
     log_level: LogLevel
+    log_file: Path
 
 
 def _build_settings(
@@ -145,6 +145,7 @@ def _build_settings(
     ssl_verify: bool | None,
     max_retries: int | None,
     log_level: LogLevel | None,
+    log_file: Path | None = None,
 ) -> Settings:
     """Construct the one Settings object a command invocation runs on.
 
@@ -163,6 +164,8 @@ def _build_settings(
         overrides["max_retries"] = max_retries
     if log_level is not None:
         overrides["log_level"] = log_level
+    if log_file is not None:
+        overrides["log_file"] = log_file
     return Settings(**overrides)
 
 
@@ -172,6 +175,7 @@ def _run_command_preamble(
     ssl_verify: bool | None,
     max_retries: int | None,
     log_level: LogLevel | None,
+    log_file: Path | None = None,
 ) -> Settings:
     """Run the shared four-step command bootstrap and return the constructed Settings.
 
@@ -193,15 +197,16 @@ def _run_command_preamble(
     this module's global namespace so that string-path patches targeting
     ``vkdownloader.cli.warn_unknown_env_vars`` still take effect here.
 
-    Any ``OSError`` raised during the preamble is wrapped in
+    Any ``OSError`` or ``UnicodeError`` raised during the preamble is wrapped in
     ``_PreambleFailure`` so both commands delegate to
     ``_render_preamble_failure`` — keeping the bootstrap-failure path
     independent of the structured-log sink. The env-scan / settings step and
     the logging-setup step run in separate ``try`` blocks so the wrapper can
-    set ``logging_related`` correctly: OSErrors from env scanning or settings
-    construction carry ``logging_related=False``, while the logging step
-    (after ``_build_settings`` returns) carries ``logging_related=True``, so
-    the renderer appends the log-file hint only to logging-related failures.
+    set ``logging_related`` correctly: failures from env scanning or settings
+    construction (including a ``UnicodeDecodeError`` from a malformed ``.env``
+    read by ``dotenv``) carry ``logging_related=False``, while the logging
+    step (after ``_build_settings`` returns) carries ``logging_related=True``,
+    so the renderer appends the log-file hint only to logging-related failures.
     After ``setup_logging`` returns, ``_logging_configured`` is set so the
     catch-all can avoid emitting a log record through an unconfigured sink.
     """
@@ -223,8 +228,9 @@ def _run_command_preamble(
             ssl_verify=ssl_verify,
             max_retries=max_retries,
             log_level=log_level,
+            log_file=log_file,
         )
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise _PreambleFailure(
             "OSError during command preamble (env scan or settings construction)"
         ) from exc
@@ -234,7 +240,7 @@ def _run_command_preamble(
         _logging_configured = True
         _log_env_file_path()
         return settings
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise _PreambleFailure(
             "OSError during command preamble (logging setup)",
             logging_related=True,
@@ -394,6 +400,11 @@ def download(
         "--log-level",
         help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)",
     ),
+    log_file: Path | None = typer.Option(
+        None,
+        "--log-file",
+        help="Log file path; writes structured JSON logs to this file instead of stderr (effective default: none; from VKDOWNLOADER_LOG_FILE or .env; overrides .env)",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -405,7 +416,14 @@ def download(
     """
 
     async def _download() -> Path | None:
-        """Async implementation of video download."""
+        """Async implementation of video download.
+
+        Signal handlers are registered here in the entry layer (not in the
+        service layer) so both ``download`` and ``batch`` share one lifecycle
+        owner for SIGINT/SIGTERM disposition (ENT-004).
+        """
+        from .services.downloader import download_video
+
         setup_signal_handlers()
         try:
             result = await download_video(
@@ -437,6 +455,7 @@ def download(
             ssl_verify=ssl_verify,
             max_retries=max_retries,
             log_level=log_level,
+            log_file=log_file,
         )
         result = asyncio.run(_download())
 
@@ -544,12 +563,43 @@ def batch_download(
         "--log-level",
         help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (effective default: INFO; from VKDOWNLOADER_LOG_LEVEL or .env)",
     ),
+    log_file: Path | None = typer.Option(
+        None,
+        "--log-file",
+        help="Log file path; writes structured JSON logs to this file instead of stderr (effective default: none; from VKDOWNLOADER_LOG_FILE or .env; overrides .env)",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
     Reads video URLs from a file (one URL per line) and downloads each video
     with the specified quality to the output directory.
     """
+
+    async def _run_batch_with_signal_handlers() -> int:
+        """Async implementation of batch download.
+
+        Signal handlers are registered here in the entry layer (not in the
+        service layer) so both ``download`` and ``batch`` share one lifecycle
+        owner for SIGINT/SIGTERM disposition (ENT-004). The ``run_batch``
+        import is deferred to function scope so ``--help`` does not load the
+        service layer's heavy dependencies (yt-dlp, playwright, aiohttp,
+        rich) (ENT-013).
+        """
+        from .services.batch_downloader import run_batch
+
+        setup_signal_handlers()
+        try:
+            return await run_batch(
+                valid_urls,
+                quality_spec,
+                DownloadMethod(method),
+                settings,
+                output,
+                skipped_count,
+            )
+        finally:
+            cleanup_signal_handlers()
+
     try:
         valid_urls: list[str] = []
         skipped_count = 0
@@ -562,6 +612,7 @@ def batch_download(
             ssl_verify=ssl_verify,
             max_retries=max_retries,
             log_level=log_level,
+            log_file=log_file,
         )
 
         # Read the URL file narrowly so a read failure produces the precise
@@ -594,16 +645,7 @@ def batch_download(
             typer.echo(f"No URLs found in {urls_file}", err=True)
             raise typer.Exit(code=1)
 
-        exit_code = asyncio.run(
-            run_batch(
-                valid_urls,
-                quality_spec,
-                DownloadMethod(method),
-                settings,
-                output,
-                skipped_count,
-            )
-        )
+        exit_code = asyncio.run(_run_batch_with_signal_handlers())
         raise typer.Exit(code=exit_code)
 
     except ValidationError as e:

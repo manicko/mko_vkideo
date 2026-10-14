@@ -361,7 +361,7 @@ class TestDownloadCommand:
 
         with (
             patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 side_effect=error,
             ),
@@ -410,7 +410,7 @@ class TestDownloadCommand:
         """
         with (
             patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 side_effect=VideoNotFoundError("No streams found for video"),
             ),
@@ -592,7 +592,9 @@ class TestBatchCommand:
         urls_file.write_text("https://vkvideo.ru/video-1_1\n")
 
         with patch(
-            "vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0
+            "vkdownloader.services.batch_downloader.run_batch",
+            new_callable=AsyncMock,
+            return_value=0,
         ) as mock_run_batch:
             result = runner.invoke(
                 app,
@@ -611,7 +613,9 @@ class TestBatchCommand:
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("https://vkvideo.ru/video-1_1\n")
 
-        with patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch:
+        with patch(
+            "vkdownloader.services.batch_downloader.run_batch", new_callable=AsyncMock
+        ) as mock_run_batch:
             result = runner.invoke(
                 app,
                 ["batch", str(urls_file), "--quality", "nope"],
@@ -1733,7 +1737,7 @@ class TestBatchCommand:
 
         with (
             patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 return_value=tmp_path / "video.mp4",
             ) as mock_download_video,
@@ -1772,7 +1776,7 @@ class TestBatchCommand:
 
         with (
             patch(
-                "vkdownloader.cli.run_batch",
+                "vkdownloader.services.batch_downloader.run_batch",
                 new_callable=AsyncMock,
                 side_effect=error,
             ),
@@ -1867,7 +1871,7 @@ class TestQualityOptionValidation:
         quality model the argument parser rejected such a value outright.
         """
         with patch(
-            "vkdownloader.cli.download_video",
+            "vkdownloader.services.downloader.download_video",
             new_callable=AsyncMock,
             return_value=tmp_path / "video_1072.mp4",
         ) as mock_download_video:
@@ -2372,18 +2376,21 @@ class TestBatchErrorHandler:
         assert "An error occurred during batch download" in result.output
         assert "UnboundLocalError" not in result.output
 
-    def test_batch_non_utf8_env_file_reports_designed_error(
+    def test_batch_non_utf8_env_file_reports_preamble_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A ``.env`` that is not valid UTF-8 must print the designed message and exit 1.
+        """A ``.env`` that is not valid UTF-8 is a preamble failure (exit 3).
 
         ``Settings`` and ``warn_unknown_env_vars()`` both read ``.env`` from the
         working directory before the URL file is touched, so a malformed ``.env``
-        raises above the binding the handler reports. Before the fix the handler
-        itself raised ``UnboundLocalError``: the designed message never printed,
-        the intended exit code never happened, and the process died with a raw
-        traceback. ``catch_exceptions=False`` makes that failure mode observable —
-        the exception propagates out of ``runner.invoke`` and errors the test.
+        raises a ``UnicodeDecodeError`` (a ``ValueError`` subclass, not
+        ``OSError``) during the env-scan / settings-construction step. The
+        preamble now catches ``(OSError, UnicodeError)`` and wraps it as
+        ``_PreambleFailure`` (OUT-001), so the bad ``.env`` is reported as a
+        configuration error (exit 3) rather than a download failure (exit 1).
+
+        ``catch_exceptions=False`` makes that failure mode observable: the
+        exception propagates out of ``runner.invoke`` and errors the test.
         """
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("https://vkvideo.ru/video-12345_67890\n", encoding="utf-8")
@@ -2394,8 +2401,9 @@ class TestBatchErrorHandler:
 
         result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
 
-        assert result.exit_code == 1
-        assert "An error occurred during batch download" in result.output
+        assert result.exit_code == 3
+        assert "Command preamble failed" in result.output
+        assert "An error occurred during batch download" not in result.output
         assert "UnboundLocalError" not in result.output
 
     def test_batch_failure_before_url_file_read_reports_designed_error(
@@ -2434,7 +2442,9 @@ class TestBatchErrorHandler:
 
         with (
             patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
-            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch,
+            patch(
+                "vkdownloader.services.batch_downloader.run_batch", new_callable=AsyncMock
+            ) as mock_run_batch,
         ):
             mock_preamble.return_value = MagicMock(log_file=None)
             mock_run_batch.side_effect = OSError("No space left on device")
@@ -2494,7 +2504,7 @@ class TestQualityRecoveryHint:
 
         for token in tokens:
             with patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 return_value=tmp_path / "video.mp4",
             ):
@@ -3178,8 +3188,8 @@ class TestEntryPointSourcePrecedence:
             patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
-            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch("vkdownloader.cli.setup_signal_handlers"),
+            patch("vkdownloader.cli.cleanup_signal_handlers"),
             patch(
                 "vkdownloader.utils.security.validate_output_path",
                 return_value=tmp_path,
@@ -3280,8 +3290,8 @@ class TestEntryPointSourcePrecedence:
             patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
-            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch("vkdownloader.cli.setup_signal_handlers"),
+            patch("vkdownloader.cli.cleanup_signal_handlers"),
             patch(
                 "vkdownloader.utils.security.validate_output_path",
                 return_value=tmp_path,
@@ -3428,8 +3438,8 @@ class TestEntryPointSourcePrecedence:
             patch(
                 "vkdownloader.services.batch_downloader.download_video",
             ) as mock_dv,
-            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
+            patch("vkdownloader.cli.setup_signal_handlers"),
+            patch("vkdownloader.cli.cleanup_signal_handlers"),
             patch(
                 "vkdownloader.utils.security.validate_output_path",
                 return_value=tmp_path,
@@ -3485,7 +3495,9 @@ class TestPreambleCalledOncePerCommand:
         """download calls _run_command_preamble exactly once."""
         with (
             patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
-            patch("vkdownloader.cli.download_video", new_callable=AsyncMock) as mock_download,
+            patch(
+                "vkdownloader.services.downloader.download_video", new_callable=AsyncMock
+            ) as mock_download,
         ):
             mock_preamble.return_value = MagicMock(log_file=None)
             mock_download.return_value = tmp_path / "video.mp4"
@@ -3506,7 +3518,9 @@ class TestPreambleCalledOncePerCommand:
 
         with (
             patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
-            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock) as mock_run_batch,
+            patch(
+                "vkdownloader.services.batch_downloader.run_batch", new_callable=AsyncMock
+            ) as mock_run_batch,
         ):
             mock_preamble.return_value = MagicMock(log_file=None)
             mock_run_batch.return_value = 0
@@ -3843,13 +3857,39 @@ class TestPreambleFailureRendering:
         assert batch_result.exit_code == 3
         assert download_result.stderr == batch_result.stderr
 
+    def test_download_non_utf8_env_file_exits_three(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OUT-001: a malformed ``.env`` (undecodable bytes) exits 3 for download.
+
+        Mirrors the report's reproduction of the ``download`` command: a bad
+        ``.env`` byte surfaces as ``UnicodeDecodeError`` from the preamble's
+        env scan, which is now caught and wrapped as ``_PreambleFailure`` so
+        the command exits 3 (preamble failure) instead of 1.
+        """
+        (tmp_path / ".env").write_bytes(
+            b"VKDOWNLOADER_LOG_LEVEL=" + bytes([_undecodable_byte()]) + b"\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(
+            app,
+            ["download", "https://vkvideo.ru/video-12345_67890"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 3
+        assert "Command preamble failed" in result.output
+        assert "An error occurred during download" not in result.output
+        assert "Traceback" not in result.output
+
 
 class TestLogLevelOption:
-    """Tests for the ``--log-level`` CLI option (P13-B2).
+    """Tests for the ``--log-level`` and ``--log-file`` CLI options.
 
-    Covers: help-text identity across both commands, supplied value changing
-    verbosity, unsupplied value leaving env/.env reachable, absence of a
-    ``--log-file`` option in help, and the Live-1 hint-message structural fix.
+    Covers: help-text identity across both commands for both options, supplied
+    values changing verbosity/destination, unsupplied values leaving env/.env
+    reachable, and the Live-1 hint-message structural fix.
     """
 
     # The help text must be byte-identical between download and batch (C4).
@@ -3911,7 +3951,7 @@ class TestLogLevelOption:
             patch("vkdownloader.cli.setup_logging") as mock_setup,
             patch("vkdownloader.cli._log_env_file_path"),
             patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 return_value=tmp_path / "video.mp4",
             ),
@@ -3940,7 +3980,11 @@ class TestLogLevelOption:
             patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
             patch("vkdownloader.cli.setup_logging") as mock_setup,
             patch("vkdownloader.cli._log_env_file_path"),
-            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0),
+            patch(
+                "vkdownloader.services.batch_downloader.run_batch",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             result = runner.invoke(
                 app,
@@ -3971,7 +4015,7 @@ class TestLogLevelOption:
             patch("vkdownloader.cli.setup_logging") as mock_setup,
             patch("vkdownloader.cli._log_env_file_path"),
             patch(
-                "vkdownloader.cli.download_video",
+                "vkdownloader.services.downloader.download_video",
                 new_callable=AsyncMock,
                 return_value=tmp_path / "video.mp4",
             ),
@@ -4001,7 +4045,11 @@ class TestLogLevelOption:
             patch("vkdownloader.cli.warn_unknown_env_vars", return_value=[]),
             patch("vkdownloader.cli.setup_logging") as mock_setup,
             patch("vkdownloader.cli._log_env_file_path"),
-            patch("vkdownloader.cli.run_batch", new_callable=AsyncMock, return_value=0),
+            patch(
+                "vkdownloader.services.batch_downloader.run_batch",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
         ):
             result = runner.invoke(
                 app,
@@ -4014,19 +4062,44 @@ class TestLogLevelOption:
         assert settings_arg.log_level == LogLevel.ERROR
 
     # ------------------------------------------------------------------
-    # No --log-file option (D-1 / decision C: --log-level only)
+    # --log-file declared in both commands (P1 / OUT-015)
     # ------------------------------------------------------------------
 
-    def test_no_log_file_option_in_help(self) -> None:
-        """Neither ``download --help`` nor ``batch --help`` mentions ``--log-file``."""
+    _LOG_FILE_HELP = (
+        "Log file path; writes structured JSON logs to this file instead of stderr "
+        "(effective default: none; from VKDOWNLOADER_LOG_FILE or .env; overrides .env)"
+    )
+
+    def test_log_file_appears_in_both_help_with_identical_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--log-file`` appears in BOTH ``download --help`` and ``batch --help``
+        with byte-identical help text (P1 / OUT-015)."""
+        monkeypatch.setenv("COLUMNS", "500")
+
         download_help = runner.invoke(app, ["download", "--help"])
         batch_help = runner.invoke(app, ["batch", "--help"])
 
         assert download_help.exit_code == 0
         assert batch_help.exit_code == 0
+        assert "--log-file" in download_help.output
+        assert "--log-file" in batch_help.output
 
-        assert "--log-file" not in download_help.output
-        assert "--log-file" not in batch_help.output
+        # The full help text must appear as a contiguous string in both.
+        assert self._LOG_FILE_HELP in download_help.output
+        assert self._LOG_FILE_HELP in batch_help.output
+
+        # The complete --log-file line must be byte-identical between commands.
+        download_line = next(
+            (ln for ln in download_help.output.splitlines() if "--log-file" in ln), ""
+        )
+        batch_line = next((ln for ln in batch_help.output.splitlines() if "--log-file" in ln), "")
+        assert download_line == batch_line, (
+            "download and batch --log-file lines differ:\n"
+            f"  download: {download_line!r}\n"
+            f"  batch:    {batch_line!r}"
+        )
 
     # ------------------------------------------------------------------
     # Live-1: hint message names no option that doesn't resolve to --help

@@ -133,8 +133,6 @@ def _batch_runtime(download: object) -> Iterator[None]:
     drive the real path between the download result and the summary.
     """
     with (
-        patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-        patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
         patch("vkdownloader.services.batch_downloader.download_video", side_effect=download),
         patch(
             "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
@@ -168,8 +166,6 @@ class TestBatchDownloaderSemaphore:
         merge_side_effect = lambda segments_dir, output_file, *_: output_file  # noqa: E731
 
         with (
-            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
             patch(
                 "vkdownloader.services.downloader.check_ffmpeg_available",
                 return_value=True,
@@ -722,8 +718,6 @@ class TestCorrelationInheritance:
             return tmp_path / "ok.mp4"
 
         with (
-            patch("vkdownloader.services.batch_downloader.setup_signal_handlers"),
-            patch("vkdownloader.services.batch_downloader.cleanup_signal_handlers"),
             patch(
                 "vkdownloader.services.batch_downloader.VKVideoExtractor.extract_streams",
                 side_effect=_make_mock_extract_streams(),

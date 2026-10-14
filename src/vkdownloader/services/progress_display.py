@@ -11,22 +11,13 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    ProgressColumn,
-    Task,
-    TaskID,
-    TaskProgressColumn,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-from rich.text import Text
 from structlog import get_logger
+
+if TYPE_CHECKING:
+    from rich.console import Console
+    from rich.progress import Progress, TaskID
 
 from ..config import encoding_safe
 from ..models.enums import TERMINAL_STATUSES, ProgressStatus
@@ -43,36 +34,6 @@ _PROGRESS_LOG_INTERVAL_SECONDS: float = 1.0
 # Long titles are truncated to keep each progress line readable on an 80-col
 # terminal.
 _MAX_TITLE_LENGTH: int = 60
-
-
-class _StatusColumn(ProgressColumn):
-    """Render a terminal status marker for a download task.
-
-    Renders nothing while a task is in progress and a styled glyph once the task
-    reaches a terminal status, which is carried in ``task.fields["status"]``.
-    """
-
-    def render(self, task: Task) -> Text:
-        raw = task.fields.get("status")
-        if raw is None:
-            return Text("")
-        # task.fields is dict[str, Any] upstream; coerce and validate so Any
-        # never escapes into our own signatures or logic.
-        try:
-            status = ProgressStatus(str(raw))
-        except ValueError:
-            return Text("")
-        match status:
-            case ProgressStatus.SUCCESS:
-                return Text("[✓]", style="green")
-            case ProgressStatus.FAILED:
-                return Text("[✗]", style="red")
-            case ProgressStatus.SKIPPED:
-                return Text("[⊘]", style="yellow")
-            case ProgressStatus.CANCELLED:
-                return Text("[⊘]", style="cyan")
-            case ProgressStatus.IN_PROGRESS:
-                return Text("")
 
 
 def _format_outcome(status: ProgressStatus) -> str:
@@ -141,6 +102,8 @@ class RichProgressReporter:
         gates all read the same value.
         """
         if self._console is None:
+            from rich.console import Console
+
             self._console = Console(stderr=True)
         if self._enabled is None:
             self._enabled = self._console.is_terminal
@@ -376,9 +339,56 @@ class RichProgressReporter:
         ``is_terminal`` is the value resolved by :meth:`is_enabled` (and read once
         by :meth:`start`); threading it in keeps ``auto_refresh`` consistent with
         the gated decision instead of re-reading ``console.is_terminal`` here.
+
+        Rich is imported here (not at module scope) so that ``--help`` and other
+        non-batch command paths do not load the heavy ``rich`` dependency
+        (ENT-013).
         """
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            ProgressColumn,
+            Task,
+            TaskProgressColumn,
+            TextColumn,
+            TimeRemainingColumn,
+            TransferSpeedColumn,
+        )
+        from rich.text import Text
+
         console = self._console
         assert console is not None, "start() must be called before building progress"
+
+        class _StatusColumn(ProgressColumn):
+            """Render a terminal status marker for a download task.
+
+            Renders nothing while a task is in progress and a styled glyph once
+            the task reaches a terminal status, which is carried in
+            ``task.fields["status"]``.
+            """
+
+            def render(self, task: Task) -> Text:
+                raw = task.fields.get("status")
+                if raw is None:
+                    return Text("")
+                # task.fields is dict[str, Any] upstream; coerce and validate so
+                # Any never escapes into our own signatures or logic.
+                try:
+                    status = ProgressStatus(str(raw))
+                except ValueError:
+                    return Text("")
+                match status:
+                    case ProgressStatus.SUCCESS:
+                        return Text("[\u2713]", style="green")
+                    case ProgressStatus.FAILED:
+                        return Text("[\u2717]", style="red")
+                    case ProgressStatus.SKIPPED:
+                        return Text("[\u2298]", style="yellow")
+                    case ProgressStatus.CANCELLED:
+                        return Text("[\u2298]", style="cyan")
+                    case ProgressStatus.IN_PROGRESS:
+                        return Text("")
+
         columns = (
             _StatusColumn(),
             TextColumn("{task.description}"),

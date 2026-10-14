@@ -23,39 +23,12 @@ from ..services.extractor import VKVideoExtractor
 from ..utils.security import _resolve_output_file, sanitize_filename_component
 from ..utils.url_sanitizer import _strip_auth_params
 from .concurrency import SemaphoreLike
-from .cookies import _cookies_to_netscape  # noqa: F401 — backward-compat re-export
 from .ffmpeg_utils import (
     _MERGE_HINT,
-    _build_ffmpeg_concat_command,
-    _merge_segments_batched,
-    cancel_subprocess,
     check_ffmpeg_available,
 )
 from .quality import QualitySelector
-from .retry_policies import (
-    _retry_429_with_backoff,  # noqa: F401 — backward-compat re-export
-)
-from .segment_downloader import (
-    _cleanup_segments,
-    _download_segment,
-    _download_segment_parallel,
-    _download_segment_sequential,
-    _fetch_playlist_with_retry,
-    _parse_m3u8_segments,
-    download_hls_with_resume,
-)
-from .signal_handlers import setup_signal_handlers
 from .ytdlp_downloader import (
-    _attempt_segment_resume as _attempt_segment_resume,  # noqa: F401 — backward-compat re-export
-)
-from .ytdlp_downloader import (
-    _await_first_and_cancel_others,
-    _build_ytdlp_cli_command,  # noqa: F401 — backward-compat re-export
-    _create_temp_cookie_file,  # noqa: F401 — backward-compat re-export
-    _download_with_ytdlp,  # noqa: F401 — backward-compat re-export
-    _echo_ytdlp_line,  # noqa: F401 — backward-compat re-export
-    _is_ytdlp_progress_line,  # noqa: F401 — backward-compat re-export
-    _parse_ytdlp_progress,  # noqa: F401 — backward-compat re-export
     _resolve_cookies,
     download_with_ytdlp_with_resume_fallback,
 )
@@ -77,63 +50,6 @@ def _semaphore_context(
     if semaphore is not None:
         return semaphore
     return nullcontext()
-
-
-# Backward-compatibility re-export facade.
-#
-# This module intentionally re-exports symbols that were historically
-# importable from ``vkdownloader.services.downloader``. Downstream code
-# (and tests) still imports from here, so the names below are kept as a
-# stable public surface even though most implementations now live in
-# focused sibling modules.
-#
-# Symbol ownership (where each name is actually defined):
-#   * Owned by this module (downloader.py):
-#       perform_download, download_video, _semaphore_context
-#   * ytdlp_downloader.py:
-#       download_with_ytdlp_with_resume_fallback, _build_ytdlp_cli_command,
-#       _echo_ytdlp_line, _parse_ytdlp_progress,
-#       _resolve_cookies, _create_temp_cookie_file, _await_first_and_cancel_others
-#   * ffmpeg_utils.py:
-#       cancel_subprocess, _build_ffmpeg_concat_command,
-#       _merge_segments_batched, check_ffmpeg_available
-#   * segment_downloader.py:
-#       download_hls_with_resume, _cleanup_segments, _download_segment,
-#       _download_segment_parallel, _download_segment_sequential,
-#       _fetch_playlist_with_retry, _parse_m3u8_segments
-#   * retry_policies.py:
-#       _retry_429_with_backoff
-#   * cookies.py:
-#       _cookies_to_netscape
-#   * signal_handlers.py:
-#       setup_signal_handlers
-__all__ = [
-    "cancel_subprocess",
-    "check_ffmpeg_available",
-    "download_hls_with_resume",
-    "download_with_ytdlp_with_resume_fallback",
-    "download_video",
-    "perform_download",
-    "_await_first_and_cancel_others",
-    "_build_ffmpeg_concat_command",
-    "_build_ytdlp_cli_command",
-    "_cleanup_segments",
-    "_cookies_to_netscape",
-    "_create_temp_cookie_file",
-    "_download_segment",
-    "_download_segment_parallel",
-    "_download_segment_sequential",
-    "_download_with_ytdlp",
-    "_echo_ytdlp_line",
-    "_fetch_playlist_with_retry",
-    "_is_ytdlp_progress_line",
-    "_merge_segments_batched",
-    "_parse_m3u8_segments",
-    "_parse_ytdlp_progress",
-    "_resolve_cookies",
-    "_retry_429_with_backoff",
-    "setup_signal_handlers",
-]
 
 
 async def perform_download(
@@ -168,9 +84,12 @@ async def perform_download(
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
         video_data: Optional pre-extracted video data with streams. When provided, skips extraction.
         selected_stream: Optional pre-selected stream. When provided, used instead of streams[0].
-        echo: When False, suppresses yt-dlp's native console echo (progress
-            lines are emitted at DEBUG level instead; non-progress lines are
-            dropped). Only governs yt-dlp output.
+        echo: When False, suppresses yt-dlp's native console echo; progress
+            lines are emitted at DEBUG level as ``ytdlp_progress_suppressed``
+            and non-progress lines are emitted at DEBUG level as
+            ``ytdlp_output_suppressed`` (redacted) via
+            :func:`~vkdownloader.services.ytdlp_downloader._echo_ytdlp_line`, so
+            no child output is silently lost. Only governs yt-dlp output.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -315,9 +234,12 @@ async def download_video(
             single permit acquired once for the entire video download (D-01).
         progress_callback: Optional callback for per-URL segment progress.
         output_index: Index for fallback filename (0 for single, index for batch).
-        echo: When False, suppresses yt-dlp's native console echo (progress
-            lines are emitted at DEBUG level instead; non-progress lines are
-            dropped). Only governs yt-dlp output.
+        echo: When False, suppresses yt-dlp's native console echo; progress
+            lines are emitted at DEBUG level as ``ytdlp_progress_suppressed``
+            and non-progress lines are emitted at DEBUG level as
+            ``ytdlp_output_suppressed`` (redacted) via
+            :func:`~vkdownloader.services.ytdlp_downloader._echo_ytdlp_line`, so
+            no child output is silently lost. Only governs yt-dlp output.
         title_callback: Optional callback invoked with the sanitized video
             title immediately after stream extraction succeeds. Used by the
             batch progress reporter for per-file labeling. If the video has no

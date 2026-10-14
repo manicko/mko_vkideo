@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings
 
 from vkdownloader.models.enums import CookieSource, LogLevel
+from vkdownloader.utils.url_sanitizer import redact_log_event
 
 
 class Settings(BaseSettings):
@@ -80,14 +81,32 @@ class Settings(BaseSettings):
         "yt-dlp's socket timeout as a library option and as a CLI flag. "
         "Does NOT bound the ffmpeg merge subprocesses — each merge stage has its "
         "own separate per-stage budget (see ``_MERGE_STAGE_TIMEOUT`` in "
-        "``ffmpeg_utils``). On expiry of that wait_for the extraction thread is not "
-        "stopped and is joined at interpreter shutdown under the interpreter's own "
-        "thread-join rule, not under this setting. Does not bound the yt-dlp child's "
-        "post-drain re-wait — see ``download_stall_timeout`` for that inactivity bound. "
-        "On retryable HTTP failures (408, 425, 429, 5xx), the exponential backoff "
-        "delay is capped at 30 seconds per request — each request may wait up to "
-        "that ceiling independently, so a batch of N concurrent videos may have "
+        "``ffmpeg_utils``). On expiry of that wait_for the extraction's OS thread "
+        "is not stopped and cannot be; the executor is shut down non-blockingly "
+        "(cancel_futures=True, wait=False) so the process is not held by it, and "
+        "that teardown thread-join is bounded by ``shutdown_timeout``, not under "
+        "this setting. Does not bound the yt-dlp child's post-drain re-wait — "
+        "see ``download_stall_timeout`` for that inactivity bound. On retryable "
+        "HTTP failures (408, 425, 429, 5xx), the exponential backoff delay is "
+        "capped at 30 seconds per request — each request may wait up to that "
+        "ceiling independently, so a batch of N concurrent videos may have "
         "multiple bounded waits in flight simultaneously.",
+    )
+    shutdown_timeout: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="Bound, in seconds, applied to the thread-join of the "
+        "extraction executor at interpreter shutdown. When the off-loop yt-dlp "
+        "extraction times out, its OS thread cannot be stopped — the "
+        "``ThreadPoolExecutor`` is shut down non-blockingly "
+        "(cancel_futures=True, wait=False) so the process is freed from the "
+        "asyncio wait_for expiry, but the worker thread may still be running. "
+        "This setting is the ceiling on how long the process will wait for "
+        "that thread to drain during teardown, and is independent of — and "
+        "normally far shorter than — ``download_timeout``, because the "
+        "extraction has already been declared failed at that point and joining "
+        "it longer serves nothing. CON-010 resolved.",
     )
     download_stall_timeout: float = Field(
         default=300.0,
@@ -618,16 +637,6 @@ def setup_logging(settings: Settings | None = None) -> None:
     Raises:
         OSError: If log_file parent directory cannot be created.
     """
-    # B6 RF-1: this import is deferred to runtime to break an import cycle.
-    # Importing ``vkdownloader.utils.url_sanitizer`` at module level would run
-    # ``utils/__init__`` -> ``.security`` -> ``from ..config import Settings``
-    # while ``config`` is still mid-import, so ``Settings`` is not yet bound and
-    # the import raises ImportError. Resolving the symbol only inside
-    # setup_logging() — i.e. after config.py has finished importing — is the
-    # cycle's only safe landing point; hoisting it to module level breaks the
-    # package import.
-    from vkdownloader.utils.url_sanitizer import redact_log_event
-
     if settings is None:
         settings = Settings()
 

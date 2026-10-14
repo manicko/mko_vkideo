@@ -1,6 +1,9 @@
 """Tests for VKVideoExtractor service."""
 
 import asyncio
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -225,6 +228,83 @@ class TestExtractionErrors:
             with patch("asyncio.get_running_loop"):
                 with pytest.raises(ExtractionError, match="timed out"):
                     await extractor._extract_with_ytdlp(url, "12345_67890")
+
+    @pytest.mark.asyncio
+    async def test_con010_timeout_does_not_block_on_abandoned_thread(
+        self,
+    ) -> None:
+        """CON-010: a timed-out off-loop extraction does not gate the process
+        on the abandoned yt-dlp worker thread.
+
+        The blocking call runs on an explicit single-worker ``ThreadPoolExecutor``
+        and is torn down in a ``finally`` block with
+        ``shutdown(wait=False, cancel_futures=True)``. A worker that blocks
+        until released proves the coroutine returns within the
+        ``download_timeout + shutdown_timeout`` bound -- not after the worker
+        -- and that shutdown was called without waiting.
+        """
+        # download_timeout is bounded ge=30; drop the effective timeout so the
+        # test exercises the real wait_for expiry quickly rather than waiting
+        # the full configured ceiling.
+        settings = Settings(download_timeout=30, shutdown_timeout=5.0)
+        extractor = VKVideoExtractor(settings=settings)
+        extractor.settings.download_timeout = 1
+        url = "https://vkvideo.ru/video-12345_67890"
+
+        release = threading.Event()
+        created: list[ThreadPoolExecutor] = []
+
+        class RecordingExecutor(ThreadPoolExecutor):
+            """Real executor that records the kwargs passed to shutdown."""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                super().__init__(*args, **kwargs)
+                created.append(self)
+                self.shutdown_calls: list[dict[str, object]] = []
+
+            def shutdown(self, *args: object, **kwargs: object) -> None:
+                self.shutdown_calls.append(kwargs)
+                super().shutdown(*args, **kwargs)
+
+        def _hung_extract(*_args: object, **_kwargs: object) -> dict[str, object]:
+            # Simulate a yt-dlp call that never returns on its own.
+            release.wait(timeout=10)
+            return {"title": "Test", "formats": []}
+
+        try:
+            with patch(
+                "vkdownloader.services.extractor.ThreadPoolExecutor",
+                RecordingExecutor,
+            ):
+                with patch("yt_dlp.YoutubeDL") as mock_ydl_class:
+                    mock_ydl = mock_ydl_class.return_value.__enter__.return_value
+                    mock_ydl.extract_info.side_effect = _hung_extract
+
+                    start = time.monotonic()
+                    with pytest.raises(ExtractionError, match="timed out"):
+                        await extractor._extract_with_ytdlp(url, "12345_67890")
+                    elapsed = time.monotonic() - start
+        finally:
+            # Release the abandoned worker so it drains within the test rather
+            # than outliving it as a non-daemon thread.
+            release.set()
+
+        assert created, "expected the extractor to create an executor"
+        executor = created[0]
+        # On the timeout path the executor must be shut down non-blockingly.
+        assert any(
+            call.get("wait") is False and call.get("cancel_futures") is True
+            for call in executor.shutdown_calls
+        ), f"expected a non-blocking shutdown; got {executor.shutdown_calls!r}"
+        # The coroutine returned on the download_timeout + shutdown_timeout
+        # bound, not after the worker it would have waited for had the finally
+        # used wait=True (CON-010).
+        bound = extractor.settings.download_timeout + extractor.settings.shutdown_timeout
+        assert elapsed < bound, (
+            f"coroutine blocked for {elapsed:.3f}s, exceeding the "
+            f"{bound}s bound; the abandoned thread must not gate the "
+            f"process exit"
+        )
 
     def test_format_cookies_for_ffmpeg(self) -> None:
         """Test _format_cookies_for_ffmpeg correctly formats cookies for ffmpeg header."""
@@ -906,7 +986,7 @@ class TestExtractWithBrowser:
         """D-12: a failing cookie capture is contained; the m3u8 stream is still returned."""
         extractor = VKVideoExtractor(settings=_browser_settings())
         url = "https://vkvideo.ru/video-12345_67890"
-        m3u8_url = "https://cdn.example.com/video.m3u8"
+        m3u8_url = "https://cdn.vkvideo.ru/video.m3u8"
         page = _mock_browser_page([])
         page.context.cookies.side_effect = RuntimeError("browser context closed")
 
@@ -934,8 +1014,8 @@ class TestExtractWithBrowser:
         """D-12: only the first captured m3u8 URL becomes an HLS stream with no height."""
         extractor = VKVideoExtractor(settings=_browser_settings())
         url = "https://vkvideo.ru/video-12345_67890"
-        first_url = "https://cdn.example.com/first.m3u8"
-        second_url = "https://cdn.example.com/second.m3u8"
+        first_url = "https://cdn.vkvideo.ru/first.m3u8"
+        second_url = "https://cdn.vkvideo.ru/second.m3u8"
         page = _mock_browser_page([])
 
         with (
@@ -980,7 +1060,7 @@ class TestExtractWithBrowser:
                 ),
                 patch(
                     "vkdownloader.services.extractor.NetworkMonitor",
-                    return_value=_mock_network_monitor(["https://cdn.example.com/video.m3u8"]),
+                    return_value=_mock_network_monitor(["https://cdn.vkvideo.ru/video.m3u8"]),
                 ),
                 patch.object(extractor, "_simulate_video_interaction", new_callable=AsyncMock),
             ):

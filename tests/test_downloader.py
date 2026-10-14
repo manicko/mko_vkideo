@@ -440,7 +440,7 @@ class TestPerformDownload:
                 new_callable=AsyncMock,
             ) as mock_ytdlp,
             patch(
-                "vkdownloader.services.downloader.download_hls_with_resume",
+                "vkdownloader.services.segment_downloader.download_hls_with_resume",
                 new_callable=AsyncMock,
             ) as mock_seg,
         ):

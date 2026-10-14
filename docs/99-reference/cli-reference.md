@@ -63,13 +63,14 @@ vkdownloader download [OPTIONS] URL
 |------|-------|------|---------|-------------|
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--log-level` | | str | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (env: `VKDOWNLOADER_LOG_LEVEL`) |
+| `--log-file` | | Path | _none_ | Log file path; writes structured JSON logs to this file instead of stderr (env: `VKDOWNLOADER_LOG_FILE`; overrides `.env`) |
 | `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
-The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
+The log **destination** defaults to stderr; pass `--log-file PATH` to write structured JSON logs to a file instead. `--log-file` overrides `VKDOWNLOADER_LOG_FILE` or a `.env` entry. Set it to an empty value (e.g. `VKDOWNLOADER_LOG_FILE=""`) to log to stderr.
 
 **Behavior:**
 
@@ -132,13 +133,14 @@ vkdownloader batch [OPTIONS] URLS_FILE
 |------|-------|------|---------|-------------|
 | `--max-retries` | `-r` | int | `3` | Maximum retry attempts for failed segment downloads; valid range 1-10 (env: `VKDOWNLOADER_MAX_RETRIES`) |
 | `--log-level` | | str | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (env: `VKDOWNLOADER_LOG_LEVEL`) |
+| `--log-file` | | Path | _none_ | Log file path; writes structured JSON logs to this file instead of stderr (env: `VKDOWNLOADER_LOG_FILE`; overrides `.env`) |
 | `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
 | `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
-The log **destination** is environment-configured only (`VKDOWNLOADER_LOG_FILE` or `.env`); there is no `--log-file` CLI option.
+The log **destination** defaults to stderr; pass `--log-file PATH` to write structured JSON logs to a file instead. `--log-file` overrides `VKDOWNLOADER_LOG_FILE` or a `.env` entry. Set it to an empty value (e.g. `VKDOWNLOADER_LOG_FILE=""`) to log to stderr.
 
 **Environment Variables:**
 
@@ -169,7 +171,7 @@ The display is a `rich` live multi-line view on stderr, refreshed 10 times per s
 
 Each line is labelled `video_{N}` during extraction and `video_{N}: {sanitized_title}` once the title is known, with columns for the status marker, label, bar, percentage, transfer speed and ETA. A finished download becomes a status line that stays on screen and scrolls up with the display: the marker is `[✓]` for `done`, `[✗]` for `failed`, and `[⊘]` for `skipped` (a duplicate URL detected within the batch — reachable) or `cancelled`, with the outcome word appended to the label. The terminal returns to normal output when the batch ends.
 
-yt-dlp's own native progress echo is suppressed while the display is active, so it cannot interleave with the bars.
+yt-dlp's own native progress echo is suppressed while the display is active, so it cannot interleave with the bars. While the display is active, yt-dlp's non-progress output lines (anything that is not a parseable progress line) are likewise not echoed to the terminal; instead each is captured as a single `ytdlp_output_suppressed` DEBUG record (redacted) so no child output is silently lost. At the default INFO verbosity these DEBUG records are invisible — raise the verbosity with `--log-level DEBUG` (and optionally `--log-file`) to surface them.
 
 When the output stream is not a terminal (piped, redirected, or CI) the display is never started and no escape codes are written. Progress falls back to structlog INFO events `download_progress` (at most one per second per video) and `download_finished`, and yt-dlp's progress echo stays on stderr.
 

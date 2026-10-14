@@ -2031,3 +2031,52 @@ def _fake_disk_usage(free_bytes: int) -> object:
 
     DiskUsage = namedtuple("DiskUsage", "total used free")
     return DiskUsage(free_bytes * 2, free_bytes, free_bytes)
+
+
+class TestDownloadPolicyReprRedaction:
+    """SEC-008: DownloadPolicy.__repr__ must redact sensitive header values."""
+
+    COOKIE_CANARY = "secret_cookie_value_9876543210"
+    AUTH_CANARY = "secret_bearer_token_0987654321"
+
+    @staticmethod
+    def _make_policy() -> DownloadPolicy:
+        """Build a DownloadPolicy with sensitive headers for repr testing."""
+        return DownloadPolicy(
+            session=MagicMock(),
+            semaphore=asyncio.Semaphore(1),
+            headers={
+                "User-Agent": "test-agent",
+                "Cookie": f"session={TestDownloadPolicyReprRedaction.COOKIE_CANARY}",
+                "Authorization": f"Bearer {TestDownloadPolicyReprRedaction.AUTH_CANARY}",
+            },
+            max_concurrent_segments=4,
+            backoff_coordinator=None,
+            video_url="https://vkvideo.ru/video-12345_67890",
+            max_retries=3,
+            download_timeout=300,
+        )
+
+    def test_repr_redacts_cookie_header(self) -> None:
+        """Cookie header value must not appear in repr."""
+        policy = self._make_policy()
+        rendered = repr(policy)
+        assert self.COOKIE_CANARY not in rendered
+
+    def test_repr_redacts_authorization_header(self) -> None:
+        """Authorization header value must not appear in repr."""
+        policy = self._make_policy()
+        rendered = repr(policy)
+        assert self.AUTH_CANARY not in rendered
+
+    def test_repr_contains_redaction_marker(self) -> None:
+        """Redacted headers must show the redaction marker."""
+        policy = self._make_policy()
+        rendered = repr(policy)
+        assert "***REDACTED***" in rendered
+
+    def test_repr_preserves_non_sensitive_headers(self) -> None:
+        """Non-sensitive headers (e.g. User-Agent) must remain visible."""
+        policy = self._make_policy()
+        rendered = repr(policy)
+        assert "test-agent" in rendered

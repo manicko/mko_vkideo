@@ -9,13 +9,12 @@ import random
 import shutil
 import ssl
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urljoin
 
-import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
@@ -32,6 +31,7 @@ from .downloader_throttle import (
     build_client_timeout,
     get_shutdown_event,
 )
+from .extractor import _extract_video_id
 from .ffmpeg_utils import _merge_segments_batched
 from .quality import QualitySelector
 from .retry_policies import (
@@ -43,6 +43,8 @@ from .retry_policies import (
 )
 
 if TYPE_CHECKING:
+    import aiohttp
+
     from ..models.dtos import HLSDownloadRequest
     from ..services.extractor import VKVideoExtractor
     from .downloader_throttle import URLBackoffCoordinator
@@ -97,6 +99,34 @@ class DownloadPolicy:
     # _download_segment_concurrent instead of only at merge time.
     progress_callback: Callable[[str, int, int], None] | None = None
 
+    def __repr__(self) -> str:
+        """Return a safe representation with sensitive headers redacted.
+
+        SEC-008: ``headers`` is a plain ``dict[str, str]`` because aiohttp
+        requires ``str`` values (the Cookie ``SecretStr`` is unwrapped at
+        ``segment_downloader.py:1346``).  The dataclass-generated
+        ``__repr__`` would therefore emit the raw ``Cookie`` and
+        ``Authorization`` header values to any debug log or debugger
+        inspection.  This override redacts those keys while letting every
+        other field fall through to its normal ``repr``.
+        """
+        parts: list[str] = []
+        for field_info in fields(self):
+            value = getattr(self, field_info.name)
+            if field_info.name == "headers":
+                safe_headers: dict[str, str] = {
+                    key: _REDACTED if key in _SENSITIVE_HEADER_KEYS else val
+                    for key, val in value.items()
+                }
+                parts.append(f"{field_info.name}={safe_headers!r}")
+            else:
+                parts.append(f"{field_info.name}={value!r}")
+        return f"{type(self).__name__}({', '.join(parts)})"
+
+
+# SEC-008: Header keys whose values must be redacted from DownloadPolicy.__repr__.
+_SENSITIVE_HEADER_KEYS: Final[frozenset[str]] = frozenset({"Cookie", "Authorization"})
+_REDACTED: Final[str] = "***REDACTED***"
 
 logger = get_logger(__name__)
 
@@ -346,7 +376,7 @@ async def _run_parallel_download_with_backoff(
             return True
 
         logger.warning("segment_download_failed", status=response.status)
-        await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, video_url)
+        await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, segment_url)
 
         if _should_continue_on_retry(response.status, attempt, max_retries):
             retry_after_seconds = _parse_retry_after(response)
@@ -387,6 +417,8 @@ async def _try_single_download_attempt(
     Returns True on success, None for retryable failures (including network
     errors), False for fatal HTTP status codes (non-retryable).
     """
+    import aiohttp
+
     try:
         return await _run_parallel_download_with_backoff(
             session,
@@ -434,7 +466,7 @@ async def _download_segment_parallel(
     for attempt in range(max_retries):
         if shutdown_event.is_set():
             return False
-        if await _check_backoff_before_attempt(backoff_coordinator, video_url, shutdown_event):
+        if await _check_backoff_before_attempt(backoff_coordinator, segment_url, shutdown_event):
             return False
 
         result = await _try_single_download_attempt(
@@ -453,7 +485,16 @@ async def _download_segment_parallel(
         if result is False:
             # Fatal error (non-retryable HTTP status) — fail fast, no retry
             return False
-        # result is None: retryable, continue loop
+        # result is None: retryable transport failure. Back off before
+        # retrying instead of looping with zero delay (NET-010 parallel),
+        # mirroring the _fetch_playlist_with_retry backoff pattern.
+        if attempt == max_retries - 1:
+            return False
+        delay = _compute_backoff_delay(_TRANSPORT_FAILURE_STATUS, attempt, None)
+        sanitized_url = _strip_auth_params(segment_url)
+        if await _wait_with_shutdown(delay, shutdown_event, attempt, sanitized_url):
+            return False
+        continue
 
     return False
 
@@ -603,6 +644,8 @@ async def _fetch_single_playlist(
     timeout: aiohttp.ClientTimeout,
 ) -> tuple[str, int] | None:
     """Fetch a single playlist, returning (playlist_text, status_code) or None on error."""
+    import aiohttp
+
     try:
         async with session.get(url, headers=headers, timeout=timeout) as response:
             if response.status == 200:
@@ -791,6 +834,8 @@ def _create_connector(settings: Settings, video_url: str) -> aiohttp.TCPConnecto
     # transport never clips an operator's setting. The connector is per download
     # — this is NOT a process-wide pool — so the aggregate is per-download times
     # concurrent downloads.
+    import aiohttp
+
     connection_ceiling = settings.max_concurrent_downloads
     if settings.ssl_verify:
         return aiohttp.TCPConnector(
@@ -924,7 +969,7 @@ async def _tally_and_merge(
     )
 
     if progress_callback:
-        video_id = video_url.split("_")[-1] if "_" in video_url else video_url
+        video_id = _extract_video_id(video_url)
         progress_callback(video_id, downloaded_count, len(segments))
 
     # Detect failed segments explicitly from download results.
@@ -1083,9 +1128,7 @@ async def _download_segment_concurrent(
         # DF-003: Report per-segment progress so users see incremental
         # progress during segment downloads, not just once at merge time.
         if policy.progress_callback is not None:
-            video_id = (
-                policy.video_url.split("_")[-1] if "_" in policy.video_url else policy.video_url
-            )
+            video_id = _extract_video_id(policy.video_url)
             # Count segments downloaded so far (including existing) + result
             downloaded = len(list(task.segments_dir.glob("*.ts")))
             policy.progress_callback(video_id, downloaded, task.total_segments)
@@ -1179,6 +1222,8 @@ async def _run_download_session(
     Returns:
         Path to downloaded file on success, None on failure.
     """
+    import aiohttp
+
     connector = _create_connector(settings, video_url)
 
     async with aiohttp.ClientSession(connector=connector) as session:

@@ -171,6 +171,7 @@ class BrowserManager:
             user_agent=self.settings.user_agent,
             locale=self.settings.locale,
             timezone_id=self.settings.timezone,
+            ignore_https_errors=not self.settings.ssl_verify,
         )
 
         page = await context.new_page()

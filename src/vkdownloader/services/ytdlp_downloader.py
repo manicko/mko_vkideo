@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from playwright.async_api import Cookie
 from pydantic import SecretStr
@@ -31,7 +31,7 @@ from ..models.enums import CookieSource, QualityKind
 from ..models.quality import QualitySpec
 from ..services.cookies import _cookies_to_netscape
 from ..services.downloader_throttle import get_shutdown_event
-from ..services.extractor import VKVideoExtractor
+from ..services.extractor import VKVideoExtractor, _extract_video_id
 from ..services.ffmpeg_utils import (
     _SPAWN_BOUNDARY_KWARGS,
     cancel_subprocess,
@@ -865,14 +865,16 @@ def _build_ytdlp_cli_command(
     if not settings.ssl_verify:
         cmd.append("--no-check-certificates")
 
-    # Add cookies file if cookies are provided
+    # SEC-004: Pass cookies via stdin using yt-dlp's `--cookies -` syntax so the
+    # cookie file path never enters the child process argv (/proc/<pid>/cmdline).
+    # The caller opens cookie_file and passes the FD as stdin to the subprocess.
     cookie_file: Path | None = None
     if raw_cookies:
         cookie_file = _create_temp_cookie_file(raw_cookies)
-        cmd.extend(["--cookies", str(cookie_file)])
+        cmd.extend(["--cookies", "-"])
     elif cookies:
         cookie_file = _create_temp_cookie_file(cookies)
-        cmd.extend(["--cookies", str(cookie_file)])
+        cmd.extend(["--cookies", "-"])
 
     return cmd, cookie_file
 
@@ -1254,7 +1256,7 @@ async def _download_with_ytdlp(
 
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
-    video_id = video_url.split("_")[-1] if "_" in video_url else video_url
+    video_id = _extract_video_id(video_url)
     shutdown_event = get_shutdown_event()
 
     if not settings.ssl_verify:
@@ -1281,13 +1283,22 @@ async def _download_with_ytdlp(
     # empirically). Using stdout=PIPE + stderr=STDOUT merges all output into a
     # single stream, avoiding dual-pipe deadlock complexity while preserving
     # error messages for structured logging on failure.
+    # SEC-004: Pass cookies via stdin (yt-dlp's `--cookies -`) instead of
+    # `--cookies <path>`, so the cookie file path never appears in argv.
+    cookie_stdin: IO[str] | None = None
     process: asyncio.subprocess.Process | None = None
     try:
+        spawn_kwargs: dict[str, object] = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.STDOUT,
+            **_SPAWN_BOUNDARY_KWARGS,
+        }
+        if cookie_file is not None:
+            cookie_stdin = open(cookie_file)
+            spawn_kwargs["stdin"] = cookie_stdin
         process = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            **_SPAWN_BOUNDARY_KWARGS,  # type: ignore[arg-type]
+            **spawn_kwargs,  # type: ignore[arg-type]
         )
 
         output_chunks: bytearray = bytearray()
@@ -1418,6 +1429,8 @@ async def _download_with_ytdlp(
                 )
         raise
     finally:
+        if cookie_stdin is not None:
+            cookie_stdin.close()
         if cookie_file is not None:
             # The inner exists() guard is kept: folding it in would make
             # unlink(missing_ok=True) "succeed" on an absent file and emit

@@ -1,12 +1,14 @@
 """Throttle utilities for VK Video Downloader."""
 
+from __future__ import annotations
+
 import asyncio
 import contextvars
 import random  # noqa: F401 — test-compat: patches target downloader_throttle.random.uniform
 import time
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-import aiohttp
 from structlog import get_logger
 
 from ..config import Settings
@@ -14,6 +16,9 @@ from ..utils.formatting import format_bytes
 from ..utils.url_sanitizer import (
     _strip_auth_params as _strip_auth_params,  # noqa: F401 — re-exported for retry_policies module-level access
 )
+
+if TYPE_CHECKING:
+    import aiohttp
 
 logger = get_logger(__name__)
 
@@ -34,6 +39,8 @@ def build_client_timeout(download_timeout: int) -> aiohttp.ClientTimeout:
     with ``connect``); ``sock_read`` is set to the full ``download_timeout`` so
     the per-read ceiling grows with the operator's budget.
     """
+    import aiohttp
+
     return aiohttp.ClientTimeout(
         total=download_timeout,
         connect=min(30, download_timeout // 4),

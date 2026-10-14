@@ -117,7 +117,15 @@ async def _retry_429_with_backoff(
                 segment_index=segment_index,
                 url=sanitized_url,
             )
-            return None
+            # Transport-level failure (connection reset, timeout, DNS, etc.):
+            # treat as transient and retry with backoff instead of giving
+            # up immediately (NET-010 sequential).
+            delay = _compute_backoff_delay(503, attempt, None)
+            if attempt == max_retries - 1:
+                break
+            if await _wait_with_shutdown(delay, shutdown_event, segment_index, sanitized_url):
+                return None
+            continue
 
     return None
 

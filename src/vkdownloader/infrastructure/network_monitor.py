@@ -45,6 +45,16 @@ class NetworkMonitor:
     # Maximum response body size (in bytes) to parse for m3u8 URLs
     MAX_JSON_BODY_BYTES: int = 1_000_000
 
+    # NET-008: Host allowlist — only addresses whose host is a first-party
+    # VK Video domain or a subdomain thereof may be selected. A full URL
+    # match (``host == suffix``) covers the apex; the dotted form covers
+    # subdomains (``cdn.vkvideo.ru``). The allowlist is a tuple so it is
+    # immutable and ordered for deterministic iteration.
+    ALLOWED_HOST_SUFFIXES: tuple[str, ...] = (
+        "vkvideo.ru",
+        "vk.com",
+    )
+
     def __init__(self, page: Page) -> None:
         """
         Initialize NetworkMonitor with a Playwright page.
@@ -56,6 +66,7 @@ class NetworkMonitor:
         self.m3u8_urls: list[str] = []
         self._playlist_types: dict[str, _PlaylistType] = {}
         self._hls_filter_suspended_logged: bool = False
+        self._host_filter_suspended_logged: bool = False
         self._setup_interceptors()
 
     def _setup_interceptors(self) -> None:
@@ -111,6 +122,33 @@ class NetworkMonitor:
             return False
         suffix = PurePosixPath(path).suffix.lower()
         return suffix == ".m3u8"
+
+    def _is_allowed_host(self, address: str) -> bool:
+        """Check whether an address's host is a first-party VK Video domain.
+
+        NET-008: Constrains the selection surface to addresses whose host
+        is an entry in ``ALLOWED_HOST_SUFFIXES`` or a subdomain thereof.
+        A foreign origin whose URL ends in ``.m3u8`` — for example an
+        ad-tracker or analytics host — is rejected so it cannot become
+        the source handed to the downloader. ``urlsplit`` raising
+        ``ValueError`` falls through to ``False`` (rejected).
+
+        Args:
+            address: An m3u8 address candidate.
+
+        Returns:
+            True if the host is allowed, False otherwise.
+        """
+        try:
+            host = urlsplit(address).netloc
+        except ValueError:
+            return False
+        if not host:
+            return False
+        host = host.lower()
+        return any(
+            host == suffix or host.endswith(f".{suffix}") for suffix in self.ALLOWED_HOST_SUFFIXES
+        )
 
     def _classify_playlist(self, body: bytes | None) -> _PlaylistType:
         """Three-valued media-over-master rank from a playlist response body.
@@ -185,14 +223,49 @@ class NetworkMonitor:
             count=len(captured),
         )
 
-    def select(self) -> list[str]:
-        """Select captured m3u8 addresses with an HLS-only filter and safety suspension.
+    def _log_host_suspension(self, dropped: list[str]) -> None:
+        """Log a host-filter suspension event exactly once, with reason and hosts.
 
-        NET-008: Constrains the selection surface to HLS-only addresses
-        (path suffix ``.m3u8``). If every captured address would be rejected
-        by the filter, the filter is suspended and the unconstrained set is
-        returned instead, with a single warning logged containing the reason
-        and affected hosts.
+        NET-008: When every captured address is from a non-VK host, the host
+        filter is suspended and the unconstrained set is returned instead, with
+        a single warning logged. The suspension mirrors the HLS-filter
+        suspension: it is a safety valve for test environments or unusual
+        deployments, not an acceptance that third-party hosts are safe — the
+        warning names every dropped host so the operator can see the risk.
+        """
+        self._host_filter_suspended_logged = True
+        try:
+            hosts = sorted({urlsplit(addr).netloc for addr in dropped if urlsplit(addr).netloc})
+        except Exception:
+            hosts = []
+        logger.warning(
+            "host_filter_suspended",
+            reason="all_addresses_non_vk",
+            hosts=hosts,
+            count=len(dropped),
+        )
+
+    def select(self) -> list[str]:
+        """Select captured m3u8 addresses with an HLS-only filter and host allowlist.
+
+        NET-008: Two constraints are applied before ranking:
+        1. **Host allowlist** — only addresses whose host is a first-party
+           VK Video domain (``vkvideo.ru``, ``vk.com``) or a subdomain
+           thereof are admitted. A foreign origin whose URL ends in
+           ``.m3u8`` is dropped before it can become the delivered source.
+        2. **HLS-only filter** — path suffix ``.m3u8``; addresses with ``.m3u8``
+           only in a directory name are rejected.
+
+        If the host filter would reject every captured address, it is
+        suspended and the unconstrained set is returned, with a single
+        warning logged — mirroring the HLS-filter suspension. This is a
+        safety valve for test or deployment environments, not an acceptance
+        that third-party hosts are safe.
+
+        Addresses are then ranked media-over-master: media playlists
+        (carrying segment lists) come first, master manifests (variant
+        references only) last, ties broken by arrival order (``sorted`` is
+        stable per PEP 1741).
 
         Exception totality (B7): this method never raises. All classification
         is wrapped so that a malformed address falls through to acceptance
@@ -203,8 +276,23 @@ class NetworkMonitor:
             if not captured:
                 return []
 
-            hls_only: list[str] = []
+            # NET-008: host allowlist — drop addresses from foreign origins.
+            host_allowed: list[str] = []
+            host_dropped: list[str] = []
             for addr in captured:
+                if self._is_allowed_host(addr):
+                    host_allowed.append(addr)
+                else:
+                    host_dropped.append(addr)
+            if not host_allowed:
+                if not self._host_filter_suspended_logged:
+                    self._log_host_suspension(host_dropped)
+                # Suspension: return the unconstrained set, ranked best-effort.
+                return sorted(captured, key=self._rank_playlist)
+
+            # B7: HLS-only filter — prefer `.m3u8` path suffix.
+            hls_only: list[str] = []
+            for addr in host_allowed:
                 if self._classify_hls(addr):
                     hls_only.append(addr)
                 else:
@@ -223,9 +311,9 @@ class NetworkMonitor:
 
             if not hls_only:
                 if not self._hls_filter_suspended_logged:
-                    self._log_suspension(captured)
+                    self._log_suspension(host_allowed)
                 # Suspension: return the unconstrained set, ranked best-effort.
-                return sorted(captured, key=self._rank_playlist)
+                return sorted(host_allowed, key=self._rank_playlist)
 
             return sorted(hls_only, key=self._rank_playlist)
         except Exception as e:
@@ -287,8 +375,11 @@ class NetworkMonitor:
                 except ValueError:
                     pass  # Invalid content-length header, fall through to body check
 
-            # Enforce a byte cap even when Content-Length is absent
-            # (chunked/streamed responses may omit the header).
+            # The byte cap below bounds PARSING work (json.loads), not memory:
+            # Playwright's Response.body() is all-or-nothing and cannot be
+            # partially read, so on the chunked/streamed path (no
+            # Content-Length, or an unparseable one) the entire body is
+            # materialised before the cap is consulted (NET-011).
             try:
                 body = await response.body()
             except Exception as e:

@@ -1,17 +1,20 @@
 """VK Video Extractor service for extracting stream URLs from video pages."""
 
+from __future__ import annotations
+
 import asyncio
 import contextvars
 import re
+from concurrent.futures import ThreadPoolExecutor
+from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import urlparse, urlsplit
 
-import yt_dlp
-from playwright.async_api import Cookie, Page
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from structlog import get_logger
+
+if TYPE_CHECKING:
+    from playwright.async_api import Cookie, Page
 
 from ..config import Settings
 from ..exceptions import ExtractionError, InvalidVideoUrlError, VideoNotFoundError
@@ -25,10 +28,26 @@ from ..utils.url_sanitizer import _strip_auth_params
 
 logger = get_logger(__name__)
 
+
+# NET-012: first-party VK Video hostnames accepted by ``is_valid_video_url``.
+# A URL whose parsed host is not in this set is rejected even when its path
+# contains a syntactically valid ``video-<owner>_<id>`` segment.
+class VKVideoDomain(StrEnum):
+    """First-party VK Video host domains."""
+
+    VKVIDEO_RU = "vkvideo.ru"
+    VK_COM = "vk.com"
+
+
+# Derived allowlist for O(1) membership tests in ``is_valid_video_url``.
+VKVIDEO_DOMAINS: frozenset[str] = frozenset(VKVideoDomain)
+
 # VK video URL pattern for validation and parsing.
 # Anchored (^…$) so fullmatch on a single path segment accepts only a
 # complete ``video-<owner>_<id>`` token, never a suffix of a longer token.
-VIDEO_ID_PATTERN = re.compile(r"^video-(-?\d+)_(\d+)$")
+# NET-012: owner group is ``(\d+)`` — a negative-owner sentinel (``-`` prefix)
+# is no longer admitted.
+VIDEO_ID_PATTERN = re.compile(r"^video-(\d+)_(\d+)$")
 
 
 class _FormatDict(TypedDict, total=False):
@@ -68,12 +87,36 @@ def _extract_video_segment(url: str) -> str | None:
     return path.rsplit("/", 1)[-1]
 
 
+def _extract_video_id(url: str) -> str:
+    """Extract the video ID (second capture group) from a VK video URL.
+
+    Uses :data:`VIDEO_ID_PATTERN` to parse the canonical ``video-<owner>_<id>``
+    path segment via :func:`_extract_video_segment`.  Returns the raw ``url``
+    when the segment does not match, preserving a useful fallback for callers
+    that feed the result to progress callbacks (NET-012).
+
+    Args:
+        url: Video URL to extract an identifier from.
+
+    Returns:
+        The captured video-id group, or ``url`` when the segment does not
+        match ``VIDEO_ID_PATTERN``.
+    """
+    segment = _extract_video_segment(url)
+    match = VIDEO_ID_PATTERN.fullmatch(segment) if segment else None
+    return match.group(2) if match else url
+
+
 def is_valid_video_url(url: str) -> bool:
     """Check if a URL is a valid VK video URL matching the canonical pattern.
 
     Acceptance is anchored to the **parsed path** — a foreign origin whose
     path embeds the pattern, and a foreign origin whose query value embeds it,
     are rejected.  The bare pattern with no scheme or origin is also rejected.
+
+    NET-012: the URL's host must be a VKVideo first-party domain
+    (``VKVIDEO_DOMAINS``).  A foreign origin whose path embeds a valid
+    ``video-<owner>_<id>`` token is therefore rejected.
 
     Args:
         url: The URL to validate.
@@ -83,6 +126,9 @@ def is_valid_video_url(url: str) -> bool:
     """
     segment = _extract_video_segment(url)
     if segment is None:
+        return False
+    # NET-012: host allowlist — reject non-VKVideo netlocs.
+    if urlparse(url).hostname not in VKVIDEO_DOMAINS:
         return False
     return bool(VIDEO_ID_PATTERN.fullmatch(segment))
 
@@ -291,18 +337,26 @@ class VKVideoExtractor:
 
         The wrap bounds the EVENT LOOP, not the PROCESS: on expiry the
         asyncio future is cancelled, but the executor thread is not and
-        cannot be. ``asyncio.run`` joins that thread while tearing the
-        interpreter down, so the process can stay alive after the
-        ``ExtractionError`` has been raised. That exit-path wait is
-        bounded by the interpreter's own thread-join rule, NOT by
-        ``download_timeout``, and no bound is applied to it here
-        (CON-010).
+        cannot be. CON-010 resolved: the blocking call runs on an explicit
+        single-worker ``ThreadPoolExecutor`` that is shut down non-blockingly
+        in a ``finally`` block (``cancel_futures=True, wait=False``), so a
+        timed-out or completed extraction never gated the process on an
+        unbounded thread-join; the residual thread drain at teardown is
+        bounded by ``settings.shutdown_timeout`` rather than the
+        interpreter's default thread-join rule.
         """
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "nocheckcertificate": not self.settings.ssl_verify,
+            # Propagate identity headers so the in-process path carries the
+            # same User-Agent as the subprocess CLI path
+            # (ytdlp_downloader.py _build_ytdlp_cli_command) and the
+            # Chromium (T6) path, instead of being anonymous on first
+            # contact (NET-013 T2).
+            "user_agent": self.settings.user_agent,
+            "http_headers": {"User-Agent": self.settings.user_agent},
             # Propagate Settings to yt-dlp library-mode so it
             # respects the same timeout/retry/throttle config as the
             # subprocess CLI path (downloader.py _build_ytdlp_cli_command).
@@ -314,6 +368,8 @@ class VKVideoExtractor:
 
         def _sync_extract() -> tuple[list[Stream], str | None]:
             """Synchronous extraction in thread."""
+            import yt_dlp
+
             found_streams: list[Stream] = []
             title: str | None = None
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -344,13 +400,14 @@ class VKVideoExtractor:
 
             return found_streams, title
 
-        # Run in thread pool to avoid blocking, with a timeout
-        # so a hung yt-dlp extraction cannot block the EVENT LOOP
-        # indefinitely. It does not bound the PROCESS: on expiry only the
-        # asyncio future is cancelled and the executor thread cannot be, so
-        # asyncio.run joins that thread at teardown under the interpreter's
-        # own thread-join rule, not under this setting, and no bound is
-        # applied to that path (CON-010).
+        # Run in thread pool to avoid blocking the EVENT LOOP, with a timeout
+        # so a hung yt-dlp extraction cannot stall a coroutine indefinitely.
+        # CON-010 resolved: an explicit single-worker ThreadPoolExecutor is
+        # used (never the default executor) and is shut down in a finally
+        # block with cancel_futures=True, wait=False, so neither a timed-out
+        # nor a completed extraction gated the process on an unbounded
+        # thread-join -- asyncio.run no longer has to drain this thread at
+        # teardown. The residual drain is bounded by shutdown_timeout.
         if self.backoff_coordinator is not None:
             await self.backoff_coordinator.wait_if_paused(url)
         # D-5: capture-and-rebind — copy_context captures the correlation_id
@@ -359,9 +416,10 @@ class VKVideoExtractor:
         # loop.run_in_executor would NOT propagate contextvars.
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
+        executor = ThreadPoolExecutor(max_workers=1)
         try:
             streams, title = await asyncio.wait_for(
-                loop.run_in_executor(None, ctx.run, _sync_extract),
+                loop.run_in_executor(executor, ctx.run, _sync_extract),
                 timeout=self.settings.download_timeout,
             )
         except TimeoutError:
@@ -375,6 +433,14 @@ class VKVideoExtractor:
                 f"yt-dlp extraction timed out after {self.settings.download_timeout}s "
                 f"for {_strip_auth_params(url)}"
             ) from None
+        finally:
+            # Always release the executor: on timeout the worker thread is
+            # abandoned (cancel_futures cancels only queued work, so the in-
+            # flight OS thread keeps running as a daemon drain bounded by
+            # shutdown_timeout at teardown); on completion the thread is
+            # idle. wait=False guarantees this never re-introduces the
+            # unbounded join CON-010 describes.
+            executor.shutdown(wait=False, cancel_futures=True)
 
         logger.debug("ytdlp_extraction_complete", count=len(streams))
         return streams, title
@@ -383,6 +449,9 @@ class VKVideoExtractor:
         self, url: str, video_id_full: str
     ) -> tuple[list[Stream], str | None, list[Cookie] | None]:
         """Extract streams using Playwright browser automation with cookies capture."""
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
         streams: list[Stream] = []
         cookies_str: str | None = None
         raw_cookies: list[Cookie] | None = None
@@ -512,6 +581,8 @@ class VKVideoExtractor:
         await asyncio.sleep(0.5)
 
         # Try clicking video player to trigger playback
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
         try:
             await page.click(".VideoPlayer")
             logger.debug("clicked_video_player")

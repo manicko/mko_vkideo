@@ -15,7 +15,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import typer
 from structlog import get_logger
 
 from ..config import Settings
@@ -32,7 +31,6 @@ from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
 from ..services.extractor import VIDEO_ID_PATTERN, VKVideoExtractor, _extract_video_segment
 from ..services.progress_display import RichProgressReporter
-from ..services.signal_handlers import cleanup_signal_handlers, setup_signal_handlers
 from ..utils.correlation import (
     bind_correlation_id,
     clear_correlation_id,
@@ -371,8 +369,9 @@ async def _run_batch_with_progress(
     Exact-URL duplicates within the batch are skipped (ProgressStatus.SKIPPED)
     before any network call, never launching a second download for the same URL.
     """
-    # Setup signal handlers inside async context
-    setup_signal_handlers()
+    # Signal handlers are registered in the CLI entry layer (cli.py) for both
+    # the download and batch commands, keeping the service layer free of
+    # process-level signal disposition (ENT-004).
     batch_correlation_id = generate_correlation_id()
     bind_correlation_id(batch_correlation_id)
     try:
@@ -579,8 +578,9 @@ async def _run_batch_with_progress(
             # output per R3.
             reporter.stop()
     finally:
-        # Cleanup signal handlers to allow re-registration on subsequent loops
-        cleanup_signal_handlers()
+        # Signal handlers are cleaned up in the CLI entry layer (cli.py)
+        # alongside setup, keeping this layer free of process-level signal
+        # disposition (ENT-004).
         clear_correlation_id()
 
 
@@ -608,8 +608,10 @@ def _print_batch_summary(
         Cancellation takes precedence over failure: an interrupted run did
         not complete by the user's own doing, so its remaining "failures"
         are indistinguishable from work the interruption cut short. Reporting
-        the interruption as such is the more truthful answer (D-04).
+        the          interruption as such is the more truthful answer (D-04).
     """
+    import typer
+
     # Print results
     for url, output_path, status in results:
         typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))

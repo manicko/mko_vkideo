@@ -27,17 +27,6 @@ from vkdownloader.models.enums import CookieSource, LogLevel, QualityKind, Strea
 from vkdownloader.models.quality import QualitySpec
 from vkdownloader.models.video import Stream
 from vkdownloader.services.cookies import _cookies_to_netscape, _sanitize_cookie_value
-from vkdownloader.services.downloader import (
-    _build_ytdlp_cli_command,
-    _cleanup_segments,
-    _create_temp_cookie_file,
-    _echo_ytdlp_line,
-    _is_ytdlp_progress_line,
-    _parse_m3u8_segments,
-    _parse_ytdlp_progress,
-    _resolve_cookies,
-    download_hls_with_resume,
-)
 from vkdownloader.services.downloader_throttle import get_shutdown_event
 from vkdownloader.services.ffmpeg_utils import (
     _SPAWN_BOUNDARY_KWARGS,
@@ -49,13 +38,24 @@ from vkdownloader.services.ffmpeg_utils import (
 from vkdownloader.services.quality import QualitySelector
 from vkdownloader.services.segment_downloader import (
     PlaylistFetchResult,
+    _cleanup_segments,
     _download_segment,
     _download_segment_parallel,
     _download_segment_sequential,
     _is_retryable_status,
+    _parse_m3u8_segments,
+    download_hls_with_resume,
 )
 from vkdownloader.services.signal_handlers import setup_signal_handlers
-from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
+from vkdownloader.services.ytdlp_downloader import (
+    _build_ytdlp_cli_command,
+    _create_temp_cookie_file,
+    _echo_ytdlp_line,
+    _is_ytdlp_progress_line,
+    _parse_ytdlp_progress,
+    _resolve_cookies,
+    _ytdlp_temp_name,
+)
 
 
 class TestDownloadHlsWithResume:
@@ -845,7 +845,10 @@ class TestYtdlpCliCommand:
         assert cookie_file.exists()
         assert "--cookies" in cmd
         idx = cmd.index("--cookies")
-        assert cmd[idx + 1] == str(cookie_file)
+        # SEC-004: yt-dlp reads cookies from stdin (`--cookies -`), so the
+        # temp file path must NOT appear in argv.
+        assert cmd[idx + 1] == "-"
+        assert str(cookie_file) not in " ".join(cmd)
 
     def test_cli_command_creates_cookie_file_for_string_cookies(
         self, test_settings: Settings
@@ -863,6 +866,58 @@ class TestYtdlpCliCommand:
         assert cookie_file is not None
         assert cookie_file.exists()
         assert "--cookies" in cmd
+        idx = cmd.index("--cookies")
+        # SEC-004: yt-dlp reads cookies from stdin (`--cookies -`), not from a path.
+        assert cmd[idx + 1] == "-"
+        assert str(cookie_file) not in " ".join(cmd)
+
+
+class TestSec004CookiePathNotInArgv:
+    """SEC-004: cookie file path must never appear in yt-dlp argv."""
+
+    def test_raw_cookies_path_not_in_argv(self, test_settings: Settings) -> None:
+        """Cookie path must not leak into the child process argv."""
+        from playwright.async_api import Cookie
+
+        raw_cookies = [
+            Cookie(
+                name="vk",
+                value="abc123",
+                domain="vkvideo.ru",
+                path="/",
+            )
+        ]
+        cmd, cookie_file = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies=None,
+            raw_cookies=raw_cookies,
+        )
+
+        assert cookie_file is not None
+        flat_cmd = " ".join(cmd)
+        assert str(cookie_file) not in flat_cmd
+        idx = cmd.index("--cookies")
+        assert cmd[idx + 1] == "-"
+
+    def test_string_cookies_path_not_in_argv(self, test_settings: Settings) -> None:
+        """Cookie path must not leak into the child process argv."""
+        cmd, cookie_file = _build_ytdlp_cli_command(
+            output_file=Path("/tmp/test.mp4"),
+            quality_str="720",
+            user_agent=test_settings.user_agent,
+            settings=test_settings,
+            cookies="vk=abc123",
+            raw_cookies=None,
+        )
+
+        assert cookie_file is not None
+        flat_cmd = " ".join(cmd)
+        assert str(cookie_file) not in flat_cmd
+        idx = cmd.index("--cookies")
+        assert cmd[idx + 1] == "-"
 
 
 class TestYtdlpProgressParsing:
@@ -1448,7 +1503,7 @@ class TestParallelSegmentsDownload:
     ) -> None:
         """Test that semaphore enforces max_concurrent_segments limit."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         test_settings = Settings(max_concurrent_segments=2)
 
@@ -1501,7 +1556,7 @@ class TestParallelSegmentsDownload:
     ) -> None:
         """Test that parallel download downloads all segments via gather."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         output_path = tmp_path / "video.mp4"
 
@@ -1553,7 +1608,7 @@ class TestParallelSegmentsDownload:
         """D-01: caller's video permit is passed in but not consumed by segment download."""
         import asyncio
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         test_settings = Settings(max_concurrent_segments=4)
 
@@ -1625,7 +1680,7 @@ class TestBrowserCookiesIntegration:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that cookies are passed to yt-dlp via cookie file and cleaned up."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -1639,9 +1694,12 @@ class TestBrowserCookiesIntegration:
 
         # Track the command that was passed to create_subprocess_exec
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
@@ -1657,12 +1715,14 @@ class TestBrowserCookiesIntegration:
         # Verify --cookies flag was in the command
         assert "--cookies" in captured_cmd
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         # Cookie file should have been cleaned up after download completes
         assert not cookie_file_path.exists(), "Cookie file should be cleaned up after download"
 
         # Verify the cookie format is correct
-        from vkdownloader.services.downloader import _cookies_to_netscape
+        from vkdownloader.services.cookies import _cookies_to_netscape
 
         netscape = _cookies_to_netscape(cookies)
         assert ".vkvideo.ru" in netscape
@@ -1675,7 +1735,7 @@ class TestBrowserCookiesIntegration:
         # Test via the actual function behavior - check cookie file creation
         # This is tested more thoroughly in test_cookies_passed_to_ytdlp_creates_cookie_file
         # Here we verify the _cookies_to_netscape produces correct format
-        from vkdownloader.services.downloader import _cookies_to_netscape
+        from vkdownloader.services.cookies import _cookies_to_netscape
 
         netscape = _cookies_to_netscape(cookies)
         assert "# Netscape HTTP Cookie File" in netscape
@@ -1705,7 +1765,7 @@ class TestSequentialDownloadMode:
     ) -> None:
         """Test that sequential mode applies 1.5s + jitter delay after semaphore release."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         test_settings = Settings(max_concurrent_segments=1)
 
@@ -1786,7 +1846,7 @@ class TestSequentialDownloadMode:
     ) -> None:
         """Test that sequential mode triggers _retry_429_with_backoff for 429 responses."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         test_settings = Settings(max_concurrent_segments=1)
 
@@ -1864,7 +1924,7 @@ class TestSequentialDownloadMode:
     ) -> None:
         """Test that parallel mode does not apply inter-segment delay."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         test_settings = Settings(max_concurrent_segments=4)
 
@@ -2068,7 +2128,7 @@ class TestDownloadMethodLogging:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that _download_with_ytdlp logs starting_ytdlp_download."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         log_messages: list[dict[str, object]] = []
 
@@ -2110,7 +2170,7 @@ class TestDownloadMethodLogging:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Verify yt-dlp's final positional argument is the m3u8_url, not the video_url."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -2868,7 +2928,7 @@ class TestManifestBaseAddressFeedsSegments:
     ) -> None:
         """PlaylistFetchResult.base_url feeds DownloadPolicy.m3u8_url for segment URL resolution."""
 
-        from vkdownloader.services.downloader import download_hls_with_resume
+        from vkdownloader.services.segment_downloader import download_hls_with_resume
 
         playlist = "#EXTM3U\nseg1.ts\nseg2.ts"
         base_url = "https://cdn.example.com/hls/playlist.m3u8"
@@ -3443,8 +3503,8 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that _download_with_ytdlp returns None when shutdown_event is set."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
         from vkdownloader.services.downloader_throttle import get_shutdown_event
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         # Set shutdown signal before download starts
         shutdown_event = get_shutdown_event()
@@ -3492,7 +3552,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that CancelledError triggers process termination and re-raises."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3526,7 +3586,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that non-zero returncode returns None with error logging."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3553,7 +3613,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Test that yt-dlp stdout progress lines are echoed to the console."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3588,7 +3648,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Test that echo=False suppresses yt-dlp console output while progress_callback still fires."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3637,7 +3697,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Test that echo=False suppresses all yt-dlp stderr output when no progress callback."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3671,7 +3731,7 @@ class TestYtDlpSubprocessShutdown:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that echo=False on a progress line emits a single ytdlp_progress_suppressed debug event."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3728,7 +3788,7 @@ class TestYtDlpSubprocessShutdown:
         redacted text, stderr stays clean. The transcript buffer still receives
         the RAW line via _retain_transcript_line.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -3790,7 +3850,7 @@ class TestYtDlpSubprocessShutdown:
         ``subprocess_reader_failed`` record that a dead reader would normally
         produce. The pipe really was drained: ``stdout.read`` was awaited.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
@@ -3851,7 +3911,7 @@ class TestYtDlpSubprocessShutdown:
         is logged as ``ytdlp_reader_line_overrun`` — no fabricated line follows,
         and no ``subprocess_reader_failed`` record is emitted.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         progress_line = b"[download]   40.3% of 649.37MiB at 983.45KiB/s ETA 06:43\n"
@@ -3921,7 +3981,7 @@ class TestYtDlpSubprocessShutdown:
         return value.  Drive the failure by patching ``Path.unlink`` — no
         real OS handle is held.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -3934,9 +3994,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=0)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
@@ -3959,7 +4022,9 @@ class TestYtDlpSubprocessShutdown:
 
         assert result == output_file
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
         mock_logger.warning.assert_any_call(
             "cookie_file_cleanup_failed",
@@ -3986,7 +4051,7 @@ class TestYtDlpSubprocessShutdown:
         must not propagate out of the ``finally`` and replace the ``None``
         that a non-zero yt-dlp returncode already produced.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -3999,9 +4064,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=1)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
@@ -4024,7 +4092,9 @@ class TestYtDlpSubprocessShutdown:
 
         assert result is None
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
         mock_logger.warning.assert_any_call(
             "cookie_file_cleanup_failed",
@@ -4043,8 +4113,8 @@ class TestYtDlpSubprocessShutdown:
         that the shutdown path already produced.  Uses the project token
         idiom for the shutdown event so it does not leak across tests.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
         from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -4061,9 +4131,12 @@ class TestYtDlpSubprocessShutdown:
             mock_process.wait = AsyncMock(return_value=0)
 
             captured_cmd: list[str] = []
+            captured_stdin: object | None = None
 
             async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
                 captured_cmd.extend(cmd)
+                nonlocal captured_stdin
+                captured_stdin = kwargs.get("stdin")
                 return mock_process
 
             def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
@@ -4091,7 +4164,9 @@ class TestYtDlpSubprocessShutdown:
 
             assert result is None
             cookies_idx = captured_cmd.index("--cookies")
-            cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+            assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+            assert captured_stdin is not None, "expected stdin to carry cookies"
+            cookie_file_path = Path(captured_stdin.name)
             assert cookie_file_path.exists(), "Cookie file should remain when unlink raises OSError"
             mock_logger.warning.assert_any_call(
                 "cookie_file_cleanup_failed",
@@ -4110,7 +4185,7 @@ class TestYtDlpSubprocessShutdown:
         Guards against the fix passing by deleting the cleanup entirely: the
         file IS removed on success and ``cookie_file_cleaned_up`` IS logged.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -4123,9 +4198,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=0)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         debug_events: list[tuple[str, dict[str, object]]] = []
@@ -4153,7 +4231,9 @@ class TestYtDlpSubprocessShutdown:
 
         assert result == output_file
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         assert not cookie_file_path.exists(), "Cookie file should be removed when cleanup succeeds"
         cleanup_events = [
             (event, kwargs) for event, kwargs in debug_events if event == "cookie_file_cleaned_up"
@@ -4175,7 +4255,7 @@ class TestYtDlpSubprocessShutdown:
         honest by checking the observable effect — ``process.wait()`` was
         called — rather than a private attribute.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
         cookies = "vk=abc123; session=xyz789"
@@ -4242,8 +4322,8 @@ class TestYtDlpSubprocessShutdown:
 
         Asserts on log records, not on return values.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
         from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -4312,8 +4392,8 @@ class TestYtDlpSubprocessShutdown:
         fail if anyone reverts to the pre-B5
         ``if not await cancel_subprocess(process):`` warning.
         """
-        from vkdownloader.services.downloader import _download_with_ytdlp
         from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
 
@@ -4491,9 +4571,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=0)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
@@ -4509,7 +4592,9 @@ class TestYtDlpSubprocessShutdown:
 
         assert result == output_file
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         assert not cookie_file_path.exists(), "cookie file should be removed on success"
         assert not cookie_file_path.parent.exists(), (
             "cookie artefact directory must be removed on success"
@@ -4554,9 +4639,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=0)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         def raising_unlink(self: Path, *args: object, **kwargs: object) -> None:
@@ -4582,7 +4670,9 @@ class TestYtDlpSubprocessShutdown:
         # Outcome is unchanged (success).
         assert result == output_file
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         # The credential file survives (unlink raised).
         assert cookie_file_path.exists(), "credential file must survive a locked unlink"
         # The directory survives (rmdir cannot succeed while the file is present).
@@ -4632,9 +4722,12 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(side_effect=asyncio.CancelledError())
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin
+            captured_stdin = kwargs.get("stdin")
             return mock_process
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
@@ -4655,7 +4748,9 @@ class TestYtDlpSubprocessShutdown:
                         )
 
         cookies_idx = captured_cmd.index("--cookies")
-        cookie_file_path = Path(captured_cmd[cookies_idx + 1])
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
+        cookie_file_path = Path(captured_stdin.name)
         assert not cookie_file_path.parent.exists(), (
             "cookie artefact directory must be removed even on cancellation"
         )
@@ -4680,16 +4775,21 @@ class TestYtDlpSubprocessShutdown:
         mock_process.wait = AsyncMock(return_value=0)
 
         captured_cmd: list[str] = []
+        captured_stdin: object | None = None
         cookie_file_path: Path | None = None
 
         async def mock_create_subprocess_exec(*cmd: str, **kwargs: object) -> AsyncMock:
             captured_cmd.extend(cmd)
+            nonlocal captured_stdin, cookie_file_path
+            captured_stdin = kwargs.get("stdin")
             # Simulate yt-dlp consuming the cookie file so it vanishes before
-            # the finally block runs.
-            nonlocal cookie_file_path
-            if "--cookies" in cmd:
-                cookies_idx = cmd.index("--cookies")
-                cookie_file_path = Path(cmd[cookies_idx + 1])
+            # the finally block runs. The caller opened the credential file as
+            # stdin, so drain and close it here (mirroring yt-dlp closing stdin
+            # after reading) before unlinking, lest a Windows open-file handle
+            # block the deletion.
+            if captured_stdin is not None:
+                cookie_file_path = Path(captured_stdin.name)
+                captured_stdin.close()
                 cookie_file_path.unlink(missing_ok=True)
             return mock_process
 
@@ -4705,6 +4805,9 @@ class TestYtDlpSubprocessShutdown:
                 )
 
         assert result == output_file
+        cookies_idx = captured_cmd.index("--cookies")
+        assert captured_cmd[cookies_idx + 1] == "-", "SEC-004: cookies passed via stdin"
+        assert captured_stdin is not None, "expected stdin to carry cookies"
         assert cookie_file_path is not None
         assert not cookie_file_path.exists(), "cookie file should have been consumed"
         assert not cookie_file_path.parent.exists(), (
@@ -4866,7 +4969,7 @@ class TestYtDlpStallTimeout:
     async def test_stall_terminates_and_reaps_silent_child(self, tmp_path: Path) -> None:
         """STALL CASE: a child that emits then goes silent is killed within the
         bound AND the child is reaped (cancel_subprocess is awaited)."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         stall_timeout = 1.0
         settings = self._fast_settings(stall=stall_timeout)
@@ -4909,7 +5012,7 @@ class TestYtDlpStallTimeout:
         """LIVENESS CASE: a child that keeps emitting output does NOT trip the
         bound, proving this is an inactivity limit (not a total-time budget)
         and that NET-007 is preserved, not reinstated."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         stall_timeout = 1.0
         settings = self._fast_settings(stall=stall_timeout)
@@ -4968,7 +5071,7 @@ class TestYtDlpStallTimeout:
     async def test_cancellation_during_reap_propagates_and_reaps(self, tmp_path: Path) -> None:
         """CANCELLATION ARM: cancelling the holder still propagates
         ``CancelledError`` and the termination ladder still runs."""
-        from vkdownloader.services.downloader import _download_with_ytdlp
+        from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         settings = self._fast_settings(stall=10.0)
         output_file = tmp_path / "video.mp4"
@@ -5073,7 +5176,7 @@ class TestAttemptSegmentResumeQuality:
         Browser streams only have quality="best", so numeric qualities must reuse
         the pre-selected m3u8_url (mirroring the _resolve_cookies BEST-only guard).
         """
-        from vkdownloader.services.downloader import _attempt_segment_resume
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
         # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
@@ -5451,7 +5554,7 @@ class TestYtDlpRetryBackoff:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that a backoff delay occurs between yt-dlp retry attempts."""
-        from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
+        from vkdownloader.services.ytdlp_downloader import download_with_ytdlp_with_resume_fallback
 
         output_file = tmp_path / "video.mp4"
         # Create a .part file (yt-dlp's temp name) so the retry loop
@@ -5506,7 +5609,7 @@ class TestYtDlpRetryBackoff:
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Test that backoff_coordinator.wait_if_paused is called between retries."""
-        from vkdownloader.services.downloader import download_with_ytdlp_with_resume_fallback
+        from vkdownloader.services.ytdlp_downloader import download_with_ytdlp_with_resume_fallback
 
         output_file = tmp_path / "video.mp4"
         # Create a .part file (yt-dlp's temp name) so the retry loop
@@ -6848,7 +6951,7 @@ class TestGracefulDegradation:
         caller (the retry loop in ``download_with_ytdlp_with_resume_fallback``)
         decides whether to retry.
         """
-        from vkdownloader.services.downloader import _attempt_segment_resume
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
         # yt-dlp writes to .part; _attempt_segment_resume stats/unlinks the
@@ -6925,7 +7028,7 @@ class TestGracefulDegradation:
         to the caller rather than swallowing it as a token-refresh issue.
         """
         from vkdownloader.exceptions import QualityParseError
-        from vkdownloader.services.downloader import _attempt_segment_resume
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
 
         output_file = tmp_path / "video.mp4"
         _ytdlp_temp_name(output_file).write_bytes(b"partial data")
