@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
@@ -650,7 +651,8 @@ _YTDLP_PROGRESS_LINE_RE = re.compile(r"^\[download\]\s+(?:N/A|\d+(?:\.\d+)?)(?:%
 # reads pct, size, and size_unit -- speed/eta groups exist for clarity only.
 _YTDLP_PROGRESS_RE = re.compile(
     r"\[download\]\s+"
-    r"(?P<pct>\d+(?:\.\d+)?)%\s+of\s+~?\s*"
+    r"(?P<pct>\d+(?:\.\d+)?)%\s+of\s+"
+    r"(?P<estimate>~)?\s*"
     r"(?P<size>\d+(?:\.\d+)?)"
     r"(?P<size_unit>[KMG]?i?B)"
     r"\s+at\s+"
@@ -691,6 +693,99 @@ def _is_ytdlp_progress_line(line: str) -> bool:
     return _YTDLP_PROGRESS_LINE_RE.match(line) is not None
 
 
+@dataclass
+class ProgressState:
+    """Normalized progress state for a single yt-dlp download attempt.
+
+    Separates measured (downloaded) bytes, fragment-based progress, and the
+    (possibly estimated) total size so callers can avoid misleading percentage
+    or ETA jumps caused by fluctuating byte estimates.
+    """
+
+    downloaded: int = 0
+    total: int = 0
+    fragment_index: int = 0
+    fragment_count: int = 0
+    is_estimate: bool = False
+
+
+def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
+    """Parse a yt-dlp progress line into a :class:`ProgressState`.
+
+    Extends :func:`_parse_ytdlp_progress` with fragment information parsed from
+    a trailing ``(frag i/n)`` or ``(frag i)`` suffix and an ``is_estimate``
+    flag derived from the ``~`` marker on the total size.
+
+    Args:
+        line: A decoded stderr line from the yt-dlp subprocess.
+
+    Returns:
+        A :class:`ProgressState` if the line carries a percent and a size,
+        otherwise ``None``.
+    """
+    match = _YTDLP_PROGRESS_RE.search(line)
+    if match is not None:
+        pct = float(match.group("pct"))
+        size = float(match.group("size"))
+        size_unit = match.group("size_unit")
+        multiplier = _SIZE_UNITS.get(size_unit, 1)
+        total = int(size * multiplier)
+        downloaded = int(total * pct / 100)
+        is_estimate = match.group("estimate") is not None
+        frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
+        fragment_index = int(frag_match.group(1)) if frag_match else 0
+        fragment_count = (
+            int(frag_match.group(2)) if frag_match and frag_match.group(2) is not None else 0
+        )
+        return ProgressState(
+            downloaded=downloaded,
+            total=total,
+            fragment_index=fragment_index,
+            fragment_count=fragment_count,
+            is_estimate=is_estimate,
+        )
+
+    # Byte-count progress lines carry a measured byte count but no total.
+    byte_match = re.search(
+        r"\[download\]\s+(?P<size>\d+(?:\.\d+)?)(?P<size_unit>[KMG]?i?B)\s+at\b", line
+    )
+    if byte_match is not None:
+        size = float(byte_match.group("size"))
+        size_unit = byte_match.group("size_unit")
+        multiplier = _SIZE_UNITS.get(size_unit, 1)
+        downloaded = int(size * multiplier)
+        frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
+        fragment_index = int(frag_match.group(1)) if frag_match else 0
+        fragment_count = (
+            int(frag_match.group(2)) if frag_match and frag_match.group(2) is not None else 0
+        )
+        return ProgressState(
+            downloaded=downloaded,
+            total=0,
+            fragment_index=fragment_index,
+            fragment_count=fragment_count,
+            is_estimate=False,
+        )
+
+    # Percent-only fallback lines carry no size at all.
+    pct_match = re.search(r"\[download\]\s+(?P<pct>N/A|\d+(?:\.\d+)?)%\s+at\b", line)
+    if pct_match is not None:
+        frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
+        fragment_index = int(frag_match.group(1)) if frag_match else 0
+        fragment_count = (
+            int(frag_match.group(2)) if frag_match and frag_match.group(2) is not None else 0
+        )
+        return ProgressState(
+            downloaded=0,
+            total=0,
+            fragment_index=fragment_index,
+            fragment_count=fragment_count,
+            is_estimate=False,
+        )
+
+    return None
+
+
 def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     """Parse a yt-dlp progress line into (downloaded_bytes, total_bytes).
 
@@ -708,16 +803,10 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
         count) are still progress updates — see :func:`_is_ytdlp_progress_line`
         — they simply carry no ratio to report.
     """
-    match = _YTDLP_PROGRESS_RE.search(line)
-    if match is None:
+    state = _parse_ytdlp_progress_state(line)
+    if state is None or state.total <= 0:
         return None
-    pct = float(match.group("pct"))
-    size = float(match.group("size"))
-    size_unit = match.group("size_unit")
-    multiplier = _SIZE_UNITS.get(size_unit, 1)
-    total = int(size * multiplier)
-    downloaded = int(total * pct / 100)
-    return downloaded, total
+    return state.downloaded, state.total
 
 
 def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
@@ -781,15 +870,19 @@ def _echo_ytdlp_line(line: str, *, echo: bool = True) -> None:
 def _resolve_format_selector(quality_str: str) -> str:
     """Resolve a yt-dlp format selector string from a quality token.
 
-    A positive integer height selects ``best[height<=N]``; the keyword
-    ``worst`` selects ``worst``; everything else (including ``best``
-    and ``unknown``) selects ``best``.
+    Every stream URL extracted from VK/OK CDN is a single-quality media
+    playlist (or direct media file) carrying no height metadata, so a
+    height filter such as ``best[height<=N]`` never matches and yt-dlp fails
+    with "Requested format is not available". The quality is already selected
+    upstream by :class:`~vkdownloader.services.quality.QualitySelector` via the
+    stream URL, so here yt-dlp only needs to download the best (sole) format
+    of that URL. The keyword ``worst`` selects ``worst``; everything else
+    (including ``best``, ``unknown`` and any height) selects ``best``.
 
     This replaces the inline ternary that silently mapped ``worst`` -> ``best``
-    (NET-003).
+    (NET-003) and the earlier ``best[height<=N]`` filter that could not match
+    a heightless media playlist.
     """
-    if quality_str and quality_str.isdigit():
-        return f"best[height<={quality_str}]"
     if quality_str == "worst":
         return "worst"
     return "best"
@@ -1314,6 +1407,7 @@ async def _download_with_ytdlp(
         async def _monitor_progress() -> None:
             """Read stdout, parse yt-dlp progress, invoke callback."""
             assert process.stdout is not None
+            progress_state: ProgressState | None = None
             try:
                 async for line in iter_process_lines(
                     process.stdout, shutdown_event, on_shutdown=_on_shutdown
@@ -1321,10 +1415,18 @@ async def _download_with_ytdlp(
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
                     _retain_transcript_line(output_chunks, line)
-                    progress = _parse_ytdlp_progress(decoded)
-                    if progress is not None and progress_callback is not None:
-                        downloaded, total = progress
-                        progress_callback(video_id, downloaded, total)
+                    progress_state = _parse_ytdlp_progress_state(decoded)
+                    if progress_state is not None and progress_callback is not None:
+                        if progress_state.fragment_count > 0:
+                            progress_callback(
+                                video_id, progress_state.fragment_index, progress_state.fragment_count
+                            )
+                        elif progress_state.total > 0:
+                            progress_callback(
+                                video_id, progress_state.downloaded, progress_state.total
+                            )
+                        else:
+                            progress_callback(video_id, progress_state.downloaded, 0)
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
@@ -1340,6 +1442,7 @@ async def _download_with_ytdlp(
         async def _drain_output() -> None:
             """Drain stdout to prevent buffer deadlock when no callback."""
             assert process.stdout is not None
+            progress_state: ProgressState | None = None
             try:
                 async for line in iter_process_lines(
                     process.stdout, shutdown_event, on_shutdown=_on_shutdown
@@ -1347,6 +1450,18 @@ async def _download_with_ytdlp(
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
                     _retain_transcript_line(output_chunks, line)
+                    progress_state = _parse_ytdlp_progress_state(decoded)
+                    if progress_state is not None and progress_callback is not None:
+                        if progress_state.fragment_count > 0:
+                            progress_callback(
+                                video_id, progress_state.fragment_index, progress_state.fragment_count
+                            )
+                        elif progress_state.total > 0:
+                            progress_callback(
+                                video_id, progress_state.downloaded, progress_state.total
+                            )
+                        else:
+                            progress_callback(video_id, progress_state.downloaded, 0)
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
@@ -1407,6 +1522,8 @@ async def _download_with_ytdlp(
             return None
 
         logger.info("ytdlp_download_completed", output=str(output_file))
+        if output_file.exists():
+            logger.info("download_final_size", size=output_file.stat().st_size)
         return output_file
 
     except FileNotFoundError as exc:
