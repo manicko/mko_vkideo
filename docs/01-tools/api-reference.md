@@ -354,7 +354,7 @@ result = await perform_download(
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `url` | str | Required | VK video URL to download. |
-| `quality` | str | Required | Quality token as a plain string: `best`, `worst`, `unknown`, or any offered height (e.g. "720", "1072"). A numeric token becomes the yt-dlp format selector `best[height<=N]`. Not a `QualitySpec`. |
+| `quality` | str | Required | Quality token as a plain string: `best`, `worst`, `unknown`, or any offered height (e.g. "720", "1072"). The stream URL is already selected for that quality during extraction, so yt-dlp downloads the best (sole) format of that URL. Not a `QualitySpec`. |
 | `output_file` | Path | Required | Output file path. |
 | `method` | DownloadMethod | Required | Download method (YTDLP or AUTO). |
 | `extractor` | VKVideoExtractor \| None | None | Optional extractor instance. |
@@ -544,7 +544,7 @@ A validated quality request: a selection keyword (`best` / `worst`) or the exact
 |--------|-------------|
 | `QualitySpec.parse(raw: str) -> QualitySpec` | Classmethod. Parses a user-supplied token. Accepted: `best`, `worst`, `unknown`, or any positive height in pixels with an optional trailing `p` (`720`, `720p`, `1072`). Case-insensitive, surrounding whitespace ignored, empty value falls back to `best`. Raises `QualityParseError` otherwise. |
 | `matches(stream_label: str) -> bool` | True for an exact request whose label equals `stream_label` (the numeric form without the `p` suffix is accepted too). A `best` / `worst` request never matches a single label. |
-| `__str__() -> str` | The canonical token: `"1072"` for an exact height, otherwise the keyword. This is the string handed to the yt-dlp format selector as `best[height<=1072]`. |
+| `__str__() -> str` | The canonical token: `"1072"` for an exact height, otherwise the keyword. This is the value passed to the download layer as the quality token (the stream URL is already selected for that quality during extraction). |
 
 **Example:**
 ```python

@@ -719,7 +719,7 @@ class TestYtdlpCliCommand:
 
         assert "-f" in cmd
         idx = cmd.index("-f")
-        assert "best[height<=720]" in cmd[idx + 1]
+        assert "best" in cmd[idx + 1]
 
     def test_cli_command_format_best_for_best_quality(self, test_settings: Settings) -> None:
         """Test format selector is 'best' when quality is non-numeric."""
@@ -758,11 +758,13 @@ class TestYtdlpCliCommand:
     def test_cli_command_format_selector_for_non_standard_height(
         self, test_settings: Settings
     ) -> None:
-        """A height outside any fixed ladder reaches yt-dlp as a height filter.
+        """A height outside any fixed ladder is still accepted by QualitySpec.
 
-        The user's reported case: a video offering 106p вЂ¦ 1610p, requested at
-        1072p. The token produced by ``QualitySpec`` must become
-        ``best[height<=1072]``, not a rejected value.
+        The user's reported case: a video offering 106p … 1610p, requested at
+        1072p. The token produced by ``QualitySpec`` is ``"1072"``. Because the
+        stream URL is already selected for that quality upstream, yt-dlp only
+        downloads the best (sole) format of that URL, so no height filter is
+        sent.
         """
         cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
@@ -774,7 +776,7 @@ class TestYtdlpCliCommand:
         )
 
         idx = cmd.index("-f")
-        assert cmd[idx + 1] == "best[height<=1072]"
+        assert cmd[idx + 1] == "best"
 
     def test_cli_command_uses_python_module(self, test_settings: Settings) -> None:
         """Test CLI command uses sys.executable -m yt_dlp for environment consistency."""

@@ -137,7 +137,7 @@ stream = selector.select(video.streams, QualitySpec.parse("1072"))
 stream = selector.select(video.streams, QualitySpec.parse("worst"))
 ```
 
-`QualitySpec.parse` raises `QualityParseError` for a token that is neither a keyword nor a positive height. The parsed request carries `kind` (`QualityKind.BEST`, `QualityKind.WORST` or `QualityKind.EXACT`) and, for an exact request, the `label` it matches (`"1072p"`). `str(spec)` renders the token the CLI accepts — `"1072"` — which is also the value handed to the yt-dlp format selector as `best[height<=1072]`.
+`QualitySpec.parse` raises `QualityParseError` for a token that is neither a keyword nor a positive height. The parsed request carries `kind` (`QualityKind.BEST`, `QualityKind.WORST` or `QualityKind.EXACT`) and, for an exact request, the `label` it matches (`"1072p"`). `str(spec)` renders the token the CLI accepts — `"1072"` — which is passed to the download layer as the quality token (the stream URL is already selected for that quality during extraction, so yt-dlp downloads the best (sole) format of that URL).
 
 ### Complete Download Flow with Method Selection
 
