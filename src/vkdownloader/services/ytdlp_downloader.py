@@ -1014,12 +1014,14 @@ def _has_recoverable_ytdlp_artifacts(output_file: Path) -> bool:
         pass
     parent = output_file.parent
     try:
-        if any(parent.glob(output_file.name + ".part-Frag*")):
+        if any(
+            entry.name.startswith(output_file.name + ".part-Frag") for entry in parent.iterdir()
+        ):
             return True
     except OSError:
         pass
     try:
-        if any(parent.glob(output_file.name + ".ytdl")):
+        if any(entry.name.startswith(output_file.name + ".ytdl") for entry in parent.iterdir()):
             return True
     except OSError:
         pass

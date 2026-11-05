@@ -188,16 +188,27 @@ def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
     signature_file = segments_dir / _PLAYLIST_SIGNATURE_FILE
 
     # Block B: an absent signature means we have no evidence that the files on
-    # disk belong to a different playlist, so preserve them (and record the
-    # current signature) instead of deleting unknown partials.
+    # disk belong to a different playlist. Preserve them (and record the current
+    # signature) only when the directory holds no *.ts segments, so an empty or
+    # segment-free directory is never assumed to share identity with a different
+    # playlist. If *.ts files are already present, fall through to the clearing
+    # branch below: identity is never assumed for unknown partials.
     if not signature_file.exists():
-        try:
-            signature_file.write_text(signature, encoding="utf-8")
-        except OSError:
-            pass
-        return
+        has_ts = any(segments_dir.glob("*.ts"))
+        if not has_ts:
+            try:
+                signature_file.write_text(signature, encoding="utf-8")
+            except OSError:
+                pass
+            return
+        # has_ts is True: do not return; continue to the clearing branch.
 
-    stored = signature_file.read_text(encoding="utf-8").strip()
+    try:
+        stored = (
+            signature_file.read_text(encoding="utf-8").strip() if signature_file.exists() else ""
+        )
+    except OSError:
+        stored = ""
     if stored == signature:
         return
 
@@ -1441,5 +1452,5 @@ def _log_preserve_segments(segments_dir: Path) -> None:
             "merge temp a failed merge left behind; this is not a count of "
             "resumable segments"
         ),
-        next_action="clear the working directory before re-running the download",
+        next_action="resume from the preserved working directory; clear it only if segments are corrupt",
     )
