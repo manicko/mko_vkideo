@@ -1312,7 +1312,32 @@ async def _attempt_segment_resume(
     return None
 
 
-# TRN-011: The child transcript buffer exists only to build the
+def _derive_last_error_code(sanitized_tail: str) -> str | None:
+    """Derive a machine-readable error code from a sanitized child tail.
+
+    Prefers an explicit HTTP status reported by yt-dlp (e.g.
+    ``HTTP Error 403: Forbidden``); falls back to a bare 4xx/5xx status
+    token. Returns ``None`` when no code can be determined.
+    """
+    for pattern in (
+        r"HTTP Error\s+(\d{3})",
+        r"HTTP\s+(\d{3})",
+        r"(?:status|status code)[:\s]+(\d{3})",
+    ):
+        match = re.search(pattern, sanitized_tail, re.IGNORECASE)
+        if match is not None:
+            return match.group(1)
+    match = re.search(r"\b([45]\d{2})\b", sanitized_tail)
+    if match is not None:
+        return match.group(1)
+    match = re.search(r"ERROR:\s*(.+)", sanitized_tail)
+    if match is not None:
+        code = match.group(1).strip()
+        if code:
+            return code[:64]
+    return None
+
+
 # ``download_failed`` record, so only a bounded *tail* of the child's output
 # is retained. The tail is the informative part of a failure; the head is not.
 # Sized against the reader's per-line limit (``asyncio.streams._DEFAULT_LIMIT``
@@ -1569,15 +1594,20 @@ async def _download_with_ytdlp(
                 return None
 
         elapsed_seconds = time.monotonic() - started_at
+        output_data = bytes(output_chunks) if output_chunks else b""
+
+        sanitized_tail = (
+            sanitize_text_for_log(output_data.decode(errors="replace")) if output_data else ""
+        )
+        last_error_code = _derive_last_error_code(sanitized_tail)
+
         logger.info(
             "child_exit",
             attempt_id=attempt_id,
             returncode=process.returncode,
             elapsed_seconds=elapsed_seconds,
-            last_error_code=None,
+            last_error_code=last_error_code,
         )
-
-        output_data = bytes(output_chunks) if output_chunks else b""
 
         if shutdown_event.is_set():
             logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))

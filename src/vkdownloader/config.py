@@ -622,6 +622,18 @@ def encoding_safe(stream: IO[str]) -> IO[str]:
     return cast(IO[str], _EncodingSafeTextStream(stream))
 
 
+class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that keeps rotated/new files owner-only on POSIX."""
+
+    def _open(self):
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return stream
+
+
 class _ExcInfoClearingFormatter(logging.Formatter):
     """Formatter that suppresses the stdlib's duplicate traceback render.
 
@@ -689,7 +701,7 @@ def setup_logging(settings: Settings | None = None) -> None:
     _formatter = _ExcInfoClearingFormatter(fmt="%(message)s")
     try:
         if settings.log_file:
-            handler: logging.Handler = logging.handlers.RotatingFileHandler(
+            handler: logging.Handler = _PrivateRotatingFileHandler(
                 settings.log_file,
                 maxBytes=settings.log_max_bytes,
                 backupCount=settings.log_backup_count,

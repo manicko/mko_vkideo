@@ -151,6 +151,9 @@ def sanitize_url_for_log(url: str) -> str:
 _STRUCTURAL_KEYS: frozenset[str] = frozenset({"event", "level", "timestamp", "correlation_id"})
 
 
+_PRIMITIVE_TYPES: tuple[type, ...] = (int, float, bool, complex, type(None))
+
+
 def _sanitize_value(
     value: object,
     depth: int,
@@ -164,7 +167,51 @@ def _sanitize_value(
         return sanitize_exception(value)
     if isinstance(value, (list, tuple, dict)):
         return _sanitize_collection(value, depth, seen)
-    return value
+    if isinstance(value, _PRIMITIVE_TYPES):
+        return value
+    # Unknown/non-primitive objects: stringify and sanitize so secrets in
+    # their repr cannot leak unredacted.
+    return sanitize_text_for_log(str(value))
+
+
+def _sanitize_deep(
+    value: object,
+    seen: set[int],
+) -> object:
+    """Sanitize every string leaf in a subtree without a depth bound.
+
+    Used at the depth boundary so collections that are too deep to recurse
+    through the normal bounded path still have their string leaves redacted.
+    Cycle guard prevents infinite traversal; a cycle yields an empty
+    container rather than the original object.
+    """
+    if isinstance(value, str):
+        return sanitize_text_for_log(value)
+    if isinstance(value, bytes):
+        return sanitize_for_log(value)
+    if isinstance(value, BaseException):
+        return sanitize_exception(value)
+    if not isinstance(value, (list, tuple, dict)):
+        if isinstance(value, _PRIMITIVE_TYPES):
+            return value
+        return sanitize_text_for_log(str(value))
+    if id(value) in seen:
+        if isinstance(value, list):
+            return []
+        if isinstance(value, tuple):
+            return ()
+        return {}
+    seen.add(id(value))
+    try:
+        if isinstance(value, list):
+            return [_sanitize_deep(item, seen) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_sanitize_deep(item, seen) for item in value)
+        if isinstance(value, dict):
+            return {k: _sanitize_deep(v, seen) for k, v in value.items()}
+        return value
+    finally:
+        seen.discard(id(value))
 
 
 def _sanitize_collection(
@@ -175,12 +222,16 @@ def _sanitize_collection(
     """Recursively sanitize containers with a bounded depth and cycle guard."""
     if seen is None:
         seen = set()
-    if depth >= 8:
-        return value
     if not isinstance(value, (list, tuple, dict)):
         return _sanitize_value(value, depth, seen)
+    if depth >= 8:
+        return _sanitize_deep(value, seen)
     if id(value) in seen:
-        return value
+        if isinstance(value, list):
+            return []
+        if isinstance(value, tuple):
+            return ()
+        return {}
     seen.add(id(value))
     try:
         if isinstance(value, list):
@@ -216,7 +267,9 @@ def sanitize_for_log(value: object) -> object:
         return sanitize_exception(value)
     if isinstance(value, (list, tuple, dict)):
         return _sanitize_collection(value, 0, set())
-    return value
+    if isinstance(value, (int, float, bool, complex, type(None))):
+        return value
+    return sanitize_text_for_log(str(value))
 
 
 def redact_log_event(
@@ -227,14 +280,7 @@ def redact_log_event(
     for key, value in list(event_dict.items()):
         if key in _STRUCTURAL_KEYS:
             continue
-        if isinstance(value, str):
-            event_dict[key] = sanitize_text_for_log(value)
-        elif isinstance(value, bytes):
-            event_dict[key] = sanitize_for_log(value)
-        elif isinstance(value, BaseException):
-            event_dict[key] = sanitize_exception(value)
-        elif isinstance(value, (list, tuple, dict)):
-            event_dict[key] = _sanitize_collection(value, 0, set())
+        event_dict[key] = _sanitize_value(value, 0, set())
     return event_dict
 
 

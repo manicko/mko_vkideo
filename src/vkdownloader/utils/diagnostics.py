@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -73,6 +75,18 @@ class DiagnosticContext:
         return asdict(self)
 
 
+class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that keeps rotated/new files owner-only on POSIX."""
+
+    def _open(self):
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return stream
+
+
 class ChildTranscriptSink:
     def __init__(
         self,
@@ -96,7 +110,7 @@ class ChildTranscriptSink:
         self._handler: logging.handlers.RotatingFileHandler | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            handler = logging.handlers.RotatingFileHandler(
+            handler = _PrivateRotatingFileHandler(
                 self.path,
                 maxBytes=self.max_bytes,
                 backupCount=self.backup_count,
@@ -104,6 +118,10 @@ class ChildTranscriptSink:
             )
             handler.setFormatter(logging.Formatter("%(message)s"))
             self._handler = handler
+            try:
+                self.path.chmod(0o600)
+            except OSError:
+                pass
         except OSError:
             self._disabled = True
             self._handler = None
@@ -118,10 +136,12 @@ class ChildTranscriptSink:
             self._last_progress_time = now
         try:
             sanitized = sanitize_text_for_log(str(line).rstrip("\r\n"))
-            import re
 
-            sanitized = re.sub(r"(?i)(cookie:)\s*.*", r"\1 ***REDACTED***", sanitized)
-            sanitized = re.sub(r"(?i)(set-cookie:)\s*.*", r"\1 ***REDACTED***", sanitized)
+            sanitized = re.sub(
+                r"(?i)((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api-key):)\s*.*",
+                r"\1 ***REDACTED***",
+                sanitized,
+            )
             data = sanitized.encode("utf-8")
             if len(data) > self.max_line_bytes:
                 data = data[: self.max_line_bytes]

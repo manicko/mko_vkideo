@@ -21,6 +21,7 @@ from ..config import Settings
 from ..exceptions import DownloadError
 from ..models.enums import QualityKind, QualityLabel
 from ..models.quality import QualitySpec
+from ..utils.diagnostics import bind_diagnostic_context
 from ..utils.formatting import format_bytes
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params
@@ -1248,6 +1249,8 @@ async def _run_download_session(
     """
     import aiohttp
 
+    _bind_segment_diagnostic_context(diagnostic_context)
+
     connector = _create_connector(settings, video_url)
 
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -1327,6 +1330,28 @@ async def _run_download_session(
         )
 
 
+def _coerce_diagnostic_context(value: object) -> dict[str, object]:
+    """Coerce a diagnostic context object into a mapping of bindable fields."""
+    if value is None:
+        return {}
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        data = value.to_dict()
+    elif isinstance(value, dict):
+        data = value
+    else:
+        data = vars(value)
+    return {str(k): v for k, v in data.items() if v is not None}
+
+
+def _bind_segment_diagnostic_context(value: object) -> None:
+    if value is None:
+        return
+    try:
+        bind_diagnostic_context(**_coerce_diagnostic_context(value))
+    except Exception:
+        pass
+
+
 async def download_hls_with_resume(
     request: HLSDownloadRequest,
     settings: Settings | None = None,
@@ -1371,6 +1396,7 @@ async def download_hls_with_resume(
         so partial segments remain available for resume. ``_cleanup_segments``
         runs only in ``_tally_and_merge`` after a verified merge.
     """
+    _bind_segment_diagnostic_context(diagnostic_context)
     logger.info(
         "starting_segment_download",
         url=_strip_auth_params(request.video_url),
