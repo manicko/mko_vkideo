@@ -100,6 +100,23 @@ class DownloadPolicy:
     # DF-003: Added to enable per-segment progress reporting from
     # _download_segment_concurrent instead of only at merge time.
     progress_callback: Callable[[str, int, int], None] | None = None
+    # Block E checkpoint fields.
+    state_path: Path | None = None
+    stream_variant_id: str | None = None
+    video_id: str | None = None
+    quality_requested: str | None = None
+    playlist_fingerprint: str | None = None
+    generation_id: str | None = None
+    segment_durations: list[float] | None = None
+    media_sequence: int | None = None
+    discontinuity_sequence: int = 0
+    init_map_identity: str | None = None
+    codecs: str | None = None
+    resolution: str | None = None
+    is_live: bool = False
+    endlist: bool = False
+    checkpoint: object | None = None
+    checkpoint_lock: object | None = None
 
     def __repr__(self) -> str:
         """Return a safe representation with sensitive headers redacted.
@@ -170,6 +187,86 @@ def _compute_playlist_signature(segments: list[str]) -> str:
     """
     joined = "\n".join(segments)
     return hashlib.sha256(joined.encode()).hexdigest()
+
+
+def _reconcile_checkpoint(
+    *,
+    segments_dir: Path,
+    state_path: Path | None = None,
+    video_id: str,
+    quality_requested: str,
+    stream_variant_id: str,
+    playlist_fingerprint: str,
+    media_sequence: int | None = None,
+    discontinuity_sequence: int = 0,
+    init_map_identity: str | None = None,
+    codecs: str | None = None,
+    resolution: str | None = None,
+    is_live: bool = False,
+    endlist: bool = True,
+    generation_id: str | None = None,
+    segments: list[str] | None = None,
+    checkpoint: object | None = None,
+) -> object:
+    """Verify or quarantine checkpoint, returning an active checkpoint."""
+    from . import checkpoint as _cp
+
+    segments_dir = Path(segments_dir)
+    segments_dir.mkdir(parents=True, exist_ok=True)
+    if state_path is None:
+        state_path = segments_dir / "state.json"
+    state_path = Path(state_path)
+
+    existing = None
+    try:
+        existing = _cp.read_checkpoint(state_path, segments_dir)
+    except Exception:  # noqa: BLE001
+        existing = None
+
+    if existing is not None:
+        ok = _cp.verify_checkpoint(
+            existing,
+            stream_variant_id=stream_variant_id,
+            playlist_fingerprint=playlist_fingerprint,
+            init_map_identity=init_map_identity,
+            media_sequence=media_sequence,
+            discontinuity_sequence=discontinuity_sequence,
+        )
+        if ok:
+            all_verified = all(
+                _cp.verify_segment_record(rec, segments_dir) for rec in existing.segments.values()
+            )
+            if all_verified:
+                return existing
+        # mismatch or corrupt -> quarantine
+        try:
+            _cp.quarantine_generation(segments_dir, existing.generation_id)
+        except Exception:  # noqa: BLE001
+            pass
+        segments_dir.mkdir(parents=True, exist_ok=True)
+
+    gen = generation_id or "gen-0"
+    new_checkpoint = _cp.JobCheckpoint(
+        schema_version=_cp.CHECKPOINT_SCHEMA_VERSION,
+        video_id=video_id,
+        quality_requested=quality_requested,
+        stream_variant_id=stream_variant_id,
+        playlist_fingerprint=playlist_fingerprint,
+        generation_id=gen,
+        media_sequence=media_sequence,
+        discontinuity_sequence=discontinuity_sequence,
+        init_map_identity=init_map_identity,
+        codecs=codecs,
+        resolution=resolution,
+        is_live=is_live,
+        endlist=endlist,
+        segments={},
+    )
+    try:
+        _cp.write_checkpoint_atomic(state_path, new_checkpoint)
+    except Exception:  # noqa: BLE001
+        pass
+    return new_checkpoint
 
 
 def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
@@ -1149,6 +1246,53 @@ async def _download_segment_concurrent(
             download_timeout=policy.download_timeout,
         )
 
+        # Block E: publish checkpoint entry only after a successful rename.
+        if result:
+            try:
+                from . import checkpoint as _cp
+
+                if getattr(policy, "checkpoint", None) is not None:
+                    seg_path = segment_path
+                    size = seg_path.stat().st_size
+                    sha = _cp.streaming_sha256(seg_path)
+                    duration = None
+                    durations = getattr(policy, "segment_durations", None)
+                    if durations and task.idx < len(durations):
+                        duration = durations[task.idx]
+                    record = _cp.SegmentRecord(
+                        sequence=task.idx,
+                        relative_file=seg_path.name,
+                        size=size,
+                        sha256=sha,
+                        duration_seconds=duration,
+                        byte_range=None,
+                        discontinuity_sequence=getattr(policy, "discontinuity_sequence", 0) or 0,
+                        media_sequence=getattr(policy, "media_sequence", None),
+                        generation_id=getattr(policy, "generation_id", None) or "gen-0",
+                    )
+                    lock = getattr(policy, "checkpoint_lock", None)
+                    if lock is not None:
+                        async with lock:
+                            _cp.upsert_segment_record(
+                                policy.checkpoint,
+                                str(task.idx),
+                                record,
+                                state_path=getattr(policy, "state_path", None),
+                                segments_dir=policy.segments_dir,
+                                write=True,
+                            )
+                    else:
+                        _cp.upsert_segment_record(
+                            policy.checkpoint,
+                            str(task.idx),
+                            record,
+                            state_path=getattr(policy, "state_path", None),
+                            segments_dir=policy.segments_dir,
+                            write=True,
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("checkpoint_publish_failed", idx=task.idx, error=str(exc))
+
         # DF-003: Report per-segment progress so users see incremental
         # progress during segment downloads, not just once at merge time.
         if policy.progress_callback is not None:
@@ -1192,9 +1336,26 @@ def _iter_pending_segment_tasks(
     """
     for i, seg in enumerate(segments):
         segment_path = policy.segments_dir / f"{i:05d}.ts"
-        if segment_path.exists() and segment_path.stat().st_size > 0:
-            logger.debug("skipping_existing_segment", idx=i)
-            continue
+        record = None
+        if getattr(policy, "checkpoint", None) is not None:
+            try:
+                record = policy.checkpoint.segments.get(str(i))
+            except Exception:  # noqa: BLE001
+                record = None
+
+        if record is not None:
+            try:
+                from . import checkpoint as _cp
+
+                if _cp.verify_segment_record(record, policy.segments_dir):
+                    logger.debug("skipping_verified_segment", idx=i)
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            if segment_path.exists() and segment_path.stat().st_size > 0:
+                logger.debug("skipping_existing_segment", idx=i)
+                continue
         yield SegmentTask(
             idx=i,
             segment_url=seg,
@@ -1218,11 +1379,16 @@ async def _run_download_session(
     quality: str,
     attempt_id: int | None = None,
     diagnostic_context: object | None = None,
+    state_path: Path | None = None,
+    video_id: str | None = None,
+    stream_variant_id: str | None = None,
+    playlist_fingerprint: str | None = None,
+    generation_id: str | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
     Creates the segments working directory ``segments_dir`` only after the
-    playlist is fetched and parsed — never before the first network round-trip
+    playlist is fetched and parsed - never before the first network round-trip
     (P12-B7, ART-005 lifetime). The directory is not removed here; removal on
     every non-success exit is the caller's responsibility.
 
@@ -1272,13 +1438,78 @@ async def _run_download_session(
         segments = _parse_m3u8_segments(playlist_result.playlist_text)
         logger.info("found_segments", count=len(segments))
 
+        # Parse HLS structure for durations + media identity (Block E).
+        try:
+            from . import hls_parser as _hp
+
+            media_playlist = _hp.parse_media_playlist(
+                playlist_result.playlist_text, base_url=playlist_result.base_url
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hls_parse_failed", error=str(exc))
+            media_playlist = None
+
+        segment_durations = None
+        is_live = False
+        endlist = True
+        media_sequence = None
+        discontinuity_sequence = 0
+        init_map_identity = None
+        codecs = None
+        resolution = None
+        if media_playlist is not None:
+            segment_durations = [s.duration for s in media_playlist.segments]
+            # align length
+            if len(segment_durations) != len(segments):
+                segment_durations = None
+            is_live = bool(getattr(media_playlist, "is_live", False))
+            endlist = bool(getattr(media_playlist, "endlist", True))
+            media_sequence = getattr(media_playlist, "media_sequence", None)
+            discontinuity_sequence = getattr(media_playlist, "discontinuity_sequence", 0) or 0
+            init_map_identity = getattr(media_playlist, "init_map_identity", None)
+            codecs = getattr(media_playlist, "codecs", None)
+            resolution = getattr(media_playlist, "resolution", None)
+
+        if stream_variant_id is None:
+            stream_variant_id = f"{codecs or 'unknown'}:{resolution or 'unknown'}"
+        if video_id is None:
+            video_id = _extract_video_id(video_url)
+        if playlist_fingerprint is None:
+            try:
+                from . import hls_parser as _hp
+
+                playlist_fingerprint = _hp.compute_playlist_fingerprint(
+                    media_playlist,
+                    variant_id=stream_variant_id,
+                    codecs=codecs,
+                    resolution=resolution,
+                )
+            except Exception:  # noqa: BLE001
+                playlist_fingerprint = f"fp:{len(segments)}"
+
         # P12-B7 (ART-005 lifetime): the segments working directory is created
-        # only after the playlist is parsed and segments are enumerated — not
-        # in download_hls_with_resume before the fetch. Every non-success exit
-        # removes it via _cleanup_segments in download_hls_with_resume's finally.
+        # only after the playlist is parsed and segments are enumerated.
         segments_dir.mkdir(parents=True, exist_ok=True)
 
-        _clear_stale_segments(segments_dir, segments)
+        if state_path is None:
+            state_path = segments_dir / "state.json"
+
+        checkpoint = _reconcile_checkpoint(
+            segments_dir=segments_dir,
+            state_path=state_path,
+            video_id=video_id or _extract_video_id(video_url),
+            quality_requested=quality,
+            stream_variant_id=stream_variant_id,
+            playlist_fingerprint=playlist_fingerprint,
+            media_sequence=media_sequence,
+            discontinuity_sequence=discontinuity_sequence,
+            init_map_identity=init_map_identity,
+            codecs=codecs,
+            resolution=resolution,
+            is_live=is_live,
+            endlist=endlist,
+            generation_id=generation_id,
+        )
 
         # P12-B8 (ART-012): probe the download volume's free space before the
         # fan-out begins, mirroring _check_merge_space's shape. The demand
@@ -1287,27 +1518,10 @@ async def _run_download_session(
         # otherwise succeed — segments are resumable, unlike the merge).
         _check_download_space(len(segments), segments_dir)
 
-        # D-01: The batch semaphore gates *videos* (one permit per video, acquired
-        # once in perform_download). asyncio.Semaphore is not reentrant: reusing the
-        # caller's batch permit here for per-segment acquisition would deadlock once
-        # all video permits are held, because every inner acquisition would wait on a
-        # permit the same task already holds. The segment fan-out is therefore
-        # bounded by a semaphore this layer owns, sized by
-        # max_concurrent_segments. The live task set is further
-        # bounded by a counting window of that same ceiling in the segment
-        # pump (len(pending) >= policy.max_concurrent_segments), so no more
-        # than max_concurrent_segments task objects exist at once (CON-003).
-        # CON-009: the connector this function constructs carries the SAME value as
-        # both its total and its per-origin ceiling, so limit_per_host == limit is
-        # provably non-binding (the per-host term can never be the binding one —
-        # acquired per-host connections are a subset of all acquired) and the
-        # transport never clips an operator's setting: the segment semaphore stays
-        # the single binding authority. The connector is per download — this is NOT
-        # a process-wide pool — so the aggregate is per-download times concurrent
-        # downloads.
         semaphore_to_use: asyncio.Semaphore = asyncio.Semaphore(settings.max_concurrent_segments)
         is_bounded_batch = video_semaphore is not None
 
+        checkpoint_lock = asyncio.Lock()
         policy = DownloadPolicy(
             session=session,
             semaphore=semaphore_to_use,
@@ -1320,7 +1534,23 @@ async def _run_download_session(
             is_bounded_batch=is_bounded_batch,
             m3u8_url=playlist_result.base_url,
             segments_dir=segments_dir,
-            progress_callback=progress_callback,  # DF-003: enable per-segment progress
+            progress_callback=progress_callback,
+            state_path=state_path,
+            stream_variant_id=stream_variant_id,
+            video_id=video_id,
+            quality_requested=quality,
+            playlist_fingerprint=playlist_fingerprint,
+            generation_id=checkpoint.generation_id,
+            segment_durations=segment_durations,
+            media_sequence=media_sequence,
+            discontinuity_sequence=discontinuity_sequence,
+            init_map_identity=init_map_identity,
+            codecs=codecs,
+            resolution=resolution,
+            is_live=is_live,
+            endlist=endlist,
+            checkpoint=checkpoint,
+            checkpoint_lock=checkpoint_lock,
         )
 
         return await _process_downloaded_segments(
@@ -1362,6 +1592,11 @@ async def download_hls_with_resume(
     attempt_id: int | None = None,
     diagnostic_context: object | None = None,
     workspace: DownloadWorkspace | None = None,
+    state_path: Path | None = None,
+    video_id: str | None = None,
+    stream_variant_id: str | None = None,
+    playlist_fingerprint: str | None = None,
+    generation_id: str | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -1414,9 +1649,20 @@ async def download_hls_with_resume(
     if workspace is not None:
         segments_dir = workspace.segments_dir
         merge_output = workspace.staging_dir / output_file.name
+        if state_path is None:
+            state_path = workspace.state_path
     else:
         segments_dir = output_file.parent / f".{output_file.stem}_segments"
         merge_output = output_file
+        if state_path is None:
+            state_path = segments_dir / "state.json"
+
+    if video_id is None:
+        video_id = getattr(request, "video_id", None)
+    if stream_variant_id is None:
+        stream_variant_id = getattr(request, "stream_variant_id", None)
+    if playlist_fingerprint is None:
+        playlist_fingerprint = getattr(request, "playlist_fingerprint", None)
 
     headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
@@ -1447,6 +1693,11 @@ async def download_hls_with_resume(
             quality=request.quality,
             attempt_id=attempt_id,
             diagnostic_context=diagnostic_context,
+            state_path=state_path,
+            video_id=video_id,
+            stream_variant_id=stream_variant_id,
+            playlist_fingerprint=playlist_fingerprint,
+            generation_id=generation_id,
         )
         if result is not None:
             if workspace is not None:

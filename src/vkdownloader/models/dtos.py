@@ -63,3 +63,7 @@ class HLSDownloadRequest(BaseModel):
     #     guard always-true, so SecretStr -- not Secret -- is required here.
     cookies: SecretStr | None = Field(default=None, repr=False)
     progress_callback: Callable[[str, int, int], None] | None = None
+    # Block E optional identity fields.
+    stream_variant_id: str | None = None
+    video_id: str | None = None
+    playlist_fingerprint: str | None = None
