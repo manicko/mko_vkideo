@@ -67,6 +67,8 @@ async def perform_download(
     selected_stream: Stream | None = None,
     *,
     echo: bool = True,
+    diagnostic_sink: object | None = None,
+    attempt_id: int | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -101,10 +103,26 @@ async def perform_download(
         url=_strip_auth_params(url),
         quality=quality,
         output=str(output_file),
+        attempt_id=attempt_id,
     )
 
     if settings is None:
         settings = Settings()
+
+    if (
+        diagnostic_sink is None
+        and getattr(settings, "diagnostics_enabled", True)
+        and getattr(settings, "diagnostic_log_dir", None) is not None
+    ):
+        try:
+            from .diagnostics import open_diagnostic_sink
+
+            diagnostic_sink = open_diagnostic_sink(
+                settings.diagnostic_log_dir / f"{output_file.stem}.diagnostic.jsonl",
+                settings,
+            )
+        except Exception:
+            diagnostic_sink = None
 
     # Probe ffmpeg availability once at startup so users learn about a missing
     # binary before a long download fails at the merge step. The probe's answer
@@ -174,6 +192,8 @@ async def perform_download(
                     video_semaphore=semaphore,
                     progress_callback=progress_callback,
                     echo=echo,
+                    diagnostic_sink=diagnostic_sink,
+                    attempt_id=attempt_id,
                 )
             case DownloadMethod.AUTO:
                 # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
@@ -197,6 +217,8 @@ async def perform_download(
                     video_semaphore=semaphore,
                     progress_callback=progress_callback,
                     echo=echo,
+                    diagnostic_sink=diagnostic_sink,
+                    attempt_id=attempt_id,
                 )
             case _:
                 logger.error(
@@ -223,6 +245,8 @@ async def download_video(
     title_callback: Callable[[str], None] | None = None,
     video_data: VideoWithStreams | None = None,
     selected_stream: Stream | None = None,
+    diagnostic_sink: object | None = None,
+    attempt_id: int | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -316,4 +340,6 @@ async def download_video(
         video_data=video,
         selected_stream=stream,
         echo=echo,
+        diagnostic_sink=diagnostic_sink,
+        attempt_id=attempt_id,
     )

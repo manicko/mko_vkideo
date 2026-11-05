@@ -1214,6 +1214,8 @@ async def _run_download_session(
     video_semaphore: SemaphoreLike | None,
     *,
     quality: str,
+    attempt_id: int | None = None,
+    diagnostic_context: object | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1331,6 +1333,8 @@ async def download_hls_with_resume(
     extractor: VKVideoExtractor | None = None,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_semaphore: SemaphoreLike | None = None,
+    attempt_id: int | None = None,
+    diagnostic_context: object | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -1372,6 +1376,7 @@ async def download_hls_with_resume(
         url=_strip_auth_params(request.video_url),
         output=str(request.output_file),
         quality=request.quality,
+        attempt_id=attempt_id,
     )
 
     if settings is None:
@@ -1407,12 +1412,20 @@ async def download_hls_with_resume(
             backoff_coordinator,
             video_semaphore,
             quality=request.quality,
+            attempt_id=attempt_id,
+            diagnostic_context=diagnostic_context,
         )
         if result is not None:
             success = True
             return result
         return None
     finally:
+        if not success:
+            logger.warning(
+                "job_failed_preserved",
+                attempt_id=attempt_id,
+                path=str(output_file),
+            )
         if not success:
             # Block B: preserve partials on every non-success exit. Log only;
             # never delete the working directory here. _cleanup_segments runs

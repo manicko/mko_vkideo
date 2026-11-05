@@ -60,7 +60,8 @@ def _strip_auth_params(url: str) -> str:
         parsed = urlsplit(url)
         if not parsed.scheme or not parsed.netloc:
             return "***REDACTED***"
-        return f"{parsed.scheme}://{parsed.netloc}/***REDACTED***"
+        host = parsed.netloc.rsplit("@", 1)[-1]
+        return f"{parsed.scheme}://{host}/***REDACTED***"
     except Exception:
         return "***REDACTED***"
 
@@ -150,23 +151,72 @@ def sanitize_url_for_log(url: str) -> str:
 _STRUCTURAL_KEYS: frozenset[str] = frozenset({"event", "level", "timestamp", "correlation_id"})
 
 
-def _sanitize_collection(
-    value: list[object] | tuple[object, ...] | dict[str, object],
-) -> list[object] | tuple[object, ...] | dict[str, object]:
-    """Apply :func:`sanitize_text_for_log` depth-1 into a container.
+def _sanitize_value(
+    value: object,
+    depth: int,
+    seen: set[int],
+) -> object:
+    if isinstance(value, str):
+        return sanitize_text_for_log(value)
+    if isinstance(value, bytes):
+        return sanitize_for_log(value)
+    if isinstance(value, BaseException):
+        return sanitize_exception(value)
+    if isinstance(value, (list, tuple, dict)):
+        return _sanitize_collection(value, depth, seen)
+    return value
 
-    Builds a **new** container of the same type (never mutates the input, which
-    structlog's shallow per-record copy would otherwise share across records).
-    Top-level ``str`` elements are redacted; nested containers are passed
-    through unchanged (depth-1 only). Dict keys are preserved byte-identical;
-    only the values are sanitised.
-    """
-    if isinstance(value, list):
-        return [sanitize_text_for_log(v) if isinstance(v, str) else v for v in value]
-    if isinstance(value, tuple):
-        return tuple(sanitize_text_for_log(v) if isinstance(v, str) else v for v in value)
-    if isinstance(value, dict):
-        return {k: sanitize_text_for_log(v) if isinstance(v, str) else v for k, v in value.items()}
+
+def _sanitize_collection(
+    value: object,
+    depth: int = 0,
+    seen: set[int] | None = None,
+) -> object:
+    """Recursively sanitize containers with a bounded depth and cycle guard."""
+    if seen is None:
+        seen = set()
+    if depth >= 8:
+        return value
+    if not isinstance(value, (list, tuple, dict)):
+        return _sanitize_value(value, depth, seen)
+    if id(value) in seen:
+        return value
+    seen.add(id(value))
+    try:
+        if isinstance(value, list):
+            return [_sanitize_value(item, depth + 1, seen) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_sanitize_value(item, depth + 1, seen) for item in value)
+        if isinstance(value, dict):
+            return {k: _sanitize_value(v, depth + 1, seen) for k, v in value.items()}
+        return value
+    finally:
+        seen.discard(id(value))
+
+
+def sanitize_exception(exc: BaseException) -> str:
+    """Sanitize an exception into a safe string (no raw .args leakage)."""
+    try:
+        message = str(exc)
+    except Exception:
+        message = type(exc).__name__
+    return sanitize_text_for_log(f"{type(exc).__name__}: {message}")
+
+
+def sanitize_for_log(value: object) -> object:
+    """Public helper to sanitize arbitrary values for logging."""
+    if isinstance(value, str):
+        return sanitize_text_for_log(value)
+    if isinstance(value, bytes):
+        try:
+            return sanitize_text_for_log(value.decode("utf-8", errors="replace"))
+        except Exception:
+            return "***REDACTED***"
+    if isinstance(value, BaseException):
+        return sanitize_exception(value)
+    if isinstance(value, (list, tuple, dict)):
+        return _sanitize_collection(value, 0, set())
+    return value
 
 
 def redact_log_event(
@@ -174,39 +224,17 @@ def redact_log_event(
     method_name: str,
     event_dict: EventDict,
 ) -> EventDict:
-    """Redact URLs and artefact paths from every string value in a structlog event dict.
-
-    This is a central, event-name-agnostic structlog processor (B6) that applies
-    :func:`sanitize_text_for_log` to every ``str`` value in the event dict,
-    excluding the structural keys that structlog itself manages (``event``,
-    ``level``, ``timestamp``, ``correlation_id``). It is idempotent: the redaction
-    marker is a fixed point of ``sanitize_text_for_log``, so running the processor
-    on an already-redacted value is a no-op.
-
-    The module holds both the text transform (:func:`sanitize_text_for_log`) and
-    this event-dict transform over that same policy, so the redaction rules
-    (URL regex, artefact regexes, ordering, idempotency) stay in one place.
-
-    Non-string values (``None``, ``int``, ``bool``, ``float``, ``bytes``,
-    collections) are passed through unchanged. For ``list`` / ``tuple`` / ``dict``
-    values, the processor recurses **depth-1**: string elements are redacted,
-    non-string leaves pass through, and nested containers deeper than depth-1
-    are returned without further recursion. The original container is never
-    mutated in place — a new container is always built, because structlog's
-    per-record dict copy is shallow and a shared list/tuple/dict would otherwise
-    leak redacted state across records.
-
-    A ``StrEnum`` member is an ``isinstance(value, str)`` match; ``re.sub`` returns
-    a plain ``str``, so the field's rendered output is byte-identical even though
-    its Python type narrows from enum to ``str``.
-    """
-    for key, value in event_dict.items():
+    for key, value in list(event_dict.items()):
         if key in _STRUCTURAL_KEYS:
             continue
         if isinstance(value, str):
             event_dict[key] = sanitize_text_for_log(value)
+        elif isinstance(value, bytes):
+            event_dict[key] = sanitize_for_log(value)
+        elif isinstance(value, BaseException):
+            event_dict[key] = sanitize_exception(value)
         elif isinstance(value, (list, tuple, dict)):
-            event_dict[key] = _sanitize_collection(value)
+            event_dict[key] = _sanitize_collection(value, 0, set())
     return event_dict
 
 
@@ -215,4 +243,6 @@ __all__ = [
     "redact_log_event",
     "sanitize_text_for_log",
     "sanitize_url_for_log",
+    "sanitize_exception",
+    "sanitize_for_log",
 ]

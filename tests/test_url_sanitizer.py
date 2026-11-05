@@ -829,14 +829,11 @@ class TestRedactLogEventProcessor:
         assert result == {"event": "bare_event"}
 
     def test_bytes_value_passes_through(self) -> None:
-        """A ``bytes`` value (pre-UnicodeDecoder) passes through unchanged.
-        After UnicodeDecoder runs, the same processor would see a ``str`` and
-        redact — but the processor itself never raises on ``bytes``.
-        """
+        """A ``bytes`` value is sanitized (decoded) rather than passed raw."""
         event_dict = {"event": "raw_blob", "blob": b"https://cdn.example.com/x?token=SECRET"}
         result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
 
-        assert result["blob"] == b"https://cdn.example.com/x?token=SECRET"
+        assert "SECRET" not in str(result["blob"])
 
     def test_list_values_are_depth1_sanitised(self) -> None:
         """A ``list`` value has its string elements redacted via depth-1 recursion,
@@ -1178,3 +1175,40 @@ class TestRealConfiguredChain:
         assert "SECRET123" not in cast(str, str_record["path"])
         assert "cdn.example.com" in cast(str, str_record["path"])
         assert none_record["path"] is None
+
+
+class TestBlockCDiagnosticsRed:
+    """RED tests for Block C diagnostics gaps."""
+
+    def test_strip_auth_params_removes_userinfo(self) -> None:
+        assert _strip_auth_params("https://u:p@host/x?t=1") == "https://host/***REDACTED***"
+
+    def test_recursive_sanitization_depth2(self) -> None:
+        event_dict = {"outer": {"inner": {"url": "https://cdn.example.com/x?token=SECRET"}}}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+        assert "SECRET" not in str(result["outer"]["inner"]["url"])
+
+    def test_bytes_value_sanitization(self) -> None:
+        event_dict = {"blob": b"https://cdn.example.com/x?token=SECRET"}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+        assert "SECRET" not in str(result["blob"])
+
+    def test_exception_object_sanitization(self) -> None:
+        exc = ValueError("fetch failed: https://cdn.example.com/x?token=SECRET")
+        event_dict = {"error": exc}
+        result = redact_log_event(_TEST_LOGGER, "debug", dict(event_dict))
+        assert "SECRET" not in str(result["error"])
+
+    def test_sanitize_exception_helper(self) -> None:
+        from vkdownloader.utils.url_sanitizer import sanitize_exception
+
+        exc = ValueError("fetch failed: https://cdn.example.com/x?token=SECRET")
+        result = sanitize_exception(exc)
+        assert "SECRET" not in str(result)
+        assert "cdn.example.com" in str(result)
+
+    def test_sanitize_for_log_helper(self) -> None:
+        from vkdownloader.utils.url_sanitizer import sanitize_for_log
+
+        result = sanitize_for_log("https://cdn.example.com/x?token=SECRET")
+        assert "SECRET" not in str(result)

@@ -1048,6 +1048,8 @@ async def download_with_ytdlp_with_resume_fallback(
     video_semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     echo: bool = True,
+    diagnostic_sink: object | None = None,
+    attempt_id: int | None = None,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based fallback on failure.
 
@@ -1101,6 +1103,8 @@ async def download_with_ytdlp_with_resume_fallback(
             raw_cookies,
             progress_callback,
             echo=echo,
+            diagnostic_sink=diagnostic_sink,
+            attempt_id=attempt_id,
         )
 
         if result:
@@ -1345,6 +1349,8 @@ async def _download_with_ytdlp(
     progress_callback: Callable[[str, int, int], None] | None = None,
     *,
     echo: bool = True,
+    diagnostic_sink: object | None = None,
+    attempt_id: int | None = None,
 ) -> Path | None:
     """Download video using yt-dlp via subprocess.
 
@@ -1386,12 +1392,14 @@ async def _download_with_ytdlp(
         url=_strip_auth_params(m3u8_url),
         output=str(output_file),
         quality=quality,
+        attempt_id=attempt_id,
     )
 
     quality_str = quality.replace("p", "") if quality else "720"
     user_agent = settings.user_agent
     video_id = _extract_video_id(video_url)
     shutdown_event = get_shutdown_event()
+    started_at = time.monotonic()
 
     if not settings.ssl_verify:
         logger.warning("ssl_verification_disabled", url=_strip_auth_params(video_url))
@@ -1456,6 +1464,13 @@ async def _download_with_ytdlp(
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
                     _retain_transcript_line(output_chunks, line)
+                    if diagnostic_sink is not None:
+                        try:
+                            diagnostic_sink.write_line(
+                                decoded, is_progress=_is_ytdlp_progress_line(decoded)
+                            )
+                        except Exception:
+                            pass
                     progress_state = _parse_ytdlp_progress_state(decoded)
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
@@ -1493,6 +1508,13 @@ async def _download_with_ytdlp(
                     decoded = line.decode(errors="replace")
                     _echo_ytdlp_line(decoded, echo=echo)
                     _retain_transcript_line(output_chunks, line)
+                    if diagnostic_sink is not None:
+                        try:
+                            diagnostic_sink.write_line(
+                                decoded, is_progress=_is_ytdlp_progress_line(decoded)
+                            )
+                        except Exception:
+                            pass
                     progress_state = _parse_ytdlp_progress_state(decoded)
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
@@ -1546,6 +1568,15 @@ async def _download_with_ytdlp(
                 )
                 return None
 
+        elapsed_seconds = time.monotonic() - started_at
+        logger.info(
+            "child_exit",
+            attempt_id=attempt_id,
+            returncode=process.returncode,
+            elapsed_seconds=elapsed_seconds,
+            last_error_code=None,
+        )
+
         output_data = bytes(output_chunks) if output_chunks else b""
 
         if shutdown_event.is_set():
@@ -1563,6 +1594,7 @@ async def _download_with_ytdlp(
                 url=_strip_auth_params(video_url),
                 returncode=process.returncode,
                 error=error_msg,
+                attempt_id=attempt_id,
             )
             return None
 

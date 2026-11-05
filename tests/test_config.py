@@ -1853,3 +1853,54 @@ def test_aggregate_segment_ceiling_formula(
     effective_per_video = min(segments, downloads)
     aggregate = effective_per_video * downloads
     assert aggregate == expected_aggregate
+
+
+class TestSetupLoggingIdempotencyBlockC:
+    """RED tests for Block C logging idempotency."""
+
+    def test_repeated_setup_logging_single_handler_and_second_file(self, tmp_path: Path) -> None:
+        first = tmp_path / "first.log"
+        second = tmp_path / "second.log"
+        settings1 = Settings(log_file=str(first), log_level="DEBUG")  # type: ignore[arg-type]
+        settings2 = Settings(log_file=str(second), log_level="DEBUG")  # type: ignore[arg-type]
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging(settings1)
+            logger = structlog.get_logger("idempotency")
+            logger.info("first record")
+            for handler in root.handlers:
+                handler.flush()
+
+            setup_logging(settings2)
+            logger = structlog.get_logger("idempotency")
+            logger.info("second record")
+            for handler in root.handlers:
+                handler.flush()
+            assert len(root.handlers) == 1
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        assert second.exists()
+        assert "second record" in second.read_text(encoding="utf-8")
+
+
+class TestDiagnosticsEnabledBlockC:
+    """RED tests for Block C diagnostics enable/disable option."""
+
+    def test_diagnostics_enabled_default_true(self) -> None:
+        settings = Settings()
+        assert settings.diagnostics_enabled is True
+
+    def test_diagnostic_log_dir_default_none(self) -> None:
+        settings = Settings()
+        assert settings.diagnostic_log_dir is None
+
+    def test_diagnostic_log_dir_empty_string_coerced_none(self) -> None:
+        settings = Settings(diagnostic_log_dir="")  # type: ignore[arg-type]
+        assert settings.diagnostic_log_dir is None

@@ -3,6 +3,7 @@
 import difflib
 import io
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -202,6 +203,23 @@ class Settings(BaseSettings):
         default=None,
         description="Optional log file path",
     )
+    diagnostics_enabled: bool = Field(
+        default=True,
+        description="Enable persistent diagnostic logs and child transcript sinks.",
+    )
+    diagnostic_log_dir: Path | None = Field(
+        default=None,
+        description="Interim base directory for diagnostic logs; None disables auto-sink. "
+        "Block D supplies a per-job workspace.log_path.",
+    )
+    log_max_bytes: int = Field(
+        default=10_485_760,
+        description="Maximum size in bytes of a log file before rotation.",
+    )
+    log_backup_count: int = Field(
+        default=5,
+        description="Number of rotated log file backups to retain.",
+    )
 
     @field_validator("download_dir", mode="before")
     @classmethod
@@ -221,7 +239,7 @@ class Settings(BaseSettings):
             return Settings.model_fields["download_dir"].default
         return v
 
-    @field_validator("log_file", mode="before")
+    @field_validator("log_file", "diagnostic_log_dir", mode="before")
     @classmethod
     def empty_string_to_none(cls, v: object) -> object:
         """Map empty-string log_file to None (no file logging).
@@ -265,7 +283,7 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("download_dir", "log_file", mode="after")
+    @field_validator("download_dir", "log_file", "diagnostic_log_dir", mode="after")
     @classmethod
     def expand_tilde_paths(cls, v: Path | None) -> Path | None:
         """Expand ``~`` and resolve to an absolute path.
@@ -629,16 +647,27 @@ class _ExcInfoClearingFormatter(logging.Formatter):
 def setup_logging(settings: Settings | None = None) -> None:
     """Configure structlog for the application.
 
-    Creates parent directory for log_file if it does not exist.
+    Creates parent directory for log_file if it does not exist. Idempotent:
+    existing root handlers are closed and removed before attaching new ones.
 
     Args:
         settings: Application settings. If None, uses default Settings().
 
     Raises:
-        OSError: If log_file parent directory cannot be created.
+        OSError: If log_file parent directory or handler cannot be created.
     """
     if settings is None:
         settings = Settings()
+
+    root = logging.getLogger()
+
+    # Idempotency: close and remove any existing root handlers first.
+    for existing in list(root.handlers):
+        try:
+            existing.close()
+        except Exception:
+            pass
+        root.removeHandler(existing)
 
     if settings.log_file is not None:
         log_path = settings.log_file
@@ -648,24 +677,28 @@ def setup_logging(settings: Settings | None = None) -> None:
             raise OSError(
                 f"Failed to create log file parent directory '{log_path.parent}': {e}"
             ) from e
-        # SEC-003: Create the log file before FileHandler opens it, so subprocess
-        # output sanitized for SEC-002 is not readable by other local users.
-        # 0o600 sets POSIX permission bits, and that is the only place the
-        # owner-only confinement is delivered: on Windows `touch(mode=...)` ignores
-        # the mode and `chmod` toggles only the read-only attribute, so both
-        # branches leave the file readable by any local user. Confinement is not
-        # offered there (D-11); the mode is requested for its POSIX effect only,
-        # and no access control list is applied.
-        if not log_path.exists():
-            log_path.touch(mode=0o600)
-        else:
-            log_path.chmod(0o600)
+        # SEC-003: Create the log file before handler opens it.
+        try:
+            if not log_path.exists():
+                log_path.touch(mode=0o600)
+            else:
+                log_path.chmod(0o600)
+        except OSError as e:
+            raise OSError(f"Failed to prepare log file '{log_path}': {e}") from e
 
     _formatter = _ExcInfoClearingFormatter(fmt="%(message)s")
-    if settings.log_file:
-        handler: logging.Handler = logging.FileHandler(settings.log_file)
-    else:
-        handler = logging.StreamHandler(encoding_safe(sys.stderr))
+    try:
+        if settings.log_file:
+            handler: logging.Handler = logging.handlers.RotatingFileHandler(
+                settings.log_file,
+                maxBytes=settings.log_max_bytes,
+                backupCount=settings.log_backup_count,
+                encoding="utf-8",
+            )
+        else:
+            handler = logging.StreamHandler(encoding_safe(sys.stderr))
+    except OSError as e:
+        raise OSError(f"Failed to create log handler: {e}") from e
     handler.setFormatter(_formatter)
 
     logging.basicConfig(
@@ -673,6 +706,7 @@ def setup_logging(settings: Settings | None = None) -> None:
         handlers=[handler],
     )
 
+    structlog.reset_defaults()
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

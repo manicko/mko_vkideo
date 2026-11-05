@@ -137,6 +137,8 @@ class _SettingsOverrides(TypedDict, total=False):
     max_retries: int
     log_level: LogLevel
     log_file: Path
+    diagnostics_enabled: bool
+    diagnostic_log_dir: Path
 
 
 def _build_settings(
@@ -146,6 +148,8 @@ def _build_settings(
     max_retries: int | None,
     log_level: LogLevel | None,
     log_file: Path | None = None,
+    diagnostics: bool | None = None,
+    log_dir: Path | None = None,
 ) -> Settings:
     """Construct the one Settings object a command invocation runs on.
 
@@ -166,6 +170,10 @@ def _build_settings(
         overrides["log_level"] = log_level
     if log_file is not None:
         overrides["log_file"] = log_file
+    if diagnostics is not None:
+        overrides["diagnostics_enabled"] = diagnostics
+    if log_dir is not None:
+        overrides["diagnostic_log_dir"] = log_dir
     return Settings(**overrides)
 
 
@@ -176,6 +184,8 @@ def _run_command_preamble(
     max_retries: int | None,
     log_level: LogLevel | None,
     log_file: Path | None = None,
+    diagnostics: bool | None = None,
+    log_dir: Path | None = None,
 ) -> Settings:
     """Run the shared four-step command bootstrap and return the constructed Settings.
 
@@ -229,6 +239,8 @@ def _run_command_preamble(
             max_retries=max_retries,
             log_level=log_level,
             log_file=log_file,
+            diagnostics=diagnostics,
+            log_dir=log_dir,
         )
     except (OSError, UnicodeError) as exc:
         raise _PreambleFailure(
@@ -405,6 +417,16 @@ def download(
         "--log-file",
         help="Log file path; writes structured JSON logs to this file instead of stderr (effective default: none; from VKDOWNLOADER_LOG_FILE or .env; overrides .env)",
     ),
+    diagnostics: bool | None = typer.Option(
+        None,
+        "--diagnostics/--no-diagnostics",
+        help="Enable diagnostic logs and child transcript sinks (effective default: true; from VKDOWNLOADER_DIAGNOSTICS_ENABLED or .env)",
+    ),
+    log_dir: Path | None = typer.Option(
+        None,
+        "--log-dir",
+        help="Base directory for diagnostic logs (effective default: none; from VKDOWNLOADER_DIAGNOSTIC_LOG_DIR or .env)",
+    ),
 ) -> None:
     """Download a single video from vkvideo.ru.
 
@@ -456,6 +478,8 @@ def download(
             max_retries=max_retries,
             log_level=log_level,
             log_file=log_file,
+            diagnostics=diagnostics,
+            log_dir=log_dir,
         )
         result = asyncio.run(_download())
 
@@ -568,6 +592,16 @@ def batch_download(
         "--log-file",
         help="Log file path; writes structured JSON logs to this file instead of stderr (effective default: none; from VKDOWNLOADER_LOG_FILE or .env; overrides .env)",
     ),
+    diagnostics: bool | None = typer.Option(
+        None,
+        "--diagnostics/--no-diagnostics",
+        help="Enable diagnostic logs and child transcript sinks (effective default: true; from VKDOWNLOADER_DIAGNOSTICS_ENABLED or .env)",
+    ),
+    log_dir: Path | None = typer.Option(
+        None,
+        "--log-dir",
+        help="Base directory for diagnostic logs (effective default: none; from VKDOWNLOADER_DIAGNOSTIC_LOG_DIR or .env)",
+    ),
 ) -> None:
     """Download multiple videos from a file.
 
@@ -613,6 +647,8 @@ def batch_download(
             max_retries=max_retries,
             log_level=log_level,
             log_file=log_file,
+            diagnostics=diagnostics,
+            log_dir=log_dir,
         )
 
         # Read the URL file narrowly so a read failure produces the precise
