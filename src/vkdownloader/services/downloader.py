@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from structlog import get_logger
 
@@ -69,6 +69,7 @@ async def perform_download(
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
+    workspace: Any = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -109,18 +110,30 @@ async def perform_download(
     if settings is None:
         settings = Settings()
 
+    if workspace is None:
+        try:
+            from .workspace import make_workspace
+
+            workspace = make_workspace(output_file, output_file.stem, str(quality))
+        except Exception:  # noqa: BLE001
+            workspace = None
+
     if (
         diagnostic_sink is None
         and getattr(settings, "diagnostics_enabled", True)
-        and getattr(settings, "diagnostic_log_dir", None) is not None
+        and (getattr(settings, "diagnostic_log_dir", None) is not None or workspace is not None)
     ):
         try:
             from .diagnostics import open_diagnostic_sink
 
-            diagnostic_sink = open_diagnostic_sink(
-                settings.diagnostic_log_dir / f"{output_file.stem}.diagnostic.jsonl",
-                settings,
-            )
+            if getattr(settings, "diagnostic_log_dir", None) is not None:
+                sink_path = settings.diagnostic_log_dir / f"{output_file.stem}.diagnostic.jsonl"
+            elif workspace is not None:
+                sink_path = workspace.log_path
+            else:
+                sink_path = None
+            if sink_path is not None:
+                diagnostic_sink = open_diagnostic_sink(sink_path, settings)
         except Exception:
             diagnostic_sink = None
 
@@ -194,6 +207,7 @@ async def perform_download(
                     echo=echo,
                     diagnostic_sink=diagnostic_sink,
                     attempt_id=attempt_id,
+                    workspace=workspace,
                 )
             case DownloadMethod.AUTO:
                 # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
@@ -219,6 +233,7 @@ async def perform_download(
                     echo=echo,
                     diagnostic_sink=diagnostic_sink,
                     attempt_id=attempt_id,
+                    workspace=workspace,
                 )
             case _:
                 logger.error(
@@ -247,6 +262,7 @@ async def download_video(
     selected_stream: Stream | None = None,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
+    workspace: Any = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -321,6 +337,14 @@ async def download_video(
 
     output_file = _resolve_output_file(video, output, settings, output_index)
 
+    if workspace is None:
+        try:
+            from .workspace import make_workspace
+
+            workspace = make_workspace(output_file, video.id, str(quality))
+        except Exception:  # noqa: BLE001
+            workspace = None
+
     # When pre-extracted data is provided, forward the pre-selected stream
     # to perform_download (which will skip its own extraction via the
     # video_data / selected_stream guard).
@@ -342,4 +366,5 @@ async def download_video(
         echo=echo,
         diagnostic_sink=diagnostic_sink,
         attempt_id=attempt_id,
+        workspace=workspace,
     )

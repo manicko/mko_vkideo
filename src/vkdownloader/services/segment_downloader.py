@@ -42,6 +42,7 @@ from .retry_policies import (
     _retry_429_with_backoff,
     _wait_with_shutdown,
 )
+from .workspace import DownloadWorkspace
 
 if TYPE_CHECKING:
     import aiohttp
@@ -1360,6 +1361,7 @@ async def download_hls_with_resume(
     video_semaphore: SemaphoreLike | None = None,
     attempt_id: int | None = None,
     diagnostic_context: object | None = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """
     Download HLS stream with segment-level resume and token refresh.
@@ -1409,7 +1411,12 @@ async def download_hls_with_resume(
         settings = Settings()
     output_file = validate_output_path(request.output_file)
 
-    segments_dir = output_file.parent / f".{output_file.stem}_segments"
+    if workspace is not None:
+        segments_dir = workspace.segments_dir
+        merge_output = workspace.staging_dir / output_file.name
+    else:
+        segments_dir = output_file.parent / f".{output_file.stem}_segments"
+        merge_output = output_file
 
     headers: dict[str, str] = {
         "User-Agent": settings.user_agent,
@@ -1431,7 +1438,7 @@ async def download_hls_with_resume(
             headers,
             settings,
             segments_dir,
-            output_file,
+            merge_output,
             request.progress_callback,
             request.video_url,
             extractor,
@@ -1442,6 +1449,15 @@ async def download_hls_with_resume(
             diagnostic_context=diagnostic_context,
         )
         if result is not None:
+            if workspace is not None:
+                try:
+                    from .workspace import cleanup_owned_job_artifacts, publish_verified_file
+
+                    publish_verified_file(result, workspace.final_path)
+                    cleanup_owned_job_artifacts(workspace)
+                    result = workspace.final_path
+                except FileExistsError:
+                    return None
             success = True
             return result
         return None

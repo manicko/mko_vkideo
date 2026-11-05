@@ -44,6 +44,7 @@ from ..services.retry_policies import (
     _wait_with_shutdown,
 )
 from ..services.segment_downloader import download_hls_with_resume
+from ..services.workspace import DownloadWorkspace
 from ..utils.security import validate_output_path
 from ..utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log
 
@@ -110,17 +111,17 @@ _COOKIE_LIFECYCLE_LOCK = threading.Lock()
 def _is_pid_alive(pid: int) -> bool:
     """Report whether a process with ``pid`` is currently alive.
 
-    On POSIX, uses ``os.kill(pid, 0)`` — signal 0 tests process existence
+    On POSIX, uses ``os.kill(pid, 0)`` - signal 0 tests process existence
     without delivering a signal. ``os.kill`` is **prohibited** on the Windows
     branch, but not because it would terminate the target: on Windows
-    ``os.kill(pid, sig)`` dispatches the two console-control values first —
+    ``os.kill(pid, sig)`` dispatches the two console-control values first -
     ``signal.CTRL_C_EVENT`` (0) and ``signal.CTRL_BREAK_EVENT`` (1) go to
     ``GenerateConsoleCtrlEvent``, and only any other value reaches
     ``TerminateProcess``. Because ``CTRL_C_EVENT == 0``, ``os.kill(pid, 0)``
     takes the **console-control** branch, which makes it wrong as a probe twice
     over: against a target that is not attached to a console the call fails with
-    ``OSError`` and says nothing about liveness — exactly the batch and service
-    case ``SEC-002`` targets — and against a console-attached target it delivers a
+    ``OSError`` and says nothing about liveness - exactly the batch and service
+    case ``SEC-002`` targets - and against a console-attached target it delivers a
     real CTRL_C event to that process's console group, which reaches the
     operator's own foreground program. A ``ctypes`` probe via ``OpenProcess`` +
     ``GetExitCodeProcess`` is used instead (D-1); ``STILL_ACTIVE`` (259) means
@@ -130,7 +131,7 @@ def _is_pid_alive(pid: int) -> bool:
         import ctypes
 
         # GetExitCodeProcess requires PROCESS_QUERY_INFORMATION (0x0400), not
-        # SYNCHRONIZE — SYNCHRONIZE only permits WaitForSingleObject. Using the
+        # SYNCHRONIZE - SYNCHRONIZE only permits WaitForSingleObject. Using the
         # wrong right makes GetExitCodeProcess fail with access denied, so
         # _is_pid_alive incorrectly returns False for the current process (D-1).
         PROCESS_QUERY_INFORMATION = 0x0400
@@ -166,21 +167,21 @@ def _is_pid_probe_conclusive(pid: int) -> bool:
 
     On POSIX the answer is always ``True``: ``_is_pid_alive`` already maps
     ``PermissionError`` to alive, so its ``False`` can only come from
-    ``ProcessLookupError`` — a definitive "no such process".
+    ``ProcessLookupError`` - a definitive "no such process".
 
     On Windows a ``False`` can also come from ``OpenProcess`` failing with
     ``ERROR_ACCESS_DENIED`` (5): an elevated, SYSTEM, or other-account owner
     like live PID 4 opens with access denied and is misreported dead. This
     function re-issues ``OpenProcess(PROCESS_QUERY_INFORMATION)`` and treats
-    **only** ``ERROR_INVALID_PARAMETER`` (87) — "no process object for this PID"
-    — as conclusive; ``ERROR_ACCESS_DENIED`` (5) and any other failure are
+    **only** ``ERROR_INVALID_PARAMETER`` (87) - "no process object for this PID"
+    - as conclusive; ``ERROR_ACCESS_DENIED`` (5) and any other failure are
     inconclusive and the directory is retained.
 
     Trap honoured: the DLL is loaded with
     ``ctypes.WinDLL("kernel32", use_last_error=True)`` and consulted via
     ``ctypes.get_last_error()``. ``ctypes.windll.kernel32`` does not arm the
     last-error slot and can report a stale code, which would make a denied
-    owner look conclusively dead — re-opening the very hazard this closes.
+    owner look conclusively dead - re-opening the very hazard this closes.
     When the handle is non-zero (a process object exists) the handle is closed
     and the result is inconclusive, for a handle that opens proves nothing
     about liveness once ``_is_pid_alive`` has already answered ``False``.
@@ -197,7 +198,7 @@ def _is_pid_probe_conclusive(pid: int) -> bool:
     handle = kernel32.OpenProcess(process_query_information, False, pid)
     if handle == 0:
         last_error = ctypes.get_last_error()
-        # ERROR_INVALID_PARAMETER (87): the PID is not allocated — death proven.
+        # ERROR_INVALID_PARAMETER (87): the PID is not allocated - death proven.
         # Any other code, notably ERROR_ACCESS_DENIED (5), is inconclusive.
         return last_error == 87
     kernel32.CloseHandle(handle)
@@ -207,8 +208,8 @@ def _is_pid_probe_conclusive(pid: int) -> bool:
 def _read_owner_pid(cookie_dir: Path) -> int | None:
     """Read the owning PID recorded in ``owner.pid`` within ``cookie_dir``.
 
-    Returns ``None`` to mean "no readable record" — the file is absent, empty,
-    unparseable, or is not a regular file — never "the owner is dead". What the
+    Returns ``None`` to mean "no readable record" - the file is absent, empty,
+    unparseable, or is not a regular file - never "the owner is dead". What the
     sweep may conclude from ``None`` is :func:`_sweep_stale_cookie_dirs`'
     business; this function is a pure parser and its return value and except
     clause are left unchanged.
@@ -238,8 +239,8 @@ def _remove_cookie_artifact_dir(cookie_dir: Path) -> None:
     directory, so ``owner.pid`` is unlinked first and the directory is then
     removed. No glob, no recursion: the credential file is never touched here.
 
-    ``FileNotFoundError`` is success, not failure — a concurrent sweep (or an
-    earlier teardown) already removed the directory — so its arm precedes the
+    ``FileNotFoundError`` is success, not failure - a concurrent sweep (or an
+    earlier teardown) already removed the directory - so its arm precedes the
     ``OSError`` arm, which it subclasses. An ``OSError`` from the ``owner.pid``
     unlink means ``rmdir`` provably cannot succeed while that file exists, so it
     is not attempted; one ``cookie_file_cleanup_failed`` record is emitted and
@@ -274,8 +275,8 @@ def _cookie_artifact_dir_age_seconds(cookie_dir: Path) -> float | None:
     Reads ``st_birthtime`` where the platform exposes it and falls back to
     ``st_ctime`` (which on Windows *is* the creation time; on POSIX it is the
     inode-change time, equal to creation time for a freshly made directory).
-    Returns ``None`` when the age cannot be established — ``stat`` raises, or
-    neither attribute exists — so the caller degrades to *retain*. Uses
+    Returns ``None`` when the age cannot be established - ``stat`` raises, or
+    neither attribute exists - so the caller degrades to *retain*. Uses
     ``time.time()``, never ``time.monotonic()``: the value is compared against a
     filesystem timestamp written by another process, so only the wall clock is
     comparable. ``max(0.0, ...)`` absorbs a clock that steps backwards.
@@ -296,7 +297,7 @@ def _sweep_stale_cookie_dirs() -> None:
     """Remove cookie artefact directories whose owner is positively dead.
 
     Scans the system temp directory for directories whose names start with
-    ``_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX`` — composed, this is
+    ``_COOKIE_ARTIFACT_PREFIX + _ARTEFACT_DIR_SUFFIX`` - composed, this is
     ``vk_cookies_`` + ``_dir`` = ``vk_cookies__dir`` (the doubled underscore is
     the join, not a separate literal). Classification is **default-deny**:
     a directory is destroyed only on a positive demonstration that it is no
@@ -308,7 +309,7 @@ def _sweep_stale_cookie_dirs() -> None:
        ``False`` as a positive demonstration of death (e.g.
        ``ERROR_INVALID_PARAMETER`` on Windows); an inconclusive probe
        (``ERROR_ACCESS_DENIED``, a PID this user cannot probe) is retained.
-    2. ``owner.pid`` is absent or unreadable — ``_read_owner_pid`` returns
+    2. ``owner.pid`` is absent or unreadable - ``_read_owner_pid`` returns
        ``None``. Such a directory is reclaimed only when its age is known and
        is at least ``_COOKIE_ARTIFACT_PIDLESS_GRACE_SECONDS``; an age that
        cannot be established is retained. The grace is a **skip condition on
@@ -322,7 +323,7 @@ def _sweep_stale_cookie_dirs() -> None:
     ``owner.pid``), an empty ``owner.pid``, an unparseable record,
     ``owner.pid`` being a directory, a crash between ``open`` and ``write``,
     and a record denied to this user. The PID-less class *is* reclaimed by the
-    sweep itself once provably older than the grace — and because ``R1``'s
+    sweep itself once provably older than the grace - and because ``R1``'s
     teardown window (``_remove_cookie_artifact_dir`` unlinking ``owner.pid``
     then ``rmdir``) is byte-identical on disk to a PID-less directory, that
     window is closed by the same grace.
@@ -330,9 +331,9 @@ def _sweep_stale_cookie_dirs() -> None:
     What the sweep cannot reclaim is **not** destroyed: an owner PID this user
     cannot probe (inconclusive) is retained for the owning run's own ``atexit``
     handler or the operator; ``R1``'s teardown window before it ages out is
-    likewise left for a later sweep. ``R1``'s locked-file residue —
+    likewise left for a later sweep. ``R1``'s locked-file residue -
     ``shutil.rmtree`` with ``ignore_errors=True`` may silently fail on a
-    credential file held open by an indexer or scanner — sits in this class; it
+    credential file held open by an indexer or scanner - sits in this class; it
     is retried on later sweeps and otherwise needs the operator. PID reuse is
     pre-existing and deliberately untouched: a recycled PID makes a dead owner
     look live, so residue is retained, never destroyed.
@@ -384,12 +385,12 @@ def clean_legacy_cookie_files(temp_dir: Path | None = None) -> int:
     product cannot distinguish "abandoned" from "in use right now". Option D
     places that decision with the operator: the operator invokes the command
     knowing no concurrent instance is using those files. The function therefore
-    performs no PID probe — it would be a false safety that could silently
+    performs no PID probe - it would be a false safety that could silently
     preserve residue while implying protection.
 
     **Scope.** Only bare *files* matching ``vk_cookies_<tail>.cookies.txt`` are
     considered. The ``vk_cookies__dir*`` directories owned by a live run are never
-    touched here — they have their own lifecycle and the sweep in
+    touched here - they have their own lifecycle and the sweep in
     :func:`_sweep_stale_cookie_dirs` reclaims their dead-PID residue.
 
     Args:
@@ -544,7 +545,7 @@ async def _await_first_and_cancel_others(
     Returns:
         Tuple of (done_tasks, pending_tasks) after cancellation.
 
-    A task in ``done`` that raised — e.g. the reader dying mid-drain — has its
+    A task in ``done`` that raised - e.g. the reader dying mid-drain - has its
     exception retrieved and reported via the ``subprocess_reader_failed`` event
     so the failure is visible instead of swallowed.  The exception is never
     re-raised: that would turn a cooperative drain into a crash.  A
@@ -565,7 +566,7 @@ async def _await_first_and_cancel_others(
     # Report any failed task's exception so a reader death is visible. Only
     # the ``done`` set is inspected: cancelled-and-settled tasks remain in
     # ``pending`` and produce no record. The exception is retrieved, not
-    # re-raised — re-raising would turn a drain into a crash (TRN-006 sink half).
+    # re-raised - re-raising would turn a drain into a crash (TRN-006 sink half).
     for task in done:
         if task.cancelled():
             continue
@@ -587,7 +588,7 @@ async def _await_ytdlp_reap_with_timeout(
 
     The bound is an **inactivity** bound: it is only armed once the reader task
     (``_monitor_progress`` or ``_drain_output``) has finished consuming the
-    child's stdout — i.e. the child has gone silent. While the reader is still
+    child's stdout - i.e. the child has gone silent. While the reader is still
     yielding lines the clock is never started, so a child that keeps producing
     output is never killed, no matter how long it runs. A bare
     ``asyncio.wait_for(process.wait(), ...)`` without this ladder would leave
@@ -596,7 +597,7 @@ async def _await_ytdlp_reap_with_timeout(
     Args:
         process: The yt-dlp subprocess whose re-wait is being bounded.
         timeout: Maximum seconds of inactivity (silence) to wait for the
-            child to exit before terminating it. Mandatory — has no default
+            child to exit before terminating it. Mandatory - has no default
             so the bound cannot be forgotten.
 
     Returns:
@@ -800,8 +801,8 @@ def _parse_ytdlp_progress(line: str) -> tuple[int, int] | None:
     Returns:
         Tuple of (downloaded_bytes, total_bytes) if the line carries a percent
         and a size, otherwise ``None``. Templates without a total (a bare byte
-        count) are still progress updates — see :func:`_is_ytdlp_progress_line`
-        — they simply carry no ratio to report.
+        count) are still progress updates - see :func:`_is_ytdlp_progress_line`
+        - they simply carry no ratio to report.
     """
     state = _parse_ytdlp_progress_state(line)
     if state is None or state.total <= 0:
@@ -895,37 +896,33 @@ def _build_ytdlp_cli_command(
     settings: Settings,
     cookies: str | None,
     raw_cookies: list[Cookie] | None,
+    *,
+    workspace: DownloadWorkspace | None = None,
 ) -> tuple[list[str], Path | None]:
     """Build a yt-dlp CLI command list and optional temp cookie file path.
 
-    The command is executed via ``asyncio.create_subprocess_exec`` so the
-    yt-dlp process can be properly terminated on cancellation or shutdown.
-
-    Args:
-        output_file: Path to save the downloaded video.
-        quality_str: Quality token: ``best``, ``worst``, ``unknown``, or a height in
-            pixels the video offers (e.g. ``"1072"``). A numeric token becomes the
-            yt-dlp format selector ``best[height<=1072]``.
-        user_agent: User agent string for HTTP requests.
-        settings: Application settings.
-        cookies: Optional raw cookie string (Netscape format) for backward compat.
-        raw_cookies: Optional list of Playwright Cookie objects for Netscape format.
-
-    Returns:
-        Tuple of (command list, cookie_file Path or None).
+    When ``workspace`` is provided, yt-dlp routes its home/temp paths through
+    ``-P`` and uses a relative output template so fragments land inside the
+    workspace instead of the output root.
     """
     # Build format selector: use height filter for numeric quality, bare "best" otherwise
     format_selector = _resolve_format_selector(quality_str)
 
+    output_template: str
+    if workspace is not None:
+        output_template = workspace.final_path.name.replace("%", "%%")
+    else:
+        output_template = str(output_file)
+
     cmd: list[str] = [
         sys.executable,
-        "-u",  # Unbuffered stderr — critical for real-time progress passthrough with PIPE
+        "-u",  # Unbuffered stderr - critical for real-time progress passthrough with PIPE
         "-m",
         "yt_dlp",
         "--encoding",
         "utf-8",
         "-o",
-        str(output_file),
+        output_template,
         "-f",
         format_selector,
         "--newline",
@@ -946,6 +943,10 @@ def _build_ytdlp_cli_command(
         "--referer",
         "https://vkvideo.ru/",
     ]
+
+    if workspace is not None:
+        cmd.extend(["-P", f"home:{workspace.staging_dir}"])
+        cmd.extend(["-P", f"temp:{workspace.ytdlp_dir}"])
 
     # --http-chunk-size forces range-request-based downloading of HLS segments.
     # When enabled (> 0), it can cause silent data corruption on CDNs that do not
@@ -972,60 +973,67 @@ def _build_ytdlp_cli_command(
     return cmd, cookie_file
 
 
-def _ytdlp_temp_name(output_file: Path) -> Path:
-    """Derive the temporary filename yt-dlp writes to during download.
+@dataclass(frozen=True)
+class YtdlpArtifacts:
+    """Track the real yt-dlp temp paths for one job."""
 
-    yt-dlp writes downloads to ``<name>.part`` and only renames to the final
-    name on success. This helper centralises that derivation so the partial-file
-    probe and the cleanup can both reference the same name without diverging
-    (P12-B9, route (a)).
+    directory: Path
+    final_name: str
 
-    The derivation mirrors yt-dlp's own ``FileDownloader.temp_name`` (verified
-    against the installed version at test time): ``filename + '.part'``.
+    @property
+    def temp_path(self) -> Path:
+        return self.directory / (self.final_name + ".part")
 
-    Args:
-        output_file: The final resolved output path.
+    @property
+    def ytdl_path(self) -> Path:
+        return self.directory / (self.final_name + ".ytdl")
 
-    Returns:
-        The ``.part`` temp path yt-dlp writes to.
-    """
-    return output_file.with_suffix(output_file.suffix + ".part")
+    def fragment_paths(self) -> list[Path]:
+        try:
+            return sorted(
+                p
+                for p in self.directory.iterdir()
+                if p.name.startswith(self.final_name + ".part-Frag")
+            )
+        except OSError:
+            return []
 
-
-def _has_recoverable_ytdlp_artifacts(output_file: Path) -> bool:
-    """Report whether any recoverable yt-dlp partial artifact exists.
-
-    A missing or zero-size ``.part`` file is not proof that no recoverable
-    data exists: yt-dlp may have left ``.part-Frag*`` fragments, a ``.ytdl``
-    metadata file, or a non-empty segment directory beside the output. This
-    helper checks all of those so the resume decision is artifact-aware.
-
-    Args:
-        output_file: The final resolved output path.
-
-    Returns:
-        True if any recoverable artifact is present.
-    """
-    temp_file = _ytdlp_temp_name(output_file)
-    try:
-        if temp_file.exists() and temp_file.stat().st_size > 0:
+    def has_artifacts(self) -> bool:
+        try:
+            if self.temp_path.exists() and self.temp_path.stat().st_size > 0:
+                return True
+        except OSError:
+            pass
+        if self.fragment_paths():
             return True
-    except OSError:
-        pass
-    parent = output_file.parent
-    try:
-        if any(
-            entry.name.startswith(output_file.name + ".part-Frag") for entry in parent.iterdir()
-        ):
-            return True
-    except OSError:
-        pass
-    try:
-        if any(entry.name.startswith(output_file.name + ".ytdl") for entry in parent.iterdir()):
-            return True
-    except OSError:
-        pass
-    segments_dir = output_file.parent / f".{output_file.stem}_segments"
+        try:
+            if self.ytdl_path.exists():
+                return True
+        except OSError:
+            pass
+        return False
+
+
+def _ytdlp_artifacts_for(
+    output_file: Path, workspace: DownloadWorkspace | None = None
+) -> YtdlpArtifacts:
+    if workspace is not None:
+        return YtdlpArtifacts(directory=workspace.ytdlp_dir, final_name=workspace.final_path.name)
+    return YtdlpArtifacts(directory=output_file.parent, final_name=output_file.name)
+
+
+def _has_recoverable_ytdlp_artifacts(
+    output_file: Path, workspace: DownloadWorkspace | None = None
+) -> bool:
+    """Report whether any recoverable yt-dlp partial artifact exists."""
+    art = _ytdlp_artifacts_for(output_file, workspace)
+    if art.has_artifacts():
+        return True
+    segments_dir = (
+        workspace.segments_dir
+        if workspace is not None
+        else Path(output_file).parent / f".{Path(output_file).stem}_segments"
+    )
     try:
         if segments_dir.exists() and any(segments_dir.iterdir()):
             return True
@@ -1050,6 +1058,7 @@ async def download_with_ytdlp_with_resume_fallback(
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """Download using yt-dlp with automatic segment-based fallback on failure.
 
@@ -1081,7 +1090,7 @@ async def download_with_ytdlp_with_resume_fallback(
         progress_callback: Optional callback for per-URL segment progress (video_id, downloaded, total).
         echo: When False, suppresses yt-dlp's native console echo (progress lines
             are emitted at DEBUG level instead; non-progress lines are dropped).
-            Only governs yt-dlp output — has no effect on the ffmpeg or segment paths.
+            Only governs yt-dlp output - has no effect on the ffmpeg or segment paths.
 
     Returns:
         Path to downloaded file on success, None on failure.
@@ -1105,6 +1114,7 @@ async def download_with_ytdlp_with_resume_fallback(
             echo=echo,
             diagnostic_sink=diagnostic_sink,
             attempt_id=attempt_id,
+            workspace=workspace,
         )
 
         if result:
@@ -1146,7 +1156,7 @@ async def download_with_ytdlp_with_resume_fallback(
         # yt-dlp writes to <output>.part until the download completes, so we
         # probe for recoverable artifacts, not just the .part file (Block B).
         validated_output = validate_output_path(output_file)
-        if not _has_recoverable_ytdlp_artifacts(validated_output):
+        if not _has_recoverable_ytdlp_artifacts(validated_output, workspace):
             return None
 
         # Attempt segment resume with fresh token
@@ -1162,6 +1172,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 backoff_coordinator,
                 video_semaphore,
                 progress_callback,
+                workspace=workspace,
             )
         ) is not None:
             return segment_result
@@ -1188,6 +1199,7 @@ async def _attempt_segment_resume(
     backoff_coordinator: URLBackoffCoordinator | None,
     video_semaphore: SemaphoreLike | None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -1220,7 +1232,7 @@ async def _attempt_segment_resume(
         QualityParseError: If ``quality`` is neither a keyword nor a positive
             height; logged and re-raised so the caller reports it verbatim.
     """
-    temp_file = _ytdlp_temp_name(output_file)
+    temp_file = _ytdlp_artifacts_for(output_file).temp_path
     try:
         partial_size = temp_file.stat().st_size if temp_file.exists() else 0
     except OSError:
@@ -1287,6 +1299,7 @@ async def _attempt_segment_resume(
                 extractor=extractor,
                 backoff_coordinator=backoff_coordinator,
                 video_semaphore=video_semaphore,
+                workspace=workspace,
             )
     except ExtractionError as e:
         # TRN-008 / B13 arm (d): narrowed from (ExtractionError, OSError).
@@ -1376,6 +1389,7 @@ async def _download_with_ytdlp(
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """Download video using yt-dlp via subprocess.
 
@@ -1383,12 +1397,12 @@ async def _download_with_ytdlp(
     so the yt-dlp process can be properly terminated (SIGTERM -> SIGKILL)
     on cancellation or shutdown. yt-dlp has its own ``--socket-timeout``,
     ``-R`` (retries), ``--fragment-retries``, and ``-N`` (concurrent
-    fragments) for network robustness — no application-level download
+    fragments) for network robustness - no application-level download
     timeout is imposed, avoiding premature kill of legitimate long downloads.
     A download that keeps producing output is never killed, no matter how
-    long it runs. Only the **inactivity** of the stream — the one-shot reap
+    long it runs. Only the **inactivity** of the stream - the one-shot reap
     applied after the reader has consumed every line and the child has gone
-    silent — is bounded by ``download_stall_timeout``: on expiry the child is
+    silent - is bounded by ``download_stall_timeout``: on expiry the child is
     terminated through the cancellation ladder (``cancel_subprocess``) and
     the resulting ``TimeoutError`` is re-raised. This is not a whole-operation
     budget (see ``download_timeout`` for the per-request and per-subprocess
@@ -1407,7 +1421,7 @@ async def _download_with_ytdlp(
         progress_callback: Optional callback for per-URL progress updates.
         echo: When False, suppresses yt-dlp's native console echo (progress lines
             are emitted at DEBUG level instead; non-progress lines are dropped).
-            Only governs yt-dlp output — has no effect on the ffmpeg or segment paths.
+            Only governs yt-dlp output - has no effect on the ffmpeg or segment paths.
 
     Returns:
         Path to the output file on success, None on failure.
@@ -1436,6 +1450,7 @@ async def _download_with_ytdlp(
         settings,
         cookies,
         raw_cookies,
+        workspace=workspace,
     )
     logger.info(
         "ytdlp_format_selected",
@@ -1513,7 +1528,7 @@ async def _download_with_ytdlp(
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
-                # reaped below — record which download lost its transcript, then
+                # reaped below - record which download lost its transcript, then
                 # end normally and let the returncode decide the verdict.
                 logger.error(
                     "ytdlp_reader_line_overrun",
@@ -1557,7 +1572,7 @@ async def _download_with_ytdlp(
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
-                # reaped below — record which download lost its transcript, then
+                # reaped below - record which download lost its transcript, then
                 # end normally and let the returncode decide the verdict.
                 logger.error(
                     "ytdlp_reader_line_overrun",
@@ -1629,6 +1644,17 @@ async def _download_with_ytdlp(
             return None
 
         logger.info("ytdlp_download_completed", output=str(output_file))
+        if workspace is not None:
+            staged = workspace.staging_dir / workspace.final_path.name
+            if staged.exists():
+                try:
+                    from .workspace import cleanup_owned_job_artifacts, publish_verified_file
+
+                    publish_verified_file(staged, workspace.final_path)
+                    cleanup_owned_job_artifacts(workspace)
+                except FileExistsError:
+                    return None
+            return workspace.final_path
         if output_file.exists():
             logger.info("download_final_size", size=output_file.stat().st_size)
         return output_file
@@ -1678,7 +1704,7 @@ async def _download_with_ytdlp(
             # LOAD-BEARING ORDER: the credential file is unlinked above, so the
             # directory is empty apart from owner.pid and the removal below can
             # succeed. Run this whenever a cookie file was created, even if it
-            # has already vanished or its unlink failed — otherwise the directory
+            # has already vanished or its unlink failed - otherwise the directory
             # leaks.
             _remove_cookie_artifact_dir(cookie_file.parent)
 

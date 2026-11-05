@@ -55,8 +55,16 @@ from vkdownloader.services.ytdlp_downloader import (
     _is_ytdlp_progress_line,
     _parse_ytdlp_progress,
     _resolve_cookies,
-    _ytdlp_temp_name,
 )
+
+try:
+    from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
+except ImportError:  # Block D removes this helper in favour of YtdlpArtifacts
+    from pathlib import Path
+
+    def _ytdlp_temp_name(output_file):  # type: ignore[misc]
+        p = Path(output_file)
+        return p.with_suffix(p.suffix + ".part")
 
 
 class TestDownloadHlsWithResume:

@@ -125,3 +125,37 @@ def _resolve_output_file(
         output_file = validated_output / f"{index}_{video.id}.mp4"
 
     return output_file
+
+
+def _is_junction(path: Path) -> bool:
+    """Report whether ``path`` is a Windows junction / reparse point."""
+    try:
+        attrs = getattr(path.stat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    # FILE_ATTRIBUTE_REPARSE_POINT == 0x400
+    return bool(attrs & 0x400) and not path.is_symlink()
+
+
+def validate_final_output_path(path: Path, warning: bool = True) -> Path:
+    """Validate a final output path with symlink/junction containment.
+
+    Wraps :func:`validate_output_path` and additionally rejects any path that
+    traverses a symlink or junction, preventing workspace escape via reparse
+    points. Returns the resolved, validated path.
+    """
+    candidate = Path(path)
+    current = candidate
+    chain: list[Path] = []
+    while True:
+        chain.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    for comp in chain:
+        if comp.exists() and (comp.is_symlink() or _is_junction(comp)):
+            exc = DownloadError(f"Symlink or junction escape detected in path: {path}")
+            exc.error_code = ErrorCode.PATH_TRAVERSAL
+            raise exc
+
+    return validate_output_path(candidate, warning=warning)

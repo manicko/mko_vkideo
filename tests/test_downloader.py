@@ -22,7 +22,16 @@ from vkdownloader.models.enums import CookieSource, DownloadMethod, StreamFormat
 from vkdownloader.models.video import Stream, VideoWithStreams
 from vkdownloader.services.downloader import perform_download
 from vkdownloader.services.downloader_throttle import _shutdown_event_ctx
-from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
+
+try:
+    from vkdownloader.services.ytdlp_downloader import _ytdlp_temp_name
+except ImportError:  # Block D removes this helper in favour of YtdlpArtifacts
+    from pathlib import Path
+
+    def _ytdlp_temp_name(output_file):  # type: ignore[misc]
+        p = Path(output_file)
+        return p.with_suffix(p.suffix + ".part")
+
 
 _URL = "https://vkvideo.ru/video-12345_67890"
 _QUALITY = "720"

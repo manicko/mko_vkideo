@@ -77,6 +77,7 @@ class ErrorCode(StrEnum):
     DOWNLOAD_ERROR = "download_error"
     STEALTH_ASSET_MISSING = "stealth_asset_missing"
     PATH_TRAVERSAL = "path_traversal"
+    WORKSPACE_LOCKED = "workspace_locked"
     UNEXPECTED_ERROR = "unexpected_error"
 
 
