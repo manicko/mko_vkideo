@@ -43,8 +43,9 @@ Every value that message names is accepted when pasted back into the command lin
 When extracting streams from a VK video URL, the `VKVideoExtractor` uses yt-dlp as the primary extraction method (handles VK protections):
 
 1. Uses yt-dlp to extract available formats
-2. Filters formats to include only video-bearing streams — a record that does not
-   declare a non-`none` video codec (``vcodec``) is dropped
+2. Drops only explicitly audio-only formats (``vcodec == "none"`` with a real
+   audio codec); master playlists and combined progressive files that omit
+   ``vcodec`` are kept so the downloaded file retains its audio track
 3. Extracts height, width, and bitrate for each stream variant
     4. Creates Stream objects with quality strings in `{height}p` format
 

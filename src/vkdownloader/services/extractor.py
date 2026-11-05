@@ -60,6 +60,7 @@ class _FormatDict(TypedDict, total=False):
     """
 
     vcodec: str
+    acodec: str
     height: int
     width: int
     url: str
@@ -150,39 +151,40 @@ def _classify_format(url: str) -> StreamFormat:
     return StreamFormat.HLS if suffix == ".m3u8" else StreamFormat.MP4
 
 
-def _declares_video_codec(f: _FormatDict) -> bool:
-    """Return True when a format dict declares a usable video codec (NET-017).
+def _is_audio_only_format(f: _FormatDict) -> bool:
+    """Return True when a format dict is explicitly audio-only.
 
-    A record is video-bearing only when the ``vcodec`` key is present, its value
-    is a non-empty string, and it is not the audio-only literal ``"none"``
-    (case-insensitive). A record that omits the key is indeterminate — neither
-    video-bearing nor explicitly audio-only — and is therefore not offered.
-
-    Height or width are never read as a proxy here: they are the placeholder
-    field this same block redefines, and a heightless video record would be
-    wrongly dropped (see ``test_build_streams_quality_unknown_without_height``).
+    A record is audio-only only when it declares ``vcodec == "none"`` (the
+    yt-dlp sentinel for "no video track") AND carries a non-empty audio codec.
+    Records that omit ``vcodec`` altogether (master playlists, combined
+    progressive files) are NOT audio-only: dropping them silently discards the
+    streams that carry an audio track and is the root cause of the "downloaded
+    without sound" regression.
     """
-    codec = f.get("vcodec")
-    if not isinstance(codec, str) or codec == "":
+    vcodec = f.get("vcodec")
+    if not isinstance(vcodec, str) or vcodec.strip().lower() != "none":
         return False
-    return codec.lower() != "none"
+    acodec = f.get("acodec")
+    return isinstance(acodec, str) and acodec.strip() != "" and acodec.strip().lower() != "none"
 
 
 def _build_streams(formats: list[_FormatDict]) -> list[Stream]:
     """Convert raw yt-dlp format dicts into the stream list, in input order.
 
-    Filtering decisions (NET-017):
-    - Offer only a record that explicitly declares a video codec (see
-      ``_declares_video_codec``); a record with no ``vcodec`` key is dropped.
+    Filtering decisions:
+    - Drop only explicitly audio-only formats (``vcodec == "none"`` with a real
+      audio codec); master playlists and combined progressive files that omit
+      ``vcodec`` are kept because they carry an audio track.
     - Skip formats with a falsy ``url``.
     - Classify format by the parsed path suffix via ``_classify_format``
       (``.m3u8`` -> HLS, everything else -> MP4), not by a substring test.
     """
     found_streams: list[Stream] = []
     for f in formats:
-        # NET-017: exclude records that do not declare a video codec (absent,
-        # empty, or the audio-only literal).
-        if not _declares_video_codec(f):
+        # Drop only explicitly audio-only formats. Master playlists and
+        # combined progressive files that omit ``vcodec`` are kept because they
+        # carry an audio track; dropping them leaves silent video-only variants.
+        if _is_audio_only_format(f):
             continue
         height = f.get("height")
         width = f.get("width")

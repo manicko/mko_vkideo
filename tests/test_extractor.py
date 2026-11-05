@@ -642,7 +642,12 @@ class TestBuildStreams:
     def test_build_streams_excludes_audio_only_formats(self) -> None:
         """D-12: audio-only formats (vcodec 'none') are excluded; video-bearing keep input order."""
         formats = [
-            {"vcodec": "none", "url": "https://example.com/audio.mp4", "height": 0},
+            {
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "url": "https://example.com/audio.mp4",
+                "height": 0,
+            },
             {
                 "vcodec": "h264",
                 "url": "https://example.com/720.mp4",
@@ -809,7 +814,7 @@ class TestBuildStreams:
         info = {
             "title": "Test Video",
             "formats": [
-                {"vcodec": "none", "url": "https://example.com/audio.mp4"},
+                {"vcodec": "none", "acodec": "mp4a.40.2", "url": "https://example.com/audio.mp4"},
                 {
                     "vcodec": "h264",
                     "url": "https://example.com/stream.m3u8",
@@ -891,15 +896,16 @@ class TestBuildStreams:
         assert len(streams) == 1
         assert streams[0].format == StreamFormat.HLS
 
-    def test_build_streams_excludes_record_without_vcodec(self) -> None:
-        """NET-017: a record that omits vcodec is indeterminate and not offered."""
+    def test_build_streams_keeps_record_without_vcodec(self) -> None:
+        """A record that omits vcodec (master/combined) is kept so audio survives."""
         formats = [
             {"url": "https://example.com/video.mp4", "height": 720, "width": 1280},
         ]
 
         streams = _build_streams(formats)  # type: ignore[arg-type]
 
-        assert streams == []
+        assert len(streams) == 1
+        assert streams[0].url == "https://example.com/video.mp4"
 
 
 def _browser_settings() -> Settings:
