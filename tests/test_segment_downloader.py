@@ -440,7 +440,7 @@ class TestPreserveSegmentsReporter:
         assert call.kwargs["working_dir"] == str(tmp_path)
         assert call.kwargs["working_dir_ts_count"] == 0
         assert "not a count of resumable segments" in call.kwargs["count_note"]
-        assert "clear the working directory" in call.kwargs["next_action"]
+        assert "resume from the preserved working directory" in call.kwargs["next_action"]
 
     def test_count_includes_merge_temps_and_says_so(self, tmp_path: Path) -> None:
         """The count includes batch_*.ts temps and the record says so.
@@ -463,7 +463,7 @@ class TestPreserveSegmentsReporter:
         assert call.kwargs["working_dir_ts_count"] == 3
         assert "including any batch_*.ts" in call.kwargs["count_note"]
         assert "not a count of resumable segments" in call.kwargs["count_note"]
-        assert "clear the working directory" in call.kwargs["next_action"]
+        assert "resume from the preserved working directory" in call.kwargs["next_action"]
 
     def test_missing_directory_emits_nothing(self, tmp_path: Path) -> None:
         """An absent segments directory is skipped, not logged as zero."""

@@ -39,6 +39,7 @@ from vkdownloader.services.quality import QualitySelector
 from vkdownloader.services.segment_downloader import (
     PlaylistFetchResult,
     _cleanup_segments,
+    _compute_playlist_signature,
     _download_segment,
     _download_segment_parallel,
     _download_segment_sequential,
@@ -72,6 +73,9 @@ class TestDownloadHlsWithResume:
         # Pre-create segments dir to simulate partial state
         segments_dir.mkdir(parents=True, exist_ok=True)
         (segments_dir / "00001.ts").write_bytes(b"fake segment data")
+        (segments_dir / ".signature").write_text(
+            _compute_playlist_signature(["seg1.ts", "seg2.ts", "seg3.ts", "seg4.ts"])
+        )
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
@@ -112,6 +116,9 @@ class TestDownloadHlsWithResume:
         # Pre-create segments dir to simulate partial state
         segments_dir.mkdir(parents=True, exist_ok=True)
         (segments_dir / "00000.ts").write_bytes(b"fake segment data")
+        (segments_dir / ".signature").write_text(
+            _compute_playlist_signature(["seg1.ts", "seg2.ts"])
+        )
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
@@ -153,6 +160,9 @@ class TestBlockBPreservation:
         segments_dir.mkdir(parents=True, exist_ok=True)
         payload = b"checksum-protected-bytes"
         (segments_dir / "00000.ts").write_bytes(payload)
+        (segments_dir / ".signature").write_text(
+            _compute_playlist_signature(["seg1.ts", "seg2.ts"])
+        )
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
@@ -186,6 +196,9 @@ class TestBlockBPreservation:
         segments_dir = tmp_path / ".video_segments"
         segments_dir.mkdir(parents=True, exist_ok=True)
         (segments_dir / "00000.ts").write_bytes(b"partial")
+        (segments_dir / ".signature").write_text(
+            _compute_playlist_signature(["seg1.ts", "seg2.ts"])
+        )
 
         with patch(
             "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
