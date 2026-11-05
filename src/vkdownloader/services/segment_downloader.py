@@ -1453,7 +1453,14 @@ async def download_hls_with_resume(
                 try:
                     from .workspace import cleanup_owned_job_artifacts, publish_verified_file
 
-                    publish_verified_file(result, workspace.final_path)
+                    final_lock = None
+                    try:
+                        from filelock import FileLock
+
+                        final_lock = FileLock(str(workspace.root / "publish.lock"), timeout=10.0)
+                    except Exception:  # noqa: BLE001
+                        final_lock = None
+                    publish_verified_file(result, workspace.final_path, final_lock=final_lock)
                     cleanup_owned_job_artifacts(workspace)
                     result = workspace.final_path
                 except FileExistsError:

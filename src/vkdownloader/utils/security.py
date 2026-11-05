@@ -18,6 +18,11 @@ logger = get_logger(__name__)
 # that survives sanitization would raise ValueError at the filesystem layer.
 _CONTROL_CHARS = "".join(chr(c) for c in range(32)) + chr(127)
 
+# Maximum safe length (in characters) for a final output path on Windows.
+MAX_OUTPUT_PATH_LENGTH: int = 240
+MAX_FINAL_OUTPUT_PATH_LENGTH: int = MAX_OUTPUT_PATH_LENGTH
+MAX_PATH_LENGTH: int = MAX_OUTPUT_PATH_LENGTH
+
 
 def sanitize_filename_component(title: str) -> str:
     """Sanitize a filename component for filesystem safety.
@@ -145,6 +150,13 @@ def validate_final_output_path(path: Path, warning: bool = True) -> Path:
     points. Returns the resolved, validated path.
     """
     candidate = Path(path)
+    # Windows-safe path length guard (P1-3).
+    if len(str(candidate)) > MAX_OUTPUT_PATH_LENGTH:
+        exc = DownloadError(
+            f"Output path too long ({len(str(candidate))} > {MAX_OUTPUT_PATH_LENGTH}): {candidate}"
+        )
+        exc.error_code = ErrorCode.PATH_TRAVERSAL
+        raise exc
     current = candidate
     chain: list[Path] = []
     while True:
@@ -153,9 +165,18 @@ def validate_final_output_path(path: Path, warning: bool = True) -> Path:
             break
         current = current.parent
     for comp in chain:
-        if comp.exists() and (comp.is_symlink() or _is_junction(comp)):
+        # Broken symlinks are still symlinks even when they do not exist, so
+        # do not guard is_symlink() with exists() (P1-2).
+        if comp.is_symlink() or _is_junction(comp):
             exc = DownloadError(f"Symlink or junction escape detected in path: {path}")
             exc.error_code = ErrorCode.PATH_TRAVERSAL
             raise exc
 
-    return validate_output_path(candidate, warning=warning)
+    resolved = validate_output_path(candidate, warning=warning)
+    if len(str(resolved)) > MAX_OUTPUT_PATH_LENGTH:
+        exc = DownloadError(
+            f"Output path too long ({len(str(resolved))} > {MAX_OUTPUT_PATH_LENGTH}): {resolved}"
+        )
+        exc.error_code = ErrorCode.PATH_TRAVERSAL
+        raise exc
+    return resolved

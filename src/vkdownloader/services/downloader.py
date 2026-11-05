@@ -186,62 +186,81 @@ async def perform_download(
     # When None (single-download mode), no limiting.
     semaphore_context = _semaphore_context(semaphore)
 
-    async with semaphore_context:
-        match method:
-            case DownloadMethod.YTDLP:
-                m3u8_url, cookies, raw_cookies = await _resolve_cookies(
-                    extractor, settings, url, m3u8_url, quality
-                )
-                return await download_with_ytdlp_with_resume_fallback(
-                    url,
-                    m3u8_url,
-                    output_file,
-                    quality,
-                    extractor,
-                    settings,
-                    cookies=cookies,
-                    raw_cookies=raw_cookies,
-                    backoff_coordinator=backoff_coordinator,
-                    video_semaphore=semaphore,
-                    progress_callback=progress_callback,
-                    echo=echo,
-                    diagnostic_sink=diagnostic_sink,
-                    attempt_id=attempt_id,
-                    workspace=workspace,
-                )
-            case DownloadMethod.AUTO:
-                # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
-                if settings.cookie_source == CookieSource.NONE:
-                    # Skip browser cookie resolution when explicitly disabled
-                    m3u8_url, cookies, raw_cookies = m3u8_url, None, None
-                else:
+    # Acquire the per-workspace job lock so concurrent publishers cannot race
+    # on the final path (P0-2). Released on every exit path.
+    job_lock = None
+    if workspace is not None:
+        try:
+            from .workspace import acquire_job_lock
+
+            job_lock = acquire_job_lock(workspace)
+        except Exception:  # noqa: BLE001
+            job_lock = None
+            raise
+
+    try:
+        async with semaphore_context:
+            match method:
+                case DownloadMethod.YTDLP:
                     m3u8_url, cookies, raw_cookies = await _resolve_cookies(
                         extractor, settings, url, m3u8_url, quality
                     )
-                return await download_with_ytdlp_with_resume_fallback(
-                    url,
-                    m3u8_url,
-                    output_file,
-                    quality,
-                    extractor,
-                    settings,
-                    cookies=cookies,
-                    raw_cookies=raw_cookies,
-                    backoff_coordinator=backoff_coordinator,
-                    video_semaphore=semaphore,
-                    progress_callback=progress_callback,
-                    echo=echo,
-                    diagnostic_sink=diagnostic_sink,
-                    attempt_id=attempt_id,
-                    workspace=workspace,
-                )
-            case _:
-                logger.error(
-                    "unknown_download_method",
-                    url=_strip_auth_params(url),
-                    method=str(method),
-                )
-                return None
+                    return await download_with_ytdlp_with_resume_fallback(
+                        url,
+                        m3u8_url,
+                        output_file,
+                        quality,
+                        extractor,
+                        settings,
+                        cookies=cookies,
+                        raw_cookies=raw_cookies,
+                        backoff_coordinator=backoff_coordinator,
+                        video_semaphore=semaphore,
+                        progress_callback=progress_callback,
+                        echo=echo,
+                        diagnostic_sink=diagnostic_sink,
+                        attempt_id=attempt_id,
+                        workspace=workspace,
+                    )
+                case DownloadMethod.AUTO:
+                    # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
+                    if settings.cookie_source == CookieSource.NONE:
+                        # Skip browser cookie resolution when explicitly disabled
+                        m3u8_url, cookies, raw_cookies = m3u8_url, None, None
+                    else:
+                        m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                            extractor, settings, url, m3u8_url, quality
+                        )
+                    return await download_with_ytdlp_with_resume_fallback(
+                        url,
+                        m3u8_url,
+                        output_file,
+                        quality,
+                        extractor,
+                        settings,
+                        cookies=cookies,
+                        raw_cookies=raw_cookies,
+                        backoff_coordinator=backoff_coordinator,
+                        video_semaphore=semaphore,
+                        progress_callback=progress_callback,
+                        echo=echo,
+                        diagnostic_sink=diagnostic_sink,
+                        attempt_id=attempt_id,
+                        workspace=workspace,
+                    )
+                case _:
+                    logger.error(
+                        "unknown_download_method",
+                        url=_strip_auth_params(url),
+                        method=str(method),
+                    )
+                    return None
+    finally:
+        if job_lock is not None:
+            try:
+                job_lock.release()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def download_video(

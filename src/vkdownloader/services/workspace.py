@@ -10,6 +10,7 @@ shared ``<output>/tmp/logs`` sink. The final, validated video lives at
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -24,6 +25,21 @@ from ..models.enums import ErrorCode
 from ..utils.security import validate_final_output_path
 
 logger = get_logger(__name__)
+
+# Quality tokens must be safe path components: alphanumerics, underscore and
+# hyphen, at most 16 characters. Anything else (path separators, "..", spaces)
+# is rejected fail-closed (P1-1).
+_QUALITY_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
+
+
+def _validate_quality(quality: Any) -> str:
+    q = str(quality)
+    if ".." in q or "/" in q or "\\" in q:
+        raise ValueError(f"Unsafe quality token: {quality!r}")
+    if not _QUALITY_RE.fullmatch(q):
+        raise ValueError(f"Invalid quality token: {quality!r}")
+    return q
+
 
 try:  # pragma: no cover - exercised only when filelock is absent
     from filelock import FileLock
@@ -50,6 +66,7 @@ class DownloadWorkspace:
 
 def stable_job_id(video_id: str, quality: str, final_basename: str) -> str:
     """Derive a stable, bounded job id from non-secret inputs."""
+    quality = _validate_quality(quality)
     logical = f"{video_id}|{quality}|{final_basename.casefold()}"
     digest = sha256(logical.encode("utf-8")).hexdigest()[:12]
     safe_vid = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(video_id))[:32]
@@ -58,6 +75,7 @@ def stable_job_id(video_id: str, quality: str, final_basename: str) -> str:
 
 def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWorkspace:
     """Create (or reuse) the per-job workspace tree for ``final_path``."""
+    quality = _validate_quality(quality)
     validated_final = validate_final_output_path(Path(final_path))
     tmp = validated_final.parent / "tmp"
     job = tmp / "jobs" / stable_job_id(video_id, quality, validated_final.name)
@@ -212,14 +230,59 @@ def publish_verified_file(
     final: Path,
     final_lock: Any = None,
 ) -> Path:
-    """Publish ``staged`` to ``final`` via an atomic, collision-safe rename."""
+    """Publish ``staged`` to ``final`` via an atomic, collision-safe operation.
+
+    Uses ``os.link`` (hard link) which atomically fails with ``FileExistsError``
+    when ``final`` already exists, guaranteeing no overwrite even under a race.
+    Falls back to an O_EXCL reservation + rename when hard links are
+    unavailable (cross-filesystem / unsupported). ``final_lock``, when given,
+    is held for the duration to serialize publishers.
+    """
+    import errno as _errno
+
     staged = Path(staged)
     final = Path(final)
+
+    if not staged.exists():
+        raise FileNotFoundError(f"Staged file not found: {staged}")
 
     def _do() -> Path:
         if final.exists() or final.is_symlink():
             raise FileExistsError(f"Refusing to overwrite existing output: {final}")
-        os.rename(str(staged), str(final))
+
+        # Primary: hard link is atomic and fails if final exists.
+        linked = False
+        try:
+            os.link(str(staged), str(final))
+            linked = True
+        except OSError as exc:
+            if exc.errno == _errno.EEXIST:
+                raise FileExistsError(f"Refusing to overwrite existing output: {final}") from exc
+            # Fallback for cross-filesystem / unsupported hard links.
+            if exc.errno in (
+                _errno.EXDEV,
+                _errno.ENOTSUP,
+                _errno.EOPNOTSUPP,
+                _errno.EPERM,
+                _errno.ENOSYS,
+            ):
+                try:
+                    fd = os.open(str(final), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                    os.close(fd)
+                except FileExistsError:
+                    raise FileExistsError(
+                        f"Refusing to overwrite existing output: {final}"
+                    ) from None
+                os.replace(str(staged), str(final))
+                linked = True
+            else:
+                raise
+
+        if linked and staged.exists():
+            try:
+                staged.unlink()
+            except OSError:
+                pass
         return final
 
     if final_lock is not None and hasattr(final_lock, "__enter__"):
@@ -255,6 +318,8 @@ def discover_legacy_artifacts(output_dir: Path) -> list[LegacyArtifact]:
     except OSError:
         return result
     for entry in entries:
+        if entry.is_symlink():
+            continue
         kind: str | None = None
         if entry.is_file():
             name = entry.name
