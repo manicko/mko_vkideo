@@ -187,10 +187,19 @@ def _clear_stale_segments(segments_dir: Path, segments: list[str]) -> None:
     signature = _compute_playlist_signature(segments)
     signature_file = segments_dir / _PLAYLIST_SIGNATURE_FILE
 
-    if signature_file.exists():
-        stored = signature_file.read_text(encoding="utf-8").strip()
-        if stored == signature:
-            return
+    # Block B: an absent signature means we have no evidence that the files on
+    # disk belong to a different playlist, so preserve them (and record the
+    # current signature) instead of deleting unknown partials.
+    if not signature_file.exists():
+        try:
+            signature_file.write_text(signature, encoding="utf-8")
+        except OSError:
+            pass
+        return
+
+    stored = signature_file.read_text(encoding="utf-8").strip()
+    if stored == signature:
+        return
 
     stale_count = len(list(segments_dir.glob("*.ts")))
     if stale_count:
@@ -376,7 +385,9 @@ async def _run_parallel_download_with_backoff(
             return True
 
         logger.warning("segment_download_failed", status=response.status)
-        await _notify_backoff_for_retryable_status(response.status, backoff_coordinator, segment_url)
+        await _notify_backoff_for_retryable_status(
+            response.status, backoff_coordinator, segment_url
+        )
 
         if _should_continue_on_retry(response.status, attempt, max_retries):
             retry_after_seconds = _parse_retry_after(response)
@@ -1335,17 +1346,15 @@ async def download_hls_with_resume(
 
     Returns:
         Path to downloaded MP4 file on success, None on failure.
-
     Tree lifetime (P12-B7, ART-005):
         The segments working directory (``segments_dir``) is created inside
+
         ``_run_download_session`` only after the playlist is parsed and the
         segment list is enumerated — not before the first network fetch. On every
         non-success exit the ``finally`` block reports the tree's state via
-        ``_log_preserve_segments`` and then removes it via
-        ``_cleanup_segments``, so no working directory is left behind after a
-        failure. ``_cleanup_segments`` handles a non-existent directory
-        gracefully (the playlist-fetch-failure path returns before the tree is
-        ever created).
+        ``_log_preserve_segments`` and PRESERVES it (no ``_cleanup_segments``),
+        so partial segments remain available for resume. ``_cleanup_segments``
+        runs only in ``_tally_and_merge`` after a verified merge.
     """
     logger.info(
         "starting_segment_download",
@@ -1394,12 +1403,14 @@ async def download_hls_with_resume(
         return None
     finally:
         if not success:
-            # P12-B7 (ART-005 lifetime): report the tree's state, then remove it
-            # on every non-success exit. _log_preserve_segments runs first so the
-            # reporter sees the actual count; _cleanup_segments then removes the
-            # tree. _cleanup_segments handles a non-existent dir gracefully.
-            _log_preserve_segments(segments_dir)
-            _cleanup_segments(segments_dir)
+            # Block B: preserve partials on every non-success exit. Log only;
+            # never delete the working directory here. _cleanup_segments runs
+            # solely in _tally_and_merge after a verified merge.
+            try:
+                _log_preserve_segments(segments_dir)
+            except Exception:
+                # Guard so a logging failure cannot mask the original exception.
+                pass
 
 
 def _log_preserve_segments(segments_dir: Path) -> None:

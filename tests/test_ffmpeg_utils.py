@@ -697,8 +697,12 @@ class TestMergeSegmentsBatched:
 
         assert result == output
         assert output.exists()
-        remaining = list(segments_dir.iterdir())
-        assert remaining == []
+        # Block B: regenerable temps/lists removed, original segments preserved.
+        remaining_names = {p.name for p in segments_dir.iterdir()}
+        assert all(f"{i:05d}.ts" in remaining_names for i in range(250))
+        assert not any(p.name.startswith("batch_") for p in segments_dir.iterdir())
+        assert not (segments_dir / "final_list.txt").exists()
+        assert not any(p.name.startswith("batch_list_") for p in segments_dir.iterdir())
 
 
 def _write_segments(directory: Path, count: int, size_bytes: int) -> list[Path]:

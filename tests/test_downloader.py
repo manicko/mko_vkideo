@@ -341,6 +341,7 @@ class TestPerformDownload:
             )
 
         assert seg_result == seg_output
+        assert _ytdlp_temp_name(seg_output).exists()
         assert mock_seg.call_args.kwargs["video_semaphore"] is semaphore
         assert semaphore._value == initial
 

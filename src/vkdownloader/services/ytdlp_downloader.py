@@ -992,6 +992,46 @@ def _ytdlp_temp_name(output_file: Path) -> Path:
     return output_file.with_suffix(output_file.suffix + ".part")
 
 
+def _has_recoverable_ytdlp_artifacts(output_file: Path) -> bool:
+    """Report whether any recoverable yt-dlp partial artifact exists.
+
+    A missing or zero-size ``.part`` file is not proof that no recoverable
+    data exists: yt-dlp may have left ``.part-Frag*`` fragments, a ``.ytdl``
+    metadata file, or a non-empty segment directory beside the output. This
+    helper checks all of those so the resume decision is artifact-aware.
+
+    Args:
+        output_file: The final resolved output path.
+
+    Returns:
+        True if any recoverable artifact is present.
+    """
+    temp_file = _ytdlp_temp_name(output_file)
+    try:
+        if temp_file.exists() and temp_file.stat().st_size > 0:
+            return True
+    except OSError:
+        pass
+    parent = output_file.parent
+    try:
+        if any(parent.glob(output_file.name + ".part-Frag*")):
+            return True
+    except OSError:
+        pass
+    try:
+        if any(parent.glob(output_file.name + ".ytdl")):
+            return True
+    except OSError:
+        pass
+    segments_dir = output_file.parent / f".{output_file.stem}_segments"
+    try:
+        if segments_dir.exists() and any(segments_dir.iterdir()):
+            return True
+    except OSError:
+        pass
+    return False
+
+
 async def download_with_ytdlp_with_resume_fallback(
     video_url: str,
     m3u8_url: str,
@@ -1012,7 +1052,8 @@ async def download_with_ytdlp_with_resume_fallback(
     Flow:
     1. Try yt-dlp download
     2. On failure with partial file: get fresh token via browser + switch to segment download
-    3. Falls back to a fresh segment-based download via HLS; the partial yt-dlp file is discarded
+     3. Falls back to a fresh segment-based download via HLS; the partial yt-dlp
+     artifacts are preserved for resume.
 
     Args:
         video_url: Original VK video URL.
@@ -1097,10 +1138,9 @@ async def download_with_ytdlp_with_resume_fallback(
 
         # Check for partial file - switch to segment download with fresh token.
         # yt-dlp writes to <output>.part until the download completes, so we
-        # probe for the .part file, not the final name (P12-B9, route (a)).
+        # probe for recoverable artifacts, not just the .part file (Block B).
         validated_output = validate_output_path(output_file)
-        temp_file = _ytdlp_temp_name(validated_output)
-        if not temp_file.exists() or temp_file.stat().st_size == 0:
+        if not _has_recoverable_ytdlp_artifacts(validated_output):
             return None
 
         # Attempt segment resume with fresh token
@@ -1126,14 +1166,8 @@ async def download_with_ytdlp_with_resume_fallback(
         url=_strip_auth_params(video_url),
         retries=settings.max_retries,
     )
-    # DF-008: Clean up partial output file left by yt-dlp on failure.
-    # yt-dlp writes to <output>.part, never to the final name, so the cleanup
-    # targets the temp file (P12-B9, route (a)).
-    temp_file = _ytdlp_temp_name(validated_output)
-    try:
-        temp_file.unlink(missing_ok=True)
-    except OSError:
-        logger.warning("failed_to_cleanup_partial_file", path=str(temp_file))
+    # Block B: preserve partials (.part, fragments, .ytdl) for resume.
+    logger.info("preserving_ytdlp_partials", path=str(validated_output))
     return None
 
 
@@ -1153,12 +1187,13 @@ async def _attempt_segment_resume(
 
     Called when yt-dlp fails and partial file exists. Forces browser extraction
     to get fresh token, then falls back to a fresh segment-based download via HLS.
-    The partial yt-dlp file is discarded; segment download starts from the beginning.
+    Partial yt-dlp artifacts (.part, fragments, .ytdl) are PRESERVED; the segment
+    backend runs in its own workspace and leaves the original artifact untouched.
 
     Args:
         video_url: Original VK video URL.
         m3u8_url: HLS playlist URL (may be stale).
-        output_file: Output file path (partial file is discarded, segment download starts fresh).
+        output_file: Output file path (partial file is preserved, segment download starts fresh).
         quality: Quality token (``best``, ``worst``, ``unknown``, or a height in
             pixels the video offers, e.g. ``1072``).
         retry_count: Current retry attempt number.
@@ -1179,11 +1214,16 @@ async def _attempt_segment_resume(
         QualityParseError: If ``quality`` is neither a keyword nor a positive
             height; logged and re-raised so the caller reports it verbatim.
     """
+    temp_file = _ytdlp_temp_name(output_file)
+    try:
+        partial_size = temp_file.stat().st_size if temp_file.exists() else 0
+    except OSError:
+        partial_size = 0
     logger.warning(
         "download_interrupted_switching_to_segments",
         url=_strip_auth_params(video_url),
         path=str(output_file),
-        size=_ytdlp_temp_name(output_file).stat().st_size,
+        size=partial_size,
         retry=retry_count,
     )
     logger.info("attempting_segment_resume", retry=retry_count)
@@ -1225,9 +1265,8 @@ async def _attempt_segment_resume(
                     available=[s.quality for s in browser_streams],
                 )
                 raise
-            # Remove partial .part file to start clean segment download.
-            # yt-dlp writes to the .part temp name, not the final name.
-            _ytdlp_temp_name(output_file).unlink()
+            # Preserve the yt-dlp partial; do NOT unlink it. The segment backend
+            # runs in its own workspace and leaves the original artifact untouched.
             # Continue to segment download
             return await download_hls_with_resume(
                 HLSDownloadRequest(
@@ -1419,7 +1458,9 @@ async def _download_with_ytdlp(
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
                             progress_callback(
-                                video_id, progress_state.fragment_index, progress_state.fragment_count
+                                video_id,
+                                progress_state.fragment_index,
+                                progress_state.fragment_count,
                             )
                         elif progress_state.total > 0:
                             progress_callback(
@@ -1454,7 +1495,9 @@ async def _download_with_ytdlp(
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
                             progress_callback(
-                                video_id, progress_state.fragment_index, progress_state.fragment_count
+                                video_id,
+                                progress_state.fragment_index,
+                                progress_state.fragment_count,
                             )
                         elif progress_state.total > 0:
                             progress_callback(

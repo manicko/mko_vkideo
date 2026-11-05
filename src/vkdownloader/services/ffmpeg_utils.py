@@ -719,35 +719,8 @@ async def _merge_segments_batched(
 
     # Final merge of all batches
     if temp_files and await _perform_final_merge(temp_files, output_file, download_timeout):
-        # D-13: the input segments are deleted here, and only here, because
-        # this is the first point at which the whole merge is known to have
-        # succeeded. The shape this replaces deleted each batch's inputs the
-        # moment that batch merged and swept every accumulated batch temp on
-        # any non-success exit, so a failure in a later stage destroyed both
-        # copies of every already-merged byte: 250 segments with a failed
-        # final stage left 0 originals, and a failed second batch left 150 of
-        # 250 with the first batch's temp deleted by the same sweep.
-        #
-        # `missing_ok=True` because `returncode == 0` from the final stage
-        # attests only to the batch temps -- the originals are not in
-        # `final_list.txt` -- so a bare unlink() would assert a precondition
-        # no code path established. The bare unlink() on the temps and on the
-        # final list stays: there the exit code does attest.
-        #
-        # Deferred (same tag): a graceful stage failure now leaves the temps
-        # beside a complete segment set, so the `*.ts` counts in
-        # segment_downloader.py also count `batch_*.ts` and a resumed run will
-        # not re-trigger the merge. Excluding the merge temps is phase 07's
-        # ART-004; discharged by P12-B6 in segment_downloader._tally_and_merge. The compensating control
-        # is `_log_preserve_segments`, which now reports the working
-        # directory's `*.ts` count and the clear-the-directory action instead
-        # of implying the directory is resumable as it stands. The merge peak
-        # sizing (3x the segment bytes via _MERGE_MULTIPLIER) is discharged
-        # by P12-B8 — both _required_merge_bytes and this comment now carry
-        # the corrected multiplier.
-        for segment_path in merged_inputs:
-            segment_path.unlink(missing_ok=True)
-
+        # Block B: original segments are PRESERVED on success; only regenerable
+        # batch temps and final_list.txt are removed inside _perform_final_merge.
         return output_file
 
     return None

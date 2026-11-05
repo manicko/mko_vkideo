@@ -62,16 +62,10 @@ class TestDownloadHlsWithResume:
     """Tests for download_hls_with_resume segment-level resume functionality."""
 
     @pytest.mark.asyncio
-    async def test_removes_segments_on_session_failure(
+    async def test_preserves_segments_on_session_failure(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Test segments tree is removed on a non-success session exit (P12-B7).
-
-        P12-B7 changed the contract: the working directory is created only after
-        the playlist is parsed and removed on every non-success exit. Previously
-        this asserted the tree was preserved for resume; the new contract asserts
-        it is removed.
-        """
+        """Block B: segments tree is PRESERVED on a non-success session exit."""
         output_path = tmp_path / "video.mp4"
         segments_dir = tmp_path / ".video_segments"
 
@@ -96,8 +90,10 @@ class TestDownloadHlsWithResume:
             )
 
         assert result is None
-        # P12-B7: tree removed on every non-success exit.
-        assert not segments_dir.exists(), "Segments directory should be removed on failure"
+        # Block B: tree preserved on failure.
+        assert segments_dir.exists(), "Segments directory should be preserved on failure"
+        assert (segments_dir / "00001.ts").exists()
+        assert (segments_dir / "00001.ts").read_bytes() == b"fake segment data"
 
     @pytest.mark.asyncio
     async def test_removes_segments_on_segment_download_failure(
@@ -138,8 +134,319 @@ class TestDownloadHlsWithResume:
                 )
 
         assert result is None
-        # P12-B7: tree removed on every non-success exit.
-        assert not segments_dir.exists(), "Segments directory should be removed on failure"
+        # Block B: tree preserved on failure.
+        assert segments_dir.exists(), "Segments directory should be preserved on failure"
+        assert (segments_dir / "00000.ts").exists()
+        assert (segments_dir / "00000.ts").read_bytes() == b"fake segment data"
+
+
+class TestBlockBPreservation:
+    """Block B red tests for preservation contracts."""
+
+    @pytest.mark.asyncio
+    async def test_preservation_checksums_identical_on_failure(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Pre-created segment bytes are unchanged after a failed session."""
+        output_path = tmp_path / "video.mp4"
+        segments_dir = tmp_path / ".video_segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        payload = b"checksum-protected-bytes"
+        (segments_dir / "00000.ts").write_bytes(payload)
+
+        with patch(
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.segment_downloader._download_segment",
+                return_value=False,
+            ):
+                result = await download_hls_with_resume(
+                    HLSDownloadRequest(
+                        video_url="https://vkvideo.ru/video-12345_67890",
+                        m3u8_url="https://example.com/video.m3u8",
+                        output_file=output_path,
+                    ),
+                    settings=test_settings,
+                )
+
+        assert result is None
+        assert (segments_dir / "00000.ts").read_bytes() == payload
+
+    @pytest.mark.asyncio
+    async def test_preservation_on_cancellation(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """CancelledError propagates and data remains."""
+        output_path = tmp_path / "video.mp4"
+        segments_dir = tmp_path / ".video_segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "00000.ts").write_bytes(b"partial")
+
+        with patch(
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.segment_downloader._process_downloaded_segments",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                        ),
+                        settings=test_settings,
+                    )
+
+        assert segments_dir.exists()
+        assert (segments_dir / "00000.ts").exists()
+
+    @pytest.mark.asyncio
+    async def test_no_cleanup_called_on_failure(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """_cleanup_segments must not be called on failure path."""
+        output_path = tmp_path / "video.mp4"
+        segments_dir = tmp_path / ".video_segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "00000.ts").write_bytes(b"partial")
+
+        with patch(
+            "vkdownloader.services.segment_downloader._cleanup_segments",
+        ) as mock_cleanup:
+            with patch(
+                "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+                return_value=PlaylistFetchResult(
+                    playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                    base_url="https://example.com/playlist.m3u8",
+                ),
+            ):
+                with patch(
+                    "vkdownloader.services.segment_downloader._download_segment",
+                    return_value=False,
+                ):
+                    result = await download_hls_with_resume(
+                        HLSDownloadRequest(
+                            video_url="https://vkvideo.ru/video-12345_67890",
+                            m3u8_url="https://example.com/video.m3u8",
+                            output_file=output_path,
+                        ),
+                        settings=test_settings,
+                    )
+
+        assert result is None
+        mock_cleanup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_success_still_cleans(self, test_settings: Settings, tmp_path: Path) -> None:
+        """Successful merge still cleans the segments dir (regression guard)."""
+        output_path = tmp_path / "video.mp4"
+        segments_dir = output_path.parent / ".video_segments"
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        (segments_dir / "00000.ts").write_bytes(b"a")
+        (segments_dir / "00001.ts").write_bytes(b"b")
+
+        with patch(
+            "vkdownloader.services.segment_downloader._fetch_playlist_with_retry",
+            return_value=PlaylistFetchResult(
+                playlist_text="#EXTM3U\nseg1.ts\nseg2.ts\n",
+                base_url="https://example.com/playlist.m3u8",
+            ),
+        ):
+            with patch(
+                "vkdownloader.services.segment_downloader._clear_stale_segments",
+            ):
+                with patch(
+                    "vkdownloader.services.segment_downloader._download_segment",
+                    new_callable=AsyncMock,
+                ):
+                    with patch(
+                        "vkdownloader.services.segment_downloader._merge_segments_batched",
+                        return_value=output_path,
+                    ):
+                        result = await download_hls_with_resume(
+                            HLSDownloadRequest(
+                                video_url="https://vkvideo.ru/video-12345_67890",
+                                m3u8_url="https://example.com/video.m3u8",
+                                output_file=output_path,
+                            ),
+                            settings=test_settings,
+                        )
+
+        assert result == output_path
+        assert not segments_dir.exists()
+
+
+class TestBlockBYtDlp:
+    """Block B red tests for yt-dlp partial preservation."""
+
+    @pytest.mark.asyncio
+    async def test_attempt_segment_resume_preserves_part(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """_attempt_segment_resume must not unlink the yt-dlp .part."""
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
+
+        stream = Stream(
+            url="https://example.com/fresh.m3u8",
+            format=StreamFormat.HLS,
+            quality="best",
+            height=1080,
+        )
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(return_value=([stream], None, None))
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader.download_hls_with_resume",
+            new_callable=AsyncMock,
+            return_value=output_file,
+        ):
+            result = await _attempt_segment_resume(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/stale.m3u8",
+                output_file,
+                "1080",
+                retry_count=1,
+                extractor=mock_extractor,
+                settings=test_settings,
+                backoff_coordinator=None,
+                video_semaphore=None,
+            )
+
+        assert result == output_file
+        assert _ytdlp_temp_name(output_file).exists()
+        assert _ytdlp_temp_name(output_file).read_bytes() == b"partial data"
+
+    @pytest.mark.asyncio
+    async def test_max_retries_exhausted_preserves_part(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """All retries exhausted must not unlink .part."""
+        from vkdownloader.services.ytdlp_downloader import download_with_ytdlp_with_resume_fallback
+
+        test_settings.max_retries = 1
+        output_file = tmp_path / "video.mp4"
+        _ytdlp_temp_name(output_file).write_bytes(b"partial")
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader._attempt_segment_resume",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader._compute_backoff_delay",
+                    return_value=0.0,
+                ):
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader._wait_with_shutdown",
+                        new_callable=AsyncMock,
+                        return_value=False,
+                    ):
+                        result = await download_with_ytdlp_with_resume_fallback(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "https://cdn.example.com/video.m3u8",
+                            output_file,
+                            "720",
+                            None,
+                            test_settings,
+                        )
+
+        assert result is None
+        assert _ytdlp_temp_name(output_file).exists()
+        assert _ytdlp_temp_name(output_file).read_bytes() == b"partial"
+
+    @pytest.mark.asyncio
+    async def test_artifact_aware_early_return_with_fragments(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Missing/zero .part with fragments/segments still attempts segment resume."""
+        from vkdownloader.services.ytdlp_downloader import download_with_ytdlp_with_resume_fallback
+
+        test_settings.max_retries = 1
+        output_file = tmp_path / "video.mp4"
+        # No .part, but a fragment artifact exists.
+        (tmp_path / (output_file.name + ".part-Frag1")).write_bytes(b"frag")
+
+        with patch(
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with patch(
+                "vkdownloader.services.ytdlp_downloader._attempt_segment_resume",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as mock_seg:
+                with patch(
+                    "vkdownloader.services.ytdlp_downloader._compute_backoff_delay",
+                    return_value=0.0,
+                ):
+                    with patch(
+                        "vkdownloader.services.ytdlp_downloader._wait_with_shutdown",
+                        new_callable=AsyncMock,
+                        return_value=False,
+                    ):
+                        await download_with_ytdlp_with_resume_fallback(
+                            "https://vkvideo.ru/video-12345_67890",
+                            "https://cdn.example.com/video.m3u8",
+                            output_file,
+                            "720",
+                            None,
+                            test_settings,
+                        )
+
+        assert mock_seg.called
+
+    @pytest.mark.asyncio
+    async def test_token_refresh_failure_preserves_part(
+        self, test_settings: Settings, tmp_path: Path
+    ) -> None:
+        """Token refresh failure (ExtractionError) preserves .part/fragments."""
+        from vkdownloader.exceptions import ExtractionError
+        from vkdownloader.services.ytdlp_downloader import _attempt_segment_resume
+
+        output_file = tmp_path / "video.mp4"
+        _ytdlp_temp_name(output_file).write_bytes(b"partial data")
+        (tmp_path / (output_file.name + ".part-Frag1")).write_bytes(b"frag")
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_streams_with_cookies = AsyncMock(side_effect=ExtractionError("boom"))
+
+        try:
+            await _attempt_segment_resume(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/stale.m3u8",
+                output_file,
+                "best",
+                retry_count=1,
+                extractor=mock_extractor,
+                settings=test_settings,
+                backoff_coordinator=None,
+                video_semaphore=None,
+            )
+        except Exception:
+            pass
+
+        assert _ytdlp_temp_name(output_file).exists()
+        assert (tmp_path / (output_file.name + ".part-Frag1")).exists()
 
     @pytest.mark.asyncio
     async def test_resume_with_all_segments_present_merges_without_download(
@@ -5213,6 +5520,7 @@ class TestAttemptSegmentResumeQuality:
             )
 
         assert result == output_file
+        assert _ytdlp_temp_name(output_file).exists()
         mock_extractor.extract_streams_with_cookies.assert_awaited_once_with(
             "https://vkvideo.ru/video-12345_67890", force_browser=True
         )
@@ -5429,6 +5737,9 @@ class TestB13ResumeErrorHandling:
         # No failed_to_refresh_token warning emitted
         for call in mock_warning.call_args_list:
             assert call[0][0] != "failed_to_refresh_token"
+
+        # Block B: .part preserved.
+        assert _ytdlp_temp_name(output_file).exists()
 
     @pytest.mark.asyncio
     async def test_extraction_error_still_logged_as_refresh_token(

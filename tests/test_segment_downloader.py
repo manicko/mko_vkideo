@@ -1323,7 +1323,7 @@ class TestTreeLifetime:
         assert not segments_dir.exists()
 
     @pytest.mark.asyncio
-    async def test_tree_removed_after_failed_session(
+    async def test_tree_preserved_after_failed_session(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Tree is cleaned up when the session returns None (no merge produced).
@@ -1356,10 +1356,11 @@ class TestTreeLifetime:
             )
 
         assert result is None
-        assert not segments_dir.exists()
+        # Block B: preserved on failure.
+        assert segments_dir.exists()
 
     @pytest.mark.asyncio
-    async def test_tree_removed_after_merge_failure(
+    async def test_tree_preserved_after_merge_failure(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Tree is cleaned up when ``_process_downloaded_segments`` raises.
@@ -1392,10 +1393,11 @@ class TestTreeLifetime:
                     settings=test_settings,
                 )
 
-        assert not segments_dir.exists()
+        # Block B: preserved on failure.
+        assert segments_dir.exists()
 
     @pytest.mark.asyncio
-    async def test_tree_removed_after_file_not_found(
+    async def test_tree_preserved_after_file_not_found(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
         """Tree is cleaned up when ``_process_downloaded_segments`` raises
@@ -1430,7 +1432,8 @@ class TestTreeLifetime:
                     settings=test_settings,
                 )
 
-        assert not segments_dir.exists()
+        # Block B: preserved on failure.
+        assert segments_dir.exists()
 
 
 class TestSegmentFanoutCompletion:
