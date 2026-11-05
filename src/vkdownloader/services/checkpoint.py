@@ -282,6 +282,33 @@ def verify_checkpoint(
         return False
 
 
+def _sanitize_generation_id(generation_id: Any) -> str:
+    """Return a single safe path component for *generation_id*.
+
+    Rejects separators, ``.``, ``..``, empty values, and NUL bytes, falling
+    back to ``"gen"`` when the value is unsafe.
+    """
+    text = str(generation_id or "gen")
+    if not text or "\x00" in text:
+        return "gen"
+    if text in (".", ".."):
+        return "gen"
+    if "/" in text or "\\" in text:
+        return "gen"
+    try:
+        import os as _os
+
+        if _os.sep in text or (_os.altsep and _os.altsep in text):
+            return "gen"
+    except Exception:  # noqa: BLE001
+        pass
+    from pathlib import Path as _Path
+
+    if _Path(text).parts != (text,):
+        return "gen"
+    return text
+
+
 def quarantine_generation(
     segments_dir: str | Path,
     generation_id: str | None = None,
@@ -289,7 +316,12 @@ def quarantine_generation(
     *args: Any,
     **kwargs: Any,
 ) -> Path:
-    """Rename *segments_dir* to a quarantine sibling and recreate it."""
+    """Rename *segments_dir* to a quarantine sibling and recreate it.
+
+    The quarantine target directory is created only when there is something to
+    move; an absent ``segments_dir`` does not leave an empty generation
+    directory behind.
+    """
     segments_dir = Path(segments_dir)
     if generation_id is None and checkpoint is not None:
         generation_id = getattr(checkpoint, "generation_id", None)
@@ -301,27 +333,21 @@ def quarantine_generation(
     if generation_id is None:
         generation_id = kwargs.get("generation_id")
 
+    gen = _sanitize_generation_id(generation_id)
+
     parent = segments_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
     quarantine_root = parent / "generations"
-    quarantine_root.mkdir(parents=True, exist_ok=True)
 
-    gen = str(generation_id or "gen")
     target = quarantine_root / gen
-    if target.exists():
-        index = 1
-        while (quarantine_root / f"{gen}-{index}").exists():
-            index += 1
-        target = quarantine_root / f"{gen}-{index}"
-
     if segments_dir.exists():
-        try:
-            segments_dir.rename(target)
-        except OSError:
-            # Fallback: copy then remove original is destructive; prefer rename.
-            raise
-    else:
-        target.mkdir(parents=True, exist_ok=True)
+        quarantine_root.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            index = 1
+            while (quarantine_root / f"{gen}-{index}").exists():
+                index += 1
+            target = quarantine_root / f"{gen}-{index}"
+        segments_dir.rename(target)
 
     segments_dir.mkdir(parents=True, exist_ok=True)
     return target

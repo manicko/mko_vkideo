@@ -98,7 +98,7 @@ class HLSMediaPlaylist(BaseModel):
 
     @field_validator("segments", mode="before")
     @classmethod
-    def _ensure_list(cls, value):
+    def _ensure_list(cls, value: Any) -> object:
         return value if value is not None else []
 
     @property
@@ -385,6 +385,8 @@ def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
     # Media playlist fields.
     media_sequence = 0
     discontinuity_sequence = 0
+    target_duration = None
+    version = None
     init_map_identity = None
     endlist = False
     is_live = False
@@ -392,6 +394,8 @@ def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
     if isinstance(playlist, HLSMediaPlaylist):
         media_sequence = playlist.media_sequence
         discontinuity_sequence = playlist.discontinuity_sequence
+        target_duration = playlist.target_duration
+        version = playlist.version
         init_map_identity = playlist.init_map_identity
         endlist = playlist.endlist
         is_live = playlist.is_live
@@ -441,6 +445,8 @@ def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
         "variant_id": variant_id,
         "codecs": codecs,
         "resolution": resolution,
+        "target_duration": target_duration,
+        "version": version,
         "media_sequence": media_sequence,
         "discontinuity_sequence": discontinuity_sequence,
         "init_map_identity": init_map_identity,

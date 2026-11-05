@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
     from ..models.dtos import HLSDownloadRequest
     from ..services.extractor import VKVideoExtractor
+    from .checkpoint import JobCheckpoint
     from .downloader_throttle import URLBackoffCoordinator
 
 
@@ -115,8 +116,8 @@ class DownloadPolicy:
     resolution: str | None = None
     is_live: bool = False
     endlist: bool = False
-    checkpoint: object | None = None
-    checkpoint_lock: object | None = None
+    checkpoint: JobCheckpoint | None = None
+    checkpoint_lock: asyncio.Lock | None = None
 
     def __repr__(self) -> str:
         """Return a safe representation with sensitive headers redacted.
@@ -206,8 +207,8 @@ def _reconcile_checkpoint(
     endlist: bool = True,
     generation_id: str | None = None,
     segments: list[str] | None = None,
-    checkpoint: object | None = None,
-) -> object:
+    checkpoint: JobCheckpoint | None = None,
+) -> JobCheckpoint:
     """Verify or quarantine checkpoint, returning an active checkpoint."""
     from . import checkpoint as _cp
 
@@ -218,10 +219,15 @@ def _reconcile_checkpoint(
     state_path = Path(state_path)
 
     existing = None
+    unreadable = False
     try:
-        existing = _cp.read_checkpoint(state_path, segments_dir)
+        if state_path.exists():
+            existing = _cp.read_checkpoint(state_path, segments_dir)
+            if existing is None:
+                unreadable = True
     except Exception:  # noqa: BLE001
         existing = None
+        unreadable = True
 
     if existing is not None:
         ok = _cp.verify_checkpoint(
@@ -232,17 +238,19 @@ def _reconcile_checkpoint(
             media_sequence=media_sequence,
             discontinuity_sequence=discontinuity_sequence,
         )
-        if ok:
-            all_verified = all(
-                _cp.verify_segment_record(rec, segments_dir) for rec in existing.segments.values()
-            )
-            if all_verified:
-                return existing
-        # mismatch or corrupt -> quarantine
-        try:
+        if not ok:
+            # Identity mismatch or unreadable checkpoint: quarantine the old
+            # generation. Failures propagate (no silent swallow).
             _cp.quarantine_generation(segments_dir, existing.generation_id)
-        except Exception:  # noqa: BLE001
-            pass
+            segments_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            # Identity matches: keep checkpoint even if individual segments are
+            # corrupt; _iter_pending_segment_tasks handles those.
+            return existing
+
+    if unreadable:
+        # Checkpoint present but unreadable: quarantine the old generation.
+        _cp.quarantine_generation(segments_dir, generation_id or "gen")
         segments_dir.mkdir(parents=True, exist_ok=True)
 
     gen = generation_id or "gen-0"
@@ -262,10 +270,7 @@ def _reconcile_checkpoint(
         endlist=endlist,
         segments={},
     )
-    try:
-        _cp.write_checkpoint_atomic(state_path, new_checkpoint)
-    except Exception:  # noqa: BLE001
-        pass
+    _cp.write_checkpoint_atomic(state_path, new_checkpoint)
     return new_checkpoint
 
 
@@ -1251,12 +1256,12 @@ async def _download_segment_concurrent(
             try:
                 from . import checkpoint as _cp
 
-                if getattr(policy, "checkpoint", None) is not None:
+                if policy.checkpoint is not None:
                     seg_path = segment_path
                     size = seg_path.stat().st_size
                     sha = _cp.streaming_sha256(seg_path)
                     duration = None
-                    durations = getattr(policy, "segment_durations", None)
+                    durations = policy.segment_durations
                     if durations and task.idx < len(durations):
                         duration = durations[task.idx]
                     record = _cp.SegmentRecord(
@@ -1266,18 +1271,18 @@ async def _download_segment_concurrent(
                         sha256=sha,
                         duration_seconds=duration,
                         byte_range=None,
-                        discontinuity_sequence=getattr(policy, "discontinuity_sequence", 0) or 0,
-                        media_sequence=getattr(policy, "media_sequence", None),
-                        generation_id=getattr(policy, "generation_id", None) or "gen-0",
+                        discontinuity_sequence=policy.discontinuity_sequence or 0,
+                        media_sequence=policy.media_sequence,
+                        generation_id=policy.generation_id or "gen-0",
                     )
-                    lock = getattr(policy, "checkpoint_lock", None)
+                    lock = policy.checkpoint_lock
                     if lock is not None:
                         async with lock:
                             _cp.upsert_segment_record(
                                 policy.checkpoint,
                                 str(task.idx),
                                 record,
-                                state_path=getattr(policy, "state_path", None),
+                                state_path=policy.state_path,
                                 segments_dir=policy.segments_dir,
                                 write=True,
                             )
@@ -1286,7 +1291,7 @@ async def _download_segment_concurrent(
                             policy.checkpoint,
                             str(task.idx),
                             record,
-                            state_path=getattr(policy, "state_path", None),
+                            state_path=policy.state_path,
                             segments_dir=policy.segments_dir,
                             write=True,
                         )
@@ -1337,7 +1342,7 @@ def _iter_pending_segment_tasks(
     for i, seg in enumerate(segments):
         segment_path = policy.segments_dir / f"{i:05d}.ts"
         record = None
-        if getattr(policy, "checkpoint", None) is not None:
+        if policy.checkpoint is not None:
             try:
                 record = policy.checkpoint.segments.get(str(i))
             except Exception:  # noqa: BLE001
