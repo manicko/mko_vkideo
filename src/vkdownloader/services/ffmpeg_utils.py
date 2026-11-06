@@ -538,6 +538,10 @@ def _build_ffmpeg_concat_command(file_list_path: Path, output_file: Path) -> lis
     return cmd
 
 
+def _escape_concat_path(path: Path) -> str:
+    return path.as_posix().replace("'", "'\\''")
+
+
 async def _merge_batch_segments(
     batch_files: list[Path], temp_dir: Path, download_timeout: float = _MERGE_STAGE_TIMEOUT
 ) -> Path | None:
@@ -563,7 +567,7 @@ async def _merge_batch_segments(
     # Write file list for concat demuxer
     with open(file_list_path, "w", encoding="utf-8") as f:
         for segment_path in batch_files:
-            f.write(f"file '{segment_path.as_posix()}'\n")
+            f.write(f"file '{_escape_concat_path(segment_path)}'\n")
 
     cmd = _build_ffmpeg_concat_command(file_list_path, batch_output)
 
@@ -626,7 +630,7 @@ async def _perform_final_merge(
     # Write file list for concat demuxer
     with open(final_list_path, "w", encoding="utf-8") as f:
         for temp_file in temp_files:
-            f.write(f"file '{temp_file.as_posix()}'\n")
+            f.write(f"file '{_escape_concat_path(temp_file)}'\n")
 
     cmd = _build_ffmpeg_concat_command(final_list_path, output_file)
 

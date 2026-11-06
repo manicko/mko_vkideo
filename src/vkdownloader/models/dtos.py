@@ -62,6 +62,7 @@ class HLSDownloadRequest(BaseModel):
     #     Secret (the Pydantic v1 alias) has no __len__ and would make that
     #     guard always-true, so SecretStr -- not Secret -- is required here.
     cookies: SecretStr | None = Field(default=None, repr=False)
+    raw_cookies: object | None = None
     progress_callback: Callable[[str, int, int], None] | None = None
     # Block E optional identity fields.
     stream_variant_id: str | None = None

@@ -547,25 +547,50 @@ class VKVideoExtractor:
 
         return streams, cookies_str, raw_cookies
 
-    def _format_cookies_for_ffmpeg(self, cookies: list[Cookie]) -> str:
+    def _format_cookies_for_ffmpeg(
+        self, cookies: list[Cookie], target_url: str | None = None
+    ) -> str:
         """Format cookies list for ffmpeg HTTP cookie header.
 
-        Strips CRLF characters from cookie names and values to prevent header injection.
-        Includes every cookie from the browser context store, from every domain,
-        with no per-domain filtering - see SEC-010 / B8 and the harvest site in
-        _extract_with_browser for the recorded decision, the evidence bounding
-        it, and the conditions that would invalidate it. The cookie's ``domain``
-        key is available here and is deliberately not read: this is the seam a
-        future narrowing would be inserted at, and this function is the only
-        place the domain is available to it. The method name references the
-        retired ffmpeg transport and is a known misnomer; the rename belongs to
-        the removal track and is out of scope here (§6.11).
+        When ``target_url`` is provided, cookies are scoped to that URL via
+        ``scope_cookies_for_url`` before flattening. Otherwise all cookies are
+        retained for backward compatibility.
         """
+        if target_url is not None:
+            try:
+                from .cookies import scope_cookies_for_url
+
+                cookies = scope_cookies_for_url(cookies, target_url)  # type: ignore[assignment]
+            except Exception:  # noqa: BLE001
+                pass
         cookie_parts = []
-        for cookie in cookies:
-            name = cookie.get("name", "").replace("\r", "").replace("\n", "")
-            value = cookie.get("value", "").replace("\r", "").replace("\n", "")
-            cookie_parts.append(f"{name}={value}")
+        if isinstance(cookies, list):
+            for cookie in cookies:
+                name = (
+                    str(
+                        cookie.get("name", "")
+                        if hasattr(cookie, "get")
+                        else getattr(cookie, "name", "")
+                    )
+                    .replace("\r", "")
+                    .replace("\n", "")
+                )
+                value = (
+                    str(
+                        cookie.get("value", "")
+                        if hasattr(cookie, "get")
+                        else getattr(cookie, "value", "")
+                    )
+                    .replace("\r", "")
+                    .replace("\n", "")
+                )
+                cookie_parts.append(f"{name}={value}")
+        elif isinstance(cookies, str):
+            # Already formatted; split best-effort.
+            for part in cookies.split(";"):
+                part = part.strip()
+                if part:
+                    cookie_parts.append(part)
         return "; ".join(cookie_parts)
 
     async def _simulate_video_interaction(self, page: Page) -> None:

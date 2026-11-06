@@ -122,6 +122,8 @@ class DownloadPolicy:
     progress_callback: Callable[[str, int, int], None] | None = None
     progress_snapshot_callback: Callable[[str, object], None] | None = None
     # Block E checkpoint fields.
+    # Block G raw cookies for per-host scoping.
+    raw_cookies: object | None = None
     state_path: Path | None = None
     stream_variant_id: str | None = None
     video_id: str | None = None
@@ -914,6 +916,7 @@ async def _fetch_playlist_with_retry(
     preselected_variant_id: str | None = None,
     preselected_height: int | None = None,
     progress_snapshot_callback: Callable[[str, object], None] | None = None,
+    raw_cookies: object | None = None,
 ) -> PlaylistFetchResult | None:
     """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
 
@@ -964,7 +967,11 @@ async def _fetch_playlist_with_retry(
         if backoff_coordinator is not None:
             await backoff_coordinator.wait_if_paused(current_url)
 
-        result = await _fetch_single_playlist(session, current_url, headers, client_timeout)
+        request_headers = dict(headers)
+        _cv = _cookie_header_for_url(raw_cookies, current_url)
+        if _cv:
+            request_headers["Cookie"] = _cv
+        result = await _fetch_single_playlist(session, current_url, request_headers, client_timeout)
 
         if result is None:
             logger.warning(
@@ -1075,9 +1082,24 @@ async def _fetch_playlist_with_retry(
                         refreshed_variant_id = refresh_result[2]
                 else:
                     new_cookies = ""
-                if not isinstance(new_cookies, str):
-                    new_cookies = "" if new_cookies is None else str(new_cookies)
-                headers["Cookie"] = new_cookies
+                raw_refreshed = (
+                    getattr(refreshed_binding, "raw_cookies", None)
+                    if refreshed_binding is not None
+                    else None
+                )
+                if (
+                    raw_refreshed is None
+                    and isinstance(refresh_result, tuple)
+                    and len(refresh_result) > 3
+                ):
+                    raw_refreshed = refresh_result[3]
+                _cv = _cookie_header_for_url(raw_refreshed, current_url)
+                if _cv:
+                    headers["Cookie"] = _cv
+                elif new_cookies:
+                    headers["Cookie"] = new_cookies
+                else:
+                    headers["Cookie"] = ""
                 # BG-002: compare refreshed binding against preselected identity.
                 _pre_variant = refreshed_variant_id
                 _pre_height = None
@@ -1460,12 +1482,17 @@ async def _download_segment_concurrent(
             else task.segment_url
         )
 
+        request_headers = dict(policy.headers)
+        _cv = _cookie_header_for_url(getattr(policy, "raw_cookies", None), full_url)
+        if _cv:
+            request_headers["Cookie"] = _cv
+
         segment_path = task.segments_dir / f"{task.idx:05d}.ts"
         result = await _download_segment(
             policy.session,
             full_url,
             segment_path,
-            policy.headers,
+            request_headers,
             max_concurrent_segments=policy.max_concurrent_segments,
             segment_index=task.idx,
             backoff_coordinator=policy.backoff_coordinator,
@@ -1681,6 +1708,7 @@ async def _run_download_session(
     generation_id: str | None = None,
     state_machine: DownloadStateMachine | None = None,
     progress_snapshot_callback: Callable[[str, object], None] | None = None,
+    raw_cookies: object | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1730,6 +1758,7 @@ async def _run_download_session(
             quality=quality,
             state_machine=state_machine,
             progress_snapshot_callback=progress_snapshot_callback,
+            raw_cookies=raw_cookies,
         )
         if playlist_result is None or not playlist_result.playlist_text:
             return None
@@ -1926,6 +1955,7 @@ async def _run_download_session(
             state_machine=state_machine,
             segment_byte_ranges=segment_byte_ranges,
             init_map_sha256=init_map_sha256,
+            raw_cookies=raw_cookies,
         )
 
         return await _process_downloaded_segments(
@@ -1990,6 +2020,34 @@ def _strip_query_token(url: str) -> str:
         return parts._replace(query="").geturl()
     except Exception:  # noqa: BLE001
         return str(url).split("?", 1)[0]
+
+
+def _cookie_header_for_url(raw_cookies: object | None, url: str) -> str | None:
+    """Build a Cookie header value scoped to ``url``."""
+    try:
+        from .cookies import scope_cookies_for_url
+
+        scoped = scope_cookies_for_url(raw_cookies, url)
+    except Exception:  # noqa: BLE001
+        scoped = raw_cookies
+    if scoped is None:
+        return None
+    if isinstance(scoped, str):
+        return scoped.strip() or None
+    if isinstance(scoped, list):
+        parts: list[str] = []
+        for cookie in scoped:
+            if isinstance(cookie, dict):
+                name = cookie.get("name")
+                value = cookie.get("value")
+            else:
+                name = getattr(cookie, "name", None)
+                value = getattr(cookie, "value", None)
+            if name is None or value is None:
+                continue
+            parts.append(f"{name}={value}")
+        return "; ".join(parts) or None
+    return None
 
 
 async def download_hls_with_resume(
@@ -2083,14 +2141,12 @@ async def download_hls_with_resume(
         "User-Agent": settings.user_agent,
         "Referer": "https://vkvideo.ru/",
     }
-    if request.cookies:
-        # SEC-008 (B7): request.cookies is a SecretStr, not a str. An aiohttp
-        # headers mapping requires str values; a SecretStr raises
-        # "Cannot serialize non-str key" at the wire, so unwrap it here.
-        # DOWNSTREAM: policy.headers carries plain str values from this point,
-        # so _download_segment_concurrent and the four hops to session.get need
-        # no further change.
-        headers["Cookie"] = request.cookies.get_secret_value()
+    raw_cookies = request.raw_cookies
+    if raw_cookies is None and getattr(request, "stream_binding", None) is not None:
+        raw_cookies = getattr(request.stream_binding, "raw_cookies", None)
+    if raw_cookies is None and request.cookies:
+        raw_cookies = request.cookies.get_secret_value()
+    # SEC-008: base headers carry no Cookie; per-request scoping builds it.
 
     success = False
     try:
@@ -2115,6 +2171,7 @@ async def download_hls_with_resume(
             generation_id=generation_id,
             state_machine=state_machine,
             progress_snapshot_callback=progress_snapshot_callback,
+            raw_cookies=raw_cookies,
         )
         if result is not None:
             if workspace is not None:

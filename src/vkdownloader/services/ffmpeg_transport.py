@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -36,14 +37,23 @@ class DownloadTransport(Protocol):
     name: str
 
     async def download(
-        self, binding: StreamBinding, workspace: DownloadWorkspace | None
+        self,
+        binding: StreamBinding,
+        workspace: DownloadWorkspace | None,
+        progress_callback: Callable[[object], None] | None = None,
+        progress_snapshot_callback: Callable[[object], None] | None = None,
     ) -> Path | None:
         """Download ``binding`` into ``workspace`` staging area."""
         ...
 
 
 class FfmpegTransport:
-    """Direct FFmpeg HLS download transport (optional adapter)."""
+    """Direct FFmpeg HLS download transport (optional adapter).
+
+    Cookie values may be passed via argv/headers for this transport; this is a
+    bounded risk because credentials are short-lived and scoped, and argv is
+    never logged by this module.
+    """
 
     name = "ffmpeg"
 
@@ -51,7 +61,11 @@ class FfmpegTransport:
         self.settings = settings if settings is not None else Settings()
 
     async def download(
-        self, binding: StreamBinding, workspace: DownloadWorkspace | None
+        self,
+        binding: StreamBinding,
+        workspace: DownloadWorkspace | None,
+        progress_callback: Callable[[object], None] | None = None,
+        progress_snapshot_callback: Callable[[object], None] | None = None,
     ) -> Path | None:
         # Resolve staged output path.
         if workspace is not None and workspace.staging_dir is not None:
@@ -76,33 +90,23 @@ class FfmpegTransport:
             # Build a Cookie header value from the binding's cookies without
             # embedding the cookie artifact path in the signed URL.
             cookie_header_value: str | None = None
-            raw_cookies = getattr(binding, "raw_cookies", None)
-            cookies = getattr(binding, "cookies", None)
-            if raw_cookies:
-                if isinstance(raw_cookies, list):
-                    parts: list[str] = []
-                    for item in raw_cookies:
-                        if isinstance(item, dict):
-                            name = str(item.get("name", "")).replace("\r", "").replace("\n", "")
-                            value = str(item.get("value", "")).replace("\r", "").replace("\n", "")
-                        else:
-                            name = (
-                                str(getattr(item, "name", "")).replace("\r", "").replace("\n", "")
-                            )
-                            value = (
-                                str(getattr(item, "value", "")).replace("\r", "").replace("\n", "")
-                            )
-                        if name and value:
-                            parts.append(f"{name}={value}")
-                    cookie_header_value = "; ".join(parts)
-                elif isinstance(raw_cookies, str):
-                    cookie_header_value = raw_cookies
-            elif cookies:
-                if isinstance(cookies, str):
-                    cookie_header_value = cookies
-                elif isinstance(cookies, list):
+            try:
+                from .cookies import scope_cookies_for_url
+
+                scoped_raw = scope_cookies_for_url(raw_cookies, binding.media_playlist_url)
+                scoped_flat = (
+                    scope_cookies_for_url(cookies, binding.media_playlist_url)
+                    if cookies and not raw_cookies
+                    else None
+                )
+            except Exception:  # noqa: BLE001
+                scoped_raw = raw_cookies
+                scoped_flat = cookies
+            source = scoped_raw if raw_cookies else (scoped_flat if cookies else None)
+            if source:
+                if isinstance(source, list):
                     parts = []
-                    for item in cookies:
+                    for item in source:
                         if isinstance(item, dict):
                             name = str(item.get("name", "")).replace("\r", "").replace("\n", "")
                             value = str(item.get("value", "")).replace("\r", "").replace("\n", "")
@@ -116,6 +120,8 @@ class FfmpegTransport:
                         if name and value:
                             parts.append(f"{name}={value}")
                     cookie_header_value = "; ".join(parts)
+                elif isinstance(source, str):
+                    cookie_header_value = source
 
             headers_content = (
                 f"User-Agent: {self.settings.user_agent}\r\nReferer: https://vkvideo.ru/\r\n"
@@ -164,13 +170,23 @@ class FfmpegTransport:
 
             async def _read_progress() -> None:
                 assert process.stderr is not None
-                async for _progress in read_progress(
+                async for progress in read_progress(
                     process.stderr,
                     stderr_collector=stderr_chunks,
                     shutdown_event=shutdown_event,
                     on_shutdown=_on_shutdown,
                 ):
-                    pass
+                    if progress_callback is not None:
+                        try:
+                            progress_callback(progress)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if progress_snapshot_callback is not None:
+                        try:
+                            # Best-effort translation; no strict schema.
+                            progress_snapshot_callback(progress)
+                        except Exception:  # noqa: BLE001
+                            pass
 
             try:
                 process_task = asyncio.create_task(process.wait())
