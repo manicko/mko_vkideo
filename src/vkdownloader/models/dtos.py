@@ -67,3 +67,4 @@ class HLSDownloadRequest(BaseModel):
     stream_variant_id: str | None = None
     video_id: str | None = None
     playlist_fingerprint: str | None = None
+    stream_binding: object | None = None

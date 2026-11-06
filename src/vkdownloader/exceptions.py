@@ -141,6 +141,37 @@ class QualityNotAvailableError(VKDownloadError):
         return ErrorCode.QUALITY_NOT_AVAILABLE.value
 
 
+class QualityMismatchError(QualityNotAvailableError):
+    """Raised when a refreshed stream does not match the requested quality.
+
+    Attributes:
+        requested: The quality string that was requested (e.g., "1440").
+        available: List of available quality strings (e.g., ["1080p", "720p"]).
+        actual_height: The height reported by the refreshed stream, if any.
+    """
+
+    error_code = ErrorCode.QUALITY_MISMATCH
+    requested: str | None = None
+    available: list[str] = []
+    actual_height: int | None = None
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        requested: str | None = None,
+        available: list[str] | None = None,
+        actual_height: int | None = None,
+    ) -> None:
+        self.requested = requested
+        self.available = list(available) if available else []
+        self.actual_height = actual_height
+        VKDownloadError.__init__(
+            self,
+            message if message is not None else "Exact quality is unavailable or unverified",
+        )
+
+
 class QualityParseError(VKDownloadError):
     """Raised when a quality string cannot be parsed to QualitySpec.
 

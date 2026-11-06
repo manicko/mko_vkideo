@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
@@ -36,6 +36,7 @@ from .ytdlp_downloader import (
 
 if TYPE_CHECKING:
     from .downloader_throttle import URLBackoffCoordinator
+    from .workspace import DownloadWorkspace
 
 logger = get_logger(__name__)
 
@@ -69,7 +70,7 @@ async def perform_download(
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
-    workspace: Any = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -127,7 +128,9 @@ async def perform_download(
             from .diagnostics import open_diagnostic_sink
 
             if getattr(settings, "diagnostic_log_dir", None) is not None:
-                sink_path = settings.diagnostic_log_dir / f"{output_file.stem}.diagnostic.jsonl"
+                diag_dir = settings.diagnostic_log_dir
+                assert diag_dir is not None
+                sink_path = diag_dir / f"{output_file.stem}.diagnostic.jsonl"
             elif workspace is not None:
                 sink_path = workspace.log_path
             else:
@@ -281,7 +284,7 @@ async def download_video(
     selected_stream: Stream | None = None,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
-    workspace: Any = None,
+    workspace: DownloadWorkspace | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 

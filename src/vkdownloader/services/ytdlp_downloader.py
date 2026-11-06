@@ -39,6 +39,7 @@ from ..services.ffmpeg_utils import (
     iter_process_lines,
 )
 from ..services.quality import QualitySelector
+from ..services.quality_refresh import refresh_stream
 from ..services.retry_policies import (
     _compute_backoff_delay,
     _wait_with_shutdown,
@@ -1059,9 +1060,10 @@ async def download_with_ytdlp_with_resume_fallback(
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
+    stream_variant_id: str | None = None,
+    stream_binding: object | None = None,
 ) -> Path | None:
-    """Download using yt-dlp with automatic segment-based fallback on failure.
-
+    """
     Flow:
     1. Try yt-dlp download
     2. On failure with partial file: get fresh token via browser + switch to segment download
@@ -1173,6 +1175,8 @@ async def download_with_ytdlp_with_resume_fallback(
                 video_semaphore,
                 progress_callback,
                 workspace=workspace,
+                stream_variant_id=stream_variant_id,
+                stream_binding=stream_binding,
             )
         ) is not None:
             return segment_result
@@ -1197,9 +1201,11 @@ async def _attempt_segment_resume(
     extractor: VKVideoExtractor | None,
     settings: Settings,
     backoff_coordinator: URLBackoffCoordinator | None,
-    video_semaphore: SemaphoreLike | None,
+    video_semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     workspace: DownloadWorkspace | None = None,
+    stream_variant_id: str | None = None,
+    stream_binding: object | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -1249,58 +1255,53 @@ async def _attempt_segment_resume(
     try:
         if extractor is None:
             extractor = VKVideoExtractor(settings=settings, backoff_coordinator=backoff_coordinator)
-        # Force browser for token refresh during resume (recovery scenario)
-        browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(
-            video_url, force_browser=True
-        )
-        if browser_streams:
-            try:
-                quality_spec = QualitySpec.parse(quality)
-                # Browser streams are labelled QualityLabel.UNKNOWN.value
-                # ("unknown") and height=None by _extract_with_browser.
-                # Only run quality selection for BEST; for exact requests, reuse the
-                # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
-                if quality_spec.kind is QualityKind.BEST:
-                    selector = QualitySelector()
-                    selected_stream = selector.select(browser_streams, quality_spec)
-                    m3u8_url = str(selected_stream.url)
-                    logger.info(
-                        "fresh_token_obtained_for_resume",
-                        quality=quality,
-                        selected_quality=selected_stream.quality,
-                    )
-                else:
-                    logger.info(
-                        "browser_streams_selected_with_preselected_url_for_resume",
-                        quality=quality,
-                        m3u8_url=_strip_auth_params(m3u8_url),
-                    )
-            except QualityNotAvailableError:
-                logger.error(
-                    "requested_quality_not_available_in_browser_streams",
-                    url=_strip_auth_params(video_url),
-                    quality=quality,
-                    available=[s.quality for s in browser_streams],
-                )
-                raise
-            # Preserve the yt-dlp partial; do NOT unlink it. The segment backend
-            # runs in its own workspace and leaves the original artifact untouched.
-            # Continue to segment download
-            return await download_hls_with_resume(
-                HLSDownloadRequest(
-                    video_url=video_url,
-                    m3u8_url=m3u8_url,
-                    output_file=output_file,
-                    quality=quality,
-                    cookies=SecretStr(cookies) if cookies else None,
-                    progress_callback=progress_callback,
-                ),
-                settings=settings,
-                extractor=extractor,
-                backoff_coordinator=backoff_coordinator,
-                video_semaphore=video_semaphore,
-                workspace=workspace,
+        try:
+            from ..models.enums import CookieSource
+
+            if getattr(extractor, "settings", None) is not None:
+                extractor.settings.cookie_source = CookieSource.BROWSER
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            binding = await refresh_stream(video_url, quality, None, extractor)
+        except QualityNotAvailableError as exc:
+            logger.error(
+                "requested_quality_not_available_in_browser_streams",
+                url=_strip_auth_params(video_url),
+                quality=quality,
+                available=["best"] + (getattr(exc, "available", []) or []),
             )
+            raise
+        m3u8_url = binding.media_playlist_url
+        cookies = binding.cookies if isinstance(binding.cookies, str) else None
+        stream_variant_id = binding.variant_id
+        logger.info(
+            "fresh_token_obtained_for_resume",
+            quality=quality,
+            selected_quality=quality,
+        )
+        # Preserve the yt-dlp partial; do NOT unlink it. The segment backend
+        # runs in its own workspace and leaves the original artifact untouched.
+        # Continue to segment download
+        return await download_hls_with_resume(
+            HLSDownloadRequest(
+                video_url=video_url,
+                m3u8_url=m3u8_url,
+                output_file=output_file,
+                quality=quality,
+                cookies=SecretStr(cookies) if isinstance(cookies, str) and cookies else None,
+                progress_callback=progress_callback,
+                stream_variant_id=stream_variant_id,
+                stream_binding=binding,
+            ),
+            settings=settings,
+            extractor=extractor,
+            backoff_coordinator=backoff_coordinator,
+            video_semaphore=video_semaphore,
+            workspace=workspace,
+            stream_variant_id=stream_variant_id,
+            stream_binding=binding,
+        )
     except ExtractionError as e:
         # TRN-008 / B13 arm (d): narrowed from (ExtractionError, OSError).
         # A FileNotFoundError from the merge is an OSError, but arm (b) now
@@ -1506,7 +1507,7 @@ async def _download_with_ytdlp(
                     _retain_transcript_line(output_chunks, line)
                     if diagnostic_sink is not None:
                         try:
-                            diagnostic_sink.write_line(
+                            getattr(diagnostic_sink, "write_line", lambda *a, **k: None)(
                                 decoded, is_progress=_is_ytdlp_progress_line(decoded)
                             )
                         except Exception:
@@ -1550,7 +1551,7 @@ async def _download_with_ytdlp(
                     _retain_transcript_line(output_chunks, line)
                     if diagnostic_sink is not None:
                         try:
-                            diagnostic_sink.write_line(
+                            getattr(diagnostic_sink, "write_line", lambda *a, **k: None)(
                                 decoded, is_progress=_is_ytdlp_progress_line(decoded)
                             )
                         except Exception:
@@ -1741,31 +1742,30 @@ async def _resolve_cookies(
         QualityNotAvailableError: If requested quality is BEST but not available in browser streams.
         QualityParseError: If ``quality`` is neither a keyword nor a positive height.
     """
-    if settings.cookie_source == CookieSource.BROWSER:
+    if settings.cookie_source != CookieSource.BROWSER:
+        return m3u8_url, None, None
+
+    quality_spec = QualitySpec.parse(quality)
+    if quality_spec.kind is QualityKind.BEST:
         browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
         if browser_streams:
-            quality_spec = QualitySpec.parse(quality)
-            # Browser streams are labelled QualityLabel.UNKNOWN.value
-            # ("unknown") and height=None by _extract_with_browser.
-            # Only run quality selection for BEST; for exact requests, reuse the
-            # pre-selected m3u8_url from the caller (yt-dlp already selected the stream).
-            if quality_spec.kind is QualityKind.BEST:
-                selector = QualitySelector()
-                selected_stream = selector.select(browser_streams, quality_spec)
-                m3u8_url = str(selected_stream.url)
-                logger.info(
-                    "browser_streams_selected",
-                    quality=quality,
-                    selected_quality=selected_stream.quality,
-                )
-            else:
-                logger.info(
-                    "browser_streams_selected_with_preselected_url",
-                    quality=quality,
-                    m3u8_url=_strip_auth_params(m3u8_url),
-                )
+            selector = QualitySelector()
+            selected_stream = selector.select(browser_streams, quality_spec)
+            m3u8_url = str(selected_stream.url)
+            logger.info(
+                "browser_streams_selected",
+                quality=quality,
+                selected_quality=selected_stream.quality,
+            )
         else:
             cookies = None
             raw_cookies = None
         return m3u8_url, cookies, raw_cookies
-    return m3u8_url, None, None
+
+    # Exact quality: verify through refresh_stream instead of retaining the
+    # stale m3u8_url merely because quality is not BEST.
+    extractor.settings = settings
+    binding = await refresh_stream(url, quality, None, extractor)
+    cookies = binding.cookies if isinstance(binding.cookies, str) else None
+    raw_cookies = binding.raw_cookies if isinstance(binding.raw_cookies, list) else None
+    return binding.media_playlist_url, cookies, raw_cookies

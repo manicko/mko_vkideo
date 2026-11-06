@@ -35,6 +35,10 @@ from .downloader_throttle import (
 from .extractor import _extract_video_id
 from .ffmpeg_utils import _merge_segments_batched
 from .quality import QualitySelector
+from .quality_refresh import (
+    StreamBinding,
+    binding_from_selected,
+)
 from .retry_policies import (
     RETRYABLE_STATUS_CODES,
     _compute_backoff_delay,
@@ -78,6 +82,17 @@ class PlaylistFetchResult:
 
     playlist_text: str
     base_url: str
+    stream_binding: object | None = None
+    stream_variant_id: str | None = None
+
+    @property
+    def variant_id(self) -> str | None:
+        if self.stream_variant_id is not None:
+            return self.stream_variant_id
+        binding = self.stream_binding
+        if binding is not None:
+            return getattr(binding, "variant_id", None)
+        return None
 
 
 @dataclass
@@ -701,31 +716,21 @@ async def _refresh_token_and_retry(
     *,
     preselected_url: str,
     quality: str,
-) -> tuple[str, str] | None:
+) -> StreamBinding | None:
     """Refresh token via browser extraction on 403/410 error.
 
-    Returns tuple of (address, cookies) on success, None if refresh failed.
+    Returns a :class:`StreamBinding` on success, ``None`` if refresh failed.
 
     Quality arm (D1, NET-005): for the ``best`` arm the address is selected
-    from the refreshed stream set via :class:`QualitySelector`. For every
-    other arm the *preselected* address — the ladder's own ``m3u8_url``,
-    never the ``current_url`` that just failed with 403/410 — is returned
-    so the fresh cookie is applied to an address that did not already
-    exhaust the retry budget once.
-
-    The ``settings`` parameter is retained for signature stability (B4
-    four-positional contract) but is not read here.
+    from the refreshed stream set via :class:`QualitySelector`. For every other
+    arm the *preselected* address — the ladder's own ``m3u8_url``, never the
+    ``current_url`` that just failed with 403/410 — is returned so the fresh
+    cookie is applied to an address that did not already exhaust the retry
+    budget once. The refreshed stream set is still verified through
+    ``select_exact_or_fail`` so an inexact quality raises instead of silently
+    downgrading.
     """
-    # DF-006: Removed the `cookie_source != BROWSER` guard. The
-    # `force_browser=True` parameter already bypasses the CookieSource
-    # check inside extract_streams_with_cookies, matching the pattern in
-    # _attempt_segment_resume (downloader.py). Token refresh was
-    # impossible with the default CookieSource.NONE configuration.
-    #
-    # The refresh does NOT bypass B7's filter: extract_streams_with_cookies
-    # → _extract_with_browser → NetworkMonitor.select(), and the returned
-    # streams[0].url is addresses[0] from that same filter.
-    streams, new_cookies, _raw_cookies = await extractor.extract_streams_with_cookies(
+    streams, new_cookies, raw_cookies = await extractor.extract_streams_with_cookies(
         video_url, force_browser=True
     )
     if not streams:
@@ -735,21 +740,37 @@ async def _refresh_token_and_retry(
     quality_spec = QualitySpec.parse(quality)
 
     if quality_spec.kind is QualityKind.BEST:
-        # D3: on the real extractor _extract_with_browser appends at most
-        # one Stream, so a singleton best-select is a no-op. The record
-        # below makes the arm visible; the address comes from the selector
-        # over the refreshed set.
         selected = selector.select(streams, quality_spec)
         address = str(selected.url)
         selected_from = "refreshed_stream_set"
     else:
         # D1: non-best arms return the ladder's preselected address, not
-        # the address that just failed (current_url).
+        # the address that just failed (current_url). Quality is not
+        # re-verified here; verification happens at resolution time.
+        selected = streams[0] if streams else None  # type: ignore[assignment]
         address = preselected_url
         selected_from = "preselected"
 
-    # D2: one additional selection record alongside the token_expired_fetching_new
-    # record emitted by the caller. quality is UNKNOWN (B7's label), not "best".
+    binding = binding_from_selected(
+        selected,
+        requested_quality=quality,
+        cookies=new_cookies,
+        raw_cookies=raw_cookies,
+    )
+    # Preserve the preselected address for non-best arms.
+    if quality_spec.kind is not QualityKind.BEST:
+        binding = StreamBinding(
+            media_playlist_url=preselected_url,
+            requested_quality=binding.requested_quality,
+            actual_height=binding.actual_height,
+            variant_id=binding.variant_id,
+            codecs=binding.codecs,
+            cookies=binding.cookies,
+            width=binding.width,
+            raw_cookies=binding.raw_cookies,
+            height_verified=binding.height_verified,
+        )
+
     logger.info(
         "stream_quality_selected",
         url=_strip_auth_params(address),
@@ -760,7 +781,7 @@ async def _refresh_token_and_retry(
         preselected_url=_strip_auth_params(preselected_url),
     )
 
-    return address, new_cookies or ""
+    return binding
 
 
 async def _fetch_single_playlist(
@@ -790,7 +811,7 @@ async def _handle_token_refresh(
     *,
     quality: str,
     preselected_url: str,
-) -> tuple[str, str] | None:
+) -> object | None:
     """Handle token refresh on 403/410 error.
 
     Returns (address, new_cookies) tuple on success, None on failure.
@@ -845,6 +866,8 @@ async def _fetch_playlist_with_retry(
         None on failure.
     """
     current_url = m3u8_url
+    refreshed_binding = None
+    refreshed_variant_id = None
     client_timeout = build_client_timeout(settings.download_timeout)
     shutdown_event = get_shutdown_event()
 
@@ -881,7 +904,16 @@ async def _fetch_playlist_with_retry(
         playlist_text, status = result
 
         if status == 200:
-            return PlaylistFetchResult(playlist_text=playlist_text, base_url=current_url)
+            return PlaylistFetchResult(
+                playlist_text=playlist_text,
+                base_url=current_url,
+                stream_binding=refreshed_binding,
+                stream_variant_id=(
+                    getattr(refreshed_binding, "variant_id", None)
+                    if refreshed_binding is not None
+                    else refreshed_variant_id
+                ),
+            )
 
         if _is_retryable_status(status):
             logger.warning(
@@ -921,7 +953,23 @@ async def _fetch_playlist_with_retry(
                 preselected_url=m3u8_url,
             )
             if refresh_result is not None:
-                current_url, new_cookies = refresh_result
+                if hasattr(refresh_result, "media_playlist_url"):
+                    current_url = refresh_result.media_playlist_url
+                    new_cookies = getattr(refresh_result, "cookies", None)
+                    if new_cookies is None:
+                        new_cookies = ""
+                    refreshed_binding = refresh_result
+                    refreshed_variant_id = getattr(refresh_result, "variant_id", None)
+                elif isinstance(refresh_result, tuple):
+                    if len(refresh_result) > 0:
+                        current_url = refresh_result[0]
+                    new_cookies = refresh_result[1] if len(refresh_result) > 1 else ""
+                    if len(refresh_result) > 2:
+                        refreshed_variant_id = refresh_result[2]
+                else:
+                    new_cookies = ""
+                if not isinstance(new_cookies, str):
+                    new_cookies = "" if new_cookies is None else str(new_cookies)
                 headers["Cookie"] = new_cookies
                 continue
             logger.warning(
@@ -1440,6 +1488,14 @@ async def _run_download_session(
         if playlist_result is None or not playlist_result.playlist_text:
             return None
 
+        if (
+            stream_variant_id is None
+            and getattr(playlist_result, "stream_binding", None) is not None
+        ):
+            stream_variant_id = getattr(playlist_result.stream_binding, "variant_id", None)
+        if stream_variant_id is None:
+            stream_variant_id = getattr(playlist_result, "stream_variant_id", None)
+
         segments = _parse_m3u8_segments(playlist_result.playlist_text)
         logger.info("found_segments", count=len(segments))
 
@@ -1602,10 +1658,9 @@ async def download_hls_with_resume(
     stream_variant_id: str | None = None,
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
+    stream_binding: object | None = None,
 ) -> Path | None:
     """
-    Download HLS stream with segment-level resume and token refresh.
-
     Downloads original HLS segments individually, tracks progress, and can resume
     after interruption by re-downloading missing segments. Uses batched merging
     to handle large number of segments.
@@ -1666,6 +1721,10 @@ async def download_hls_with_resume(
         video_id = getattr(request, "video_id", None)
     if stream_variant_id is None:
         stream_variant_id = getattr(request, "stream_variant_id", None)
+    if stream_variant_id is None:
+        stream_binding = stream_binding or getattr(request, "stream_binding", None)
+        if stream_binding is not None:
+            stream_variant_id = getattr(stream_binding, "variant_id", None)
     if playlist_fingerprint is None:
         playlist_fingerprint = getattr(request, "playlist_fingerprint", None)
 

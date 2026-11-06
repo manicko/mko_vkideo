@@ -3769,14 +3769,13 @@ class TestResolveCookies:
         m3u8_url = "https://example.com/preselected.m3u8"
 
         with patch.object(QualitySelector, "select") as mock_select:
-            result = await _resolve_cookies(
-                extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "720"
-            )
+            from vkdownloader.exceptions import QualityMismatchError
 
-        # Preselected URL is reused; quality selection must not run for numeric quality.
-        assert result[0] == m3u8_url
-        assert result[1] == "vk=abc"
-        mock_select.assert_not_called()
+            with pytest.raises(QualityMismatchError):
+                await _resolve_cookies(
+                    extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "720"
+                )
+            mock_select.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_browser_source_no_streams_returns_none_cookies(
@@ -7308,7 +7307,7 @@ class TestGracefulDegradation:
 
         with (
             patch(
-                "vkdownloader.services.ytdlp_downloader.QualitySelector",
+                "vkdownloader.services.quality_refresh.QualitySelector",
                 _FailingSelector,
             ),
             patch("vkdownloader.services.ytdlp_downloader.logger.error") as mock_error,
