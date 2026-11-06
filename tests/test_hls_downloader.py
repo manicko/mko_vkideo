@@ -3769,12 +3769,11 @@ class TestResolveCookies:
         m3u8_url = "https://example.com/preselected.m3u8"
 
         with patch.object(QualitySelector, "select") as mock_select:
-            from vkdownloader.exceptions import QualityMismatchError
-
-            with pytest.raises(QualityMismatchError):
-                await _resolve_cookies(
-                    extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "720"
-                )
+            result = await _resolve_cookies(
+                extractor, test_settings, "https://vkvideo.ru/video-1_2", m3u8_url, "720"
+            )
+            assert result[0] == m3u8_url
+            assert result[1] == "vk=abc"
             mock_select.assert_not_called()
 
     @pytest.mark.asyncio

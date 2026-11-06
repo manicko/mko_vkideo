@@ -723,12 +723,11 @@ async def _refresh_token_and_retry(
 
     Quality arm (D1, NET-005): for the ``best`` arm the address is selected
     from the refreshed stream set via :class:`QualitySelector`. For every other
-    arm the *preselected* address — the ladder's own ``m3u8_url``, never the
-    ``current_url`` that just failed with 403/410 — is returned so the fresh
+    arm the *preselected* address -- the ladder's own ``m3u8_url``, never the
+    ``current_url`` that just failed with 403/410 -- is returned so the fresh
     cookie is applied to an address that did not already exhaust the retry
-    budget once. The refreshed stream set is still verified through
-    ``select_exact_or_fail`` so an inexact quality raises instead of silently
-    downgrading.
+    budget once. Non-best arms keep the preselected address and credentials
+    without binding browser-captured stream metadata.
     """
     streams, new_cookies, raw_cookies = await extractor.extract_streams_with_cookies(
         video_url, force_browser=True
@@ -743,32 +742,23 @@ async def _refresh_token_and_retry(
         selected = selector.select(streams, quality_spec)
         address = str(selected.url)
         selected_from = "refreshed_stream_set"
+        binding = binding_from_selected(
+            selected,
+            requested_quality=quality,
+            cookies=new_cookies,
+            raw_cookies=raw_cookies,
+        )
     else:
         # D1: non-best arms return the ladder's preselected address, not
-        # the address that just failed (current_url). Quality is not
-        # re-verified here; verification happens at resolution time.
-        selected = streams[0] if streams else None  # type: ignore[assignment]
+        # the address that just failed (current_url). Preserve the preselected
+        # identity; do not bind browser-captured stream metadata.
         address = preselected_url
         selected_from = "preselected"
-
-    binding = binding_from_selected(
-        selected,
-        requested_quality=quality,
-        cookies=new_cookies,
-        raw_cookies=raw_cookies,
-    )
-    # Preserve the preselected address for non-best arms.
-    if quality_spec.kind is not QualityKind.BEST:
         binding = StreamBinding(
             media_playlist_url=preselected_url,
-            requested_quality=binding.requested_quality,
-            actual_height=binding.actual_height,
-            variant_id=binding.variant_id,
-            codecs=binding.codecs,
-            cookies=binding.cookies,
-            width=binding.width,
-            raw_cookies=binding.raw_cookies,
-            height_verified=binding.height_verified,
+            requested_quality=quality,
+            cookies=new_cookies,
+            raw_cookies=raw_cookies,
         )
 
     logger.info(

@@ -29,6 +29,22 @@ class StreamBinding:
     raw_cookies: object = None
     height_verified: bool = False
 
+    def __repr__(self) -> str:
+        return (
+            "StreamBinding("
+            "media_playlist_url=<redacted>, "
+            f"requested_quality={self.requested_quality!r}, "
+            f"actual_height={self.actual_height!r}, "
+            f"variant_id={self.variant_id!r}, "
+            f"codecs={self.codecs!r}, "
+            "cookies=<redacted>, "
+            f"width={self.width!r}, "
+            "raw_cookies=<redacted>, "
+            f"height_verified={self.height_verified!r})"
+        )
+
+    __str__ = __repr__
+
 
 def _candidate_height(candidate: object) -> int | None:
     height = getattr(candidate, "height", None)

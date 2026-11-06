@@ -141,7 +141,7 @@ class QualityNotAvailableError(VKDownloadError):
         return ErrorCode.QUALITY_NOT_AVAILABLE.value
 
 
-class QualityMismatchError(QualityNotAvailableError):
+class QualityMismatchError(VKDownloadError):
     """Raised when a refreshed stream does not match the requested quality.
 
     Attributes:
@@ -170,6 +170,10 @@ class QualityMismatchError(QualityNotAvailableError):
             self,
             message if message is not None else "Exact quality is unavailable or unverified",
         )
+
+    def status_label(self) -> str:
+        """Return the quality mismatch status label."""
+        return ErrorCode.QUALITY_MISMATCH.value
 
 
 class QualityParseError(VKDownloadError):

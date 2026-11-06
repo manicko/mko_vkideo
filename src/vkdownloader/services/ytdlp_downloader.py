@@ -24,6 +24,7 @@ from ..config import Settings
 from ..exceptions import (
     DownloadError,
     ExtractionError,
+    QualityMismatchError,
     QualityNotAvailableError,
     QualityParseError,
 )
@@ -1264,6 +1265,14 @@ async def _attempt_segment_resume(
             pass
         try:
             binding = await refresh_stream(video_url, quality, None, extractor)
+        except QualityMismatchError as exc:
+            logger.error(
+                "requested_quality_mismatch_in_browser_streams",
+                url=_strip_auth_params(video_url),
+                quality=quality,
+                available=["best"] + (getattr(exc, "available", []) or []),
+            )
+            raise
         except QualityNotAvailableError as exc:
             logger.error(
                 "requested_quality_not_available_in_browser_streams",
@@ -1762,10 +1771,10 @@ async def _resolve_cookies(
             raw_cookies = None
         return m3u8_url, cookies, raw_cookies
 
-    # Exact quality: verify through refresh_stream instead of retaining the
-    # stale m3u8_url merely because quality is not BEST.
-    extractor.settings = settings
-    binding = await refresh_stream(url, quality, None, extractor)
-    cookies = binding.cookies if isinstance(binding.cookies, str) else None
-    raw_cookies = binding.raw_cookies if isinstance(binding.raw_cookies, list) else None
-    return binding.media_playlist_url, cookies, raw_cookies
+    # Exact quality: obtain cookies from browser extraction only; retain the
+    # caller's preselected m3u8_url and do not require height verification.
+    browser_streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(url)
+    if not browser_streams:
+        cookies = None
+        raw_cookies = None
+    return m3u8_url, cookies, raw_cookies

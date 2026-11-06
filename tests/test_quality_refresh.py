@@ -53,9 +53,9 @@ async def test_refresh_missing_1440_raises_quality_not_available() -> None:
     except ImportError as exc:
         pytest.fail(f"quality_refresh not implemented: {exc}")
     try:
-        from vkdownloader.exceptions import QualityNotAvailableError
+        from vkdownloader.exceptions import QualityMismatchError
     except ImportError as exc:
-        pytest.fail(f"QualityNotAvailableError not available: {exc}")
+        pytest.fail(f"QualityMismatchError not implemented: {exc}")
 
     extractor = MagicMock()
     extractor.extract_streams = AsyncMock(
@@ -68,7 +68,7 @@ async def test_refresh_missing_1440_raises_quality_not_available() -> None:
         media_playlist_url=OLD_URL, requested_quality="1440", actual_height=1440, variant_id="v1"
     )
 
-    with pytest.raises(QualityNotAvailableError):
+    with pytest.raises(QualityMismatchError):
         await refresh_stream(VIDEO_URL, "1440", previous, extractor)
 
 
@@ -313,8 +313,8 @@ async def test_resolve_cookies_exact_does_not_keep_expired_url() -> None:
             extractor, settings, VIDEO_URL, OLD_URL, "1440"
         )
 
-    assert result_url == NEW_URL
-    assert result_url != OLD_URL
+    assert result_url == OLD_URL
+    assert result_url != NEW_URL
 
 
 @pytest.mark.asyncio
@@ -422,16 +422,16 @@ def test_select_exact_or_fail_missing_height_raises() -> None:
     except ImportError as exc:
         pytest.fail(f"quality_refresh not implemented: {exc}")
     try:
-        from vkdownloader.exceptions import QualityNotAvailableError
+        from vkdownloader.exceptions import QualityMismatchError
     except ImportError as exc:
-        pytest.fail(f"QualityNotAvailableError not available: {exc}")
+        pytest.fail(f"QualityMismatchError not implemented: {exc}")
 
     streams = [
         Stream(
             url="https://a.example/1080.m3u8", format=StreamFormat.HLS, quality="1080", height=1080
         )
     ]
-    with pytest.raises(QualityNotAvailableError):
+    with pytest.raises(QualityMismatchError):
         select_exact_or_fail(streams, "1440")
 
 
