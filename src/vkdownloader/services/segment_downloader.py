@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urljoin
 
 from structlog import get_logger
@@ -832,6 +832,7 @@ async def _fetch_playlist_with_retry(
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     quality: str,
+    state_machine: Any = None,
 ) -> PlaylistFetchResult | None:
     """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
 
@@ -860,6 +861,14 @@ async def _fetch_playlist_with_retry(
     refreshed_variant_id = None
     client_timeout = build_client_timeout(settings.download_timeout)
     shutdown_event = get_shutdown_event()
+
+    if state_machine is None:
+        try:
+            from .state_machine import DownloadStateMachine
+
+            state_machine = DownloadStateMachine.create(job_id=video_url or "job", workspace=None)
+        except Exception:  # noqa: BLE001
+            state_machine = None
 
     for attempt in range(max_retries):
         if shutdown_event.is_set():
@@ -928,6 +937,12 @@ async def _fetch_playlist_with_retry(
             continue
 
         if status in (403, 410) and extractor is not None:
+            if state_machine is not None:
+                try:
+                    if not state_machine.request_refresh("token_expired"):
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
             logger.info(
                 "token_expired_fetching_new",
                 url=_strip_auth_params(current_url),
@@ -961,6 +976,13 @@ async def _fetch_playlist_with_retry(
                 if not isinstance(new_cookies, str):
                     new_cookies = "" if new_cookies is None else str(new_cookies)
                 headers["Cookie"] = new_cookies
+                if state_machine is not None:
+                    try:
+                        state_machine.record_refresh_completed(
+                            quality_match=True, variant_match=True
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 continue
             logger.warning(
                 "playlist_fetch_failed_non_retryable",
@@ -970,6 +992,11 @@ async def _fetch_playlist_with_retry(
             )
             return None
 
+        if status == 404 and state_machine is not None:
+            try:
+                state_machine.reverify_playlist_on_404()
+            except Exception:  # noqa: BLE001
+                pass
         logger.warning(
             "playlist_fetch_failed_non_retryable",
             url=_strip_auth_params(current_url),
@@ -1427,6 +1454,7 @@ async def _run_download_session(
     stream_variant_id: str | None = None,
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1474,6 +1502,7 @@ async def _run_download_session(
             max_retries=settings.max_retries,
             backoff_coordinator=backoff_coordinator,
             quality=quality,
+            state_machine=state_machine,
         )
         if playlist_result is None or not playlist_result.playlist_text:
             return None
@@ -1649,6 +1678,7 @@ async def download_hls_with_resume(
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
     stream_binding: object | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """
     Downloads original HLS segments individually, tracks progress, and can resume
@@ -1752,6 +1782,7 @@ async def download_hls_with_resume(
             stream_variant_id=stream_variant_id,
             playlist_fingerprint=playlist_fingerprint,
             generation_id=generation_id,
+            state_machine=state_machine,
         )
         if result is not None:
             if workspace is not None:

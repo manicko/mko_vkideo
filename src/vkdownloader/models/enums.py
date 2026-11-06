@@ -82,6 +82,52 @@ class ErrorCode(StrEnum):
     UNEXPECTED_ERROR = "unexpected_error"
 
 
+class DownloadState(StrEnum):
+    """Observable download state for the Block G state machine.
+
+    States are intentionally string-valued so they round-trip through JSON
+    state files and diagnostic logs without conversion.
+    """
+
+    CREATED = "created"
+    RESOLVE_STREAM = "resolve_stream"
+    VALIDATE_VARIANT = "validate_variant"
+    DOWNLOAD = "download"
+    RETRY_SAME_SEGMENT = "retry_same_segment"
+    REFRESH_STREAM = "refresh_stream"
+    RATE_LIMIT_WAIT = "rate_limit_wait"
+    RETRY = "retry"
+    VERIFY_MEDIA = "verify_media"
+    COMMIT = "commit"
+    DONE = "done"
+    PRESERVE_AND_STOP = "preserve_and_stop"
+    CANCELLED = "cancelled"
+    DISK_FULL = "disk_full"
+    FAILED_RETRY_BUDGET = "failed_retry_budget"
+    INTEGRITY_FAILED = "integrity_failed"
+    FAILED = "failed"
+
+
+class ErrorCategory(StrEnum):
+    """Classification of a download failure for state-machine transitions."""
+
+    CONNECTION_TIMEOUT = "connection_timeout"
+    CONNECTION_RESET = "connection_reset"
+    AUTH_EXPIRED = "auth_expired"
+    RATE_LIMITED = "rate_limited"
+    SERVER_ERROR = "server_error"
+    NOT_FOUND = "not_found"
+    SLOW_THROUGHPUT = "slow_throughput"
+    DISK_FULL = "disk_full"
+    PERMISSION_ERROR = "permission_error"
+    INVALID_OUTPUT_PATH = "invalid_output_path"
+    CANCELLED = "cancelled"
+    INCOMPATIBLE_PLAYLIST = "incompatible_playlist"
+    INCOMPATIBLE_CODEC = "incompatible_codec"
+    INTEGRITY_FAILURE = "integrity_failure"
+    UNKNOWN = "unknown"
+
+
 class ProgressStatus(StrEnum):
     """Download progress status for a single item.
 

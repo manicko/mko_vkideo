@@ -71,6 +71,7 @@ async def perform_download(
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -118,6 +119,19 @@ async def perform_download(
             workspace = make_workspace(output_file, output_file.stem, str(quality))
         except Exception:  # noqa: BLE001
             workspace = None
+
+    if state_machine is None and workspace is not None:
+        try:
+            from .state_machine import DownloadStateMachine
+
+            try:
+                state_machine = DownloadStateMachine.load(workspace)
+            except Exception:  # noqa: BLE001
+                state_machine = DownloadStateMachine.create(
+                    job_id=workspace.root.name, quality_requested=quality, workspace=workspace
+                )
+        except Exception:  # noqa: BLE001
+            state_machine = None
 
     if (
         diagnostic_sink is None
@@ -224,6 +238,7 @@ async def perform_download(
                         diagnostic_sink=diagnostic_sink,
                         attempt_id=attempt_id,
                         workspace=workspace,
+                        state_machine=state_machine,
                     )
                 case DownloadMethod.AUTO:
                     # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
@@ -250,6 +265,7 @@ async def perform_download(
                         diagnostic_sink=diagnostic_sink,
                         attempt_id=attempt_id,
                         workspace=workspace,
+                        state_machine=state_machine,
                     )
                 case _:
                     logger.error(
@@ -285,6 +301,7 @@ async def download_video(
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -373,6 +390,19 @@ async def download_video(
     if video_data is not None and selected_stream is not None:
         stream = selected_stream
 
+    if state_machine is None and workspace is not None:
+        try:
+            from .state_machine import DownloadStateMachine
+
+            try:
+                state_machine = DownloadStateMachine.load(workspace)
+            except Exception:  # noqa: BLE001
+                state_machine = DownloadStateMachine.create(
+                    job_id=workspace.root.name, quality_requested=str(quality), workspace=workspace
+                )
+        except Exception:  # noqa: BLE001
+            state_machine = None
+
     return await perform_download(
         url,
         str(quality),  # DF-001: pass the original request, not the degraded str(stream.quality)
@@ -389,4 +419,5 @@ async def download_video(
         diagnostic_sink=diagnostic_sink,
         attempt_id=attempt_id,
         workspace=workspace,
+        state_machine=state_machine,
     )

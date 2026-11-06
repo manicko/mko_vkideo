@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 import aiohttp
 
+from ..models.enums import ErrorCategory
 from . import downloader_throttle
 from .downloader_throttle import (
     _HTTP_DATE_FORMATS,
@@ -245,3 +246,20 @@ async def _wait_with_shutdown(
     except TimeoutError:
         # Normal timeout - continue with retry
         return False
+
+
+def classify_http_status(status: int) -> ErrorCategory:
+    """Classify an HTTP status code into an ErrorCategory."""
+    from ..models.enums import ErrorCategory
+
+    if status in (401, 403, 410):
+        return ErrorCategory.AUTH_EXPIRED
+    if status == 429:
+        return ErrorCategory.RATE_LIMITED
+    if status == 404:
+        return ErrorCategory.NOT_FOUND
+    if status == 408:
+        return ErrorCategory.CONNECTION_TIMEOUT
+    if 500 <= status < 600:
+        return ErrorCategory.SERVER_ERROR
+    return ErrorCategory.UNKNOWN

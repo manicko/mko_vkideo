@@ -933,9 +933,9 @@ def _build_ytdlp_cli_command(
         "--socket-timeout",
         str(settings.download_timeout),
         "-R",
-        str(settings.max_retries),
+        "1",
         "--fragment-retries",
-        str(settings.max_retries),
+        "1",
         "-N",
         str(settings.max_concurrent_segments),
         "--throttled-rate",
@@ -1063,6 +1063,7 @@ async def download_with_ytdlp_with_resume_fallback(
     workspace: DownloadWorkspace | None = None,
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """
     Flow:
@@ -1103,6 +1104,16 @@ async def download_with_ytdlp_with_resume_fallback(
 
     shutdown_event = get_shutdown_event()
     retry_count = 0
+
+    if state_machine is None:
+        try:
+            from .state_machine import DownloadStateMachine
+
+            state_machine = DownloadStateMachine.create(
+                job_id=str(output_file), quality_requested=quality, workspace=workspace
+            )
+        except Exception:  # noqa: BLE001
+            state_machine = None
 
     while retry_count <= settings.max_retries:
         result = await _download_with_ytdlp(
@@ -1178,6 +1189,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 workspace=workspace,
                 stream_variant_id=stream_variant_id,
                 stream_binding=stream_binding,
+                state_machine=state_machine,
             )
         ) is not None:
             return segment_result
@@ -1207,6 +1219,7 @@ async def _attempt_segment_resume(
     workspace: DownloadWorkspace | None = None,
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
+    state_machine: object | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -1310,6 +1323,7 @@ async def _attempt_segment_resume(
             workspace=workspace,
             stream_variant_id=stream_variant_id,
             stream_binding=binding,
+            state_machine=state_machine,
         )
     except ExtractionError as e:
         # TRN-008 / B13 arm (d): narrowed from (ExtractionError, OSError).
