@@ -13,9 +13,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from vkdownloader.services.progress import ProgressSnapshot
+
+from pathlib import Path
 from structlog import get_logger
 
 from ..config import Settings
@@ -232,12 +235,12 @@ async def _download_single(
     # the ``if reporter is not None`` guard only handles the single-download
     # path where no context (and therefore no reporter) exists.
     def _on_progress(
-        video_id: str, downloaded: int = 0, total: int = 0, snapshot: Any = None
+        video_id: str, downloaded: int = 0, total: int = 0, snapshot: object = None
     ) -> None:
         if reporter is not None:
             reporter.set_video_id(index, video_id)
             if snapshot is not None:
-                reporter.update_snapshot(index, snapshot)
+                reporter.update_snapshot(index, snapshot)  # type: ignore[arg-type]
             else:
                 reporter.update(index, downloaded, total)
 

@@ -838,6 +838,7 @@ async def _fetch_playlist_with_retry(
     state_machine: DownloadStateMachine | None = None,
     preselected_variant_id: str | None = None,
     preselected_height: int | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
 ) -> PlaylistFetchResult | None:
     """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
 
@@ -1454,7 +1455,9 @@ async def _download_segment_concurrent(
                 job_id = sm.job_state.job_id if sm is not None else video_id
                 expected_segments = task.total_segments
                 if sm is not None and getattr(sm.job_state, "expected_segments", None) is not None:
-                    expected_segments = sm.job_state.expected_segments
+                    val = sm.job_state.expected_segments
+                    if val is not None:
+                        expected_segments = val
                 verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
                 network_bytes = sm.job_state.network_bytes_this_session if sm is not None else 0
                 attempt = sm.job_state.attempt_id if sm is not None else 0

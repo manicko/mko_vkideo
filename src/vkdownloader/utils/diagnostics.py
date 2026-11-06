@@ -209,7 +209,7 @@ def bind_diagnostic_context(**kwargs: object) -> dict[str, object]:
     try:
         import structlog.contextvars
 
-        structlog.contextvars.bind_contextvars(**sanitized)  # type: ignore[arg-type]
+        structlog.contextvars.bind_contextvars(**sanitized)
     except Exception:
         pass
     return sanitized

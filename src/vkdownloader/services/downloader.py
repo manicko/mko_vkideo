@@ -343,7 +343,7 @@ async def perform_download(
     finally:
         if job_lock is not None:
             try:
-                job_lock.release()
+                job_lock.release()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
 

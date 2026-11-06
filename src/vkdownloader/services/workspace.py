@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 _QUALITY_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 
 
-def _validate_quality(quality: Any) -> str:
+def _validate_quality(quality: object) -> str:
     q = str(quality)
     if ".." in q or "/" in q or "\\" in q:
         raise ValueError(f"Unsafe quality token: {quality!r}")
@@ -45,8 +45,8 @@ try:  # pragma: no cover - exercised only when filelock is absent
     from filelock import FileLock
     from filelock import Timeout as _FileLockTimeout
 except Exception:  # noqa: BLE001
-    FileLock = None  # type: ignore[assignment]
-    _FileLockTimeout = Exception  # type: ignore[assignment]
+    FileLock = None  # type: ignore
+    _FileLockTimeout = Exception  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
 class JobLock:
     """Thin handle returned by :func:`acquire_job_lock`."""
 
-    def __init__(self, path: Path, release_cb: Any = None, handle: Any = None) -> None:
+    def __init__(self, path: Path, release_cb: object = None, handle: object = None) -> None:
         self.path = path
         self._release_cb = release_cb
         self._handle = handle
@@ -118,19 +118,19 @@ class JobLock:
         self._released = True
         if self._release_cb is not None:
             try:
-                self._release_cb()
+                self._release_cb()  # type: ignore[operator]
             except Exception:  # noqa: BLE001
                 pass
         if self._handle is not None:
             try:
-                self._handle.release()
+                self._handle.release()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
 
     def __enter__(self) -> JobLock:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.release()
 
 
@@ -171,7 +171,7 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
-def acquire_job_lock(workspace: DownloadWorkspace, timeout: float = 10.0) -> Any:
+def acquire_job_lock(workspace: DownloadWorkspace, timeout: float = 10.0) -> object:
     """Acquire an exclusive lock for ``workspace``."""
     lock_path = workspace.lock_path
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +228,7 @@ def acquire_job_lock(workspace: DownloadWorkspace, timeout: float = 10.0) -> Any
 def publish_verified_file(
     staged: Path,
     final: Path,
-    final_lock: Any = None,
+    final_lock: object = None,
 ) -> Path:
     """Publish ``staged`` to ``final`` via an atomic, collision-safe operation.
 
@@ -286,7 +286,7 @@ def publish_verified_file(
         return final
 
     if final_lock is not None and hasattr(final_lock, "__enter__"):
-        with final_lock:
+        with final_lock:  # type: ignore[attr-defined]
             return _do()
     return _do()
 
