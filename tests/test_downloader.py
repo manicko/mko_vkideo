@@ -465,3 +465,49 @@ class TestPerformDownload:
 
         mock_ytdlp.assert_not_awaited()
         mock_seg.assert_not_awaited()
+
+
+class TestPerformDownloadFfmpegBranch:
+    """RED tests for Block H FFMPEG branch in perform_download."""
+
+    @pytest.mark.asyncio
+    async def test_ffmpeg_branch_selects_transport(self, tmp_path: Path) -> None:
+        from vkdownloader.models.enums import DownloadMethod
+        from vkdownloader.services.downloader import perform_download
+
+        assert hasattr(DownloadMethod, "FFMPEG")
+
+        settings = _make_settings(tmp_path, CookieSource.NONE)
+        output_file = tmp_path / "video.mp4"
+
+        with (
+            patch("vkdownloader.services.downloader.check_ffmpeg_available", return_value=True),
+        ):
+            try:
+                from vkdownloader.services import downloader as d
+
+                if not hasattr(d, "FfmpegTransport"):
+                    try:
+                        from vkdownloader.services.ffmpeg_transport import FfmpegTransport as _FT
+
+                        d.FfmpegTransport = _FT
+                    except ImportError as exc:
+                        pytest.fail(f"ffmpeg transport not available: {exc}")
+            except Exception as exc:
+                pytest.fail(str(exc))
+
+            with patch("vkdownloader.services.downloader.FfmpegTransport") as mock_transport_cls:
+                mock_transport = MagicMock()
+                mock_transport.download = AsyncMock(return_value=output_file)
+                mock_transport_cls.return_value = mock_transport
+                result = await perform_download(
+                    _URL,
+                    _QUALITY,
+                    output_file,
+                    DownloadMethod.FFMPEG,
+                    settings=settings,
+                    video_data=_VIDEO,
+                    selected_stream=_STREAM,
+                )
+
+        assert result == output_file

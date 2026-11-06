@@ -29,6 +29,12 @@ from .ffmpeg_utils import (
     check_ffmpeg_version,
 )
 from .quality import QualitySelector
+from .quality_refresh import binding_from_selected
+
+try:
+    from .ffmpeg_transport import FfmpegTransport
+except Exception:  # noqa: BLE001
+    FfmpegTransport = None  # type: ignore[assignment]
 from .ytdlp_downloader import (
     _resolve_cookies,
     download_with_ytdlp_with_resume_fallback,
@@ -271,6 +277,56 @@ async def perform_download(
                         workspace=workspace,
                         state_machine=state_machine,
                     )
+                case DownloadMethod.FFMPEG:
+                    m3u8_url, cookies, raw_cookies = await _resolve_cookies(
+                        extractor, settings, url, m3u8_url, quality
+                    )
+                    binding = binding_from_selected(
+                        selected_stream or (streams[0] if streams else None),
+                        requested_quality=quality,
+                        cookies=cookies,
+                        raw_cookies=raw_cookies,
+                    )
+                    transport = (
+                        FfmpegTransport(settings=settings) if FfmpegTransport is not None else None
+                    )
+                    if transport is None:
+                        logger.error("ffmpeg_transport_unavailable")
+                        return None
+                    if state_machine is not None:
+                        state_machine.backend = "ffmpeg"
+                        try:
+                            state_machine.job_state.backend = "ffmpeg"
+                        except Exception:  # noqa: BLE001
+                            pass
+                    logger.info("backend_started", backend="ffmpeg", attempt_id=attempt_id)
+                    staged = await transport.download(binding, workspace)
+                    logger.info("backend_stopped", backend="ffmpeg", attempt_id=attempt_id)
+                    if staged is None:
+                        return None
+                    if workspace is not None:
+                        candidate = workspace.staging_dir / workspace.final_path.name
+                        if candidate.exists():
+                            from .workspace import (
+                                cleanup_owned_job_artifacts,
+                                publish_verified_file,
+                            )
+
+                            final_lock = None
+                            try:
+                                from filelock import FileLock
+
+                                final_lock = FileLock(
+                                    str(workspace.root / "publish.lock"), timeout=10.0
+                                )
+                            except Exception:  # noqa: BLE001
+                                final_lock = None
+                            publish_verified_file(
+                                candidate, workspace.final_path, final_lock=final_lock
+                            )
+                            cleanup_owned_job_artifacts(workspace)
+                            return workspace.final_path
+                    return staged
                 case _:
                     logger.error(
                         "unknown_download_method",

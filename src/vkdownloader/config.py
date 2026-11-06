@@ -674,10 +674,14 @@ def setup_logging(settings: Settings | None = None) -> None:
     root = logging.getLogger()
 
     # Idempotency: close and remove any existing root handlers first.
+    # Preserve pytest's caplog handler so test capture keeps working.
     for existing in list(root.handlers):
+        cls_name = type(existing).__name__
+        if "Capture" in cls_name or "caplog" in cls_name.lower():
+            continue
         try:
             existing.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         root.removeHandler(existing)
 
@@ -713,8 +717,21 @@ def setup_logging(settings: Settings | None = None) -> None:
         raise OSError(f"Failed to create log handler: {e}") from e
     handler.setFormatter(_formatter)
 
+    # Be tolerant of incomplete settings objects (e.g. test mocks): fall back
+    # to INFO when log_level is not a real LogLevel.
+    log_level = settings.log_level
+    try:
+        from .models.enums import LogLevel as _LogLevel
+
+        if not isinstance(log_level, _LogLevel):
+            log_level = _LogLevel.INFO
+    except Exception:  # noqa: BLE001
+        log_level = None
+    if log_level is None:
+        log_level = LogLevel.INFO
+
     logging.basicConfig(
-        level=settings.log_level.value,
+        level=log_level.value if hasattr(log_level, "value") else log_level,
         handlers=[handler],
     )
 

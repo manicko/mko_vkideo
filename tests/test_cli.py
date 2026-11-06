@@ -2008,164 +2008,90 @@ class TestMethodOptionValidation:
         assert result.exit_code == 0
 
 
-class TestMethodFfmpegRemoved:
-    """Regression net for the ffmpeg download-transport retirement (P15-B6).
+class TestMethodFfmpegRestored:
+    """Block H: --method ffmpeg is a valid choice again."""
 
-    The ``--method ffmpeg`` value was removed by the transport retirement. This
-    class pins the surviving surface so that deleting ``--method`` outright —
-    the accident that took down the original 34 oracles — is now detected.
+    def test_download_method_ffmpeg_accepted(self, tmp_path: Path, sample_video_url: str) -> None:
+        """--method ffmpeg is accepted by the download command."""
+        mock_streams = [
+            MagicMock(
+                url="https://example.com/720p.m3u8",
+                quality="720",
+                height=720,
+            ),
+        ]
 
-    Two assertion scopes are covered:
+        with (
+            patch("vkdownloader.services.downloader.VKVideoExtractor") as mock_extractor_cls,
+            patch("vkdownloader.services.downloader.QualitySelector") as mock_selector_cls,
+            patch("vkdownloader.services.downloader.perform_download") as mock_download,
+        ):
+            mock_extractor = MagicMock()
+            mock_extractor.extract_streams = AsyncMock(
+                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+            )
+            mock_extractor_cls.return_value = mock_extractor
 
-    - **Value-list scope** (primary): ``test_method_help_text_excludes_ffmpeg``
-      parses the ``--method`` option's value list from ``--help`` and asserts
-      ``ffmpeg`` is not among the choices — an unrelated ffmpeg mention
-      elsewhere in the help text still passes.
-    - **Whole-output scope** (backstop): ``test_method_help_text_names_ffmpeg_removal``
-      asserts ``ffmpeg`` IS mentioned somewhere in the full help text — pinning
-      the migration note so users discover the removal without triggering a
-      rejection.
+            mock_selector = MagicMock()
+            mock_selector.list_available_qualities.return_value = ["720"]
+            mock_selector.select.return_value = MagicMock(quality="720")
+            mock_selector_cls.return_value = mock_selector
 
-    Both rejection tests assert the exit code (2) AND that the rejection
-    message names ``ffmpeg``; presence tests assert ``--method`` with the
-    surviving values ``yt-dlp`` and ``auto`` appears in both ``--help`` outputs.
-    """
+            mock_download.return_value = tmp_path / "test_video_720.mp4"
 
-    def test_download_method_ffmpeg_rejected(self, tmp_path: Path) -> None:
-        """Check that --method ffmpeg is rejected with a usage error that names ffmpeg."""
-        result = runner.invoke(
-            app,
-            ["download", "https://vkvideo.ru/video-12345_67890", "--method", "ffmpeg"],
-            catch_exceptions=False,
-        )
+            with patch("vkdownloader.utils.security.validate_output_path", return_value=tmp_path):
+                with patch("vkdownloader.cli.Settings") as mock_settings_cls:
+                    mock_settings_cls.return_value = MagicMock(log_file=None)
+                    result = runner.invoke(
+                        app,
+                        ["download", sample_video_url, "--method", "ffmpeg"],
+                        catch_exceptions=False,
+                    )
 
-        assert result.exit_code == 2
-        assert "ffmpeg" in result.output.lower()
-        assert "was removed" in result.output.lower()
+        assert result.exit_code == 0
 
-    def test_batch_method_ffmpeg_rejected(self, tmp_path: Path) -> None:
-        """Check that --method ffmpeg is rejected for batch command, naming ffmpeg."""
+    def test_batch_method_ffmpeg_accepted(self, tmp_path: Path) -> None:
+        """--method ffmpeg is accepted by the batch command."""
         urls_file = tmp_path / "urls.txt"
         urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
 
-        result = runner.invoke(
-            app,
-            ["batch", str(urls_file), "--method", "ffmpeg"],
-            catch_exceptions=False,
-        )
-
-        assert result.exit_code == 2
-        assert "ffmpeg" in result.output.lower()
-        assert "was removed" in result.output.lower()
-
-    def test_method_help_text_names_ffmpeg_removal(self) -> None:
-        """Verify the --method help text names the ffmpeg removal (not excludes it).
-
-        The help text must carry the loader/merger distinction: ffmpeg as a download
-        transport was removed, while ffmpeg as the segment-merge engine is still
-        required. Asserting 'ffmpeg' IS present pins the migration note in the
-        option help, so users discover it without triggering a rejection.
-        """
-        result = runner.invoke(app, ["download", "--help"])
-
-        assert result.exit_code == 0
-        assert "ffmpeg" in result.output.lower()
-
-    def test_method_help_text_excludes_ffmpeg(self) -> None:
-        """ffmpeg is not a valid choice in --method's value list; only named in the removal note.
-
-        This is the **value-list scope**: the help text mentions 'ffmpeg' only
-        in the removal explanatory text, not as a selectable value. An
-        unrelated ffmpeg mention elsewhere in the help output still passes
-        this test, because the assertion is scoped to the value list that
-        follows the ``Download method:`` prefix up to the first period.
-        """
-        result = runner.invoke(app, ["download", "--help"])
+        with (
+            patch(
+                "vkdownloader.services.batch_downloader.run_batch",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
+        ):
+            mock_preamble.return_value = MagicMock(log_file=None)
+            result = runner.invoke(
+                app,
+                ["batch", str(urls_file), "--method", "ffmpeg"],
+                catch_exceptions=False,
+            )
 
         assert result.exit_code == 0
 
+    def test_method_help_text_includes_ffmpeg(self) -> None:
+        """ffmpeg appears in the --method value list."""
+        result = runner.invoke(app, ["download", "--help"])
+
+        assert result.exit_code == 0
         marker = "Download method:"
         marker_idx = result.output.find(marker)
-        assert marker_idx != -1, "--method help text not found"
-
+        assert marker_idx != -1
         after_marker = result.output[marker_idx + len(marker) :]
-        value_list = after_marker.split(".")[0]  # "yt-dlp or auto"
-
+        value_list = after_marker.split(".")[0]
+        assert "ffmpeg" in value_list.lower()
         assert "yt-dlp" in value_list
         assert "auto" in value_list
-        assert "ffmpeg" not in value_list.lower(), (
-            "ffmpeg must not appear in the --method value list, only in the removal note"
-        )
 
-    def test_method_option_still_present_in_download_help(self) -> None:
-        """``--method`` still appears in ``download --help`` with both valid values.
-
-        Distinguishes “value rejected by the parser” from “flag removed
-        outright”: if ``--method`` were deleted entirely the option would not
-        appear in ``--help`` (exit code would be 2, not 0).  The two valid
-        values are asserted individually so the test pins the list, not just
-        the flag’s existence.
-        """
-        result = runner.invoke(app, ["download", "--help"])
-
-        assert result.exit_code == 0
-        assert "--method" in result.output
-        assert "yt-dlp" in result.output
-        assert "auto" in result.output
-
-    def test_method_option_still_present_in_batch_help(self) -> None:
-        """``--method`` still appears in ``batch --help`` with both valid values.
-
-        Mirrors the download counterpart so the two commands’ identical
-        ``--method`` help text is pinned in *both*, as required.
-        """
+    def test_method_help_text_includes_ffmpeg_batch(self) -> None:
+        """ffmpeg appears in batch --method value list."""
         result = runner.invoke(app, ["batch", "--help"])
 
         assert result.exit_code == 0
-        assert "--method" in result.output
-        assert "yt-dlp" in result.output
-        assert "auto" in result.output
-
-    def test_download_ffmpeg_rejection_carries_migration_note(self) -> None:
-        """The ``--method ffmpeg`` rejection carries a migration note, not a bare error.
-
-        Like ``test_download_method_ffmpeg_rejected`` (which now also asserts
-        the ``ffmpeg`` token), this asserts the substantive substring
-        ``was removed``.  That substring distinguishes a deliberate removal
-        explanation from a bare invalid-choice error and pins the note's
-        presence against its absence.  The substring is not the bare token
-        ``ffmpeg`` (whose absence from ``--help`` is already pinned by
-        ``test_method_help_text_excludes_ffmpeg``).
-        """
-        result = runner.invoke(
-            app,
-            ["download", "https://vkvideo.ru/video-12345_67890", "--method", "ffmpeg"],
-            catch_exceptions=False,
-        )
-
-        assert result.exit_code == 2
-        assert "was removed" in result.output.lower()
-
-    def test_batch_ffmpeg_rejection_carries_migration_note(self, tmp_path: Path) -> None:
-        """The ``--method ffmpeg`` rejection for batch carries a migration note.
-
-        Same honest witness as the download counterpart: asserts the substantive
-        substring ``was removed`` appears in the rejection output, distinguishing
-        a deliberate removal explanation from a bare invalid-choice error.
-        Like ``test_batch_method_ffmpeg_rejected`` (which now also asserts the
-        ``ffmpeg`` token), this pins the note's presence against its absence.
-        """
-        urls_file = tmp_path / "urls.txt"
-        urls_file.write_text("https://vkvideo.ru/video-12345_67890\n")
-
-        result = runner.invoke(
-            app,
-            ["batch", str(urls_file), "--method", "ffmpeg"],
-            catch_exceptions=False,
-        )
-
-        assert result.exit_code == 2
-        assert "was removed" in result.output.lower()
+        assert "ffmpeg" in result.output.lower()
 
 
 class TestSslVerifyOption:

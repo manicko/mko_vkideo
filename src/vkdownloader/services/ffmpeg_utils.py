@@ -6,11 +6,15 @@ import asyncio
 import contextlib
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -95,6 +99,99 @@ _MERGE_MULTIPLIER: Final[int] = 3
 # ``_required_merge_bytes`` so the sizing arithmetic and the merge staging
 # cannot drift apart (P12-B8).
 _MERGE_BATCH_SIZE: Final[int] = 100
+
+
+@dataclass
+class FfmpegProgress:
+    """Progress state from ffmpeg -progress pipe output."""
+
+    frame: int | None = None
+    fps: float | None = None
+    speed: float | None = None
+    total_size: int | None = None
+    out_time_us: int | None = None
+    out_time_ms: int | None = None
+    out_time: str | None = None
+    progress: str | None = None
+
+
+# Type alias for progress key handler
+_ProgressHandler = Callable[[str, FfmpegProgress], None]
+
+
+# Lookup table for progress key handlers
+_PROGRESS_KEY_HANDLERS: dict[str, _ProgressHandler] = {
+    "frame": lambda v, p: setattr(p, "frame", int(v) if v != "N/A" else None),
+    "fps": lambda v, p: setattr(p, "fps", float(v) if v != "N/A" else None),
+    "speed": lambda v, p: setattr(p, "speed", float(v.rstrip("x")) if v != "N/A" else None),
+    "total_size": lambda v, p: setattr(p, "total_size", int(v) if v != "N/A" else None),
+    "out_time_us": lambda v, p: setattr(p, "out_time_us", int(v) if v != "N/A" else None),
+    "out_time_ms": lambda v, p: setattr(p, "out_time_ms", int(v) if v != "N/A" else None),
+    "out_time": lambda v, p: setattr(p, "out_time", v if v != "N/A" else None),
+}
+
+
+class ProgressParser:
+    """Parser for ffmpeg KEY=VALUE progress output."""
+
+    @staticmethod
+    def parse_line(line: str) -> tuple[str, str] | None:
+        """Parse a single progress line in KEY=VALUE format."""
+        if "=" in line:
+            key, value = line.strip().split("=", 1)
+            return key, value
+        return None
+
+
+async def read_progress(
+    stderr: asyncio.StreamReader,
+    stderr_collector: list[bytes] | None = None,
+    *,
+    shutdown_event: asyncio.Event | None = None,
+    on_shutdown: Callable[[], Awaitable[None]] | None = None,
+) -> AsyncIterator[FfmpegProgress]:
+    """Read ffmpeg progress output in real-time."""
+    progress = FfmpegProgress()
+    async for line in iter_process_lines(
+        stderr, shutdown_event or asyncio.Event(), on_shutdown=on_shutdown
+    ):
+        if stderr_collector is not None:
+            stderr_collector.append(line)
+        parsed = ProgressParser.parse_line(line.decode(errors="replace"))
+        if parsed:
+            key, value = parsed
+            handler = _PROGRESS_KEY_HANDLERS.get(key)
+            if handler is not None:
+                try:
+                    handler(value, progress)
+                except ValueError, TypeError:
+                    pass
+            elif key == "progress":
+                progress.progress = value
+                yield progress
+                if value == "end":
+                    break
+                progress = FfmpegProgress()  # Reset for next block
+
+
+@asynccontextmanager
+async def _temp_argfile(args: list[str]) -> AsyncIterator[Path]:
+    """Async context manager for temporary ffmpeg argument file."""
+    fd, path = tempfile.mkstemp(suffix=".args", prefix="vk_ffmpeg_")
+    try:
+        os.close(fd)
+        os.chmod(path, 0o600)
+        content = _format_argfile(args)
+        Path(path).write_text(content)
+        yield Path(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def _format_argfile(args: list[str]) -> str:
+    """Format a list of arguments into ffmpeg @file syntax content."""
+    quoted = [shlex.quote(arg) for arg in args]
+    return "\n".join(quoted) + "\n"
 
 
 async def iter_process_lines(

@@ -1355,3 +1355,37 @@ class TestCheckFfmpegVersion:
         assert first == "5.0"
         assert second == "5.0"
         run_mock.assert_called_once()
+
+
+class TestFfmpegTransportHelpersRestored:
+    """RED tests for restored ffmpeg helpers (Block H)."""
+
+    def _import_helpers(self):
+        try:
+            from vkdownloader.services.ffmpeg_utils import (
+                FfmpegProgress,
+                ProgressParser,
+                _temp_argfile,
+                read_progress,
+            )
+        except ImportError as exc:
+            pytest.fail(f"ffmpeg helpers not available: {exc}")
+        return FfmpegProgress, ProgressParser, read_progress, _temp_argfile
+
+    def test_helpers_importable(self) -> None:
+        FfmpegProgress, ProgressParser, read_progress, _temp_argfile = self._import_helpers()
+        assert FfmpegProgress is not None
+        assert ProgressParser is not None
+        assert read_progress is not None
+        assert _temp_argfile is not None
+
+    def test_progress_parser_has_parse_line(self) -> None:
+        FfmpegProgress, ProgressParser, read_progress, _temp_argfile = self._import_helpers()
+        assert callable(getattr(ProgressParser, "parse_line", None))
+
+    @pytest.mark.asyncio
+    async def test_temp_argfile_removes_file(self, tmp_path: Path) -> None:
+        FfmpegProgress, ProgressParser, read_progress, _temp_argfile = self._import_helpers()
+        async with _temp_argfile(["-y", str(tmp_path / "out.mp4")]) as path:
+            assert path.exists()
+        assert not path.exists()

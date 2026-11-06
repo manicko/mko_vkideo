@@ -328,15 +328,10 @@ def _validate_quality(ctx: typer.Context, param: typer.CallbackParam, value: str
 # migration without triggering a rejection. test_method_help_text_names_ffmpeg_removal
 # pins ffmpeg's presence in --help output.
 _METHOD_OPTION_HELP = (
-    "Download method: yt-dlp or auto. "
-    "The ffmpeg download method was removed; "
+    "Download method: yt-dlp, auto, or ffmpeg. "
     "ffmpeg is still required to merge downloaded segments."
 )
-_METHOD_REJECTION_MESSAGE = (
-    "Choose from 'yt-dlp' or 'auto'. "
-    "The ffmpeg download method was removed; "
-    "ffmpeg is still required to merge downloaded segments."
-)
+_METHOD_REJECTION_MESSAGE = "Choose from 'yt-dlp', 'auto', or 'ffmpeg'."
 
 
 def _validate_method(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:

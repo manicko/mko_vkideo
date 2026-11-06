@@ -51,6 +51,7 @@ class DownloadMethod(StrEnum):
 
     YTDLP = "yt-dlp"
     AUTO = "auto"
+    FFMPEG = "ffmpeg"
 
 
 class CookieSource(StrEnum):
