@@ -280,6 +280,12 @@ def publish_verified_file(
     temp = final.parent / f".{final.name}.publish-{os.getpid()}-{uuid.uuid4().hex}.tmp"
 
     with lock:  # type: ignore[attr-defined]
+        # Sweep stale publish temp files.
+        for stale in final.parent.glob(f".{final.name}.publish-*.tmp"):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
         if final.exists() or final.is_symlink():
             raise FileExistsError(f"Refusing to overwrite existing output: {final}")
 
@@ -321,12 +327,6 @@ def publish_verified_file(
                     raise
 
             temp.unlink(missing_ok=True)
-
-            try:
-                if staged.exists():
-                    staged.unlink()
-            except OSError:
-                pass
 
             _fsync_dir(final.parent)
 

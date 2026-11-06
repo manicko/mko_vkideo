@@ -77,7 +77,27 @@ _FFMPEG_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"ffmpeg version (\S+)")
 _ffmpeg_version: str | None = None
 _ffmpeg_version_checked: bool = False
 
-# Hint text naming the missing dependency and the consequence, reused by every
+_ffprobe_available: bool | None = None
+
+
+def _ffprobe_binary() -> str | None:
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    for candidate in ("C:/ffmpeg/ffprobe.exe", "C:\\ffmpeg\\ffprobe.exe"):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def check_ffprobe_available() -> bool:
+    """Return whether ffprobe is available (write-once cache)."""
+    global _ffprobe_available
+    if _ffprobe_available is None:
+        _ffprobe_available = _ffprobe_binary() is not None
+    return _ffprobe_available
+
+
 # arm that reports a missing muxer so the install step is named once and
 # consistently (D6, TRN-008).
 _MERGE_HINT: Final[str] = "ffmpeg binary not found on PATH; segment merge will fail after download"

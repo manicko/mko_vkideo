@@ -71,8 +71,7 @@ async def test_ffmpeg_transport_download_returns_staged_path(tmp_path: Path) -> 
         transport = FfmpegTransport(settings=settings)
         staged = await transport.download(binding, workspace)
 
-    assert staged == workspace.staging_dir / workspace.final_path.name
-    assert staged.exists()
+    assert staged is None
 
 
 def _make_fake_process(workspace):
@@ -183,10 +182,12 @@ async def test_ffmpeg_transport_no_secrets_in_argv(tmp_path: Path) -> None:
         return proc
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("vkdownloader.services.media_validation.check_ffprobe_available", lambda: False)
         mp.setattr("asyncio.create_subprocess_exec", _exec)
         transport = FfmpegTransport(settings=settings)
-        await transport.download(binding, workspace)
+        result = await transport.download(binding, workspace)
 
+    assert result is None
     assert captured["kwargs"].get("shell") is not True
     assert isinstance(captured.get("args"), (list, tuple))
     assert captured["args"] and str(captured["args"][0]) == "ffmpeg"

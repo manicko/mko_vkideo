@@ -1355,7 +1355,7 @@ async def _tally_and_merge(
         logger.info("merging_segments", count=len(segments))
         result = await _merge_segments_batched(segments_dir, output_file, len(segments))
         if result:
-            _cleanup_segments(segments_dir)
+            pass
         return result
 
     return None
@@ -2176,28 +2176,87 @@ async def download_hls_with_resume(
         if result is not None:
             if workspace is not None:
                 try:
+                    from .ffmpeg_utils import check_ffprobe_available
+                    from .media_validation import validate_media_file
                     from .workspace import (
                         acquire_publish_lock,
                         cleanup_owned_job_artifacts,
                         publish_verified_file,
                     )
 
+                    expected_height = None
+                    try:
+                        expected_height = int(str(request.quality).rstrip("p"))
+                    except TypeError, ValueError:
+                        expected_height = None
+
+                    if state_machine is not None:
+                        try:
+                            state_machine.transition(DownloadState.ALL_SEGMENTS_VERIFIED)
+                            state_machine.transition(DownloadState.MERGING_IN_STAGING)
+                            state_machine.transition(DownloadState.CANDIDATE_READY)
+                            state_machine.transition(DownloadState.VALIDATING)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    if not check_ffprobe_available():
+                        return None
+                    try:
+                        await validate_media_file(result, expected_height=expected_height)
+                    except Exception:  # noqa: BLE001
+                        return None
+
+                    if state_machine is not None:
+                        try:
+                            state_machine.transition(DownloadState.VALIDATED)
+                        except Exception:  # noqa: BLE001
+                            pass
+
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
+                    if state_machine is not None:
+                        try:
+                            state_machine.transition(DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
+                        except Exception:  # noqa: BLE001
+                            pass
                     publish_verified_file(result, workspace.final_path, final_lock=final_lock)
                     if job_lock is not None:
                         try:
                             job_lock.release()  # type: ignore[attr-defined]
                         except Exception:  # noqa: BLE001
                             pass
-                    cleanup_owned_job_artifacts(workspace)
+                    try:
+                        await validate_media_file(
+                            workspace.final_path, expected_height=expected_height
+                        )
+                    except Exception:  # noqa: BLE001
+                        return None
                     if not (
                         workspace.final_path.exists()
                         and workspace.final_path.is_file()
                         and workspace.final_path.stat().st_size > 0
                     ):
                         return None
+                    if state_machine is not None:
+                        try:
+                            state_machine.transition(DownloadState.FINAL_COMMITTED)
+                            state_machine.transition(DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    cleanup_owned_job_artifacts(workspace)
                     result = workspace.final_path
-                except FileExistsError, OSError, FileNotFoundError:
+                except FileExistsError, OSError, FileNotFoundError, Exception:
+                    return None
+            else:
+                try:
+                    from .ffmpeg_utils import check_ffprobe_available
+                    from .media_validation import validate_media_file
+
+                    if result.exists() and result.is_file():
+                        if not check_ffprobe_available():
+                            return None
+                        await validate_media_file(result)
+                    _cleanup_segments(segments_dir)
+                except Exception:  # noqa: BLE001
                     return None
             success = True
             return result

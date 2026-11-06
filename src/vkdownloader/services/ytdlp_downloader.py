@@ -1963,14 +1963,23 @@ async def _download_with_ytdlp(
         logger.info("ytdlp_download_completed", output=str(output_file))
         if workspace is not None:
             staged = workspace.staging_dir / workspace.final_path.name
-            if not staged.exists():
+            if not staged.exists() or not staged.is_file() or staged.stat().st_size <= 0:
                 return None
             try:
+                from .ffmpeg_utils import check_ffprobe_available
+                from .media_validation import validate_media_file
                 from .workspace import (
                     acquire_publish_lock,
                     cleanup_owned_job_artifacts,
                     publish_verified_file,
                 )
+
+                if not check_ffprobe_available():
+                    return None
+                try:
+                    await validate_media_file(staged)
+                except Exception:  # noqa: BLE001
+                    return None
 
                 final_lock = acquire_publish_lock(workspace.final_path, 10.0)
                 publish_verified_file(staged, workspace.final_path, final_lock=final_lock)
@@ -1986,6 +1995,12 @@ async def _download_with_ytdlp(
                     and workspace.final_path.stat().st_size > 0
                 ):
                     return None
+                try:
+                    await validate_media_file(workspace.final_path)
+                except Exception:  # noqa: BLE001
+                    return None
+            except Exception:  # noqa: BLE001
+                return None
             except FileExistsError, OSError, FileNotFoundError:
                 return None
             return workspace.final_path

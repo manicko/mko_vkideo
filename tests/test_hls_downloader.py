@@ -295,14 +295,22 @@ class TestBlockBPreservation:
                         "vkdownloader.services.segment_downloader._merge_segments_batched",
                         return_value=output_path,
                     ):
-                        result = await download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
-                            ),
-                            settings=test_settings,
-                        )
+                        with patch(
+                            "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                            return_value=True,
+                        ):
+                            with patch(
+                                "vkdownloader.services.media_validation.validate_media_file",
+                                new_callable=AsyncMock,
+                            ):
+                                result = await download_hls_with_resume(
+                                    HLSDownloadRequest(
+                                        video_url="https://vkvideo.ru/video-12345_67890",
+                                        m3u8_url="https://example.com/video.m3u8",
+                                        output_file=output_path,
+                                    ),
+                                    settings=test_settings,
+                                )
 
         assert result == output_path
         assert not segments_dir.exists()
@@ -507,17 +515,25 @@ class TestBlockBYtDlp:
                         "vkdownloader.services.segment_downloader._merge_segments_batched",
                         return_value=output_path,
                     ) as mock_merge:
-                        result = await asyncio.wait_for(
-                            download_hls_with_resume(
-                                HLSDownloadRequest(
-                                    video_url="https://vkvideo.ru/video-12345_67890",
-                                    m3u8_url="https://example.com/video.m3u8",
-                                    output_file=output_path,
-                                ),
-                                settings=test_settings,
-                            ),
-                            timeout=5.0,
-                        )
+                        with patch(
+                            "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                            return_value=True,
+                        ):
+                            with patch(
+                                "vkdownloader.services.media_validation.validate_media_file",
+                                new_callable=AsyncMock,
+                            ):
+                                result = await asyncio.wait_for(
+                                    download_hls_with_resume(
+                                        HLSDownloadRequest(
+                                            video_url="https://vkvideo.ru/video-12345_67890",
+                                            m3u8_url="https://example.com/video.m3u8",
+                                            output_file=output_path,
+                                        ),
+                                        settings=test_settings,
+                                    ),
+                                    timeout=5.0,
+                                )
 
         assert result == output_path
         assert mock_download.call_count == 2
@@ -1982,19 +1998,27 @@ class TestParallelSegmentsDownload:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    # Call with video semaphore parameter
-                    result = await asyncio.wait_for(
-                        download_hls_with_resume(
-                            HLSDownloadRequest(
-                                video_url="https://vkvideo.ru/video-12345_67890",
-                                m3u8_url="https://example.com/video.m3u8",
-                                output_file=output_path,
-                            ),
-                            settings=test_settings,
-                            video_semaphore=video_semaphore,  # type: ignore[arg-type]
-                        ),
-                        timeout=10,
-                    )
+                    with patch(
+                        "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                        return_value=True,
+                    ):
+                        with patch(
+                            "vkdownloader.services.media_validation.validate_media_file",
+                            new_callable=AsyncMock,
+                        ):
+                            # Call with video semaphore parameter
+                            result = await asyncio.wait_for(
+                                download_hls_with_resume(
+                                    HLSDownloadRequest(
+                                        video_url="https://vkvideo.ru/video-12345_67890",
+                                        m3u8_url="https://example.com/video.m3u8",
+                                        output_file=output_path,
+                                    ),
+                                    settings=test_settings,
+                                    video_semaphore=video_semaphore,  # type: ignore[arg-type]
+                                ),
+                                timeout=10,
+                            )
 
         # Segment layer must complete without acquiring from the caller's semaphore
         assert result == output_path
@@ -3292,14 +3316,22 @@ class TestManifestBaseAddressFeedsSegments:
                     "vkdownloader.services.segment_downloader._merge_segments_batched",
                     return_value=output_path,
                 ):
-                    result = await download_hls_with_resume(
-                        HLSDownloadRequest(
-                            video_url="https://vkvideo.ru/video-12345_67890",
-                            m3u8_url="https://example.com/initial.m3u8",
-                            output_file=output_path,
-                        ),
-                        settings=test_settings,
-                    )
+                    with patch(
+                        "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                        return_value=True,
+                    ):
+                        with patch(
+                            "vkdownloader.services.media_validation.validate_media_file",
+                            new_callable=AsyncMock,
+                        ):
+                            result = await download_hls_with_resume(
+                                HLSDownloadRequest(
+                                    video_url="https://vkvideo.ru/video-12345_67890",
+                                    m3u8_url="https://example.com/initial.m3u8",
+                                    output_file=output_path,
+                                ),
+                                settings=test_settings,
+                            )
 
         assert result is not None
         assert len(captured_urls) == 2

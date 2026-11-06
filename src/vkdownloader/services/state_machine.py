@@ -70,6 +70,7 @@ _BASE_TRANSITIONS: dict[DownloadState, set[DownloadState]] = {
     DownloadState.VALIDATE_VARIANT: {DownloadState.DOWNLOAD, DownloadState.REFRESH_STREAM},
     DownloadState.DOWNLOAD: {
         DownloadState.VERIFY_MEDIA,
+        DownloadState.ALL_SEGMENTS_VERIFIED,
         DownloadState.RETRY_SAME_SEGMENT,
         DownloadState.REFRESH_STREAM,
         DownloadState.RATE_LIMIT_WAIT,
@@ -84,8 +85,21 @@ _BASE_TRANSITIONS: dict[DownloadState, set[DownloadState]] = {
     DownloadState.REFRESH_STREAM: {DownloadState.VALIDATE_VARIANT, DownloadState.DOWNLOAD},
     DownloadState.RATE_LIMIT_WAIT: {DownloadState.DOWNLOAD, DownloadState.RETRY},
     DownloadState.RETRY: {DownloadState.RESOLVE_STREAM, DownloadState.DOWNLOAD},
-    DownloadState.VERIFY_MEDIA: {DownloadState.COMMIT, DownloadState.INTEGRITY_FAILED},
+    DownloadState.VERIFY_MEDIA: {
+        DownloadState.COMMIT,
+        DownloadState.INTEGRITY_FAILED,
+        DownloadState.ALL_SEGMENTS_VERIFIED,
+        DownloadState.MERGING_IN_STAGING,
+    },
     DownloadState.COMMIT: {DownloadState.DONE},
+    DownloadState.ALL_SEGMENTS_VERIFIED: {DownloadState.MERGING_IN_STAGING},
+    DownloadState.MERGING_IN_STAGING: {DownloadState.CANDIDATE_READY},
+    DownloadState.CANDIDATE_READY: {DownloadState.VALIDATING},
+    DownloadState.VALIDATING: {DownloadState.VALIDATED, DownloadState.INTEGRITY_FAILED},
+    DownloadState.VALIDATED: {DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION},
+    DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION: {DownloadState.FINAL_COMMITTED},
+    DownloadState.FINAL_COMMITTED: {DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS},
+    DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS: {DownloadState.DONE},
 }
 
 

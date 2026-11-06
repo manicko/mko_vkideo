@@ -316,12 +316,25 @@ async def perform_download(
                         return None
                     if workspace is not None:
                         candidate = workspace.staging_dir / workspace.final_path.name
-                        if candidate.exists():
+                        if (
+                            candidate.exists()
+                            and candidate.is_file()
+                            and candidate.stat().st_size > 0
+                        ):
+                            from .ffmpeg_utils import check_ffprobe_available
+                            from .media_validation import validate_media_file
                             from .workspace import (
                                 acquire_publish_lock,
                                 cleanup_owned_job_artifacts,
                                 publish_verified_file,
                             )
+
+                            if not check_ffprobe_available():
+                                return None
+                            try:
+                                await validate_media_file(candidate)
+                            except Exception:  # noqa: BLE001
+                                return None
 
                             final_lock = acquire_publish_lock(workspace.final_path, 10.0)
                             try:
@@ -342,6 +355,10 @@ async def perform_download(
                                 and workspace.final_path.is_file()
                                 and workspace.final_path.stat().st_size > 0
                             ):
+                                return None
+                            try:
+                                await validate_media_file(workspace.final_path)
+                            except Exception:  # noqa: BLE001
                                 return None
                             return workspace.final_path
                     return staged

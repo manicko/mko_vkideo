@@ -81,6 +81,8 @@ class ErrorCode(StrEnum):
     PATH_TRAVERSAL = "path_traversal"
     WORKSPACE_LOCKED = "workspace_locked"
     WORKSPACE_INIT_FAILED = "workspace_init_failed"
+    FFPROBE_MISSING = "ffprobe_missing"
+    MEDIA_VALIDATION_FAILED = "media_validation_failed"
     UNEXPECTED_ERROR = "unexpected_error"
 
 
@@ -101,6 +103,14 @@ class DownloadState(StrEnum):
     RETRY = "retry"
     VERIFY_MEDIA = "verify_media"
     COMMIT = "commit"
+    ALL_SEGMENTS_VERIFIED = "all_segments_verified"
+    MERGING_IN_STAGING = "merging_in_staging"
+    CANDIDATE_READY = "candidate_ready"
+    VALIDATING = "validating"
+    VALIDATED = "validated"
+    ATOMIC_NO_CLOBBER_PUBLICATION = "atomic_no_clobber_publication"
+    FINAL_COMMITTED = "final_committed"
+    CLEANUP_OWNED_TEMP_ARTIFACTS = "cleanup_owned_temp_artifacts"
     DONE = "done"
     PRESERVE_AND_STOP = "preserve_and_stop"
     CANCELLED = "cancelled"

@@ -217,6 +217,23 @@ class FfmpegTransport:
                     )
                     return None
 
+                if not (
+                    output_file.exists()
+                    and output_file.is_file()
+                    and output_file.stat().st_size > 0
+                ):
+                    return None
+
+                try:
+                    from .ffmpeg_utils import check_ffprobe_available
+                    from .media_validation import validate_media_file
+
+                    if not check_ffprobe_available():
+                        return None
+                    await validate_media_file(output_file)
+                except Exception:  # noqa: BLE001
+                    return None
+
                 logger.info("ffmpeg_download_completed", output=str(output_file))
                 return output_file
             except asyncio.CancelledError:
