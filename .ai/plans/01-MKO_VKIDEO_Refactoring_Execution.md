@@ -14,8 +14,8 @@
 | C | Diagnostics | Pending | A |
 | D | output/tmp workspace | In progress (planner done) | B, C |
 | E | Durable checkpoint | Pending | B, D |
-| F | Exact quality refresh | Pending | E |
-| G | Retry state machine | Pending | C, E, F |
+| F | Exact quality refresh | Pending (planner done) | E |
+| G | Retry state machine | Pending (planner done) | C, E, F |
 | H | FFmpeg transport | Pending | D–G |
 | I | Progress/ETA | Pending | C, E, G |
 | J | Final validation/release | Pending | all |
@@ -72,6 +72,40 @@ Task spec: `.ai/tasks/task_E_checkpoint.yaml` (id: `block_e_checkpoint`).
 - `uv run ruff format --check src tests`
 - `git diff --check`
 - Commit message: `feat(checkpoint): durable per-segment checkpoint and safe content identity (Block E)`
+
+## Block F — task tracking
+Task spec: `.ai/tasks/task_F_quality_refresh.yaml` (id: `block_f_quality_refresh`).
+
+- [x] F researcher (quality/refresh architecture map, gaps, proposed StreamBinding/refresh_stream/select_exact_or_fail/QualityMismatchError, call-site updates, checkpoint interface, risks, RED test plan)
+- [x] F planner (exact edit list, interface contracts) — task spec written
+- [ ] F validator RED (tests asserting exact-quality refresh and browser unknown-height rejection; expect failure on old code)
+- [ ] F implementor (code changes + commit)
+- [ ] F auditor (data-loss/security review)
+- [ ] F validator GREEN (run tests)
+
+### Block F execution commands
+- `uv run pytest tests/test_quality_refresh.py tests/test_segment_downloader.py tests/test_hls_downloader.py tests/test_ytdlp_downloader.py tests/test_downloader.py -q`
+- `uv run ruff check src tests`
+- `uv run ruff format --check src tests`
+- `git diff --check`
+- Commit message: `feat(quality): exact-quality refresh without silent downgrade (Block F)`
+
+## Block G — task tracking
+Task spec: `.ai/tasks/task_G_retry_state_machine.yaml` (id: `block_g_retry_state_machine`).
+
+- [x] G researcher (retry layers + status semantics) — context captured in task spec
+- [x] G planner (state diagram) — task spec written
+- [ ] G validator RED (tests asserting bounded explicit retries; expect failure on old code)
+- [ ] G implementor (code changes + commit)
+- [ ] G auditor (data-loss/security review)
+- [ ] G validator GREEN (run tests)
+
+### Block G execution commands
+- `uv run pytest tests/test_state_machine.py tests/test_ytdlp_downloader.py tests/test_segment_downloader.py tests/test_downloader.py tests/test_packaging.py -q`
+- `uv run ruff check src tests`
+- `uv run ruff format --check src tests`
+- `git diff --check`
+- Commit message: `feat(retry): replace nested retries with observable download state machine (Block G)`
 
 ## Notes
 - Scope decisions: A2 HTTP fixture server and A3 baseline measurements deferred to Block J to prioritize P0 data preservation. Documented here per workflow.
