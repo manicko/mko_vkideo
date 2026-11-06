@@ -1426,8 +1426,14 @@ async def _download_segment_concurrent(
         # progress during segment downloads, not just once at merge time.
         if policy.progress_callback is not None:
             video_id = _extract_video_id(policy.video_url)
-            # Count segments downloaded so far (including existing) + result
-            downloaded = len(list(task.segments_dir.glob("*.ts")))
+            # Use checkpoint/state-machine verified counts when available.
+            if policy.checkpoint is not None:
+                try:
+                    downloaded = len(policy.checkpoint.segments)
+                except Exception:  # noqa: BLE001
+                    downloaded = len(list(task.segments_dir.glob("*.ts")))
+            else:
+                downloaded = len(list(task.segments_dir.glob("*.ts")))
             policy.progress_callback(video_id, downloaded, task.total_segments)
 
         if result and not policy.is_bounded_batch and policy.max_concurrent_segments == 1:

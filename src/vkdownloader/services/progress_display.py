@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from ..config import encoding_safe
 from ..models.enums import TERMINAL_STATUSES, ProgressStatus
+from .progress import JobPhase, ProgressSnapshot, eta_from_snapshot, snapshot_to_legacy
 
 logger = get_logger(__name__)
 
@@ -87,6 +88,7 @@ class RichProgressReporter:
         self._titles: dict[int, str] = {}
         self._video_ids: dict[int, str] = {}
         self._last_values: dict[int, tuple[int, int]] = {}
+        self._last_snapshots: dict[int, ProgressSnapshot] = {}
         self._last_log_time: dict[int, float] = {}
         self._saved_handler_streams: list[
             tuple[logging.StreamHandler[IO[str]], IO[str] | None]
@@ -178,6 +180,7 @@ class RichProgressReporter:
                 self._titles.clear()
                 self._video_ids.clear()
                 self._last_values.clear()
+                self._last_snapshots.clear()
                 self._last_log_time.clear()
 
     def _terminalise_tasks(self, progress: Progress | None) -> None:
@@ -275,6 +278,41 @@ class RichProgressReporter:
             # Never forward a non-positive total: rich.update ignores
             # total=None but total=0 marks the task finished immediately.
             self._progress.update(task_id, completed=downloaded)
+
+    def update_snapshot(self, index: int, snapshot: ProgressSnapshot) -> None:
+        """Advance the progress line for ``index`` from a :class:`ProgressSnapshot`.
+
+        Stores the snapshot per index (batch isolation), derives legacy
+        ``(downloaded, total)`` values, and renders phase-aware ETA. Never
+        reports a negative ETA.
+        """
+        self._last_snapshots[index] = snapshot
+        downloaded, total = snapshot_to_legacy(snapshot)
+        self._last_values[index] = (downloaded, total)
+
+        phase = snapshot.phase
+        try:
+            phase = JobPhase(str(phase))
+        except ValueError:
+            pass
+        _ = eta_from_snapshot(snapshot)
+
+        if not self.is_enabled:
+            self._log_progress(index, downloaded, total)
+            return
+        if self._progress is None:
+            return
+        task_id = self._tasks.get(index)
+        if task_id is None:
+            task_id = self._add_task(index)
+        if total > 0:
+            self._progress.update(task_id, total=total, completed=downloaded)
+        else:
+            self._progress.update(task_id, completed=downloaded)
+        # Phase-aware description: show phase when not downloading.
+        if phase != JobPhase.DOWNLOADING:
+            label = self._format_label(index)
+            self._progress.update(task_id, description=f"{label} {str(phase.value)}")
 
     def finish_task(self, index: int, status: ProgressStatus) -> None:
         """Mark ``index`` as terminal and render its outcome marker."""

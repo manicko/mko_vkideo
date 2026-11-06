@@ -519,11 +519,43 @@ class DownloadStateMachine:
     # ------------------------------------------------------------------ #
     # Counters helpers (Block I)
     # ------------------------------------------------------------------ #
-    def increment_verified_segment(self, bytes_count: int = 0) -> None:
-        self.job_state.verified_segments += 1
-        self.job_state.verified_bytes += int(bytes_count)
+    def update_progress_counters(
+        self,
+        *,
+        verified_segments: int | None = None,
+        expected_segments: int | None = None,
+        verified_bytes: int | None = None,
+        network_bytes: int | None = None,
+    ) -> None:
+        """Convenience accessor for progress counters.
+
+        Counters only ever move forward: a child restart may report lower
+        partial values, which are ignored so job-level counters are never
+        rolled back.
+        """
+        if verified_segments is not None:
+            if verified_segments > self.job_state.verified_segments:
+                self.job_state.verified_segments = int(verified_segments)
+        if expected_segments is not None:
+            self.job_state.expected_segments = expected_segments
+        if verified_bytes is not None:
+            if verified_bytes > self.job_state.verified_bytes:
+                self.job_state.verified_bytes = int(verified_bytes)
+        if network_bytes is not None:
+            if network_bytes > self.job_state.network_bytes_this_session:
+                self.job_state.network_bytes_this_session = int(network_bytes)
         if self.workspace is not None:
             self.persist()
+
+    def progress_counters(self) -> dict[str, object]:
+        """Return a read-only snapshot of the progress counters."""
+        return {
+            "verified_segments": self.job_state.verified_segments,
+            "expected_segments": self.job_state.expected_segments,
+            "verified_bytes": self.job_state.verified_bytes,
+            "network_bytes_this_session": self.job_state.network_bytes_this_session,
+            "attempt_id": self.job_state.attempt_id,
+        }
 
     def set_network_bytes(self, value: int) -> None:
         self.job_state.network_bytes_this_session = int(value)

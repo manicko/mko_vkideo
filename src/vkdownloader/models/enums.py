@@ -156,6 +156,21 @@ class ProgressStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class JobPhase(StrEnum):
+    """High-level phase of a download job for progress reporting.
+
+    Used by :class:`~vkdownloader.services.progress.ProgressSnapshot` to
+    distinguish active transfer from token refresh, waits, merging and
+    verification so the reporter can avoid misleading ETA/speed display.
+    """
+
+    DOWNLOADING = "downloading"
+    REFRESHING_TOKEN = "refreshing_token"
+    WAITING = "waiting"
+    MERGING = "merging"
+    VERIFYING = "verifying"
+
+
 # Terminal statuses: every member except IN_PROGRESS. Derived from the enum
 # so a newly added status is automatically terminal unless it is the
 # in-progress state, preventing this set from drifting out of sync with the

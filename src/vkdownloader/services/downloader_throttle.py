@@ -160,68 +160,38 @@ class ProgressManager:
     """
 
     def __init__(self) -> None:
-        self._state: dict[int, tuple[int, int]] = {}
+        self._state: dict[int, tuple[int, int, str]] = {}
         self._lock = asyncio.Lock()
 
-    async def update(self, url_index: int, downloaded: int, total: int) -> None:
-        """Update progress for a URL in thread-safe manner.
-
-        Args:
-            url_index: Index of the URL in the batch for tracking.
-            downloaded: Number of bytes downloaded so far.
-            total: Total bytes to download.
-        """
+    async def update(
+        self, url_index: int, downloaded: int, total: int, unit: str = "bytes"
+    ) -> None:
+        """Update progress for a URL in thread-safe manner."""
         async with self._lock:
-            self._state[url_index] = (downloaded, total)
+            self._state[url_index] = (int(downloaded), int(total), str(unit))
 
-    def update_sync(self, url_index: int, downloaded: int, total: int) -> None:
-        """Update progress for a URL from sync callbacks on the event loop thread.
-
-        This is a synchronous progress-callback update that performs a direct
-        dict assignment without lock protection. That is safe here because
-        progress callbacks in this codebase are delivered on the asyncio event
-        loop thread, not via ``loop.run_in_executor``.
-
-        Args:
-            url_index: Index of the URL in the batch for tracking.
-            downloaded: Number of bytes downloaded so far.
-            total: Total bytes to download.
-
-        Note:
-            If progress is ever updated from a thread pool or executor thread,
-            use the async ``update()`` method instead, which acquires the
-            asyncio lock.
-        """
-        self._state[url_index] = (downloaded, total)
+    def update_sync(self, url_index: int, downloaded: int, total: int, unit: str = "bytes") -> None:
+        """Update progress for a URL from sync callbacks."""
+        self._state[url_index] = (int(downloaded), int(total), str(unit))
 
     async def get_formatted_progress(self, url_count: int) -> str:
-        """Get formatted progress string for all URLs.
-
-        Args:
-            url_count: Total number of URLs in the batch.
-
-        Returns:
-            Formatted string like "video_0: 25B/100B, video_1: 45/100".
-            Units are detected heuristically: values exceeding 1024 are
-            treated as byte counts and formatted with SI prefixes (B/KB/MB/etc.);
-            smaller totals are treated as segment counts and displayed
-            numerically. When total is 0 (unknown), only downloaded bytes are shown.
-        """
+        """Get formatted progress string for all URLs."""
         async with self._lock:
             progress_lines = []
             for i in range(url_count):
-                downloaded, total = self._state.get(i, (0, 0))
-                if total <= 0:
-                    # Unknown total: byte-based progress (yt-dlp/ffmpeg streams in)
-                    progress_lines.append(f"video_{i}: {format_bytes(downloaded)}")
-                elif total > 1024:
-                    # Byte-based progress (yt-dlp/ffmpeg)
-                    progress_lines.append(
-                        f"video_{i}: {format_bytes(downloaded)}/{format_bytes(total)}"
-                    )
+                downloaded, total, unit = self._state.get(i, (0, 0, "bytes"))
+                if unit == "segments":
+                    if total and total > 0:
+                        progress_lines.append(f"video_{i}: {downloaded}/{total} segments")
+                    else:
+                        progress_lines.append(f"video_{i}: {downloaded} segments")
                 else:
-                    # Segment-count-based progress
-                    progress_lines.append(f"video_{i}: {downloaded}/{total} segments")
+                    if total and total > 0:
+                        progress_lines.append(
+                            f"video_{i}: {format_bytes(downloaded)}/{format_bytes(total)}"
+                        )
+                    else:
+                        progress_lines.append(f"video_{i}: {format_bytes(downloaded)}")
             return ", ".join(progress_lines)
 
     async def clear(self) -> None:

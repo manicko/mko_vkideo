@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import math
 import os
 import re
 import shutil
@@ -658,7 +659,7 @@ _YTDLP_PROGRESS_RE = re.compile(
     r"(?P<pct>\d+(?:\.\d+)?)%\s+of\s+"
     r"(?P<estimate>~)?\s*"
     r"(?P<size>\d+(?:\.\d+)?)"
-    r"(?P<size_unit>[KMG]?i?B)"
+    r"(?P<size_unit>[KMGT]?i?B)"
     r"\s+at\s+"
     r"(?P<speed>.+?)"
     r"\s+ETA\s+"
@@ -711,6 +712,55 @@ class ProgressState:
     fragment_index: int = 0
     fragment_count: int = 0
     is_estimate: bool = False
+    eta_seconds: float | None = None
+
+
+def _parse_ytdlp_eta(text: str) -> float | None:
+    """Parse a yt-dlp ETA token defensively.
+
+    Accepts ``MM:SS`` and ``HH:MM:SS``. Returns ``None`` for dashes,
+    ``Unknown``, empty, unparseable or negative values.
+    """
+    if text is None:
+        return None
+    token = str(text).strip()
+    if not token:
+        return None
+    if token.lower() in {"unknown", "n/a"}:
+        return None
+    if token in {"--:--:--", "--:--", "-"}:
+        return None
+    if token.startswith("-"):
+        return None
+    if ":" in token:
+        parts = token.split(":")
+        try:
+            values = [int(p) for p in parts]
+        except ValueError:
+            return None
+        if len(values) == 2:
+            hours = 0
+            minutes, seconds = values
+        elif len(values) == 3:
+            hours, minutes, seconds = values
+        else:
+            return None
+        if any(v < 0 for v in values):
+            return None
+        # Reject obviously malformed minute/second fields.
+        if seconds > 59 or minutes > 59:
+            return None
+        total = hours * 3600 + minutes * 60 + seconds
+        if total < 0:
+            return None
+        return float(total)
+    try:
+        value = float(token)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
 
 
 def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
@@ -729,13 +779,28 @@ def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
     """
     match = _YTDLP_PROGRESS_RE.search(line)
     if match is not None:
-        pct = float(match.group("pct"))
+        try:
+            pct = float(match.group("pct"))
+        except ValueError:
+            return None
+        if pct < 0 or pct > 100:
+            return None
         size = float(match.group("size"))
         size_unit = match.group("size_unit")
         multiplier = _SIZE_UNITS.get(size_unit, 1)
         total = int(size * multiplier)
         downloaded = int(total * pct / 100)
-        is_estimate = match.group("estimate") is not None
+        if downloaded > total:
+            downloaded = total
+            is_estimate = True
+        else:
+            is_estimate = match.group("estimate") is not None
+        # TiB/TB totals (or >= 1 TiB) are estimates.
+        if size_unit in ("TiB", "TB") or total >= (1 << 40):
+            is_estimate = True
+        if match.group("estimate") is not None:
+            is_estimate = True
+        eta_seconds = _parse_ytdlp_eta(match.group("eta"))
         frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
         fragment_index = int(frag_match.group(1)) if frag_match else 0
         fragment_count = (
@@ -747,11 +812,12 @@ def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
             fragment_index=fragment_index,
             fragment_count=fragment_count,
             is_estimate=is_estimate,
+            eta_seconds=eta_seconds,
         )
 
     # Byte-count progress lines carry a measured byte count but no total.
     byte_match = re.search(
-        r"\[download\]\s+(?P<size>\d+(?:\.\d+)?)(?P<size_unit>[KMG]?i?B)\s+at\b", line
+        r"\[download\]\s+(?P<size>\d+(?:\.\d+)?)(?P<size_unit>[KMGT]?i?B)\s+at\b", line
     )
     if byte_match is not None:
         size = float(byte_match.group("size"))
@@ -774,17 +840,29 @@ def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
     # Percent-only fallback lines carry no size at all.
     pct_match = re.search(r"\[download\]\s+(?P<pct>N/A|\d+(?:\.\d+)?)%\s+at\b", line)
     if pct_match is not None:
+        pct_token = pct_match.group("pct")
+        if pct_token != "N/A":
+            try:
+                pct_val = float(pct_token)
+            except ValueError:
+                return None
+            if pct_val < 0 or pct_val > 100:
+                return None
         frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
         fragment_index = int(frag_match.group(1)) if frag_match else 0
         fragment_count = (
             int(frag_match.group(2)) if frag_match and frag_match.group(2) is not None else 0
         )
+        # Try to parse ETA if present.
+        eta_match = re.search(r"ETA\s+(?P<eta>\S+)", line)
+        eta_seconds = _parse_ytdlp_eta(eta_match.group("eta")) if eta_match else None
         return ProgressState(
             downloaded=0,
             total=0,
             fragment_index=fragment_index,
             fragment_count=fragment_count,
             is_estimate=False,
+            eta_seconds=eta_seconds,
         )
 
     return None
@@ -1058,6 +1136,7 @@ async def download_with_ytdlp_with_resume_fallback(
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
@@ -1142,10 +1221,12 @@ async def download_with_ytdlp_with_resume_fallback(
             cookies,
             raw_cookies,
             progress_callback,
+            progress_snapshot_callback=progress_snapshot_callback,
             echo=echo,
             diagnostic_sink=diagnostic_sink,
             attempt_id=attempt_id,
             workspace=workspace,
+            state_machine=state_machine,
         )
 
         if result:
@@ -1257,6 +1338,7 @@ async def _attempt_segment_resume(
     backoff_coordinator: URLBackoffCoordinator | None,
     video_semaphore: SemaphoreLike | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
     workspace: DownloadWorkspace | None = None,
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
@@ -1492,11 +1574,13 @@ async def _download_with_ytdlp(
     cookies: str | None = None,
     raw_cookies: list[Cookie] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
     *,
     echo: bool = True,
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Download video using yt-dlp via subprocess.
 
@@ -1632,6 +1716,45 @@ async def _download_with_ytdlp(
                             )
                         else:
                             progress_callback(video_id, progress_state.downloaded, 0)
+                    if progress_state is not None and progress_snapshot_callback is not None:
+                        try:
+                            from .progress import JobPhase, ProgressSnapshot
+
+                            sm = state_machine
+                            job_id = sm.job_state.job_id if sm is not None else video_id
+                            verified_segments = (
+                                sm.job_state.verified_segments if sm is not None else 0
+                            )
+                            expected_segments = (
+                                sm.job_state.expected_segments
+                                if sm is not None
+                                else (progress_state.fragment_count or None)
+                            )
+                            verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                            network_bytes = (
+                                sm.job_state.network_bytes_this_session
+                                if sm is not None
+                                else progress_state.downloaded
+                            )
+                            attempt = (
+                                sm.job_state.attempt_id if sm is not None else (attempt_id or 0)
+                            )
+                            snapshot = ProgressSnapshot(
+                                job_id=str(job_id),
+                                phase=JobPhase.DOWNLOADING,
+                                verified_segments=int(verified_segments or 0),
+                                expected_segments=expected_segments,
+                                verified_bytes_on_disk=int(verified_bytes or 0),
+                                network_bytes_this_session=int(network_bytes or 0),
+                                eta_seconds=progress_state.eta_seconds,
+                                is_estimate=progress_state.is_estimate,
+                                attempt_id=int(attempt or 0),
+                                child_fragment_index=progress_state.fragment_index,
+                                child_fragment_count=progress_state.fragment_count,
+                            )
+                            progress_snapshot_callback(video_id, snapshot)
+                        except Exception:  # noqa: BLE001
+                            pass
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be
@@ -1676,6 +1799,45 @@ async def _download_with_ytdlp(
                             )
                         else:
                             progress_callback(video_id, progress_state.downloaded, 0)
+                    if progress_state is not None and progress_snapshot_callback is not None:
+                        try:
+                            from .progress import JobPhase, ProgressSnapshot
+
+                            sm = state_machine
+                            job_id = sm.job_state.job_id if sm is not None else video_id
+                            verified_segments = (
+                                sm.job_state.verified_segments if sm is not None else 0
+                            )
+                            expected_segments = (
+                                sm.job_state.expected_segments
+                                if sm is not None
+                                else (progress_state.fragment_count or None)
+                            )
+                            verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                            network_bytes = (
+                                sm.job_state.network_bytes_this_session
+                                if sm is not None
+                                else progress_state.downloaded
+                            )
+                            attempt = (
+                                sm.job_state.attempt_id if sm is not None else (attempt_id or 0)
+                            )
+                            snapshot = ProgressSnapshot(
+                                job_id=str(job_id),
+                                phase=JobPhase.DOWNLOADING,
+                                verified_segments=int(verified_segments or 0),
+                                expected_segments=expected_segments,
+                                verified_bytes_on_disk=int(verified_bytes or 0),
+                                network_bytes_this_session=int(network_bytes or 0),
+                                eta_seconds=progress_state.eta_seconds,
+                                is_estimate=progress_state.is_estimate,
+                                attempt_id=int(attempt or 0),
+                                child_fragment_index=progress_state.fragment_index,
+                                child_fragment_count=progress_state.fragment_count,
+                            )
+                            progress_snapshot_callback(video_id, snapshot)
+                        except Exception:  # noqa: BLE001
+                            pass
             except DownloadError as exc:
                 # The reader met a line longer than its limit. It drained the
                 # pipe first, so this task completing is what lets the child be

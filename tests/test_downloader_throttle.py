@@ -861,7 +861,7 @@ class TestProgressManager:
     async def test_update_stores_progress(self) -> None:
         """Test that update stores progress for a URL index."""
         manager = ProgressManager()
-        await manager.update(0, 25, 100)
+        await manager.update(0, 25, 100, unit="segments")
 
         result = await manager.get_formatted_progress(1)
         assert "video_0: 25/100" in result
@@ -870,8 +870,8 @@ class TestProgressManager:
     async def test_update_multiple_urls(self) -> None:
         """Test that update handles multiple URLs independently."""
         manager = ProgressManager()
-        await manager.update(0, 25, 100)
-        await manager.update(1, 50, 200)
+        await manager.update(0, 25, 100, unit="segments")
+        await manager.update(1, 50, 200, unit="segments")
 
         result = await manager.get_formatted_progress(2)
         assert "video_0: 25/100" in result
@@ -901,8 +901,8 @@ class TestProgressManager:
     async def test_overwrites_existing_progress(self) -> None:
         """Test that update overwrites existing progress for same index."""
         manager = ProgressManager()
-        await manager.update(0, 25, 100)
-        await manager.update(0, 75, 100)
+        await manager.update(0, 25, 100, unit="segments")
+        await manager.update(0, 75, 100, unit="segments")
 
         result = await manager.get_formatted_progress(1)
         assert "video_0: 75/100" in result

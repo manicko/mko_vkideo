@@ -14,6 +14,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from structlog import get_logger
 
@@ -230,10 +231,15 @@ async def _download_single(
     # The reporter methods are themselves no-ops when disabled (non-TTY), so
     # the ``if reporter is not None`` guard only handles the single-download
     # path where no context (and therefore no reporter) exists.
-    def _on_progress(video_id: str, downloaded: int, total: int) -> None:
+    def _on_progress(
+        video_id: str, downloaded: int = 0, total: int = 0, snapshot: Any = None
+    ) -> None:
         if reporter is not None:
             reporter.set_video_id(index, video_id)
-            reporter.update(index, downloaded, total)
+            if snapshot is not None:
+                reporter.update_snapshot(index, snapshot)
+            else:
+                reporter.update(index, downloaded, total)
 
     def _on_title(sanitized_title: str) -> None:
         if reporter is not None:
