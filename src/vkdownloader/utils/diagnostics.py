@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import logging.handlers
@@ -11,7 +12,6 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from vkdownloader.config import Settings
 from vkdownloader.utils.url_sanitizer import sanitize_for_log, sanitize_text_for_log
@@ -71,14 +71,14 @@ class DiagnosticContext:
     host: str | None = None
     path: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
 class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that keeps rotated/new files owner-only on POSIX."""
 
-    def _open(self):
+    def _open(self) -> io.TextIOWrapper:
         stream = super()._open()
         try:
             os.chmod(self.baseFilename, 0o600)
@@ -181,7 +181,7 @@ class ChildTranscriptSink:
             self._handler = None
 
 
-def open_diagnostic_sink(path: object, settings: Settings) -> ChildTranscriptSink | None:
+def open_diagnostic_sink(path: str | Path, settings: Settings) -> ChildTranscriptSink | None:
     if path is None:
         return None
     if not getattr(settings, "diagnostics_enabled", True):

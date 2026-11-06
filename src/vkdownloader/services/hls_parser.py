@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -26,7 +25,7 @@ class UnsupportedHLSFeatureError(ValueError):
     """Raised when an HLS feature is not supported by this parser."""
 
 
-class HLSMediaSegment(BaseModel):
+class HLSMediaSegment(BaseModel):  # type: ignore[explicit-any]
     model_config = ConfigDict(extra="forbid")
 
     index: int = Field(ge=0)
@@ -57,7 +56,7 @@ class HLSMediaSegment(BaseModel):
         return self.init_map_uri
 
 
-class HLSVariantIdentity(BaseModel):
+class HLSVariantIdentity(BaseModel):  # type: ignore[explicit-any]
     model_config = ConfigDict(extra="forbid")
 
     variant_id: str
@@ -77,7 +76,7 @@ class HLSVariantIdentity(BaseModel):
         return self.uri
 
 
-class HLSMediaPlaylist(BaseModel):
+class HLSMediaPlaylist(BaseModel):  # type: ignore[explicit-any]
     model_config = ConfigDict(extra="forbid")
 
     media_sequence: int = 0
@@ -98,7 +97,7 @@ class HLSMediaPlaylist(BaseModel):
 
     @field_validator("segments", mode="before")
     @classmethod
-    def _ensure_list(cls, value: Any) -> object:
+    def _ensure_list(cls, value: object) -> object:
         return value if value is not None else []
 
     @property
@@ -352,7 +351,7 @@ def normalize_segment_uri(uri: str, base_url: str | None = None) -> str:
     return uri
 
 
-def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
+def compute_playlist_fingerprint(*args: object, **kwargs: object) -> str:
     """Compute a structural fingerprint excluding URLs and tokens."""
     variant = kwargs.get("variant") or kwargs.get("variant_identity")
     playlist = kwargs.get("playlist") or kwargs.get("media_playlist")
@@ -420,11 +419,11 @@ def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
     else:
         # Allow passing segments list via kwargs.
         segs = kwargs.get("segments")
-        if segs:
+        if isinstance(segs, (list, tuple)):
             for idx, seg in enumerate(segs):
                 if hasattr(seg, "duration"):
                     segments_data.append(
-                        (
+                        (  # type: ignore[arg-type]
                             idx,
                             getattr(seg, "duration", None),
                             getattr(seg, "byte_range", None),
@@ -439,7 +438,21 @@ def compute_playlist_fingerprint(*args: Any, **kwargs: Any) -> str:
                         )
                     )
                 else:
-                    segments_data.append((idx, seg))
+                    segments_data.append(
+                        (
+                            idx,
+                            getattr(seg, "duration", 0.0) if hasattr(seg, "duration") else 0.0,
+                            None,
+                            None,
+                            None,
+                            False,
+                            0,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    )
 
     structural = {
         "variant_id": variant_id,

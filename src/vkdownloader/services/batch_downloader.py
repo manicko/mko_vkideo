@@ -16,9 +16,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from vkdownloader.services.progress import ProgressSnapshot
+    pass
 
 from pathlib import Path
+
 from structlog import get_logger
 
 from ..config import Settings

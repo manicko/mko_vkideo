@@ -2,23 +2,23 @@
 
 **Source plan:** `.ai/plans/MKO_VKIDEO_Refactoring_Plan.md`
 **Baseline SHA:** `665c6ac0e8e8a9d26b69ae12e608db829ba212a2`
-**Current HEAD:** `35114866e8ae6eda3f9cf3009f3bce4a6705979d`
+**Current HEAD:** `283f4157ae6d7dbb6f1a3df32e5ebad5c81c0da4`
 **Code context:** produced by Auditor (session). See auditor report in conversation.
 
 ## Blocks (from source plan §3)
 
 | # | Block | Status | Depends |
 |---|-------|--------|---------|
-| A | Baseline, commit forensics, test harness | Partial (A1 forensics done by auditor; A2/A3 deferred) | none |
-| B | Preserve partials, prohibit destructive cleanup | In progress | A |
-| C | Diagnostics | Pending | A |
-| D | output/tmp workspace | In progress (planner done) | B, C |
-| E | Durable checkpoint | Pending | B, D |
-| F | Exact quality refresh | Pending (planner done) | E |
-| G | Retry state machine | Pending (planner done) | C, E, F |
-| H | FFmpeg transport | Pending | D–G |
-| I | Progress/ETA | Pending | C, E, G |
-| J | Final validation/release | Pending | all |
+| A | Baseline, commit forensics, test harness | Partial (A1 forensics done by auditor; A2/A3 deferred to J) | none |
+| B | Preserve partials, prohibit destructive cleanup | Complete | A |
+| C | Diagnostics | Complete | A |
+| D | output/tmp workspace | Complete | B, C |
+| E | Durable checkpoint | Complete | B, D |
+| F | Exact quality refresh | Complete | E |
+| G | Retry state machine | Complete | C, E, F |
+| H | FFmpeg transport | Complete | D–G |
+| I | Progress/ETA | Complete | C, E, G |
+| J | Final validation/release | Pending (planner done) | all |
 
 ## Block B — task tracking
 
@@ -106,6 +106,48 @@ Task spec: `.ai/tasks/task_G_retry_state_machine.yaml` (id: `block_g_retry_state
 - `uv run ruff format --check src tests`
 - `git diff --check`
 - Commit message: `feat(retry): replace nested retries with observable download state machine (Block G)`
+
+## Block I — task tracking
+
+Task spec: `.ai/tasks/task_I_progress_eta.yaml` (id: `block_i_progress_eta`).
+
+- [x] I researcher (progress architecture map, gaps, proposed ProgressSnapshot/JobPhase, ETA policy, minimal change set, risks, RED test plan) — context captured in `.ai/audit/block_i_research.md`
+- [x] I planner (exact edit list, interface contracts) — task spec written
+- [ ] I validator RED (tests asserting trustworthy progress/ETA; expect failure on old code)
+- [ ] I implementor (code changes + commit)
+- [ ] I auditor (unit semantics/race review)
+- [ ] I validator GREEN (run tests)
+
+### Block I execution commands
+- `uv run pytest tests/test_progress.py tests/test_hls_downloader.py tests/test_progress_display.py tests/test_downloader_throttle.py tests/test_batch_downloader.py tests/test_segment_downloader.py tests/test_packaging.py -q`
+- `uv run ruff check src tests`
+- `uv run ruff format --check src tests`
+- `git diff --check`
+- Commit message: `feat(progress): trustworthy progress, bytes, speed and ETA (Block I)`
+
+## Block J — task tracking
+
+Task spec: `.ai/tasks/task_J_final_validation_release.yaml` (id: `block_j_final_validation_release`).
+
+- [x] J planner (release checklist, acceptance matrix, verification commands, known gaps) — task spec written
+- [ ] J researcher (dependency/version cross-check)
+- [ ] J validator (all tests + benchmarks)
+- [ ] J auditor (independent final review)
+- [ ] J implementer (only targeted fixes)
+- [ ] J validator (rerun final matrix)
+
+### Block J execution commands
+- `uv sync`
+- `uv run pytest -q`
+- `uv run ruff check .`
+- `uv run ruff check src tests`
+- `uv run ruff format --check .`
+- `uv run ruff format --check src tests`
+- `uv run mypy src`
+- `git diff --check`
+- `uv run pytest tests -q`
+- `ffprobe -v error -show_entries format=duration,size -show_entries stream=index,codec_type,codec_name,width,height -of json "C:\\data\\Video\\Shows\\<completed-file>.mp4"`
+- Commit message (targeted fixes): `fix(integration): close Block J verification gaps (Block J)`
 
 ## Notes
 - Scope decisions: A2 HTTP fixture server and A3 baseline measurements deferred to Block J to prioritize P0 data preservation. Documented here per workflow.

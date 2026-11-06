@@ -7,7 +7,6 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from structlog import get_logger
@@ -17,7 +16,7 @@ logger = get_logger(__name__)
 CHECKPOINT_SCHEMA_VERSION = 1
 
 
-class SegmentRecord(BaseModel):
+class SegmentRecord(BaseModel):  # type: ignore[explicit-any]
     """Content identity for a single persisted segment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -36,7 +35,7 @@ class SegmentRecord(BaseModel):
     generation_id: str
 
 
-class JobCheckpoint(BaseModel):
+class JobCheckpoint(BaseModel):  # type: ignore[explicit-any]
     """Versioned checkpoint for one download job."""
 
     model_config = ConfigDict(extra="forbid")
@@ -107,7 +106,7 @@ def confine_relative_path(relative: str | Path, segments_dir: str | Path) -> Pat
 validate_relative_file = confine_relative_path
 
 
-def _coerce_checkpoint(payload: Any) -> JobCheckpoint | None:
+def _coerce_checkpoint(payload: object) -> JobCheckpoint | None:
     if isinstance(payload, JobCheckpoint):
         return payload
     if hasattr(payload, "model_dump"):
@@ -152,16 +151,17 @@ def read_checkpoint(
 load_checkpoint = read_checkpoint
 
 
-def write_state_atomic(path: str | Path, payload: Any) -> None:
+def write_state_atomic(path: str | Path, payload: object) -> None:
     """Atomically write *payload* as JSON to *path*."""
     write_checkpoint_atomic(path, payload)
 
 
-def write_checkpoint_atomic(path: str | Path, payload: Any) -> None:
+def write_checkpoint_atomic(path: str | Path, payload: object) -> None:
     """Atomically write *payload* as JSON to *path*."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    data: object
     if isinstance(payload, JobCheckpoint):
         data = payload.model_dump(mode="json")
     elif hasattr(payload, "model_dump"):
@@ -220,7 +220,7 @@ def verify_segment_record(record: SegmentRecord, segments_dir: str | Path) -> bo
 
 def verify_checkpoint(
     checkpoint: JobCheckpoint,
-    *args: Any,
+    *args: object,
     stream_variant_id: str | None = None,
     playlist_fingerprint: str | None = None,
     init_map_identity: str | None = None,
@@ -229,7 +229,7 @@ def verify_checkpoint(
     generation_id: str | None = None,
     video_id: str | None = None,
     quality_requested: str | None = None,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> bool:
     """Return True if checkpoint matches the supplied identity fields."""
     try:
@@ -247,11 +247,17 @@ def verify_checkpoint(
 
         # kwargs aliases
         if stream_variant_id is None:
-            stream_variant_id = kwargs.get("variant_id") or kwargs.get("stream_variant_id")
+            val = kwargs.get("variant_id") or kwargs.get("stream_variant_id")
+            if isinstance(val, str):
+                stream_variant_id = val
         if playlist_fingerprint is None:
-            playlist_fingerprint = kwargs.get("fingerprint") or kwargs.get("playlist_fingerprint")
+            val = kwargs.get("fingerprint") or kwargs.get("playlist_fingerprint")
+            if isinstance(val, str):
+                playlist_fingerprint = val
         if init_map_identity is None:
-            init_map_identity = kwargs.get("init_map_identity")
+            val = kwargs.get("init_map_identity")
+            if isinstance(val, str):
+                init_map_identity = val
 
         if checkpoint.schema_version != CHECKPOINT_SCHEMA_VERSION:
             return False
@@ -282,7 +288,7 @@ def verify_checkpoint(
         return False
 
 
-def _sanitize_generation_id(generation_id: Any) -> str:
+def _sanitize_generation_id(generation_id: object) -> str:
     """Return a single safe path component for *generation_id*.
 
     Rejects separators, ``.``, ``..``, empty values, and NUL bytes, falling
@@ -313,8 +319,8 @@ def quarantine_generation(
     segments_dir: str | Path,
     generation_id: str | None = None,
     checkpoint: JobCheckpoint | None = None,
-    *args: Any,
-    **kwargs: Any,
+    *args: object,
+    **kwargs: object,
 ) -> Path:
     """Rename *segments_dir* to a quarantine sibling and recreate it.
 
@@ -329,9 +335,13 @@ def quarantine_generation(
         if isinstance(args[0], str):
             generation_id = args[0]
         elif isinstance(args[0], JobCheckpoint):
-            generation_id = getattr(args[0], "generation_id", None)
+            g = getattr(args[0], "generation_id", None)
+            if isinstance(g, str):
+                generation_id = g
     if generation_id is None:
-        generation_id = kwargs.get("generation_id")
+        val = kwargs.get("generation_id")
+        if isinstance(val, str):
+            generation_id = val
 
     gen = _sanitize_generation_id(generation_id)
 
@@ -354,14 +364,14 @@ def quarantine_generation(
 
 
 def upsert_segment_record(
-    *args: Any,
+    *args: object,
     state_path: str | Path | None = None,
     segments_dir: str | Path | None = None,
     write: bool = False,
     checkpoint: JobCheckpoint | None = None,
     record: SegmentRecord | None = None,
     key: str | int | None = None,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> JobCheckpoint:
     """Insert or replace a segment record in a checkpoint."""
     # Resolve positional arguments flexibly.
@@ -395,13 +405,21 @@ def upsert_segment_record(
         state_path = positional_state_path
 
     if checkpoint is None and "checkpoint" in kwargs:
-        checkpoint = kwargs.pop("checkpoint")
+        val = kwargs.pop("checkpoint")
+        if isinstance(val, JobCheckpoint):
+            checkpoint = val
     if record is None and "record" in kwargs:
-        record = kwargs.pop("record")
+        val = kwargs.pop("record")
+        if isinstance(val, SegmentRecord):
+            record = val
     if key is None and "index" in kwargs:
-        key = kwargs.pop("index")
+        val = kwargs.pop("index")
+        if isinstance(val, (str, int)):
+            key = val
     if state_path is None and "path" in kwargs:
-        state_path = kwargs.pop("path")
+        val = kwargs.pop("path")
+        if isinstance(val, (str, Path)):
+            state_path = val
 
     if checkpoint is None:
         raise ValueError("checkpoint is required")

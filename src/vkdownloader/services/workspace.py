@@ -16,7 +16,6 @@ import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
 
 from structlog import get_logger
 

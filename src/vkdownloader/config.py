@@ -625,7 +625,7 @@ def encoding_safe(stream: IO[str]) -> IO[str]:
 class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that keeps rotated/new files owner-only on POSIX."""
 
-    def _open(self):
+    def _open(self) -> io.TextIOWrapper:
         stream = super()._open()
         try:
             os.chmod(self.baseFilename, 0o600)
@@ -719,7 +719,7 @@ def setup_logging(settings: Settings | None = None) -> None:
 
     # Be tolerant of incomplete settings objects (e.g. test mocks): fall back
     # to INFO when log_level is not a real LogLevel.
-    log_level = settings.log_level
+    log_level: object = settings.log_level
     try:
         from .models.enums import LogLevel as _LogLevel
 
