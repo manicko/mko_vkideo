@@ -178,3 +178,7 @@ Available qualities: 106p, 178p, 268p, 358p, 536p, 804p, 1072p, 1610p
    In `batch`, the same condition reports that URL as failed with the `quality_not_available` status label in the summary, and the command exits `1`.
 
 This ensures users are informed when their quality preference cannot be met, rather than silently receiving a different one.
+
+## Preservation Across Refresh and Resume
+
+Exact quality is preserved across token refresh, retry, resume, and backend selection. If the requested height cannot be verified, the download fails explicitly with the available ladder and preserves partial data. See the [Troubleshooting Guide](../11-guides/troubleshooting.md#exact-quality-failures).

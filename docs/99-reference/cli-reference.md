@@ -66,7 +66,7 @@ vkdownloader download [OPTIONS] URL
 | `--log-file` | | Path | _none_ | Log file path; writes structured JSON logs to this file instead of stderr (env: `VKDOWNLOADER_LOG_FILE`; overrides `.env`) |
 | `--quality` | | str | `best` | Video quality: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded video |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `auto`, or `ffmpeg`. `ffmpeg` is an optional, user-opt-in direct HLS transport; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -86,7 +86,7 @@ The log **destination** defaults to stderr; pass `--log-file PATH` to write stru
 |------|-----------|
 | `0` | Success — video downloaded successfully. |
 | `1` | Download failure — the command ran and failed: invalid URL, download error, or missing streams. |
-| `2` | Usage error — rejected before the command body ran: unknown option/command, `--method ffmpeg` rejection, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, or the missing `URL` argument. Nothing was attempted and no file was created. |
+| `2` | Usage error — rejected before the command body ran: unknown option/command, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, or the missing `URL` argument. Nothing was attempted and no file was created. |
 | `3` | Configuration error — the operator's setup is wrong: an out-of-range `--max-retries` (bounds 1-10, enforced by the `Settings` model), or a preamble failure (a malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |
 | `130` | Interrupted by user (Ctrl+C). |
 | `4`-`129`, `131`+ | Unallocated — reserved for future use. |
@@ -136,7 +136,7 @@ vkdownloader batch [OPTIONS] URLS_FILE
 | `--log-file` | | Path | _none_ | Log file path; writes structured JSON logs to this file instead of stderr (env: `VKDOWNLOADER_LOG_FILE`; overrides `.env`) |
 | `--quality` | | str | `best` | Video quality for all downloads: `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`) |
 | `--output` | `-o` | Path | `.` | Output directory for downloaded videos |
-| `--method` | `-m` | str | `auto` | Download method: `yt-dlp` or `auto`. The ffmpeg download method was removed; ffmpeg is still required to merge downloaded segments. |
+| `--method` | `-m` | str | `auto` | Download method: `yt-dlp`, `auto`, or `ffmpeg`. `ffmpeg` is an optional, user-opt-in direct HLS transport; ffmpeg is still required to merge downloaded segments. |
 | `--cookie-source` | `-c` | str | `none` | Cookie strategy: `none` or `browser` |
 | `--ssl-verify/--no-ssl-verify` | | bool | `true` | Verify SSL certificates for CDN connections. **Warning:** `--no-ssl-verify` disables certificate verification and should only be used for debugging or in isolated environments. |
 
@@ -181,7 +181,7 @@ When the output stream is not a terminal (piped, redirected, or CI) the display 
 |------|-----------|
 | `0` | Success — no failures or cancellations; skipped duplicate items do not affect the exit code. |
 | `1` | Download failure — the command ran and failed: no URLs found in the file, unreadable URL file, or an error occurred during the batch. |
-| `2` | Usage error — rejected before the command body ran: unknown option/command, `--method ffmpeg` rejection, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was attempted and no file was created. |
+| `2` | Usage error — rejected before the command body ran: unknown option/command, an invalid `--cookie-source` / `--method` value, a `--quality` token that is neither `best` / `worst` / `unknown` nor a positive height, the missing `URLS_FILE` argument, or a `URLS_FILE` path that does not exist (the argument is declared with `exists=True`). Nothing was attempted and no file was created. |
 | `3` | Configuration error — the operator's setup is wrong: an out-of-range `--max-retries` (bounds 1-10, enforced by the `Settings` model), or a preamble failure (a malformed `.env`, a setting the model rejects, or a log directory that cannot be created). |
 | `130` | Interrupted by user (Ctrl+C). |
 | `4`-`129`, `131`+ | Unallocated — reserved for future use. |
@@ -257,8 +257,9 @@ Available method values for `--method` option:
 |-------|-------------|
 | `yt-dlp` | Uses yt-dlp for download with automatic segment-based resume on failure |
 | `auto` | Downloads via yt-dlp, falls back to segment download on failure (default) |
+| `ffmpeg` | Optional, user-opt-in direct FFmpeg HLS transport. Non-destructive: output is staged under `output/tmp` and published only after validation; a failure does not discard yt-dlp partials. Distinct from the FFmpeg merge/remux step used by segment downloads. |
 
-The `ffmpeg` download method was removed. yt-dlp is the only download transport; `ffmpeg` is still required to merge downloaded segments.
+Direct FFmpeg is independent of checkpoint and temporary-workspace improvements: disable it by choosing `yt-dlp` or `auto`; those improvements remain available for every method.
 
 ---
 
@@ -334,6 +335,88 @@ vkdownloader --show-completion
 Supports: Bash, Zsh, Fish, and PowerShell.
 
 ---
+
+## Temporary Workspace, Logs, and Diagnostics
+
+Every new download creates a per-job workspace automatically under the output directory:
+
+```text
+<output>/tmp/jobs/<job-id>/
+<output>/tmp/logs/<job-id>.jsonl
+```
+
+- In-progress artifacts (yt-dlp fragments, segments, staging) live only under `tmp/`.
+- A redacted per-job diagnostic log is created automatically under `output/tmp/logs/<job-id>.jsonl` when diagnostics are enabled (default). `--log-file` adds or overrides the structured application log destination; per-job logs remain separate.
+- Logs are retained even on success, with rotation (`VKDOWNLOADER_LOG_MAX_BYTES`, `VKDOWNLOADER_LOG_BACKUP_COUNT`).
+- Failed or cancelled jobs keep their usable temp data for resume.
+
+### View the log location
+
+```bash
+# Linux/macOS
+ls output/tmp/logs
+
+# Windows PowerShell
+Get-ChildItem -LiteralPath "output\tmp\logs"
+```
+
+### Redacted diagnostics bundle (dry run)
+
+Collect filenames and sizes plus the JSONL logs. Do not include cookies or signed URLs:
+
+```bash
+# Linux/macOS
+find output/tmp/jobs -type f -printf '%p %s bytes\n' | sort
+
+# Windows PowerShell
+Get-ChildItem -LiteralPath "output\tmp\jobs" -Recurse -File | Select-Object FullName, Length
+```
+
+Check that no signed URL parameters or cookie values are present before sharing:
+
+```bash
+grep -E 'sig=|expires=|cookie' output/tmp/logs/*.jsonl || true
+```
+
+### Manual cleanup of abandoned job folders
+
+There is no irreversible automatic cleanup of incomplete jobs. Inspect first (dry run):
+
+```bash
+# Linux/macOS
+du -sh output/tmp/jobs/* 2>/dev/null
+
+# Windows PowerShell
+Get-ChildItem -LiteralPath "output\tmp\jobs" -Directory | ForEach-Object {
+    $size = (Get-ChildItem -LiteralPath $_.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
+    [PSCustomObject]@{ Job = $_.Name; Bytes = $size }
+}
+```
+
+Delete a specific abandoned job only after confirming no process holds its lock:
+
+```bash
+# Linux/macOS
+rm -rf output/tmp/jobs/<job-id>
+
+# Windows PowerShell
+Remove-Item -LiteralPath "output\tmp\jobs\<job-id>" -Recurse -Force
+```
+
+### Resume behavior
+
+- The checkpoint (`state.json`) records verified segments.
+- Each segment is verified by size and SHA-256 before reuse.
+- A token-only URL change reuses compatible segments; there is no false restart at byte zero.
+- If media identity changes, the old generation is quarantined instead of being mixed or deleted.
+
+### Exact-quality failures
+
+`--quality 1440` (or any other height) is an exact match. If that height is unavailable, the command fails with exit code `1` and lists the qualities the video does offer. There is no silent downgrade. Partial data is preserved.
+
+### Migration and rollback
+
+Reverting application code to an older version does not delete job workspaces created by the newer version. Treat `output/tmp` as user data: older code simply ignores it. Do not run broad cleanup commands against `output/tmp`.
 
 ## See Also
 

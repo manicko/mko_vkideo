@@ -22,8 +22,10 @@ VK Video Downloader provides a programmatic and CLI interface for downloading vi
 
 - Extract video streams from VK video URLs using yt-dlp or browser automation
 - Quality selection by keyword (`best`, `worst`, `unknown`) or by any height in pixels the video offers
-- Download method selection (yt-dlp, auto)
-- Segment-level resume on token expiration
+- Download method selection (yt-dlp, auto, or optional direct ffmpeg)
+- Segment-level resume on token expiration, with a durable per-job checkpoint
+- Per-job temporary workspace under `output/tmp` (no in-progress files at the output root)
+- Redacted per-job diagnostics logs under `output/tmp/logs`
 - Batch download support via CLI
 - Path traversal prevention for security
 - SSL verification enabled by default
@@ -137,7 +139,31 @@ See [API Reference](docs/01-tools/api-reference.md) for complete API documentati
 
 See [Quality Selection Guide](docs/01-tools/quality-selection.md) for quality selection options.
 
-## Error Handling & Logging
+## Temporary Workspace and Resume
+
+New downloads use a per-job workspace under `output/tmp` automatically. The familiar command still works; the first new run creates it for you:
+
+```text
+output/
+└── tmp/
+    ├── jobs/
+    │   └── <job-id>/
+    │       ├── state.json          # durable checkpoint
+    │       ├── lock                # exclusive job lock
+    │       ├── ytdlp/             # yt-dlp fragments and partials
+    │       ├── segments/          # downloaded HLS segments
+    │       ├── staging/           # completed, not-yet-published media
+    │       └── diagnostics/       # non-secret metadata
+    └── logs/
+        └── <job-id>.jsonl         # redacted per-job diagnostic log
+```
+
+- In-progress files are never written at the output root; only the validated final MP4 is published there.
+- Failed or cancelled jobs keep their usable temp data for resume. Successful jobs remove only their owned intermediates, while logs are retained with rotation.
+- Resume uses the checkpoint (`state.json`) and verifies each segment by size and SHA-256, so a token-only URL change reuses valid segments instead of restarting at byte zero. If media identity is ambiguous, the old generation is quarantined rather than mixed.
+- Exact `--quality 1440` is preserved across refresh, retry, and backend selection, or fails with an explicit error and the available ladder; there is no silent downgrade.
+
+See [Troubleshooting Guide](docs/11-guides/troubleshooting.md) for log location, diagnostics bundle, manual cleanup, and migration/rollback notes.
 
 ### Exception Hierarchy
 
@@ -170,3 +196,25 @@ Logging uses `structlog` with a structured processor chain. When `--log-file` is
 **Correlation IDs:** Each download operation (single or batch) is assigned an 8-character hex correlation ID via `generate_correlation_id()`. The ID is bound to the structlog context and automatically included in every log entry within that operation. Use `--log-file` to get JSON output with correlation IDs for log aggregation.
 
 **URL redaction:** All log entries that include URLs pass them through `_strip_auth_params()` which replaces path and query parameters with `***REDACTED***`, preventing signed CDN tokens from leaking into logs.
+
+### Per-job logs and diagnostics bundle
+
+The per-job diagnostic log is created automatically under `output/tmp/logs/<job-id>.jsonl` when diagnostics are enabled. To view its location:
+
+```bash
+# Linux/macOS
+ls output/tmp/logs
+
+# Windows PowerShell
+Get-ChildItem -LiteralPath "output\tmp\logs"
+```
+
+A redacted diagnostics bundle should contain filenames and sizes plus the JSONL logs. Do not include cookies or signed URLs:
+
+```bash
+# Dry-run inventory (filenames and sizes only)
+find output/tmp/jobs -type f -printf '%p %s bytes\n' | sort
+
+# Windows PowerShell
+Get-ChildItem -LiteralPath "output\tmp\jobs" -Recurse -File | Select-Object FullName, Length
+```

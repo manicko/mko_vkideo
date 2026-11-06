@@ -145,6 +145,17 @@ VKDOWNLOADER_LOG_LEVEL=INFO
 VKDOWNLOADER_LOG_FILE=~/vkdownloader.log
 ```
 
+## Temporary Workspace
+
+No extra setup is required. The first download creates a per-job workspace automatically under the output directory:
+
+```text
+<output>/tmp/jobs/<job-id>/
+<output>/tmp/logs/<job-id>.jsonl
+```
+
+In-progress artifacts live only under `tmp/`; the output root receives the final, validated MP4. Failed or cancelled jobs retain their usable temp data for resume. See the [Troubleshooting Guide](../11-guides/troubleshooting.md) for cleanup and diagnostics.
+
 ## Verification
 
 After installation, verify the setup:

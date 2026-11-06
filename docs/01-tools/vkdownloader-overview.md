@@ -136,8 +136,10 @@ The CLI (`cli.py`) provides three commands:
 Both commands support:
 
 - `--quality`: Quality selection — `best`, `worst`, `unknown`, or any height in pixels the video offers (e.g. `720`, `1080`, `1072`). Any other token is a usage error (exit code 2) raised while the command line is parsed. See the [Quality Selection Guide](quality-selection.md).
-- `--method`: Download method (yt-dlp, auto)
+- `--method`: Download method (yt-dlp, auto, or optional direct ffmpeg)
 - `--output/-o`: Output directory (defaults to `Settings.download_dir` when not provided)
+
+New downloads automatically use a per-job workspace under `output/tmp`. See the [Troubleshooting Guide](../11-guides/troubleshooting.md).
 
 ## Download Methods
 

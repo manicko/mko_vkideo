@@ -40,6 +40,10 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none or browser |
 | `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
 | `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
+| `diagnostics_enabled` | `VKDOWNLOADER_DIAGNOSTICS_ENABLED` | true | Enable persistent diagnostic logs and child transcript sinks |
+| `diagnostic_log_dir` | `VKDOWNLOADER_DIAGNOSTIC_LOG_DIR` | None | Interim base directory for diagnostic logs; per-job logs are written under `output/tmp/logs` by default |
+| `log_max_bytes` | `VKDOWNLOADER_LOG_MAX_BYTES` | 10485760 | Maximum size in bytes of a log file before rotation |
+| `log_backup_count` | `VKDOWNLOADER_LOG_BACKUP_COUNT` | 5 | Number of rotated log file backups to retain |
 
 ## Headless Mode
 
