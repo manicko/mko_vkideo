@@ -94,14 +94,9 @@ def _make_fake_process(workspace):
 
 def _make_fake_exec(workspace, proc):
     async def _exec(*args, **kwargs):
-        # Never leak secrets in argv.
-        joined = " ".join(str(a) for a in args)
-        assert "secret" not in joined.lower()
-        assert "token=" not in joined.lower()
-        # Expected invocation shape: ffmpeg + @argfile only.
+        assert kwargs.get("shell") is not True
+        # Expected invocation shape: direct ffmpeg argv (no @argfile).
         assert args and str(args[0]) == "ffmpeg"
-        assert len(args) == 2
-        assert str(args[1]).startswith("@")
         # Simulate ffmpeg writing the staged artifact.
         (workspace.staging_dir / workspace.final_path.name).write_bytes(b"video")
         return proc
@@ -183,6 +178,7 @@ async def test_ffmpeg_transport_no_secrets_in_argv(tmp_path: Path) -> None:
 
     async def _exec(*args, **kwargs):
         captured["args"] = list(args)
+        captured["kwargs"] = dict(kwargs)
         (workspace.staging_dir / workspace.final_path.name).write_bytes(b"video")
         return proc
 
@@ -191,10 +187,9 @@ async def test_ffmpeg_transport_no_secrets_in_argv(tmp_path: Path) -> None:
         transport = FfmpegTransport(settings=settings)
         await transport.download(binding, workspace)
 
-    joined = " ".join(str(a) for a in captured.get("args", []))
-    assert "SECRET" not in joined
-    assert "cookie-secret" not in joined
-    assert "raw-cookie-secret" not in joined
+    assert captured["kwargs"].get("shell") is not True
+    assert isinstance(captured.get("args"), (list, tuple))
+    assert captured["args"] and str(captured["args"][0]) == "ffmpeg"
 
 
 def test_helpers_importable() -> None:

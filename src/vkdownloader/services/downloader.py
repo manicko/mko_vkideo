@@ -34,7 +34,7 @@ from .quality_refresh import binding_from_selected
 try:
     from .ffmpeg_transport import FfmpegTransport
 except Exception:  # noqa: BLE001
-    FfmpegTransport = None  # type: ignore[assignment]
+    FfmpegTransport = None  # type: ignore[misc, assignment]
 from .ytdlp_downloader import (
     _resolve_cookies,
     download_with_ytdlp_with_resume_fallback,
@@ -294,9 +294,12 @@ async def perform_download(
                         logger.error("ffmpeg_transport_unavailable")
                         return None
                     if state_machine is not None:
-                        state_machine.backend = "ffmpeg"
                         try:
                             state_machine.job_state.backend = "ffmpeg"
+                            state_machine.job_state.stream_variant_id = getattr(
+                                binding, "variant_id", None
+                            )
+                            state_machine.persist()
                         except Exception:  # noqa: BLE001
                             pass
                     logger.info("backend_started", backend="ffmpeg", attempt_id=attempt_id)
