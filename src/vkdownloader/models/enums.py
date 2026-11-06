@@ -80,6 +80,7 @@ class ErrorCode(StrEnum):
     STEALTH_ASSET_MISSING = "stealth_asset_missing"
     PATH_TRAVERSAL = "path_traversal"
     WORKSPACE_LOCKED = "workspace_locked"
+    WORKSPACE_INIT_FAILED = "workspace_init_failed"
     UNEXPECTED_ERROR = "unexpected_error"
 
 

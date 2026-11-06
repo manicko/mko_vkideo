@@ -1153,6 +1153,7 @@ async def download_with_ytdlp_with_resume_fallback(
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
+    job_lock: object | None = None,
 ) -> Path | None:
     """
     Flow:
@@ -1204,7 +1205,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 try:
                     from .workspace import acquire_job_lock
 
-                    with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                    with acquire_job_lock(workspace, timeout=10.0):
                         from .state_migration import migrate_legacy_state
 
                         migrate_legacy_state(workspace)
@@ -1368,6 +1369,7 @@ async def _attempt_segment_resume(
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
+    job_lock: object | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -1410,7 +1412,7 @@ async def _attempt_segment_resume(
                 try:
                     from .workspace import acquire_job_lock
 
-                    with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                    with acquire_job_lock(workspace, timeout=10.0):
                         from .state_migration import migrate_legacy_state
 
                         migrate_legacy_state(workspace)
@@ -1622,6 +1624,7 @@ async def _download_with_ytdlp(
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
+    job_lock: object | None = None,
 ) -> Path | None:
     """Download video using yt-dlp via subprocess.
 
@@ -1960,21 +1963,31 @@ async def _download_with_ytdlp(
         logger.info("ytdlp_download_completed", output=str(output_file))
         if workspace is not None:
             staged = workspace.staging_dir / workspace.final_path.name
-            if staged.exists():
-                try:
-                    from .workspace import cleanup_owned_job_artifacts, publish_verified_file
+            if not staged.exists():
+                return None
+            try:
+                from .workspace import (
+                    acquire_publish_lock,
+                    cleanup_owned_job_artifacts,
+                    publish_verified_file,
+                )
 
-                    final_lock = None
+                final_lock = acquire_publish_lock(workspace.final_path, 10.0)
+                publish_verified_file(staged, workspace.final_path, final_lock=final_lock)
+                if job_lock is not None:
                     try:
-                        from filelock import FileLock
-
-                        final_lock = FileLock(str(workspace.root / "publish.lock"), timeout=10.0)
+                        job_lock.release()  # type: ignore[attr-defined]
                     except Exception:  # noqa: BLE001
-                        final_lock = None
-                    publish_verified_file(staged, workspace.final_path, final_lock=final_lock)
-                    cleanup_owned_job_artifacts(workspace)
-                except FileExistsError:
+                        pass
+                cleanup_owned_job_artifacts(workspace)
+                if not (
+                    workspace.final_path.exists()
+                    and workspace.final_path.is_file()
+                    and workspace.final_path.stat().st_size > 0
+                ):
                     return None
+            except FileExistsError, OSError, FileNotFoundError:
+                return None
             return workspace.final_path
         if output_file.exists():
             logger.info("download_final_size", size=output_file.stat().st_size)

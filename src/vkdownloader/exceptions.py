@@ -230,3 +230,9 @@ class DownloadError(VKDownloadError):
     """Raised when video download fails."""
 
     error_code = ErrorCode.DOWNLOAD_ERROR
+
+
+class WorkspaceInitializationError(VKDownloadError):
+    """Raised when a workspace cannot be initialized."""
+
+    error_code = ErrorCode.WORKSPACE_INIT_FAILED

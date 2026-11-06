@@ -1700,6 +1700,7 @@ class TestSegmentFanoutBoundedProduction:
             output_file: Path,
             progress_callback: Callable[[str, int, int], None] | None,
             video_url: str,
+            checkpoint=None,
         ) -> Path | None:
             captured_results.extend(download_results)
             return None  # Don't actually merge
@@ -1793,6 +1794,7 @@ class TestSegmentFanoutBoundedProduction:
             output_file: Path,
             progress_callback: Callable[[str, int, int], None] | None,
             video_url: str,
+            checkpoint=None,
         ) -> Path | None:
             captured["results"] = download_results
             return None

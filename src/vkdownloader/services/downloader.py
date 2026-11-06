@@ -121,18 +121,15 @@ async def perform_download(
         settings = Settings()
 
     if workspace is None:
-        try:
-            from .workspace import make_workspace
+        from .workspace import make_workspace
 
-            workspace = make_workspace(output_file, output_file.stem, str(quality))
-        except Exception:  # noqa: BLE001
-            workspace = None
+        workspace = make_workspace(output_file, output_file.stem, str(quality))
 
     if state_machine is None and workspace is not None:
         try:
             from .workspace import acquire_job_lock
 
-            with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+            with acquire_job_lock(workspace, timeout=10.0):
                 from .state_migration import migrate_legacy_state
 
                 migrate_legacy_state(workspace)
@@ -256,6 +253,7 @@ async def perform_download(
                         attempt_id=attempt_id,
                         workspace=workspace,
                         state_machine=state_machine,
+                        job_lock=job_lock,
                     )
                 case DownloadMethod.AUTO:
                     # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
@@ -284,6 +282,7 @@ async def perform_download(
                         attempt_id=attempt_id,
                         workspace=workspace,
                         state_machine=state_machine,
+                        job_lock=job_lock,
                     )
                 case DownloadMethod.FFMPEG:
                     m3u8_url, cookies, raw_cookies = await _resolve_cookies(
@@ -319,23 +318,31 @@ async def perform_download(
                         candidate = workspace.staging_dir / workspace.final_path.name
                         if candidate.exists():
                             from .workspace import (
+                                acquire_publish_lock,
                                 cleanup_owned_job_artifacts,
                                 publish_verified_file,
                             )
 
-                            final_lock = None
+                            final_lock = acquire_publish_lock(workspace.final_path, 10.0)
                             try:
-                                from filelock import FileLock
-
-                                final_lock = FileLock(
-                                    str(workspace.root / "publish.lock"), timeout=10.0
+                                publish_verified_file(
+                                    candidate, workspace.final_path, final_lock=final_lock
                                 )
                             except Exception:  # noqa: BLE001
-                                final_lock = None
-                            publish_verified_file(
-                                candidate, workspace.final_path, final_lock=final_lock
-                            )
+                                return None
+                            if job_lock is not None:
+                                try:
+                                    job_lock.release()
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                job_lock = None
                             cleanup_owned_job_artifacts(workspace)
+                            if not (
+                                workspace.final_path.exists()
+                                and workspace.final_path.is_file()
+                                and workspace.final_path.stat().st_size > 0
+                            ):
+                                return None
                             return workspace.final_path
                     return staged
                 case _:
@@ -348,7 +355,7 @@ async def perform_download(
     finally:
         if job_lock is not None:
             try:
-                job_lock.release()  # type: ignore[attr-defined]
+                job_lock.release()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -449,12 +456,9 @@ async def download_video(
     output_file = _resolve_output_file(video, output, settings, output_index)
 
     if workspace is None:
-        try:
-            from .workspace import make_workspace
+        from .workspace import make_workspace
 
-            workspace = make_workspace(output_file, video.id, str(quality))
-        except Exception:  # noqa: BLE001
-            workspace = None
+        workspace = make_workspace(output_file, video.id, str(quality))
 
     # When pre-extracted data is provided, forward the pre-selected stream
     # to perform_download (which will skip its own extraction via the
@@ -466,7 +470,7 @@ async def download_video(
         try:
             from .workspace import acquire_job_lock
 
-            with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+            with acquire_job_lock(workspace, timeout=10.0):
                 from .state_migration import migrate_legacy_state
 
                 migrate_legacy_state(workspace)

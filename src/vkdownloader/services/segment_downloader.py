@@ -1836,6 +1836,7 @@ async def download_hls_with_resume(
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
     progress_snapshot_callback: Callable[[str, object], None] | None = None,
+    job_lock: object | None = None,
 ) -> Path | None:
     """
     Downloads original HLS segments individually, tracks progress, and can resume
@@ -1945,19 +1946,28 @@ async def download_hls_with_resume(
         if result is not None:
             if workspace is not None:
                 try:
-                    from .workspace import cleanup_owned_job_artifacts, publish_verified_file
+                    from .workspace import (
+                        acquire_publish_lock,
+                        cleanup_owned_job_artifacts,
+                        publish_verified_file,
+                    )
 
-                    final_lock = None
-                    try:
-                        from filelock import FileLock
-
-                        final_lock = FileLock(str(workspace.root / "publish.lock"), timeout=10.0)
-                    except Exception:  # noqa: BLE001
-                        final_lock = None
+                    final_lock = acquire_publish_lock(workspace.final_path, 10.0)
                     publish_verified_file(result, workspace.final_path, final_lock=final_lock)
+                    if job_lock is not None:
+                        try:
+                            job_lock.release()  # type: ignore[attr-defined]
+                        except Exception:  # noqa: BLE001
+                            pass
                     cleanup_owned_job_artifacts(workspace)
+                    if not (
+                        workspace.final_path.exists()
+                        and workspace.final_path.is_file()
+                        and workspace.final_path.stat().st_size > 0
+                    ):
+                        return None
                     result = workspace.final_path
-                except FileExistsError:
+                except FileExistsError, OSError, FileNotFoundError:
                     return None
             success = True
             return result
