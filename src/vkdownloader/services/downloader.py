@@ -36,6 +36,7 @@ from .ytdlp_downloader import (
 
 if TYPE_CHECKING:
     from .downloader_throttle import URLBackoffCoordinator
+    from .state_machine import DownloadStateMachine
     from .workspace import DownloadWorkspace
 
 logger = get_logger(__name__)
@@ -71,7 +72,7 @@ async def perform_download(
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -123,12 +124,15 @@ async def perform_download(
     if state_machine is None and workspace is not None:
         try:
             from .state_machine import DownloadStateMachine
+            from .workspace import stable_job_id
 
             try:
                 state_machine = DownloadStateMachine.load(workspace)
             except Exception:  # noqa: BLE001
                 state_machine = DownloadStateMachine.create(
-                    job_id=workspace.root.name, quality_requested=quality, workspace=workspace
+                    job_id=stable_job_id(output_file.stem, str(quality), output_file.name),
+                    quality_requested=quality,
+                    workspace=workspace,
                 )
         except Exception:  # noqa: BLE001
             state_machine = None
@@ -301,7 +305,7 @@ async def download_video(
     diagnostic_sink: object | None = None,
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -393,12 +397,15 @@ async def download_video(
     if state_machine is None and workspace is not None:
         try:
             from .state_machine import DownloadStateMachine
+            from .workspace import stable_job_id
 
             try:
                 state_machine = DownloadStateMachine.load(workspace)
             except Exception:  # noqa: BLE001
                 state_machine = DownloadStateMachine.create(
-                    job_id=workspace.root.name, quality_requested=str(quality), workspace=workspace
+                    job_id=stable_job_id(str(video.id), str(quality), output_file.name),
+                    quality_requested=str(quality),
+                    workspace=workspace,
                 )
         except Exception:  # noqa: BLE001
             state_machine = None

@@ -12,14 +12,14 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urljoin
 
 from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import DownloadError
-from ..models.enums import QualityKind, QualityLabel
+from ..models.enums import DownloadState, ErrorCategory, QualityKind, QualityLabel
 from ..models.quality import QualitySpec
 from ..utils.diagnostics import bind_diagnostic_context
 from ..utils.formatting import format_bytes
@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from ..services.extractor import VKVideoExtractor
     from .checkpoint import JobCheckpoint
     from .downloader_throttle import URLBackoffCoordinator
+    from .state_machine import DownloadStateMachine
 
 
 @dataclass
@@ -832,7 +833,9 @@ async def _fetch_playlist_with_retry(
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
     quality: str,
-    state_machine: Any = None,
+    state_machine: DownloadStateMachine | None = None,
+    preselected_variant_id: str | None = None,
+    preselected_height: int | None = None,
 ) -> PlaylistFetchResult | None:
     """Fetch m3u8 playlist with token refresh on 403/410 and retry on transport failures.
 
@@ -864,9 +867,15 @@ async def _fetch_playlist_with_retry(
 
     if state_machine is None:
         try:
+            from .extractor import _extract_video_id
             from .state_machine import DownloadStateMachine
+            from .workspace import stable_job_id
 
-            state_machine = DownloadStateMachine.create(job_id=video_url or "job", workspace=None)
+            state_machine = DownloadStateMachine.create(
+                job_id=stable_job_id(_extract_video_id(video_url), str(quality), "playlist.m3u8"),
+                quality_requested=quality,
+                workspace=None,
+            )
         except Exception:  # noqa: BLE001
             state_machine = None
 
@@ -937,12 +946,27 @@ async def _fetch_playlist_with_retry(
             continue
 
         if status in (403, 410) and extractor is not None:
+            if state_machine is None:
+                try:
+                    from .extractor import _extract_video_id
+                    from .state_machine import DownloadStateMachine
+                    from .workspace import stable_job_id
+
+                    state_machine = DownloadStateMachine.create(
+                        job_id=stable_job_id(
+                            _extract_video_id(video_url), str(quality), "playlist.m3u8"
+                        ),
+                        quality_requested=quality,
+                        workspace=None,
+                    )
+                except Exception:  # noqa: BLE001
+                    state_machine = None
             if state_machine is not None:
                 try:
                     if not state_machine.request_refresh("token_expired"):
                         return None
                 except Exception:  # noqa: BLE001
-                    pass
+                    return None
             logger.info(
                 "token_expired_fetching_new",
                 url=_strip_auth_params(current_url),
@@ -976,13 +1000,48 @@ async def _fetch_playlist_with_retry(
                 if not isinstance(new_cookies, str):
                     new_cookies = "" if new_cookies is None else str(new_cookies)
                 headers["Cookie"] = new_cookies
+                # BG-002: compare refreshed binding against preselected identity.
+                _pre_variant = refreshed_variant_id
+                _pre_height = None
+                if refreshed_binding is not None:
+                    _pre_height = getattr(refreshed_binding, "actual_height", None)
                 if state_machine is not None:
                     try:
+                        quality_match = True
+                        variant_match = True
+                        if hasattr(refresh_result, "media_playlist_url"):
+                            actual_height = getattr(refresh_result, "actual_height", None)
+                            requested = str(quality).strip()
+                            target_height = (
+                                preselected_height if preselected_height is not None else None
+                            )
+                            if target_height is None and requested.isdecimal():
+                                target_height = int(requested)
+                            if target_height is not None and actual_height is not None:
+                                quality_match = actual_height == target_height
+                            new_variant = getattr(refresh_result, "variant_id", None)
+                            target_variant = (
+                                preselected_variant_id
+                                if preselected_variant_id is not None
+                                else _pre_variant
+                            )
+                            if target_variant is not None:
+                                variant_match = new_variant == target_variant
+                        if not (quality_match and variant_match):
+                            try:
+                                state_machine.transition(
+                                    DownloadState.PRESERVE_AND_STOP,
+                                    reason_code="refresh_mismatch",
+                                    error_category=ErrorCategory.INTEGRITY_FAILURE,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            return None
                         state_machine.record_refresh_completed(
-                            quality_match=True, variant_match=True
+                            quality_match=quality_match, variant_match=variant_match
                         )
                     except Exception:  # noqa: BLE001
-                        pass
+                        return None
                 continue
             logger.warning(
                 "playlist_fetch_failed_non_retryable",
@@ -1454,7 +1513,7 @@ async def _run_download_session(
     stream_variant_id: str | None = None,
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1678,7 +1737,7 @@ async def download_hls_with_resume(
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
     stream_binding: object | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """
     Downloads original HLS segments individually, tracks progress, and can resume

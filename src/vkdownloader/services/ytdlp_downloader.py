@@ -29,7 +29,7 @@ from ..exceptions import (
     QualityParseError,
 )
 from ..models.dtos import HLSDownloadRequest
-from ..models.enums import CookieSource, QualityKind
+from ..models.enums import CookieSource, DownloadState, ErrorCategory, QualityKind
 from ..models.quality import QualitySpec
 from ..services.cookies import _cookies_to_netscape
 from ..services.downloader_throttle import get_shutdown_event
@@ -52,6 +52,7 @@ from ..utils.url_sanitizer import _strip_auth_params, sanitize_text_for_log
 
 if TYPE_CHECKING:
     from ..services.concurrency import SemaphoreLike
+    from ..services.state_machine import DownloadStateMachine
     from .downloader_throttle import URLBackoffCoordinator
 
 logger = get_logger(__name__)
@@ -1063,7 +1064,7 @@ async def download_with_ytdlp_with_resume_fallback(
     workspace: DownloadWorkspace | None = None,
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """
     Flow:
@@ -1108,12 +1109,28 @@ async def download_with_ytdlp_with_resume_fallback(
     if state_machine is None:
         try:
             from .state_machine import DownloadStateMachine
+            from .workspace import stable_job_id
 
             state_machine = DownloadStateMachine.create(
-                job_id=str(output_file), quality_requested=quality, workspace=workspace
+                job_id=stable_job_id(
+                    _extract_video_id(video_url) if video_url else output_file.stem,
+                    str(quality),
+                    (workspace.final_path.name if workspace is not None else output_file.name),
+                ),
+                quality_requested=quality,
+                workspace=workspace,
             )
         except Exception:  # noqa: BLE001
             state_machine = None
+
+    # Advance state machine to the download phase.
+    if state_machine is not None:
+        for _target in (DownloadState.RESOLVE_STREAM, DownloadState.DOWNLOAD):
+            try:
+                if state_machine.can_transition(_target):
+                    state_machine.transition(_target)
+            except Exception:  # noqa: BLE001
+                pass
 
     while retry_count <= settings.max_retries:
         result = await _download_with_ytdlp(
@@ -1139,6 +1156,8 @@ async def download_with_ytdlp_with_resume_fallback(
         retry_count += 1
 
         if shutdown_event.is_set():
+            if state_machine is not None:
+                state_machine.record_cancellation()
             logger.info(
                 "yt_dlp_download_cancelled",
                 url=_strip_auth_params(video_url),
@@ -1152,6 +1171,18 @@ async def download_with_ytdlp_with_resume_fallback(
         # respects the shared URLBackoffCoordinator's pause state if one is
         # provided, and allows interruption via the shutdown event.
         backoff_delay = _compute_backoff_delay(500, retry_count, None)
+        if state_machine is not None:
+            allowed = state_machine.record_retry("yt-dlp", "ytdlp_retry", backoff_delay)
+            if not allowed:
+                try:
+                    state_machine.transition(
+                        DownloadState.FAILED_RETRY_BUDGET,
+                        reason_code="retry_budget_exhausted",
+                        error_category=ErrorCategory.UNKNOWN,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
         if backoff_coordinator is not None:
             await backoff_coordinator.wait_if_paused(video_url)
         shutdown_triggered = await _wait_with_shutdown(
@@ -1161,6 +1192,8 @@ async def download_with_ytdlp_with_resume_fallback(
             _strip_auth_params(video_url),
         )
         if shutdown_triggered:
+            if state_machine is not None:
+                state_machine.record_cancellation()
             logger.info(
                 "yt_dlp_download_cancelled_during_backoff", url=_strip_auth_params(video_url)
             )
@@ -1174,6 +1207,14 @@ async def download_with_ytdlp_with_resume_fallback(
             return None
 
         # Attempt segment resume with fresh token
+        if state_machine is not None:
+            try:
+                if state_machine.can_transition(DownloadState.REFRESH_STREAM):
+                    state_machine.transition(
+                        DownloadState.REFRESH_STREAM, reason_code="segment_resume"
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         if (
             segment_result := await _attempt_segment_resume(
                 video_url,
@@ -1219,7 +1260,7 @@ async def _attempt_segment_resume(
     workspace: DownloadWorkspace | None = None,
     stream_variant_id: str | None = None,
     stream_binding: object | None = None,
-    state_machine: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -1252,6 +1293,23 @@ async def _attempt_segment_resume(
         QualityParseError: If ``quality`` is neither a keyword nor a positive
             height; logged and re-raised so the caller reports it verbatim.
     """
+    if state_machine is None:
+        try:
+            from .state_machine import DownloadStateMachine
+            from .workspace import stable_job_id
+
+            state_machine = DownloadStateMachine.create(
+                job_id=stable_job_id(
+                    _extract_video_id(video_url) if video_url else output_file.stem,
+                    str(quality),
+                    output_file.name,
+                ),
+                quality_requested=quality,
+                workspace=workspace,
+            )
+        except Exception:  # noqa: BLE001
+            state_machine = None
+
     temp_file = _ytdlp_artifacts_for(output_file).temp_path
     try:
         partial_size = temp_file.stat().st_size if temp_file.exists() else 0
@@ -1295,6 +1353,31 @@ async def _attempt_segment_resume(
             )
             raise
         m3u8_url = binding.media_playlist_url
+        if state_machine is not None:
+            try:
+                requested = str(quality).strip()
+                quality_match = True
+                if requested.isdecimal():
+                    quality_match = getattr(binding, "actual_height", None) == int(requested)
+                variant_match = True
+                prev_variant = getattr(stream_binding, "variant_id", None)
+                if prev_variant is not None:
+                    variant_match = getattr(binding, "variant_id", None) == prev_variant
+                if not (quality_match and variant_match):
+                    try:
+                        state_machine.transition(
+                            DownloadState.PRESERVE_AND_STOP,
+                            reason_code="refresh_mismatch",
+                            error_category=ErrorCategory.INTEGRITY_FAILURE,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return None
+                state_machine.record_refresh_completed(
+                    quality_match=quality_match, variant_match=variant_match
+                )
+            except Exception:  # noqa: BLE001
+                pass
         cookies = binding.cookies if isinstance(binding.cookies, str) else None
         stream_variant_id = binding.variant_id
         logger.info(

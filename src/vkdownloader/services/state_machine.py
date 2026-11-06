@@ -11,13 +11,24 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, ConfigDict
 from structlog import get_logger
 
 from ..models.enums import DownloadState, ErrorCategory
 from .checkpoint import write_state_atomic
+
+if TYPE_CHECKING:
+    from .workspace import DownloadWorkspace
+
+
+class _Logger(Protocol):
+    def debug(self, *args: object, **kwargs: object) -> None: ...
+    def info(self, *args: object, **kwargs: object) -> None: ...
+    def warning(self, *args: object, **kwargs: object) -> None: ...
+    def error(self, *args: object, **kwargs: object) -> None: ...
+
 
 logger = get_logger(__name__)
 
@@ -134,7 +145,7 @@ class DownloadJobState(BaseModel):
     # Internal observation window (not persisted as a hard contract but harmless).
     _slow_samples: list[tuple[float, float]] = []
 
-    def model_post_init(self, __context: Any) -> None:  # noqa: D401
+    def model_post_init(self, __context: object) -> None:  # noqa: D401
         if self.created_at is None:
             self.created_at = datetime.now(UTC).isoformat()
         if self.updated_at is None:
@@ -148,9 +159,9 @@ class DownloadStateMachine:
 
     def __init__(
         self,
-        job_state: DownloadJobState | dict[str, Any],
-        workspace: Any = None,
-        logger: Any = None,
+        job_state: DownloadJobState | dict[str, object],
+        workspace: DownloadWorkspace | None = None,
+        logger: _Logger | None = None,
     ) -> None:
         if isinstance(job_state, dict):
             job_state = DownloadJobState.model_validate(job_state)
@@ -170,11 +181,11 @@ class DownloadStateMachine:
         *,
         job_id: str,
         quality_requested: str | None = None,
-        workspace: Any = None,
+        workspace: DownloadWorkspace | None = None,
         attempt_id: int = 0,
         backend: str | None = None,
         stream_variant_id: str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> DownloadStateMachine:
         job_state = DownloadJobState(
             job_id=job_id,
@@ -182,7 +193,7 @@ class DownloadStateMachine:
             attempt_id=attempt_id,
             backend=backend,
             stream_variant_id=stream_variant_id,
-            **{k: v for k, v in kwargs.items() if k in DownloadJobState.model_fields},
+            **{k: v for k, v in kwargs.items() if k in DownloadJobState.model_fields},  # type: ignore[arg-type]
         )
         sm = cls(job_state, workspace=workspace)
         if workspace is not None:
@@ -193,16 +204,39 @@ class DownloadStateMachine:
         return sm
 
     @classmethod
-    def load(cls, workspace: Any) -> DownloadStateMachine:
+    def load(cls, workspace: DownloadWorkspace | None) -> DownloadStateMachine:
+        if workspace is None:
+            return cls(DownloadJobState(job_id="unknown"), workspace=None)
         path = Path(workspace.state_path)
+        job_id = getattr(getattr(workspace, "root", None), "name", None) or "unknown"
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 job_state = DownloadJobState.model_validate(data)
-            except Exception:  # noqa: BLE001
-                job_state = DownloadJobState(job_id="unknown")
-        else:
-            job_state = DownloadJobState(job_id="unknown")
+                return cls(job_state, workspace=workspace)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "corrupt_state_file",
+                    path=str(path),
+                    error=str(exc),
+                )
+                corrupt = path.with_name(path.name + ".corrupt")
+                counter = 1
+                while corrupt.exists():
+                    corrupt = path.with_name(f"{path.name}.corrupt.{counter}")
+                    counter += 1
+                try:
+                    path.rename(corrupt)
+                except OSError:  # noqa: BLE001
+                    pass
+                job_state = DownloadJobState(job_id=job_id)
+                sm = cls(job_state, workspace=workspace)
+                try:
+                    sm.persist()
+                except Exception:  # noqa: BLE001
+                    pass
+                return sm
+        job_state = DownloadJobState(job_id=job_id)
         return cls(job_state, workspace=workspace)
 
     # ------------------------------------------------------------------ #
@@ -214,7 +248,7 @@ class DownloadStateMachine:
 
     def can_transition(self, new_state: DownloadState) -> bool:
         try:
-            new_state = DownloadState(new_state)
+            new_state = DownloadState(str(new_state))
         except Exception:  # noqa: BLE001
             return False
         current = self.job_state.state
@@ -222,13 +256,13 @@ class DownloadStateMachine:
 
     def transition(
         self,
-        new_state: Any,
+        new_state: object,
         *,
-        reason_code: Any = None,
-        error_category: Any = None,
+        reason_code: str | None = None,
+        error_category: ErrorCategory | str | None = None,
         persist: bool = True,
     ) -> None:
-        new_state = DownloadState(new_state)
+        new_state = DownloadState(str(new_state))
         if not self.can_transition(new_state):
             raise ValueError(f"invalid transition {self.job_state.state} -> {new_state}")
         self.job_state.state = new_state
@@ -255,7 +289,7 @@ class DownloadStateMachine:
     # ------------------------------------------------------------------ #
     # Classification
     # ------------------------------------------------------------------ #
-    def classify_error(self, error: Any, *, http_status: int | None = None) -> ErrorCategory:
+    def classify_error(self, error: object, *, http_status: int | None = None) -> ErrorCategory:
         # Cancelled
         if isinstance(error, (asyncio.CancelledError,)):
             self.job_state.cancelled = True
@@ -340,6 +374,18 @@ class DownloadStateMachine:
         http_status: int | None = None,
     ) -> bool:
         if self.is_budget_exhausted():
+            try:
+                if self.can_transition(DownloadState.FAILED_RETRY_BUDGET):
+                    self.transition(
+                        DownloadState.FAILED_RETRY_BUDGET,
+                        reason_code="retry_budget_exhausted",
+                        error_category=ErrorCategory.UNKNOWN,
+                        persist=True,
+                    )
+                else:
+                    self.persist()
+            except Exception:  # noqa: BLE001
+                pass
             return False
         self.job_state.retries_used += 1
         self.job_state.reason_code = reason_code
@@ -358,7 +404,8 @@ class DownloadStateMachine:
             )
         except Exception:  # noqa: BLE001
             pass
-        self.persist() if self.workspace is not None else None
+        if self.workspace is not None:
+            self.persist()
         return True
 
     # ------------------------------------------------------------------ #
@@ -366,6 +413,8 @@ class DownloadStateMachine:
     # ------------------------------------------------------------------ #
     def request_refresh(self, reason_code: str) -> bool:
         if self.job_state.refresh_count >= self.job_state.refresh_cap:
+            if self.workspace is not None:
+                self.persist()
             return False
         self.job_state.refresh_count += 1
         self.job_state.reason_code = reason_code
@@ -378,7 +427,8 @@ class DownloadStateMachine:
             )
         except Exception:  # noqa: BLE001
             pass
-        self.persist() if self.workspace is not None else None
+        if self.workspace is not None:
+            self.persist()
         return True
 
     def record_refresh_completed(self, *, quality_match: bool, variant_match: bool) -> None:
@@ -392,7 +442,8 @@ class DownloadStateMachine:
             )
         except Exception:  # noqa: BLE001
             pass
-        self.persist() if self.workspace is not None else None
+        if self.workspace is not None:
+            self.persist()
 
     # ------------------------------------------------------------------ #
     # Cancellation / disk full
@@ -408,7 +459,11 @@ class DownloadStateMachine:
                     persist=True,
                 )
             except Exception:  # noqa: BLE001
-                pass
+                if self.workspace is not None:
+                    self.persist()
+        else:
+            if self.workspace is not None:
+                self.persist()
 
     def record_disk_full(self) -> None:
         self.job_state.disk_full = True
@@ -421,7 +476,11 @@ class DownloadStateMachine:
                     persist=True,
                 )
             except Exception:  # noqa: BLE001
-                pass
+                if self.workspace is not None:
+                    self.persist()
+        else:
+            if self.workspace is not None:
+                self.persist()
 
     # ------------------------------------------------------------------ #
     # Throughput observation
@@ -445,6 +504,8 @@ class DownloadStateMachine:
         if span < 5.0:
             return False
         self.job_state.slow_throughput_observed = True
+        if self.workspace is not None:
+            self.persist()
         return True
 
     # ------------------------------------------------------------------ #
@@ -452,7 +513,8 @@ class DownloadStateMachine:
     # ------------------------------------------------------------------ #
     def reverify_playlist_on_404(self) -> None:
         self.job_state.playlist_reverified = True
-        self.persist() if self.workspace is not None else None
+        if self.workspace is not None:
+            self.persist()
 
     # ------------------------------------------------------------------ #
     # Counters helpers (Block I)
@@ -460,13 +522,19 @@ class DownloadStateMachine:
     def increment_verified_segment(self, bytes_count: int = 0) -> None:
         self.job_state.verified_segments += 1
         self.job_state.verified_bytes += int(bytes_count)
+        if self.workspace is not None:
+            self.persist()
 
     def set_network_bytes(self, value: int) -> None:
         self.job_state.network_bytes_this_session = int(value)
+        if self.workspace is not None:
+            self.persist()
 
     def set_fragment_progress(self, done: int | None, total: int | None) -> None:
         self.job_state.fragment_done = done
         self.job_state.fragment_total = total
+        if self.workspace is not None:
+            self.persist()
 
     def increment_attempt_id(self) -> int:
         self.job_state.attempt_id += 1

@@ -114,8 +114,14 @@ disallow_untyped_decorators = false
 # This override suppresses the inherited explicit-Any for model classes.
 # Removable by: pydantic-stubs shipping a non-Any BaseModel.__init__.
 [[tool.mypy.overrides]]
-module = "vkdownloader.models.*"
-disallow_any_explicit = false
+  module = "vkdownloader.models.*"
+  disallow_any_explicit = false
+
+  # state_machine defines DownloadJobState (Pydantic BaseModel) in services;
+  # inherited __init__(**data: Any) is upstream's signature, not ours.
+[[tool.mypy.overrides]]
+  module = "vkdownloader.services.state_machine"
+  disallow_any_explicit = false
 
 # Settings(BaseSettings) inherits the same __init__(**data: Any) from
 # pydantic-settings' BaseSettings. Same rationale as models.*.
