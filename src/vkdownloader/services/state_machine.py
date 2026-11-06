@@ -558,7 +558,12 @@ class DownloadStateMachine:
         }
 
     def set_network_bytes(self, value: int) -> None:
-        self.job_state.network_bytes_this_session = int(value)
+        try:
+            val = int(value)
+        except TypeError, ValueError, OverflowError:
+            val = 0
+        if val > self.job_state.network_bytes_this_session:
+            self.job_state.network_bytes_this_session = val
         if self.workspace is not None:
             self.persist()
 

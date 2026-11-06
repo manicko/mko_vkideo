@@ -171,7 +171,11 @@ class TestBatchDownloaderSemaphore:
             _ytdlp_temp_name(_expected_output_path(tmp_path, url)).write_bytes(b"partial")
 
         # _merge_segments_batched returns the output_file arg so the chain sees success.
-        merge_side_effect = lambda segments_dir, output_file, *_: ((output_file.parent.mkdir(parents=True, exist_ok=True), output_file.write_bytes(b"merged"), output_file)[2])  # noqa: E731
+        merge_side_effect = lambda segments_dir, output_file, *_: (  # noqa: E731
+            output_file.parent.mkdir(parents=True, exist_ok=True),
+            output_file.write_bytes(b"merged"),
+            output_file,
+        )[2]  # noqa: E731
 
         with (
             patch(
@@ -262,7 +266,11 @@ class TestBatchDownloaderSemaphore:
             seg_output.write_bytes(b"segment data")
             return True
 
-        merge_side_effect = lambda segments_dir, output_file, *_: ((output_file.parent.mkdir(parents=True, exist_ok=True), output_file.write_bytes(b"merged"), output_file)[2])  # noqa: E731
+        merge_side_effect = lambda segments_dir, output_file, *_: (  # noqa: E731
+            output_file.parent.mkdir(parents=True, exist_ok=True),
+            output_file.write_bytes(b"merged"),
+            output_file,
+        )[2]  # noqa: E731
 
         with (
             patch(
@@ -318,7 +326,11 @@ class TestBatchDownloaderSemaphore:
         # doesn't exit early at the partial-file probe.
         _ytdlp_temp_name(output_file).write_bytes(b"partial")
 
-        merge_side_effect = lambda segments_dir, out_file, *_: ((out_file.parent.mkdir(parents=True, exist_ok=True), out_file.write_bytes(b"merged"), out_file)[2])  # noqa: E731
+        merge_side_effect = lambda segments_dir, out_file, *_: (  # noqa: E731
+            out_file.parent.mkdir(parents=True, exist_ok=True),
+            out_file.write_bytes(b"merged"),
+            out_file,
+        )[2]  # noqa: E731
 
         mock_video = VideoWithStreams(
             id="12345_00001",

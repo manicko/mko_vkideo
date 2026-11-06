@@ -295,7 +295,7 @@ class RichProgressReporter:
             phase = JobPhase(str(phase))
         except ValueError:
             pass
-        _ = eta_from_snapshot(snapshot)
+        eta = eta_from_snapshot(snapshot)
 
         if not self.is_enabled:
             self._log_progress(index, downloaded, total)
@@ -308,11 +308,26 @@ class RichProgressReporter:
         if total > 0:
             self._progress.update(task_id, total=total, completed=downloaded)
         else:
+            # Never forward a non-positive total: rich.update ignores
+            # total=None but total=0 marks the task finished immediately.
             self._progress.update(task_id, completed=downloaded)
         # Phase-aware description: show phase when not downloading.
         if phase != JobPhase.DOWNLOADING:
             label = self._format_label(index)
-            self._progress.update(task_id, description=f"{label} {str(phase.value)}")
+            eta_text = "ETA unknown" if eta is None else f"ETA {int(eta)}s"
+            self._progress.update(task_id, description=f"{label} {str(phase.value)} {eta_text}")
+            # Hide misleading speed/time during non-downloading phases by
+            # clearing rich's sampled speed/remaining values.
+            try:
+                self._progress.update(task_id, fields={"eta_seconds": eta})
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            if eta is not None:
+                label = self._format_label(index)
+                self._progress.update(
+                    task_id, description=f"{label} ETA {int(eta)}s", fields={"eta_seconds": eta}
+                )
 
     def finish_task(self, index: int, status: ProgressStatus) -> None:
         """Mark ``index`` as terminal and render its outcome marker."""

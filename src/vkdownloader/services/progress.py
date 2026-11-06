@@ -10,6 +10,7 @@ working while callers migrate.
 from __future__ import annotations
 
 import math
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -69,8 +70,12 @@ class ProgressSnapshot:
             raise ValueError("attempt_id must be non-negative")
         if self.transfer_rate_bytes_per_sec is not None:
             rate = self.transfer_rate_bytes_per_sec
-            if rate < 0:
-                raise ValueError("transfer_rate_bytes_per_sec must be non-negative")
+            if not math.isfinite(rate) or rate < 0:
+                raise ValueError("transfer_rate_bytes_per_sec must be finite and non-negative")
+        if self.eta_seconds is not None:
+            eta = self.eta_seconds
+            if not math.isfinite(eta):
+                raise ValueError("eta_seconds must be finite")
 
 
 def parse_ytdlp_eta(text: str) -> float | None:
@@ -82,7 +87,9 @@ def parse_ytdlp_eta(text: str) -> float | None:
     if text is None:
         return None
     token = str(text).strip()
-    if not token or token.lower() in {"unknown", "n/a", "--:--:--"}:
+    if not token or token.lower() in {"unknown", "n/a"}:
+        return None
+    if token in {"--:--:--", "--:--", "--", "-"}:
         return None
     if token.startswith("-"):
         return None
@@ -94,18 +101,17 @@ def parse_ytdlp_eta(text: str) -> float | None:
         except ValueError:
             return None
         if len(values) == 2:
-            minutes, seconds = values
             hours = 0
+            minutes, seconds = values
         elif len(values) == 3:
             hours, minutes, seconds = values
         else:
             return None
-        if minutes < 0 or seconds < 0 or hours < 0:
+        if any(v < 0 for v in values):
             return None
-        if seconds >= 60 or minutes >= 60:
-            # yt-dlp may emit minutes >= 60 in HH:MM:SS? reject malformed
-            if len(values) == 2 and minutes >= 60:
-                pass
+        # Reject malformed minute/second fields (hardened parser contract).
+        if seconds > 59 or minutes > 59:
+            return None
         total = hours * 3600 + minutes * 60 + seconds
         if total < 0:
             return None
@@ -121,13 +127,6 @@ def parse_ytdlp_eta(text: str) -> float | None:
 
 
 class ProgressTracker:
-    """Sliding-window tracker for transfer rate and ETA.
-
-    Samples are pruned to ``window_seconds`` (clamped to 30..90s). Rate and
-    ETA are ``None`` until enough samples exist; values are never negative or
-    non-finite.
-    """
-
     def __init__(self, *, window_seconds: float = 60.0, min_samples: int = 2) -> None:
         self._window_seconds = min(max(float(window_seconds), 30.0), 90.0)
         self._min_samples = max(1, int(min_samples))
@@ -142,14 +141,23 @@ class ProgressTracker:
     ) -> None:
         if measured_at is None:
             measured_at = time.monotonic()
+        # Monotonic guard: never move backwards in time.
+        if self._samples:
+            last_ts = self._samples[-1][0]
+            if float(measured_at) < last_ts:
+                measured_at = last_ts
         try:
             vs = int(verified_segments)
         except TypeError, ValueError:
             vs = 0
+        except OverflowError:
+            vs = sys.maxsize
         try:
             nb = int(network_bytes_this_session)
         except TypeError, ValueError:
             nb = 0
+        except OverflowError:
+            nb = sys.maxsize
         if vs < 0:
             vs = 0
         if nb < 0:

@@ -788,8 +788,14 @@ def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
         size = float(match.group("size"))
         size_unit = match.group("size_unit")
         multiplier = _SIZE_UNITS.get(size_unit, 1)
-        total = int(size * multiplier)
-        downloaded = int(total * pct / 100)
+        raw_total = size * multiplier
+        if not math.isfinite(raw_total) or raw_total < 0:
+            raw_total = float(sys.maxsize)
+        total = min(int(raw_total), sys.maxsize)
+        try:
+            downloaded = int(total * pct / 100.0)
+        except OverflowError, ValueError:
+            downloaded = total
         if downloaded > total:
             downloaded = total
             is_estimate = True
@@ -823,7 +829,10 @@ def _parse_ytdlp_progress_state(line: str) -> ProgressState | None:
         size = float(byte_match.group("size"))
         size_unit = byte_match.group("size_unit")
         multiplier = _SIZE_UNITS.get(size_unit, 1)
-        downloaded = int(size * multiplier)
+        raw = size * multiplier
+        if not math.isfinite(raw) or raw < 0:
+            raw = 0.0
+        downloaded = min(int(raw), sys.maxsize)
         frag_match = re.search(r"\(frag\s+(\d+)(?:/(\d+))?\)", line)
         fragment_index = int(frag_match.group(1)) if frag_match else 0
         fragment_count = (
@@ -1308,6 +1317,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 backoff_coordinator,
                 video_semaphore,
                 progress_callback,
+                progress_snapshot_callback=progress_snapshot_callback,
                 workspace=workspace,
                 stream_variant_id=stream_variant_id,
                 stream_binding=stream_binding,
@@ -1489,6 +1499,7 @@ async def _attempt_segment_resume(
             stream_variant_id=stream_variant_id,
             stream_binding=binding,
             state_machine=state_machine,
+            progress_snapshot_callback=progress_snapshot_callback,
         )
     except ExtractionError as e:
         # TRN-008 / B13 arm (d): narrowed from (ExtractionError, OSError).
@@ -1746,11 +1757,13 @@ async def _download_with_ytdlp(
                                 expected_segments=expected_segments,
                                 verified_bytes_on_disk=int(verified_bytes or 0),
                                 network_bytes_this_session=int(network_bytes or 0),
+                                transfer_rate_bytes_per_sec=0.0,
                                 eta_seconds=progress_state.eta_seconds,
                                 is_estimate=progress_state.is_estimate,
                                 attempt_id=int(attempt or 0),
                                 child_fragment_index=progress_state.fragment_index,
                                 child_fragment_count=progress_state.fragment_count,
+                                measured_at=time.monotonic(),
                             )
                             progress_snapshot_callback(video_id, snapshot)
                         except Exception:  # noqa: BLE001
@@ -1829,11 +1842,13 @@ async def _download_with_ytdlp(
                                 expected_segments=expected_segments,
                                 verified_bytes_on_disk=int(verified_bytes or 0),
                                 network_bytes_this_session=int(network_bytes or 0),
+                                transfer_rate_bytes_per_sec=0.0,
                                 eta_seconds=progress_state.eta_seconds,
                                 is_estimate=progress_state.is_estimate,
                                 attempt_id=int(attempt or 0),
                                 child_fragment_index=progress_state.fragment_index,
                                 child_fragment_count=progress_state.fragment_count,
+                                measured_at=time.monotonic(),
                             )
                             progress_snapshot_callback(video_id, snapshot)
                         except Exception:  # noqa: BLE001

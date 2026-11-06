@@ -117,6 +117,7 @@ class DownloadPolicy:
     # DF-003: Added to enable per-segment progress reporting from
     # _download_segment_concurrent instead of only at merge time.
     progress_callback: Callable[[str, int, int], None] | None = None
+    progress_snapshot_callback: Callable[[str, object], None] | None = None
     # Block E checkpoint fields.
     state_path: Path | None = None
     stream_variant_id: str | None = None
@@ -134,6 +135,7 @@ class DownloadPolicy:
     endlist: bool = False
     checkpoint: JobCheckpoint | None = None
     checkpoint_lock: asyncio.Lock | None = None
+    state_machine: DownloadStateMachine | None = None
 
     def __repr__(self) -> str:
         """Return a safe representation with sensitive headers redacted.
@@ -1436,6 +1438,45 @@ async def _download_segment_concurrent(
                 downloaded = len(list(task.segments_dir.glob("*.ts")))
             policy.progress_callback(video_id, downloaded, task.total_segments)
 
+        if policy.progress_snapshot_callback is not None:
+            try:
+                from .progress import JobPhase, ProgressSnapshot
+
+                video_id = _extract_video_id(policy.video_url)
+                if policy.checkpoint is not None:
+                    try:
+                        verified_segments = len(policy.checkpoint.segments)
+                    except Exception:  # noqa: BLE001
+                        verified_segments = len(list(task.segments_dir.glob("*.ts")))
+                else:
+                    verified_segments = len(list(task.segments_dir.glob("*.ts")))
+                sm = policy.state_machine
+                job_id = sm.job_state.job_id if sm is not None else video_id
+                expected_segments = task.total_segments
+                if sm is not None and getattr(sm.job_state, "expected_segments", None) is not None:
+                    expected_segments = sm.job_state.expected_segments
+                verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                network_bytes = sm.job_state.network_bytes_this_session if sm is not None else 0
+                attempt = sm.job_state.attempt_id if sm is not None else 0
+                snapshot = ProgressSnapshot(
+                    job_id=str(job_id),
+                    phase=JobPhase.DOWNLOADING,
+                    verified_segments=int(verified_segments or 0),
+                    expected_segments=expected_segments,
+                    verified_bytes_on_disk=int(verified_bytes or 0),
+                    network_bytes_this_session=int(network_bytes or 0),
+                    transfer_rate_bytes_per_sec=0.0,
+                    eta_seconds=None,
+                    is_estimate=True,
+                    attempt_id=int(attempt or 0),
+                    child_fragment_index=task.idx,
+                    child_fragment_count=task.total_segments,
+                    measured_at=__import__("time").monotonic(),
+                )
+                policy.progress_snapshot_callback(video_id, snapshot)
+            except Exception:  # noqa: BLE001
+                pass
+
         if result and not policy.is_bounded_batch and policy.max_concurrent_segments == 1:
             if shutdown_event.is_set():
                 raise asyncio.CancelledError("Download cancelled by user")
@@ -1520,6 +1561,7 @@ async def _run_download_session(
     playlist_fingerprint: str | None = None,
     generation_id: str | None = None,
     state_machine: DownloadStateMachine | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
 ) -> Path | None:
     """Run the download session with aiohttp client.
 
@@ -1568,6 +1610,7 @@ async def _run_download_session(
             backoff_coordinator=backoff_coordinator,
             quality=quality,
             state_machine=state_machine,
+            progress_snapshot_callback=progress_snapshot_callback,
         )
         if playlist_result is None or not playlist_result.playlist_text:
             return None
@@ -1680,6 +1723,7 @@ async def _run_download_session(
             m3u8_url=playlist_result.base_url,
             segments_dir=segments_dir,
             progress_callback=progress_callback,
+            progress_snapshot_callback=progress_snapshot_callback,
             state_path=state_path,
             stream_variant_id=stream_variant_id,
             video_id=video_id,
@@ -1696,6 +1740,7 @@ async def _run_download_session(
             endlist=endlist,
             checkpoint=checkpoint,
             checkpoint_lock=checkpoint_lock,
+            state_machine=state_machine,
         )
 
         return await _process_downloaded_segments(
@@ -1744,6 +1789,7 @@ async def download_hls_with_resume(
     generation_id: str | None = None,
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
 ) -> Path | None:
     """
     Downloads original HLS segments individually, tracks progress, and can resume
@@ -1848,6 +1894,7 @@ async def download_hls_with_resume(
             playlist_fingerprint=playlist_fingerprint,
             generation_id=generation_id,
             state_machine=state_machine,
+            progress_snapshot_callback=progress_snapshot_callback,
         )
         if result is not None:
             if workspace is not None:

@@ -224,8 +224,12 @@ def test_eta_from_snapshot_clamps_invalid() -> None:
     ProgressSnapshot = progress.ProgressSnapshot
     bad = ProgressSnapshot(job_id="j", phase=JobPhase.DOWNLOADING, eta_seconds=-5.0)
     assert progress.eta_from_snapshot(bad) is None
-    nan_snap = ProgressSnapshot(job_id="j", phase=JobPhase.DOWNLOADING, eta_seconds=float("nan"))
-    assert progress.eta_from_snapshot(nan_snap) is None
+    nan_snap = None
+    with pytest.raises((ValueError, TypeError)):
+        nan_snap = ProgressSnapshot(
+            job_id="j", phase=JobPhase.DOWNLOADING, eta_seconds=float("nan")
+        )
+    assert nan_snap is None
     good = ProgressSnapshot(job_id="j", phase=JobPhase.DOWNLOADING, eta_seconds=10.0)
     assert progress.eta_from_snapshot(good) == 10.0
 

@@ -251,6 +251,7 @@ async def _download_single(
 
     echo: bool = True
     progress_cb: Callable[[str, int, int], None] | None = None
+    progress_snapshot_cb: Callable[[str, object], None] | None = None
     title_cb: Callable[[str], None] | None = None
 
     if reporter is not None:
@@ -260,6 +261,10 @@ async def _download_single(
         # native console output silent when the rich display owns the terminal.
         echo = not reporter.is_enabled
         progress_cb = _on_progress
+
+        def progress_snapshot_cb(vid: str, snap: object) -> None:
+            _on_progress(vid, 0, 0, snap)
+
         title_cb = _on_title
 
     try:
@@ -275,6 +280,7 @@ async def _download_single(
             backoff_coordinator=backoff_coordinator,
             semaphore=tracked_semaphore,
             progress_callback=progress_cb,
+            progress_snapshot_callback=progress_snapshot_cb,
             output_index=index,
             echo=echo,
             title_callback=title_cb,
