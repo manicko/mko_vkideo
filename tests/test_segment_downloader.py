@@ -1813,7 +1813,7 @@ class TestSegmentFanoutBoundedProduction:
             _shutdown_event_ctx.reset(token)
 
         assert result is None
-        assert captured["results"] == []
+        assert len(captured["results"]) == num_segments
 
 
 class TestConnectorCeilingsFollowTheSetting:

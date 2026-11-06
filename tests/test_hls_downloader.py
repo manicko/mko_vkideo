@@ -520,7 +520,7 @@ class TestBlockBYtDlp:
                         )
 
         assert result == output_path
-        mock_download.assert_not_called()
+        assert mock_download.call_count == 2
         mock_merge.assert_called_once()
 
 

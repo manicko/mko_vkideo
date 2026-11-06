@@ -69,6 +69,9 @@ class SegmentTask:
     segment_url: str
     segments_dir: Path
     total_segments: int = 1
+    byte_range: tuple[int, int] | None = None
+    init_map_uri: str | None = None
+    init_map_identity: str | None = None
 
 
 @dataclass
@@ -129,6 +132,8 @@ class DownloadPolicy:
     media_sequence: int | None = None
     discontinuity_sequence: int = 0
     init_map_identity: str | None = None
+    init_map_sha256: str | None = None
+    segment_byte_ranges: list[tuple[int, int] | None] | None = None
     codecs: str | None = None
     resolution: str | None = None
     is_live: bool = False
@@ -267,10 +272,21 @@ def _reconcile_checkpoint(
             discontinuity_sequence=discontinuity_sequence,
         )
         if not ok:
-            # Identity mismatch or unreadable checkpoint: quarantine the old
-            # generation. Failures propagate (no silent swallow).
+            # Allocate a new generation ID (gen-{n+1}) and preserve prior generation.
+            try:
+                prior = existing.generation_id or "gen-0"
+                num = 0
+                if isinstance(prior, str) and prior.startswith("gen-"):
+                    try:
+                        num = int(prior.split("-", 1)[1])
+                    except TypeError, ValueError:
+                        num = 0
+                new_gen = f"gen-{num + 1}"
+            except Exception:  # noqa: BLE001
+                new_gen = "gen-1"
             _cp.quarantine_generation(segments_dir, existing.generation_id)
             segments_dir.mkdir(parents=True, exist_ok=True)
+            generation_id = new_gen
         else:
             # Identity matches: keep checkpoint even if individual segments are
             # corrupt; _iter_pending_segment_tasks handles those.
@@ -420,6 +436,7 @@ async def _download_segment_sequential(
     download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
     *,
     backoff_coordinator: URLBackoffCoordinator | None = None,
+    byte_range: tuple[int, int] | None = None,
 ) -> bool:
     """Download a single HLS segment with sequential retry logic.
 
@@ -443,6 +460,50 @@ async def _download_segment_sequential(
         return False
     if backoff_coordinator is not None:
         await backoff_coordinator.wait_if_paused(segment_url)
+
+    if byte_range is not None:
+        offset, length = byte_range
+        req_headers = dict(headers)
+        req_headers["Range"] = f"bytes={offset}-{offset + length - 1}"
+        req_headers["Accept-Encoding"] = "identity"
+        client_timeout = build_client_timeout(download_timeout)
+        content = None
+        try:
+            async with session.get(
+                segment_url, headers=req_headers, timeout=client_timeout
+            ) as resp:
+                if resp.status != 206:
+                    return False
+                cr = resp.headers.get("Content-Range", "")
+                # parse bytes start-end/total
+                if not cr.lower().startswith("bytes "):
+                    return False
+                try:
+                    range_part, _total = cr[len("bytes ") :].split("/", 1)
+                    start_str, end_str = range_part.split("-", 1)
+                    start = int(start_str)
+                    end = int(end_str)
+                except ValueError, TypeError:
+                    return False
+                if start != offset or end != offset + length - 1:
+                    return False
+                payload = await resp.read()
+                if len(payload) != length:
+                    return False
+                content = payload
+        except Exception:  # noqa: BLE001
+            return False
+        if content is None:
+            return False
+        temp_path = output_path.with_suffix(output_path.suffix + _SEGMENT_TEMP_SUFFIX)
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(content)
+            os.replace(temp_path, output_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return True
 
     content = await _retry_429_with_backoff(
         session,
@@ -599,6 +660,7 @@ async def _download_segment_parallel(
     backoff_coordinator: URLBackoffCoordinator | None = None,
     video_url: str | None = None,
     download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
+    byte_range: tuple[int, int] | None = None,
 ) -> bool:
     """Download a single HLS segment with parallel retry logic and shared backoff.
 
@@ -664,6 +726,7 @@ async def _download_segment(
     video_url: str | None = None,
     max_retries: int = 3,
     download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
+    byte_range: tuple[int, int] | None = None,
 ) -> bool:
     """Download a single HLS segment.
 
@@ -682,7 +745,7 @@ async def _download_segment(
     Returns:
         True on success, False on failure.
     """
-    if max_concurrent_segments == 1:
+    if max_concurrent_segments == 1 or byte_range is not None:
         return await _download_segment_sequential(
             session,
             segment_url,
@@ -692,6 +755,7 @@ async def _download_segment(
             max_retries=max_retries,
             download_timeout=download_timeout,
             backoff_coordinator=backoff_coordinator,
+            byte_range=byte_range,
         )
 
     return await _download_segment_parallel(
@@ -703,6 +767,7 @@ async def _download_segment(
         backoff_coordinator=backoff_coordinator,
         video_url=video_url,
         download_timeout=download_timeout,
+        byte_range=byte_range,
     )
 
 
@@ -1407,6 +1472,7 @@ async def _download_segment_concurrent(
             video_url=policy.video_url,
             max_retries=policy.max_retries,
             download_timeout=policy.download_timeout,
+            byte_range=task.byte_range,
         )
 
         # Block E: publish checkpoint entry only after a successful rename.
@@ -1428,10 +1494,15 @@ async def _download_segment_concurrent(
                         size=size,
                         sha256=sha,
                         duration_seconds=duration,
-                        byte_range=None,
+                        byte_range=(
+                            f"{task.byte_range[0]}-{task.byte_range[0] + task.byte_range[1] - 1}"
+                            if task.byte_range
+                            else None
+                        ),
                         discontinuity_sequence=policy.discontinuity_sequence or 0,
                         media_sequence=policy.media_sequence,
                         generation_id=policy.generation_id or "gen-0",
+                        init_map_sha256=getattr(policy, "init_map_sha256", None),
                     )
                     lock = policy.checkpoint_lock
                     if lock is not None:
@@ -1557,7 +1628,6 @@ def _iter_pending_segment_tasks(
         SegmentTask objects for segments that need downloading.
     """
     for i, seg in enumerate(segments):
-        segment_path = policy.segments_dir / f"{i:05d}.ts"
         record = None
         if policy.checkpoint is not None:
             try:
@@ -1574,15 +1644,18 @@ def _iter_pending_segment_tasks(
                     continue
             except Exception:  # noqa: BLE001
                 pass
-        else:
-            if segment_path.exists() and segment_path.stat().st_size > 0:
-                logger.debug("skipping_existing_segment", idx=i)
-                continue
+        byte_range = None
+        ranges = getattr(policy, "segment_byte_ranges", None)
+        if ranges and i < len(ranges):
+            byte_range = ranges[i]
         yield SegmentTask(
             idx=i,
             segment_url=seg,
             segments_dir=policy.segments_dir,
             total_segments=len(segments),
+            byte_range=byte_range,
+            init_map_uri=None,
+            init_map_identity=policy.init_map_identity,
         )
 
 
@@ -1669,40 +1742,77 @@ async def _run_download_session(
         if stream_variant_id is None:
             stream_variant_id = getattr(playlist_result, "stream_variant_id", None)
 
-        segments = _parse_m3u8_segments(playlist_result.playlist_text)
-        logger.info("found_segments", count=len(segments))
+        segments_text = playlist_result.playlist_text
+        base_url = playlist_result.base_url
 
-        # Parse HLS structure for durations + media identity (Block E).
+        # Master playlist resolution (fail-closed): never treat variants as segments.
+        selected_variant = None
         try:
             from . import hls_parser as _hp
 
-            media_playlist = _hp.parse_media_playlist(
-                playlist_result.playlist_text, base_url=playlist_result.base_url
-            )
+            if "#EXT-X-STREAM-INF" in segments_text:
+                variants = _hp.parse_master_playlist(segments_text, base_url=base_url)
+                # Exact quality match: prefer resolution height equal to requested.
+                selected_variant = _select_hls_variant(variants, quality)
+                if selected_variant is None and variants:
+                    # No exact match: fail closed rather than downgrade.
+                    logger.warning("hls_variant_no_exact_match", quality=quality)
+                    return None
+                if selected_variant is not None:
+                    # Fetch selected media playlist.
+                    async with session.get(str(getattr(selected_variant, "uri", ""))) as resp:
+                        if resp.status != 200:
+                            return None
+                        segments_text = await resp.text()
+                    base_url = getattr(selected_variant, "uri", base_url)
+                    if stream_variant_id is None:
+                        stream_variant_id = getattr(selected_variant, "variant_id", None)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hls_master_resolution_failed", error=str(exc))
+            return None
+
+        # Structured parse must succeed before any segment directory creation.
+        try:
+            from . import hls_parser as _hp
+
+            media_playlist = _hp.parse_media_playlist(segments_text, base_url=base_url)
         except Exception as exc:  # noqa: BLE001
             logger.warning("hls_parse_failed", error=str(exc))
-            media_playlist = None
+            return None
 
-        segment_durations = None
-        is_live = False
-        endlist = True
-        media_sequence = None
-        discontinuity_sequence = 0
-        init_map_identity = None
-        codecs = None
-        resolution = None
-        if media_playlist is not None:
-            segment_durations = [s.duration for s in media_playlist.segments]
-            # align length
-            if len(segment_durations) != len(segments):
-                segment_durations = None
-            is_live = bool(getattr(media_playlist, "is_live", False))
-            endlist = bool(getattr(media_playlist, "endlist", True))
-            media_sequence = getattr(media_playlist, "media_sequence", None)
-            discontinuity_sequence = getattr(media_playlist, "discontinuity_sequence", 0) or 0
-            init_map_identity = getattr(media_playlist, "init_map_identity", None)
-            codecs = getattr(media_playlist, "codecs", None)
-            resolution = getattr(media_playlist, "resolution", None)
+        segments = [str(s.uri) for s in media_playlist.segments]
+        logger.info("found_segments", count=len(segments))
+
+        # Fallback variant identity (non-trivial) if still missing.
+        if stream_variant_id is None:
+            try:
+                from urllib.parse import urlparse
+
+                host = urlparse(base_url).hostname or "unknown"
+            except Exception:  # noqa: BLE001
+                host = "unknown"
+            import hashlib as _hl
+
+            digest = _hl.sha256(_strip_query_token(base_url).encode("utf-8")).hexdigest()[:8]
+            stream_variant_id = f"{quality}:{host}:{digest}"
+
+        segment_durations = [s.duration for s in media_playlist.segments]
+        is_live = bool(getattr(media_playlist, "is_live", False))
+        endlist = bool(getattr(media_playlist, "endlist", True))
+        media_sequence = getattr(media_playlist, "media_sequence", None)
+        discontinuity_sequence = getattr(media_playlist, "discontinuity_sequence", 0)
+        init_map_identity = getattr(media_playlist, "init_map_identity", None)
+        codecs = getattr(media_playlist, "codecs", None) or (
+            getattr(selected_variant, "codecs", None) if selected_variant else None
+        )
+        resolution = getattr(media_playlist, "resolution", None) or (
+            getattr(selected_variant, "resolution", None) if selected_variant else None
+        )
+
+        # Reject live playlists fail-closed when explicitly marked live.
+        if getattr(media_playlist, "playlist_type", None) == "LIVE":
+            logger.warning("hls_live_playlist_unsupported")
+            return None
 
         if stream_variant_id is None:
             stream_variant_id = f"{codecs or 'unknown'}:{resolution or 'unknown'}"
@@ -1720,6 +1830,33 @@ async def _run_download_session(
                 )
             except Exception:  # noqa: BLE001
                 playlist_fingerprint = f"fp:{len(segments)}"
+
+        # Build byte-range list aligned with segments.
+        segment_byte_ranges: list[tuple[int, int] | None] = []
+        for s in media_playlist.segments:
+            if (
+                getattr(s, "byte_range_offset", None) is not None
+                and getattr(s, "byte_range_length", None) is not None
+            ):
+                segment_byte_ranges.append(
+                    (int(s.byte_range_offset or 0), int(s.byte_range_length or 0))
+                )
+            else:
+                segment_byte_ranges.append(None)
+
+        # Fetch + verify EXT-X-MAP before fan-out (best-effort; store hash).
+        init_map_sha256 = None
+        init_map_uri = getattr(media_playlist, "init_map_uri", None)
+        if init_map_uri:
+            try:
+                async with session.get(init_map_uri) as resp:
+                    if resp.status == 200:
+                        map_bytes = await resp.read()
+                        import hashlib as _hl
+
+                        init_map_sha256 = _hl.sha256(map_bytes).hexdigest()
+            except Exception:  # noqa: BLE001
+                init_map_sha256 = None
 
         # P12-B7 (ART-005 lifetime): the segments working directory is created
         # only after the playlist is parsed and segments are enumerated.
@@ -1787,6 +1924,8 @@ async def _run_download_session(
             checkpoint=checkpoint,
             checkpoint_lock=checkpoint_lock,
             state_machine=state_machine,
+            segment_byte_ranges=segment_byte_ranges,
+            init_map_sha256=init_map_sha256,
         )
 
         return await _process_downloaded_segments(
@@ -1817,6 +1956,40 @@ def _bind_segment_diagnostic_context(value: object) -> None:
         bind_diagnostic_context(**_coerce_diagnostic_context(value))
     except Exception:
         pass
+
+
+def _select_hls_variant(variants: object, quality: object) -> object | None:
+    """Select variant by exact requested height; no downgrade."""
+    variants_list = variants if isinstance(variants, (list, tuple)) else []
+    if not variants_list:
+        return None
+    target = None
+    try:
+        target = int(str(quality).rstrip("p"))
+    except TypeError, ValueError:
+        target = None
+    if target is None:
+        return max(variants_list, key=lambda v: (getattr(v, "bandwidth", 0) or 0,))  # type: ignore[no-any-return]
+    for v in variants_list:
+        res = getattr(v, "resolution", None)
+        if res:
+            try:
+                height = int(str(res).split("x")[-1])
+            except TypeError, ValueError:
+                height = None
+            if height == target:
+                return v  # type: ignore[no-any-return]
+    return None
+
+
+def _strip_query_token(url: str) -> str:
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(str(url))
+        return parts._replace(query="").geturl()
+    except Exception:  # noqa: BLE001
+        return str(url).split("?", 1)[0]
 
 
 async def download_hls_with_resume(
