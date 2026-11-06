@@ -130,14 +130,19 @@ async def perform_download(
 
     if state_machine is None and workspace is not None:
         try:
+            from .workspace import acquire_job_lock
+
+            with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                from .state_migration import migrate_legacy_state
+
+                migrate_legacy_state(workspace)
             from .state_machine import DownloadStateMachine
-            from .workspace import stable_job_id
 
             try:
-                state_machine = DownloadStateMachine.load(workspace)
+                state_machine = DownloadStateMachine.load(workspace, job_id=workspace.job_id)
             except Exception:  # noqa: BLE001
                 state_machine = DownloadStateMachine.create(
-                    job_id=stable_job_id(output_file.stem, str(quality), output_file.name),
+                    job_id=workspace.job_id,
                     quality_requested=quality,
                     workspace=workspace,
                 )
@@ -459,14 +464,19 @@ async def download_video(
 
     if state_machine is None and workspace is not None:
         try:
+            from .workspace import acquire_job_lock
+
+            with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                from .state_migration import migrate_legacy_state
+
+                migrate_legacy_state(workspace)
             from .state_machine import DownloadStateMachine
-            from .workspace import stable_job_id
 
             try:
-                state_machine = DownloadStateMachine.load(workspace)
+                state_machine = DownloadStateMachine.load(workspace, job_id=workspace.job_id)
             except Exception:  # noqa: BLE001
                 state_machine = DownloadStateMachine.create(
-                    job_id=stable_job_id(str(video.id), str(quality), output_file.name),
+                    job_id=workspace.job_id,
                     quality_requested=str(quality),
                     workspace=workspace,
                 )

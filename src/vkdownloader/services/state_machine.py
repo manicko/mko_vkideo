@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict
 from structlog import get_logger
 
 from ..models.enums import DownloadState, ErrorCategory
-from .checkpoint import write_state_atomic
 
 if TYPE_CHECKING:
     from .workspace import DownloadWorkspace
@@ -204,40 +203,68 @@ class DownloadStateMachine:
         return sm
 
     @classmethod
-    def load(cls, workspace: DownloadWorkspace | None) -> DownloadStateMachine:
+    def load(
+        cls,
+        workspace: DownloadWorkspace | None = None,
+        job_id: str | None = None,
+        recovery_root: Path | None = None,
+    ) -> DownloadStateMachine:
         if workspace is None:
-            return cls(DownloadJobState(job_id="unknown"), workspace=None)
-        path = Path(workspace.state_path)
-        job_id = getattr(getattr(workspace, "root", None), "name", None) or "unknown"
-        if path.exists():
+            return cls(DownloadJobState(job_id=job_id or "unknown"), workspace=None)
+        if job_id is None:
+            job_id = getattr(workspace, "job_id", None)
+        if job_id is None:
+            job_id = getattr(getattr(workspace, "root", None), "name", None) or "unknown"
+        job_id = str(job_id)
+
+        path_value = getattr(workspace, "job_state_path", None)
+        if path_value is None:
+            path_value = getattr(workspace, "state_path", None)
+        path = Path(path_value) if path_value is not None else None
+
+        if path is None or not path.exists():
+            job_state = DownloadJobState(job_id=job_id)
+            sm = cls(job_state, workspace=workspace)
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                job_state = DownloadJobState.model_validate(data)
-                return cls(job_state, workspace=workspace)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "corrupt_state_file",
-                    path=str(path),
-                    error=str(exc),
-                )
-                corrupt = path.with_name(path.name + ".corrupt")
-                counter = 1
-                while corrupt.exists():
-                    corrupt = path.with_name(f"{path.name}.corrupt.{counter}")
-                    counter += 1
-                try:
-                    path.rename(corrupt)
-                except OSError:  # noqa: BLE001
-                    pass
-                job_state = DownloadJobState(job_id=job_id)
-                sm = cls(job_state, workspace=workspace)
-                try:
-                    sm.persist()
-                except Exception:  # noqa: BLE001
-                    pass
-                return sm
-        job_state = DownloadJobState(job_id=job_id)
-        return cls(job_state, workspace=workspace)
+                sm.persist()
+            except Exception:  # noqa: BLE001
+                pass
+            return sm
+
+        # Preserve bytes helper.
+        def _preserve() -> None:
+            try:
+                from .state_migration import preserve_bytes
+
+                if recovery_root is None:
+                    tmp = Path(workspace.root).parent.parent
+                    rroot = tmp / "recovery" / job_id
+                else:
+                    rroot = Path(recovery_root)
+                ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                dated = rroot / ts
+                dated.mkdir(parents=True, exist_ok=True)
+                preserve_bytes(path, dated)
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            job_state = DownloadJobState.model_validate(data)
+            if job_state.job_id != job_id:
+                _preserve()
+                raise ValueError("job_id mismatch")
+            return cls(job_state, workspace=workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("corrupt_state_file", path=str(path), error=str(exc))
+            _preserve()
+            job_state = DownloadJobState(job_id=job_id)
+            sm = cls(job_state, workspace=workspace)
+            try:
+                sm.persist()
+            except Exception:  # noqa: BLE001
+                pass
+            return sm
 
     # ------------------------------------------------------------------ #
     # State access
@@ -284,7 +311,10 @@ class DownloadStateMachine:
     def persist(self) -> None:
         if self.workspace is None:
             return
-        write_state_atomic(self.workspace.state_path, self.job_state)
+        path_value = getattr(self.workspace, "job_state_path", None)
+        if path_value is None:
+            path_value = self.workspace.state_path
+        write_job_state_atomic(path_value, self.job_state)
 
     # ------------------------------------------------------------------ #
     # Classification
@@ -573,6 +603,24 @@ class DownloadStateMachine:
         if self.workspace is not None:
             self.persist()
 
-    def increment_attempt_id(self) -> int:
-        self.job_state.attempt_id += 1
-        return self.job_state.attempt_id
+
+def write_job_state_atomic(path: str | Path, payload: object) -> None:
+    """Owner-local atomic writer for ``DownloadJobState``.
+
+    Validates the payload as a ``DownloadJobState`` before delegating to the
+    shared atomic primitive.
+    """
+    if not isinstance(payload, DownloadJobState):
+        if hasattr(payload, "model_dump"):
+            try:
+                payload = DownloadJobState.model_validate(payload.model_dump(mode="json"))
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                payload = DownloadJobState.model_validate(payload)
+            except Exception:  # noqa: BLE001
+                pass
+    from .checkpoint import write_checkpoint_atomic
+
+    write_checkpoint_atomic(path, payload)

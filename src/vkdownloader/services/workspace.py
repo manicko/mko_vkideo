@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Protocol
 
 from structlog import get_logger
 
@@ -58,9 +59,12 @@ class DownloadWorkspace:
     segments_dir: Path
     staging_dir: Path
     diagnostics_dir: Path
+    job_state_path: Path
+    segment_checkpoint_path: Path
     state_path: Path
     log_path: Path
     lock_path: Path
+    job_id: str
 
 
 def stable_job_id(video_id: str, quality: str, final_basename: str) -> str:
@@ -76,8 +80,9 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
     """Create (or reuse) the per-job workspace tree for ``final_path``."""
     quality = _validate_quality(quality)
     validated_final = validate_final_output_path(Path(final_path))
+    job_id = stable_job_id(video_id, quality, validated_final.name)
     tmp = validated_final.parent / "tmp"
-    job = tmp / "jobs" / stable_job_id(video_id, quality, validated_final.name)
+    job = tmp / "jobs" / job_id
 
     ws = DownloadWorkspace(
         final_path=validated_final,
@@ -86,9 +91,12 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
         segments_dir=job / "segments",
         staging_dir=job / "staging",
         diagnostics_dir=job / "diagnostics",
+        job_state_path=job / "job_state.v2.json",
+        segment_checkpoint_path=job / "segment_checkpoint.v2.json",
         state_path=job / "state.json",
         log_path=tmp / "logs" / f"{job.name}.jsonl",
-        lock_path=job / "lock",
+        lock_path=tmp / "locks" / f"{job_id}.lock",
+        job_id=job_id,
     )
     for d in (
         ws.root,
@@ -97,6 +105,7 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
         ws.staging_dir,
         ws.diagnostics_dir,
         tmp / "logs",
+        tmp / "locks",
     ):
         d.mkdir(parents=True, exist_ok=True)
     return ws
@@ -168,6 +177,12 @@ def _is_pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+class _JobLockLike(Protocol):
+    def __enter__(self) -> _JobLockLike: ...
+    def __exit__(self, *exc: object) -> None: ...
+    def release(self) -> None: ...
 
 
 def acquire_job_lock(workspace: DownloadWorkspace, timeout: float = 10.0) -> object:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -120,6 +121,8 @@ def read_checkpoint(
     path: str | Path,
     segments_dir: str | Path | None = None,
     *,
+    recovery_dir: str | Path | None = None,
+    preserve: bool = False,
     schema_version: int = CHECKPOINT_SCHEMA_VERSION,
 ) -> JobCheckpoint | None:
     """Load and validate a checkpoint, returning None on any failure."""
@@ -140,10 +143,24 @@ def read_checkpoint(
         for record in checkpoint.segments.values():
             confine_relative_path(record.relative_file, base_dir)
         return checkpoint
-    except OSError, ValueError, ValidationError, json.JSONDecodeError, TypeError:
-        logger.warning("checkpoint_load_failed", path=str(path))
+    except (OSError, ValueError, ValidationError, json.JSONDecodeError, TypeError) as exc:
+        if preserve and recovery_dir is not None and path.exists():
+            try:
+                from .state_migration import preserve_bytes
+
+                preserve_bytes(path, Path(recovery_dir))
+            except Exception:  # noqa: BLE001
+                pass
+        logger.warning("checkpoint_load_failed", path=str(path), error=str(exc))
         return None
     except Exception as exc:  # noqa: BLE001
+        if preserve and recovery_dir is not None and path.exists():
+            try:
+                from .state_migration import preserve_bytes
+
+                preserve_bytes(path, Path(recovery_dir))
+            except Exception:  # noqa: BLE001
+                pass
         logger.warning("checkpoint_load_failed", path=str(path), error=str(exc))
         return None
 
@@ -171,7 +188,7 @@ def write_checkpoint_atomic(path: str | Path, payload: object) -> None:
     else:
         data = payload
 
-    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(data, handle, sort_keys=True, ensure_ascii=False)

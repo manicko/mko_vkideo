@@ -236,11 +236,21 @@ def _reconcile_checkpoint(
         state_path = segments_dir / "state.json"
     state_path = Path(state_path)
 
+    # Recovery directory for corrupt checkpoint bytes (dated, outside job dir).
+    try:
+        job_id = segments_dir.parent.name
+        tmp_root = segments_dir.parent.parent.parent
+        recovery_dir = tmp_root / "recovery" / job_id
+    except Exception:  # noqa: BLE001
+        recovery_dir = segments_dir.parent / "recovery"
+
     existing = None
     unreadable = False
     try:
         if state_path.exists():
-            existing = _cp.read_checkpoint(state_path, segments_dir)
+            existing = _cp.read_checkpoint(
+                state_path, segments_dir, recovery_dir=recovery_dir, preserve=True
+            )
             if existing is None:
                 unreadable = True
     except Exception:  # noqa: BLE001
@@ -1200,6 +1210,7 @@ async def _tally_and_merge(
     output_file: Path,
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
+    checkpoint: object | None = None,
 ) -> Path | None:
     """Tally download results and merge if all segments downloaded.
 
@@ -1217,9 +1228,28 @@ async def _tally_and_merge(
     Returns:
         Path to merged file on success, None otherwise.
     """
-    downloaded_count = len(
-        [f for f in segments_dir.glob("*.ts") if not f.name.startswith("batch_")]
-    )
+    segments_dir = Path(segments_dir)
+    from . import checkpoint as _cp
+
+    # Verified record count is the authority; glob count is diagnostic only.
+    verified_count = 0
+    if checkpoint is not None:
+        try:
+            verified_count = sum(
+                1
+                for r in getattr(checkpoint, "segments", {}).values()
+                if _cp.verify_segment_record(r, segments_dir)
+            )
+        except Exception:  # noqa: BLE001
+            verified_count = 0
+    glob_count = len([f for f in segments_dir.glob("*.ts") if not f.name.startswith("batch_")])
+    logger.debug("tally_glob_diagnostic", glob_count=glob_count, verified_count=verified_count)
+
+    has_records = bool(getattr(checkpoint, "segments", None)) if checkpoint is not None else False
+    if has_records:
+        downloaded_count = verified_count
+    else:
+        downloaded_count = glob_count
 
     if progress_callback:
         video_id = _extract_video_id(video_url)
@@ -1333,6 +1363,7 @@ async def _process_downloaded_segments(
         output_file,
         progress_callback,
         policy.video_url,
+        checkpoint=policy.checkpoint,
     )
 
 
@@ -1429,10 +1460,16 @@ async def _download_segment_concurrent(
         # progress during segment downloads, not just once at merge time.
         if policy.progress_callback is not None:
             video_id = _extract_video_id(policy.video_url)
-            # Use checkpoint/state-machine verified counts when available.
+            # Use checkpoint verified count when available.
             if policy.checkpoint is not None:
                 try:
-                    downloaded = len(policy.checkpoint.segments)
+                    from . import checkpoint as _cp
+
+                    downloaded = sum(
+                        1
+                        for r in policy.checkpoint.segments.values()
+                        if _cp.verify_segment_record(r, task.segments_dir)
+                    )
                 except Exception:  # noqa: BLE001
                     downloaded = len(list(task.segments_dir.glob("*.ts")))
             else:
@@ -1446,7 +1483,13 @@ async def _download_segment_concurrent(
                 video_id = _extract_video_id(policy.video_url)
                 if policy.checkpoint is not None:
                     try:
-                        verified_segments = len(policy.checkpoint.segments)
+                        from . import checkpoint as _cp
+
+                        verified_segments = sum(
+                            1
+                            for r in policy.checkpoint.segments.values()
+                            if _cp.verify_segment_record(r, task.segments_dir)
+                        )
                     except Exception:  # noqa: BLE001
                         verified_segments = len(list(task.segments_dir.glob("*.ts")))
                 else:
@@ -1844,7 +1887,7 @@ async def download_hls_with_resume(
         segments_dir = workspace.segments_dir
         merge_output = workspace.staging_dir / output_file.name
         if state_path is None:
-            state_path = workspace.state_path
+            state_path = workspace.segment_checkpoint_path
     else:
         segments_dir = output_file.parent / f".{output_file.stem}_segments"
         merge_output = output_file

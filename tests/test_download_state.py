@@ -50,9 +50,9 @@ def _new_sm(tmp_path):
 
     ws = make_workspace(tmp_path / "out.mp4", "vid1", "720")
     try:
-        sm = DownloadStateMachine.create(job_id="job-1", workspace=ws)
+        sm = DownloadStateMachine.create(job_id=ws.job_id, workspace=ws)
     except TypeError:
-        sm = DownloadStateMachine(DownloadJobState(job_id="job-1"), workspace=ws)
+        sm = DownloadStateMachine(DownloadJobState(job_id=ws.job_id), workspace=ws)
     return DownloadState, ErrorCategory, DownloadJobState, DownloadStateMachine, sm, ws
 
 
@@ -124,7 +124,7 @@ def test_allowed_transition_persists(tmp_path):
     DownloadState, _, _, _, sm, ws = _new_sm(tmp_path)
     sm.transition(DownloadState.RESOLVE_STREAM, reason_code="start")
     assert sm.state == DownloadState.RESOLVE_STREAM
-    assert ws.state_path.exists()
+    assert ws.job_state_path.exists()
     from vkdownloader.services.state_machine import DownloadStateMachine
 
     loaded = DownloadStateMachine.load(ws)
@@ -348,7 +348,7 @@ def test_counters_exposed():
 def test_no_secrets_persisted(tmp_path):
     DownloadState, _, _, _, sm, ws = _new_sm(tmp_path)
     sm.persist()
-    text = ws.state_path.read_text(encoding="utf-8")
+    text = ws.job_state_path.read_text(encoding="utf-8")
     assert "SECRET" not in text
     assert "token=" not in text
     assert "cookie" not in text.lower()

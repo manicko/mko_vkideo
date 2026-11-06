@@ -73,7 +73,13 @@ def test_make_workspace_layout(tmp_path: Path) -> None:
         assert d.exists() and d.is_dir(), f"missing dir: {d}"
     assert workspace.log_path.parent.exists()
     assert workspace.state_path.parent == workspace.root
-    assert workspace.lock_path.parent == workspace.root
+    assert workspace.job_state_path != workspace.segment_checkpoint_path
+    assert workspace.job_state_path.name == "job_state.v2.json"
+    assert workspace.segment_checkpoint_path.name == "segment_checkpoint.v2.json"
+    assert workspace.job_state_path.parent == workspace.root
+    assert workspace.segment_checkpoint_path.parent == workspace.root
+    assert workspace.lock_path.parent == (final_path.parent / "tmp" / "locks")
+    assert workspace.lock_path.parent.exists()
     assert (final_path.parent / "tmp").exists()
     assert (final_path.parent / "tmp" / "logs").exists()
 

@@ -1197,14 +1197,29 @@ async def download_with_ytdlp_with_resume_fallback(
     if state_machine is None:
         try:
             from .state_machine import DownloadStateMachine
-            from .workspace import stable_job_id
 
-            state_machine = DownloadStateMachine.create(
-                job_id=stable_job_id(
+            job_id = None
+            if workspace is not None:
+                job_id = getattr(workspace, "job_id", None)
+                try:
+                    from .workspace import acquire_job_lock
+
+                    with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                        from .state_migration import migrate_legacy_state
+
+                        migrate_legacy_state(workspace)
+                except Exception:  # noqa: BLE001
+                    pass
+            if job_id is None:
+                from .workspace import stable_job_id
+
+                job_id = stable_job_id(
                     _extract_video_id(video_url) if video_url else output_file.stem,
                     str(quality),
                     (workspace.final_path.name if workspace is not None else output_file.name),
-                ),
+                )
+            state_machine = DownloadStateMachine.create(
+                job_id=job_id,
                 quality_requested=quality,
                 workspace=workspace,
             )
@@ -1388,14 +1403,29 @@ async def _attempt_segment_resume(
     if state_machine is None:
         try:
             from .state_machine import DownloadStateMachine
-            from .workspace import stable_job_id
 
-            state_machine = DownloadStateMachine.create(
-                job_id=stable_job_id(
+            job_id = None
+            if workspace is not None:
+                job_id = getattr(workspace, "job_id", None)
+                try:
+                    from .workspace import acquire_job_lock
+
+                    with acquire_job_lock(workspace, timeout=10.0):  # type: ignore[attr-defined]
+                        from .state_migration import migrate_legacy_state
+
+                        migrate_legacy_state(workspace)
+                except Exception:  # noqa: BLE001
+                    pass
+            if job_id is None:
+                from .workspace import stable_job_id
+
+                job_id = stable_job_id(
                     _extract_video_id(video_url) if video_url else output_file.stem,
                     str(quality),
                     output_file.name,
-                ),
+                )
+            state_machine = DownloadStateMachine.create(
+                job_id=job_id,
                 quality_requested=quality,
                 workspace=workspace,
             )
