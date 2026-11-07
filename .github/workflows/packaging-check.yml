@@ -75,7 +75,7 @@ jobs:
       - name: Coverage measurement
         run: uv run coverage run -m pytest tests/
       - name: Coverage report
-        run: uv run coverage report
+        run: uv run coverage report --fail-under=85
       - name: Advisory scan
         if: runner.os == 'Linux'
         run: |
