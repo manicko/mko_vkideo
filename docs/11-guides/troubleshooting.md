@@ -36,14 +36,17 @@ C:\data\Video\Shows\
 └── tmp\
     ├── jobs\
     │   └── <job-id>\
-    │       ├── state.json           # durable checkpoint
-    │       ├── lock                 # exclusive job lock
-    │       ├── ytdlp\              # yt-dlp fragments and partials
-    │       ├── segments\           # downloaded HLS segments
-    │       ├── staging\            # completed, not-yet-published media
-    │       └── diagnostics\        # non-secret metadata
+    │       ├── job_state.v2.json           # durable job state
+    │       ├── segment_checkpoint.v2.json  # HLS segment checkpoint
+    │       ├── state.json                 # legacy read-only migration input
+    │       ├── ytdlp\                     # yt-dlp fragments and partials
+    │       ├── segments\                  # downloaded HLS segments
+    │       ├── staging\                   # completed, not-yet-published media
+    │       └── diagnostics\               # non-secret metadata
+    ├── locks\
+    │   └── <job-id>.lock                  # exclusive job lock (external)
     └── logs\
-        └── <job-id>.jsonl          # redacted per-job diagnostic log
+        └── <job-id>.jsonl                 # redacted per-job diagnostic log
 ```
 
 - In-progress artifacts are never written at the output root.
@@ -59,7 +62,7 @@ C:\data\Video\Shows\
 
 ## Resume Behavior
 
-- Resume uses the durable checkpoint at `state.json`.
+- Resume uses the durable checkpoints at `job_state.v2.json` (job state) and `segment_checkpoint.v2.json` (HLS segment checkpoint). The legacy `state.json`, if present, is read-only migration input.
 - Verified segments are recorded with size and SHA-256 and are checked before reuse.
 - A token-only URL change reuses compatible segments; there is no false restart at byte zero.
 - If media identity changes or is ambiguous, the old generation is quarantined in its job directory instead of being mixed or deleted.

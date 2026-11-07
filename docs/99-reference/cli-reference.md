@@ -405,7 +405,7 @@ Remove-Item -LiteralPath "output\tmp\jobs\<job-id>" -Recurse -Force
 
 ### Resume behavior
 
-- The checkpoint (`state.json`) records verified segments.
+- The checkpoints (`job_state.v2.json` for job state and `segment_checkpoint.v2.json` for verified segments) record progress. The legacy `state.json`, if present, is read-only migration input.
 - Each segment is verified by size and SHA-256 before reuse.
 - A token-only URL change reuses compatible segments; there is no false restart at byte zero.
 - If media identity changes, the old generation is quarantined instead of being mixed or deleted.
