@@ -146,6 +146,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "tests/test_ffmpeg_utils.py",
         "tests/test_ffmpeg_transport.py",
         "tests/test_hls_downloader.py",
+        "tests/test_media_validation.py",
         "tests/test_models.py",
         "tests/test_packaging.py",
         "tests/test_progress_display.py",
