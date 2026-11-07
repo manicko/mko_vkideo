@@ -57,7 +57,12 @@ _SPAWN_BOUNDARY_KWARGS: Final[dict[str, int | bool]] = (
     else {"start_new_session": True}
 )
 
-# Module-level cache: PATH lookup happens only once per process lifetime
+# Module-level cache: a positive result is pinned for the process lifetime, so
+# the (cheap) ``shutil.which`` lookup runs at most once once ffmpeg has been
+# found. A negative result is deliberately NOT pinned: a binary that appears on
+# PATH later in a long-running session must be observed by the next operation
+# (PRC-001). Re-probing only happens while the answer is still negative, so a
+# found binary is never re-checked and there is no perpetual polling.
 _ffmpeg_available: bool | None = None
 
 # Minimum ffmpeg build the product is verified against (DEP-011). ffmpeg is a
@@ -344,8 +349,13 @@ async def iter_process_lines(
 def check_ffmpeg_available() -> bool:
     """Check whether the ``ffmpeg`` binary is present on the system PATH.
 
-    Results are cached within the process so the (cheap) ``shutil.which``
-    lookup runs at most once (write-once cache — no invalidation hook).
+    A positive answer is cached for the process lifetime: once ``ffmpeg`` has
+    been found it is never re-probed. A negative answer is *not* cached, so a
+    binary that is installed (or appears on ``PATH``) after an earlier miss is
+    observed by the next call instead of being shadowed by a stale ``False``
+    (PRC-001). Because the probe only repeats while the answer stays negative,
+    there is no perpetual polling and no per-segment probing.
+
     The probe itself is silent: the single warning that names the install
     step is emitted by the call site (``perform_download``) when this
     returns ``False``, so the answer is **used**, not discarded (D6, TRN-008).
@@ -354,9 +364,17 @@ def check_ffmpeg_available() -> bool:
         ``True`` if ``ffmpeg`` was found on ``PATH``, ``False`` otherwise.
     """
     global _ffmpeg_available
-    if _ffmpeg_available is None:
-        _ffmpeg_available = shutil.which("ffmpeg") is not None
-    return _ffmpeg_available
+    # Positive result is write-once: never re-probe once found.
+    if _ffmpeg_available is True:
+        return True
+    found = shutil.which("ffmpeg") is not None
+    if found:
+        _ffmpeg_available = True
+    else:
+        # Record the miss for introspection, but do not treat it as a
+        # permanent answer: the next call re-probes (PRC-001).
+        _ffmpeg_available = False
+    return found
 
 
 def _parse_ffmpeg_version(stdout: str) -> str | None:

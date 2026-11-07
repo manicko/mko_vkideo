@@ -168,10 +168,10 @@ async def perform_download(
         except Exception:
             diagnostic_sink = None
 
-    # Probe ffmpeg availability once at startup so users learn about a missing
-    # binary before a long download fails at the merge step. The probe's answer
-    # is used here — not discarded — to emit one actionable warning when the
-    # muxer is absent (D6, TRN-008).
+    # Probe ffmpeg availability at this operation boundary so a binary that
+    # appeared since the last run is observed instead of a stale negative
+    # (PRC-001). The result is used here — not discarded — to emit one
+    # actionable warning when the muxer is absent (D6, TRN-008).
     if not check_ffmpeg_available():
         logger.warning(
             "ffmpeg_missing_for_merge",
