@@ -150,12 +150,19 @@ def validate_final_output_path(path: Path, warning: bool = True) -> Path:
     points. Returns the resolved, validated path.
     """
     candidate = Path(path)
-    # Windows-safe path length guard (P1-3).
+    # Windows-safe path length guard (P1-3). This is an independent
+    # length limitation, NOT a path-traversal/containment failure: a
+    # legitimate but overly long path is reported with its own code so
+    # callers and users can distinguish it from PATH_TRAVERSAL.
+    # Threshold policy: MAX_OUTPUT_PATH_LENGTH (240) leaves headroom below
+    # the Windows MAX_PATH (260) limit for the file name and extension
+    # while staying consistent on POSIX; it is intentionally conservative
+    # and is NOT relaxed on any platform (Windows handling is not weakened).
     if len(str(candidate)) > MAX_OUTPUT_PATH_LENGTH:
         exc = DownloadError(
             f"Output path too long ({len(str(candidate))} > {MAX_OUTPUT_PATH_LENGTH}): {candidate}"
         )
-        exc.error_code = ErrorCode.PATH_TRAVERSAL
+        exc.error_code = ErrorCode.PATH_TOO_LONG
         raise exc
     current = candidate
     chain: list[Path] = []
@@ -177,6 +184,6 @@ def validate_final_output_path(path: Path, warning: bool = True) -> Path:
         exc = DownloadError(
             f"Output path too long ({len(str(resolved))} > {MAX_OUTPUT_PATH_LENGTH}): {resolved}"
         )
-        exc.error_code = ErrorCode.PATH_TRAVERSAL
+        exc.error_code = ErrorCode.PATH_TOO_LONG
         raise exc
     return resolved

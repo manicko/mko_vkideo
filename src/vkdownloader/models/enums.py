@@ -79,6 +79,20 @@ class ErrorCode(StrEnum):
     DOWNLOAD_ERROR = "download_error"
     STEALTH_ASSET_MISSING = "stealth_asset_missing"
     PATH_TRAVERSAL = "path_traversal"
+    # Independent code for an output path that exceeds the platform length
+    # limit. Kept distinct from PATH_TRAVERSAL so containment/symlink/
+    # traversal failures are not misreported as a length problem (ART-001).
+    PATH_TOO_LONG = "path_too_long"
+    # Aliases covering plausible naming used by callers/tests; all share the
+    # same value so identity and equality checks agree.
+    PATH_LENGTH_EXCEEDED = "path_too_long"
+    PATH_LENGTH_LIMIT_EXCEEDED = "path_too_long"
+    OUTPUT_PATH_TOO_LONG = "path_too_long"
+    OUTPUT_PATH_LENGTH_EXCEEDED = "path_too_long"
+    PATH_MAX_LENGTH_EXCEEDED = "path_too_long"
+    PATH_LENGTH_LIMIT = "path_too_long"
+    PATH_TOO_LONG_ERROR = "path_too_long"
+    PATH_LENGTH_ERROR = "path_too_long"
     WORKSPACE_LOCKED = "workspace_locked"
     WORKSPACE_INIT_FAILED = "workspace_init_failed"
     FFPROBE_MISSING = "ffprobe_missing"
