@@ -299,15 +299,24 @@ class Settings(BaseSettings):
 
     @field_validator("log_level", mode="before")
     @classmethod
-    def normalize_log_level(cls, v: str | LogLevel) -> LogLevel:
+    def normalize_log_level(cls, v: object) -> LogLevel:
         """Coerce log level to uppercase and parse into LogLevel enum.
 
         Accepts a ``LogLevel`` directly or a string (e.g. ``"info"`` or
-        ``"INFO"``), normalizing case for case-insensitive input.
+        ``"INFO"``), normalizing case for case-insensitive input. Any other
+        input type (or an unrecognised string) raises ``ValueError`` so that
+        Pydantic surfaces a ``ValidationError`` instead of an unhandled
+        ``AttributeError``. The raw input value is never echoed in the error
+        message.
         """
         if isinstance(v, LogLevel):
             return v
-        return LogLevel(v.upper())
+        if isinstance(v, str):
+            try:
+                return LogLevel(v.upper())
+            except ValueError:
+                raise ValueError("invalid log level") from None
+        raise ValueError("log_level must be a LogLevel or a valid string")
 
     model_config = {
         "env_file": ".env",
