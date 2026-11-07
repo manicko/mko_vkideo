@@ -273,7 +273,7 @@ class TestDownloadCommand:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -516,7 +516,7 @@ class TestBatchCommand:
         def mock_extract_side_effect(*args: object) -> MagicMock:
             call_count[0] += 1
             if call_count[0] == 1:
-                return MagicMock(id="video1", streams=[])
+                return MagicMock(id="video1", title="Test Title", streams=[])
             raise VideoNotFoundError("Video not found")
 
         async def _pre_pass_extract_streams(url: str) -> VideoWithStreams:
@@ -637,7 +637,9 @@ class TestBatchCommand:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+                return_value=MagicMock(
+                    id="video1", title="Test Title", streams=[MagicMock(quality="720")]
+                )
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -681,7 +683,9 @@ class TestBatchCommand:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+                return_value=MagicMock(
+                    id="video1", title="Test Title", streams=[MagicMock(quality="720")]
+                )
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -733,7 +737,9 @@ class TestBatchCommand:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="video1", streams=[MagicMock(quality="720")])
+                return_value=MagicMock(
+                    id="video1", title="Test Title", streams=[MagicMock(quality="720")]
+                )
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -1827,7 +1833,7 @@ class TestQualityOptionValidation:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -1901,7 +1907,7 @@ class TestQualityOptionValidation:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -1932,7 +1938,7 @@ class TestQualityOptionValidation:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -1985,7 +1991,7 @@ class TestMethodOptionValidation:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -2028,7 +2034,7 @@ class TestMethodFfmpegRestored:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -2114,7 +2120,7 @@ class TestSslVerifyOption:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -2164,7 +2170,7 @@ class TestSslVerifyOption:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams)
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams)
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -2493,6 +2499,7 @@ class TestExitCodeContract:
             mock_extractor.extract_streams = AsyncMock(
                 return_value=MagicMock(
                     id="12345_67890",
+                    title="Test Title",
                     streams=[MagicMock(url="https://example.com/1080.m3u8", quality="1080")],
                 )
             )
@@ -2691,6 +2698,7 @@ class TestExitCodeContract:
             mock_extractor.extract_streams = AsyncMock(
                 return_value=MagicMock(
                     id="12345_67890",
+                    title="Test Title",
                     streams=[MagicMock(url="https://example.com/1080.m3u8", quality="1080")],
                 )
             )
@@ -3069,7 +3077,7 @@ class TestEntryPointSourcePrecedence:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams),
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -3163,7 +3171,7 @@ class TestEntryPointSourcePrecedence:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams),
             )
             mock_extractor_cls.return_value = mock_extractor
 
@@ -3322,7 +3330,7 @@ class TestEntryPointSourcePrecedence:
         ):
             mock_extractor = MagicMock()
             mock_extractor.extract_streams = AsyncMock(
-                return_value=MagicMock(id="12345_67890", streams=mock_streams),
+                return_value=MagicMock(id="12345_67890", title="Test Title", streams=mock_streams),
             )
             mock_extractor_cls.return_value = mock_extractor
 

@@ -213,6 +213,14 @@ class TestBatchDownloaderSemaphore:
                 "vkdownloader.services.segment_downloader._merge_segments_batched",
                 side_effect=merge_side_effect,
             ),
+            patch(
+                "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                return_value=True,
+            ),
+            patch(
+                "vkdownloader.services.media_validation.validate_media_file",
+                new_callable=AsyncMock,
+            ),
         ):
             results, peak = await asyncio.wait_for(
                 _run_batch_with_progress(
@@ -287,6 +295,14 @@ class TestBatchDownloaderSemaphore:
             patch(
                 "vkdownloader.services.segment_downloader._merge_segments_batched",
                 side_effect=merge_side_effect,
+            ),
+            patch(
+                "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                return_value=True,
+            ),
+            patch(
+                "vkdownloader.services.media_validation.validate_media_file",
+                new_callable=AsyncMock,
             ),
         ):
             result = await asyncio.wait_for(
@@ -374,6 +390,14 @@ class TestBatchDownloaderSemaphore:
             patch(
                 "vkdownloader.services.segment_downloader._merge_segments_batched",
                 side_effect=merge_side_effect,
+            ),
+            patch(
+                "vkdownloader.services.ffmpeg_utils.check_ffprobe_available",
+                return_value=True,
+            ),
+            patch(
+                "vkdownloader.services.media_validation.validate_media_file",
+                new_callable=AsyncMock,
             ),
         ):
             result = await asyncio.wait_for(

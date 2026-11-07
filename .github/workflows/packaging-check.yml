@@ -34,7 +34,11 @@ permissions:
 
 jobs:
   packaging-check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -56,6 +60,8 @@ jobs:
           # this is a pure detect-and-fail gate (DEP-003 secret-scan class).
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+      - name: Compile all Python
+        run: uv run python -m compileall -q src tests
       - name: Lint
         run: uv run ruff check src tests
       - name: Format check
@@ -69,6 +75,7 @@ jobs:
       - name: Coverage report
         run: uv run coverage report
       - name: Advisory scan
+        if: runner.os == 'Linux'
         run: |
           set +e
           uv export --locked --group dev --no-emit-project -o /tmp/vkr.txt && uv run pip-audit -r /tmp/vkr.txt 2>&1
@@ -84,6 +91,12 @@ jobs:
           rm -f /tmp/vkr.txt
       - name: Build distribution artefacts
         run: uv build --out-dir dist/
+      - name: Wheel entry-point smoke
+        if: runner.os == 'Linux'
+        run: |
+          uv pip install --force-reinstall dist/*.whl
+          python -c "import vkdownloader; print(vkdownloader.__file__)"
+          vkdownloader --help >/dev/null
       - name: Upload distribution artefacts
         uses: actions/upload-artifact@v4
         with:

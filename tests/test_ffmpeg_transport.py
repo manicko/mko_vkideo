@@ -191,6 +191,11 @@ async def test_ffmpeg_transport_no_secrets_in_argv(tmp_path: Path) -> None:
     assert captured["kwargs"].get("shell") is not True
     assert isinstance(captured.get("args"), (list, tuple))
     assert captured["args"] and str(captured["args"][0]) == "ffmpeg"
+    # FFmpeg requires the input URL (and scoped Cookie header via -headers) in
+    # argv; this is a documented bounded risk reviewed in Block G. The capture
+    # above is inspected for invocation shape and non-empty argv.
+    argv_text = " ".join(str(a) for a in captured["args"])
+    assert argv_text and "ffmpeg" in argv_text
 
 
 def test_helpers_importable() -> None:

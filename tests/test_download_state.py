@@ -77,6 +77,14 @@ def test_download_state_is_strenum():
         "failed_retry_budget",
         "integrity_failed",
         "failed",
+        "all_segments_verified",
+        "merging_in_staging",
+        "candidate_ready",
+        "validating",
+        "validated",
+        "atomic_no_clobber_publication",
+        "final_committed",
+        "cleanup_owned_temp_artifacts",
     }
     assert {m.value for m in DownloadState} == expected
 

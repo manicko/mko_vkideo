@@ -208,7 +208,6 @@ def test_publish_collision_no_overwrite(tmp_path: Path) -> None:
 
 
 def test_publish_race_no_overwrite(tmp_path: Path) -> None:
-    pytest.skip("race test - manual/CI-optional")
     ws = _import_workspace()
     staged = tmp_path / "staged.mp4"
     final = tmp_path / "final.mp4"
