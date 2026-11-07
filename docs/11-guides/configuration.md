@@ -42,8 +42,8 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `log_file` | `VKDOWNLOADER_LOG_FILE` | None | Optional log file path |
 | `diagnostics_enabled` | `VKDOWNLOADER_DIAGNOSTICS_ENABLED` | true | Enable persistent diagnostic logs and child transcript sinks |
 | `diagnostic_log_dir` | `VKDOWNLOADER_DIAGNOSTIC_LOG_DIR` | None | Interim base directory for diagnostic logs; per-job logs are written under `output/tmp/logs` by default |
-| `log_max_bytes` | `VKDOWNLOADER_LOG_MAX_BYTES` | 10485760 | Maximum size in bytes of a log file before rotation |
-| `log_backup_count` | `VKDOWNLOADER_LOG_BACKUP_COUNT` | 5 | Number of rotated log file backups to retain |
+| `log_max_bytes` | `VKDOWNLOADER_LOG_MAX_BYTES` | 10485760 | Maximum size in bytes of a log file before rotation (integer `>= 0`; `0` disables rotation and the log file grows without bound) |
+| `log_backup_count` | `VKDOWNLOADER_LOG_BACKUP_COUNT` | 5 | Number of rotated log file backups to retain (integer `>= 0`; `0` retains no backups) |
 
 ## Headless Mode
 
@@ -191,6 +191,46 @@ VKDOWNLOADER_LOG_FILE=/var/log/vkdownloader.log
 ### download_dir
 
 Output directory for downloaded videos. Paths are validated to prevent path traversal attacks.
+
+## Logging Settings
+
+### log_max_bytes
+
+Maximum size in bytes of a log file before rotation.
+
+- **Environment Variable:** `VKDOWNLOADER_LOG_MAX_BYTES`
+- **Default:** `10485760` (10 MiB)
+- **Valid values:** integer `>= 0` (negative values are rejected with a `ValidationError`)
+- **Zero semantics:** `0` disables rotation; the log file grows without bound (equivalent to `RotatingFileHandler(maxBytes=0)`).
+- **RotatingFileHandler contract:** rotation only occurs when `maxBytes > 0`.
+
+**Example:**
+```env
+# Disable rotation (file grows without bound)
+VKDOWNLOADER_LOG_MAX_BYTES=0
+
+# Rotate at 5 MiB
+VKDOWNLOADER_LOG_MAX_BYTES=5242880
+```
+
+### log_backup_count
+
+Number of rotated log file backups to retain.
+
+- **Environment Variable:** `VKDOWNLOADER_LOG_BACKUP_COUNT`
+- **Default:** `5`
+- **Valid values:** integer `>= 0` (negative values are rejected with a `ValidationError`)
+- **Zero semantics:** `0` retains no backups; when rotation occurs the previous log is discarded (equivalent to `RotatingFileHandler(backupCount=0)`).
+- **Interaction:** has no effect when `log_max_bytes` is `0`, because rotation is disabled.
+
+**Example:**
+```env
+# Retain no backups
+VKDOWNLOADER_LOG_BACKUP_COUNT=0
+
+# Retain 3 backups
+VKDOWNLOADER_LOG_BACKUP_COUNT=3
+```
 
 ## Environment Variable Caveats
 
