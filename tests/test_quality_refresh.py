@@ -522,7 +522,6 @@ def test_quality_mismatch_error_code() -> None:
     assert err.actual_height == 1080
 
 
-
 @pytest.mark.asyncio
 async def test_exact_1440_refresh_no_duplicates() -> None:
     try:
@@ -550,7 +549,9 @@ async def test_exact_1440_refresh_no_duplicates() -> None:
         variant_id="v1",
     )
 
-    binding = await refresh_stream("https://vkvideo.ru/video-12345_67890", "1440", previous, extractor)
+    binding = await refresh_stream(
+        "https://vkvideo.ru/video-12345_67890", "1440", previous, extractor
+    )
     assert binding.requested_quality == "1440"
     assert binding.actual_height == 1440
     assert binding.media_playlist_url == url

@@ -34,7 +34,9 @@ class HlsServer:
     rotated_token: str = "token-new"
     _runner: web.AppRunner | None = field(default=None, init=False, repr=False)
     _site: web.TCPSite | None = field(default=None, init=False, repr=False)
-    _attempts: dict[int, int] = field(default_factory=lambda: defaultdict(int), init=False, repr=False)
+    _attempts: dict[int, int] = field(
+        default_factory=lambda: defaultdict(int), init=False, repr=False
+    )
     _master_token: str = field(default="token-old", init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -203,9 +205,7 @@ class HlsServer:
         if not rng:
             return web.Response(status=200, body=b"x" * 100)
         if (self.faults or {}).get(-1, {}).get("bad_byterange"):
-            return web.Response(
-                status=206, body=b"x", headers={"Content-Range": "bytes 0-0/100"}
-            )
+            return web.Response(status=206, body=b"x", headers={"Content-Range": "bytes 0-0/100"})
         return web.Response(status=206, body=b"x" * 10, headers={"Content-Range": "bytes 0-9/100"})
 
 

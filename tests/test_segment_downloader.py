@@ -2087,7 +2087,6 @@ class TestDownloadPolicyReprRedaction:
         assert "test-agent" in rendered
 
 
-
 def test_exact_1440_refresh_no_duplicates() -> None:
     from vkdownloader.services.segment_downloader import _parse_m3u8_segments
 

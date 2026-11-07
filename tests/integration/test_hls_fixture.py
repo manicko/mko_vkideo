@@ -25,7 +25,11 @@ async def test_fault_429_retry_after() -> None:
 
 @pytest.mark.asyncio
 async def test_fault_403_token_refresh() -> None:
-    async with make_server(faults={1: {"status": 403, "rotate_token": True}}, token="token-old", rotated_token="token-new") as server:
+    async with make_server(
+        faults={1: {"status": 403, "rotate_token": True}},
+        token="token-old",
+        rotated_token="token-new",
+    ) as server:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{server.base_url}/seg/1?token=token-old") as resp:
                 assert resp.status == 403
@@ -61,7 +65,9 @@ async def test_fault_truncated_segment() -> None:
 async def test_fault_bad_byterange() -> None:
     async with make_server(faults={-1: {"bad_byterange": True}}) as server:
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{server.base_url}/range.bin", headers={"Range": "bytes=0-9"}) as resp:
+            async with session.get(
+                f"{server.base_url}/range.bin", headers={"Range": "bytes=0-9"}
+            ) as resp:
                 assert resp.status == 206
                 assert resp.headers.get("Content-Range") == "bytes 0-0/100"
 

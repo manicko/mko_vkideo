@@ -619,7 +619,6 @@ def test_configuration_template_ships_no_secret() -> None:
     assert not assignments, f".env.example must hold only commented settings, found: {assignments}"
 
 
-
 @pytest.mark.skipif(
     not (os.getenv("CI") or os.getenv("RUN_WHEEL_SMOKE")),
     reason="wheel smoke runs only on CI or when RUN_WHEEL_SMOKE=1",

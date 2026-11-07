@@ -287,7 +287,7 @@ def test_legacy_part_15gib_detected(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     legacy_part = out_dir / "video.mp4.part"
-    size = 15 * 1024 ** 3
+    size = 15 * 1024**3
     with open(legacy_part, "wb") as handle:
         handle.seek(size - 1)
         handle.write(b"\x00")
