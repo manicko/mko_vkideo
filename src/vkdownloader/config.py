@@ -214,11 +214,15 @@ class Settings(BaseSettings):
     )
     log_max_bytes: int = Field(
         default=10_485_760,
-        description="Maximum size in bytes of a log file before rotation.",
+        ge=0,
+        description="Maximum size in bytes of a log file before rotation. "
+        "Zero disables rotation (the log file grows without bound).",
     )
     log_backup_count: int = Field(
         default=5,
-        description="Number of rotated log file backups to retain.",
+        ge=0,
+        description="Number of rotated log file backups to retain. "
+        "Zero retains no backups.",
     )
 
     @field_validator("download_dir", mode="before")
