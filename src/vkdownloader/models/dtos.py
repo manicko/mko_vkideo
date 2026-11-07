@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr
 
 
 class HLSDownloadRequest(BaseModel):
@@ -69,3 +69,62 @@ class HLSDownloadRequest(BaseModel):
     video_id: str | None = None
     playlist_fingerprint: str | None = None
     stream_binding: object | None = None
+
+
+class BatchDownloadItemResult(BaseModel):
+    """Structured result for a single item in a batch download.
+
+    Replaces the previous ``(url, output_path, status)`` tuple so the service
+    layer can return data without coupling to the CLI/exit-code policy.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    url: str
+    output_path: str = Field(default="", validation_alias=AliasChoices("output_path", "output", "path"))
+    status: str
+
+    @property
+    def output(self) -> str:
+        return self.output_path
+
+
+class BatchDownloadResult(BaseModel):
+    """Structured result for a full batch download.
+
+    Carries the per-item results and aggregate counters. Exit-code mapping
+    (0/1/130) and user-facing rendering are deliberately left to the CLI
+    boundary (ENT-001).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    items: list[BatchDownloadItemResult] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("items", "results", "downloads", "entries"),
+    )
+    peak_concurrent_videos: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "peak_concurrent_videos",
+            "peak_concurrent",
+            "peak_concurrency",
+            "peak",
+        ),
+    )
+    skipped_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("skipped_count", "skipped", "skipped_invalid"),
+    )
+
+    @property
+    def results(self) -> list[BatchDownloadItemResult]:
+        return self.items
+
+    @property
+    def peak(self) -> int:
+        return self.peak_concurrent_videos
+
+    @property
+    def peak_concurrent(self) -> int:
+        return self.peak_concurrent_videos

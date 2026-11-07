@@ -35,7 +35,8 @@ from .exceptions import (
     VideoNotFoundError,
     VKDownloadError,
 )
-from .models.enums import CookieSource, DownloadMethod, LogLevel
+from .models.enums import CookieSource, DownloadMethod, LogLevel, ProgressStatus
+from .models.dtos import BatchDownloadResult
 from .models.quality import QualitySpec
 from .services.downloader_throttle import get_shutdown_event
 from .services.extractor import is_valid_video_url
@@ -539,6 +540,111 @@ def download(
         raise typer.Exit(code=1) from None
 
 
+def _print_batch_summary(
+    result: object,
+    peak_concurrent_videos: int | None = None,
+    skipped_count: int | None = None,
+) -> int:
+    """Render the batch download summary and return a process exit code.
+
+    Moved from ``services.batch_downloader`` so the service layer no longer
+    touches the console or decides process exit codes (ENT-001). Accepts a
+    :class:`BatchDownloadResult` (preferred) or a legacy list of result
+    tuples for compatibility with older callers/tests.
+    """
+    from .models.dtos import BatchDownloadItemResult, BatchDownloadResult
+
+    if isinstance(result, BatchDownloadResult):
+        batch_result = result
+        if peak_concurrent_videos is not None:
+            batch_result = BatchDownloadResult(
+                items=batch_result.items,
+                peak_concurrent_videos=peak_concurrent_videos,
+                skipped_count=batch_result.skipped_count
+                if skipped_count is None
+                else skipped_count,
+            )
+        elif skipped_count is not None:
+            batch_result = BatchDownloadResult(
+                items=batch_result.items,
+                peak_concurrent_videos=batch_result.peak_concurrent_videos,
+                skipped_count=skipped_count,
+            )
+    else:
+        items: list[BatchDownloadItemResult] = []
+        for entry in result:  # type: ignore[union-attr]
+            if isinstance(entry, BatchDownloadItemResult):
+                items.append(entry)
+            elif isinstance(entry, tuple):
+                seq = list(entry)
+                while len(seq) < 3:
+                    seq.append("")
+                items.append(
+                    BatchDownloadItemResult(url=str(seq[0]), output_path=str(seq[1]), status=str(seq[2]))
+                )
+            else:
+                items.append(entry)  # type: ignore[arg-type]
+        batch_result = BatchDownloadResult(
+            items=items,
+            peak_concurrent_videos=peak_concurrent_videos or 0,
+            skipped_count=skipped_count or 0,
+        )
+
+    # Print per-item status lines.
+    for item in batch_result.items:
+        typer.echo(f"{item.url}: {item.status}" + (f" -> {item.output_path}" if item.output_path else ""))
+
+    successful = sum(1 for item in batch_result.items if item.status == ProgressStatus.SUCCESS.value)
+    cancelled = sum(1 for item in batch_result.items if item.status == ProgressStatus.CANCELLED.value)
+    skipped = sum(1 for item in batch_result.items if item.status == ProgressStatus.SKIPPED.value)
+    failed = sum(
+        1
+        for item in batch_result.items
+        if item.status
+        not in (
+            ProgressStatus.SUCCESS.value,
+            ProgressStatus.CANCELLED.value,
+            ProgressStatus.SKIPPED.value,
+        )
+    )
+
+    typer.echo("\n\nDownload Summary:")
+    typer.echo(f"  Total videos: {len(batch_result.items)}")
+    if batch_result.skipped_count > 0:
+        typer.echo(f"  Skipped (invalid URLs): {batch_result.skipped_count}")
+    if skipped > 0:
+        typer.echo(f"  Skipped (duplicates): {skipped}")
+    typer.echo(f"  Peak concurrent videos: {batch_result.peak_concurrent_videos}")
+    typer.echo(f"  Successful: {successful}")
+    typer.echo(f"  Failed: {failed}")
+    if cancelled > 0:
+        typer.echo(f"  Cancelled: {cancelled}")
+
+    failed_urls = [
+        (item.url, item.status)
+        for item in batch_result.items
+        if item.status
+        not in (
+            ProgressStatus.SUCCESS.value,
+            ProgressStatus.CANCELLED.value,
+            ProgressStatus.SKIPPED.value,
+        )
+    ]
+    if failed_urls:
+        typer.echo("  Failed URLs:")
+        for url, status in failed_urls:
+            typer.echo(f"    - {url}: {status}")
+
+    if cancelled > 0:
+        typer.echo(
+            "  Interrupted by user: any partial segments already downloaded"
+            " were preserved for resume; re-run this command to resume them."
+        )
+        return 130
+
+    return 1 if failed > 0 else 0
+
+
 @app.command("batch")
 def batch_download(
     urls_file: Path = typer.Argument(
@@ -604,7 +710,7 @@ def batch_download(
     with the specified quality to the output directory.
     """
 
-    async def _run_batch_with_signal_handlers() -> int:
+    async def _run_batch_with_signal_handlers() -> BatchDownloadResult:
         """Async implementation of batch download.
 
         Signal handlers are registered here in the entry layer (not in the
@@ -614,6 +720,7 @@ def batch_download(
         service layer's heavy dependencies (yt-dlp, playwright, aiohttp,
         rich) (ENT-013).
         """
+        from .models.dtos import BatchDownloadResult
         from .services.batch_downloader import run_batch
 
         setup_signal_handlers()
@@ -676,7 +783,8 @@ def batch_download(
             typer.echo(f"No URLs found in {urls_file}", err=True)
             raise typer.Exit(code=1)
 
-        exit_code = asyncio.run(_run_batch_with_signal_handlers())
+        batch_result = asyncio.run(_run_batch_with_signal_handlers())
+        exit_code = _print_batch_summary(batch_result)
         raise typer.Exit(code=exit_code)
 
     except ValidationError as e:

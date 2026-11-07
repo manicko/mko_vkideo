@@ -30,7 +30,7 @@ from ..exceptions import (
     VKDownloadError,
 )
 from ..models.enums import DownloadMethod, ProgressStatus
-from ..models.quality import QualitySpec
+from ..models.dtos import BatchDownloadItemResult, BatchDownloadResult
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event
@@ -600,99 +600,6 @@ async def _run_batch_with_progress(
         clear_correlation_id()
 
 
-def _print_batch_summary(
-    results: list[tuple[str, str, str]],
-    peak_concurrent_videos: int,
-    skipped_count: int = 0,
-) -> int:
-    """Print batch download summary.
-
-    Args:
-        results: List of result tuples (url, output_path, status).
-        peak_concurrent_videos: Measured peak number of concurrently in-flight
-            video downloads during the batch.
-        skipped_count: Number of invalid URLs skipped during validation.
-
-    Returns:
-        Exit code, three-way:
-
-        * ``130`` if at least one download was cancelled by the user.
-        * ``1`` if no download was cancelled and at least one failed.
-        * ``0`` if every download succeeded (skipped items do not affect the
-          exit code — a deduplicated URL is neither a failure nor a success).
-
-        Cancellation takes precedence over failure: an interrupted run did
-        not complete by the user's own doing, so its remaining "failures"
-        are indistinguishable from work the interruption cut short. Reporting
-        the          interruption as such is the more truthful answer (D-04).
-    """
-    import typer
-
-    # Print results
-    for url, output_path, status in results:
-        typer.echo(f"{url}: {status}" + (f" -> {output_path}" if output_path else ""))
-
-    # Summary. Success, cancellation, skip and failure are four distinct outcomes.
-    # Each is counted explicitly so the aggregation can never misclassify one as
-    # another — the previous subtraction rule (failed = total - success - cancelled)
-    # would silently absorb a SKIPPED entry into the failed count (OUT-009).
-    successful = sum(1 for _, _, status in results if status == ProgressStatus.SUCCESS.value)
-    cancelled = sum(1 for _, _, status in results if status == ProgressStatus.CANCELLED.value)
-    skipped = sum(1 for _, _, status in results if status == ProgressStatus.SKIPPED.value)
-    failed = sum(
-        1
-        for _, _, status in results
-        if status
-        not in (
-            ProgressStatus.SUCCESS.value,
-            ProgressStatus.CANCELLED.value,
-            ProgressStatus.SKIPPED.value,
-        )
-    )
-
-    typer.echo("\n\nDownload Summary:")
-    typer.echo(f"  Total videos: {len(results)}")
-    if skipped_count > 0:
-        typer.echo(f"  Skipped (invalid URLs): {skipped_count}")
-    if skipped > 0:
-        typer.echo(f"  Skipped (duplicates): {skipped}")
-    typer.echo(f"  Peak concurrent videos: {peak_concurrent_videos}")
-    typer.echo(f"  Successful: {successful}")
-    typer.echo(f"  Failed: {failed}")
-    if cancelled > 0:
-        typer.echo(f"  Cancelled: {cancelled}")
-
-    # Show failed URLs with error reasons. Cancelled and skipped items are
-    # excluded: they were not failures and must not be listed as ones.
-    failed_urls = [
-        (url, status)
-        for url, _, status in results
-        if status
-        not in (
-            ProgressStatus.SUCCESS.value,
-            ProgressStatus.CANCELLED.value,
-            ProgressStatus.SKIPPED.value,
-        )
-    ]
-    if failed_urls:
-        typer.echo("  Failed URLs:")
-        for url, status in failed_urls:
-            typer.echo(f"    - {url}: {status}")
-
-    if cancelled > 0:
-        # Phrased as a possibility, not a measurement: the batch layer did
-        # not count the segments itself, the segment layer does that and logs
-        # preserving_segments_for_resume whenever it leaves data on disk.
-        typer.echo(
-            "  Interrupted by user: any partial segments already downloaded"
-            " were preserved for resume; re-run this command to resume them."
-        )
-        return 130
-
-    # Exit with code 1 if any downloads failed
-    return 1 if failed > 0 else 0
-
-
 async def run_batch(
     urls: list[str],
     quality: QualitySpec,
@@ -700,12 +607,14 @@ async def run_batch(
     settings: Settings,
     output: Path,
     skipped_count: int = 0,
-) -> int:
-    """Run a full batch download: orchestration + summary, returning an exit code.
+) -> BatchDownloadResult:
+    """Run a full batch download: orchestration, returning a structured result.
 
     This is the public entry point for batch download orchestration, called
     by the CLI handler.  It orchestrates concurrent downloads with progress
-    display, prints a summary, and returns a process exit code.
+    display and returns a :class:`BatchDownloadResult` carrying per-item
+    statuses and aggregate counters.  User-facing rendering and exit-code
+    mapping (0/1/130) are performed by the CLI boundary (ENT-001).
 
     Args:
         urls: List of validated video URLs to download.
@@ -716,11 +625,18 @@ async def run_batch(
         skipped_count: Number of invalid URLs skipped during validation.
 
     Returns:
-        Exit code, three-way: ``0`` if all downloads succeeded, ``1`` if any
-        failed, ``130`` if any download was cancelled by the user. Cancellation
-        wins over failure — see :func:`_print_batch_summary`, which computes it.
+        A :class:`BatchDownloadResult` with per-item results and aggregate
+        counters.  No Typer import or exit-code decision is made here.
     """
     results, peak_concurrent_videos = await _run_batch_with_progress(
         urls, quality, method, settings, output
     )
-    return _print_batch_summary(results, peak_concurrent_videos, skipped_count)
+    items = [
+        BatchDownloadItemResult(url=url, output_path=output_path, status=status)
+        for url, output_path, status in results
+    ]
+    return BatchDownloadResult(
+        items=items,
+        peak_concurrent_videos=peak_concurrent_videos,
+        skipped_count=skipped_count,
+    )
