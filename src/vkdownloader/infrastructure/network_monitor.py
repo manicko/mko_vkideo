@@ -284,11 +284,12 @@ class NetworkMonitor:
                     host_allowed.append(addr)
                 else:
                     host_dropped.append(addr)
+            # NET-001: fail-closed — never return unconstrained captured
+            # addresses when no trusted host survived. Log once for diagnosis.
             if not host_allowed:
                 if not self._host_filter_suspended_logged:
                     self._log_host_suspension(host_dropped)
-                # Suspension: return the unconstrained set, ranked best-effort.
-                return sorted(captured, key=self._rank_playlist)
+                return []
 
             # B7: HLS-only filter — prefer `.m3u8` path suffix.
             hls_only: list[str] = []
@@ -312,7 +313,9 @@ class NetworkMonitor:
             if not hls_only:
                 if not self._hls_filter_suspended_logged:
                     self._log_suspension(host_allowed)
-                # Suspension: return the unconstrained set, ranked best-effort.
+                # NET-001: fail-closed by trusted hosts — even on HLS no-match,
+                # never fall back to unconstrained captured addresses. The
+                # HLS suspension keeps the trusted (host_allowed) set, ranked.
                 return sorted(host_allowed, key=self._rank_playlist)
 
             return sorted(hls_only, key=self._rank_playlist)
@@ -320,9 +323,9 @@ class NetworkMonitor:
             logger.warning(
                 "hls_select_error",
                 error=str(e.__class__.__name__),
-                fallback="returning_unconstrained_set",
+                fallback="returning_empty",
             )
-            return list(self.m3u8_urls)
+            return []
 
     async def _intercept_response(self, response: Response) -> None:
         """
