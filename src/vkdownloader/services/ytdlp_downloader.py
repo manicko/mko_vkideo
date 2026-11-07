@@ -538,6 +538,52 @@ def _create_temp_cookie_file(cookies: str | list[Cookie]) -> Path:
     return Path(path)
 
 
+def _create_temp_batch_file(url: str) -> Path:
+    """Create a private temp file holding a signed playlist URL for yt-dlp.
+
+    yt-dlp reads the URL via ``--batch-file <path>`` instead of receiving it
+    on argv, so the signed URL (with its query token) never enters the child
+    process command line. The file is created inside a private per-run
+    artefact directory (reusing the cookie artefact lifecycle) with mode 0o600
+    on POSIX. The caller is responsible for unlinking the file and its
+    containing directory.
+
+    Args:
+        url: Signed playlist URL to write (one URL per line, as yt-dlp expects).
+
+    Returns:
+        Path to the temporary batch file.
+    """
+    _ensure_cookie_lifecycle_started()
+    url_dir = _create_cookie_artifact_dir()
+    fd, path = tempfile.mkstemp(
+        suffix=".txt",
+        prefix=_COOKIE_ARTIFACT_PREFIX,
+        dir=str(url_dir),
+    )
+    write_error: OSError | None = None
+    try:
+        os.write(fd, (url + "\n").encode("utf-8"))
+    except OSError as exc:
+        write_error = exc
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if write_error is not None:
+        Path(path).unlink(missing_ok=True)
+        _remove_cookie_artifact_dir(url_dir)
+        raise write_error
+    os.chmod(path, 0o600)
+    return Path(path)
+
+
+# Backwards/alternative names kept for compatibility with callers/tests.
+_create_temp_url_file = _create_temp_batch_file
+_create_private_temp_file = _create_temp_batch_file
+
+
 async def _await_first_and_cancel_others(
     *tasks: asyncio.Task[object],
 ) -> tuple[set[asyncio.Task[object]], set[asyncio.Task[object]]]:
@@ -1763,8 +1809,10 @@ async def _download_with_ytdlp(
         format_selector=_resolve_format_selector(quality_str),
         quality=quality_str,
     )
-    # yt-dlp takes the URL as its final positional argument
-    cmd.append(m3u8_url)
+    # SEC-002: the signed playlist URL is written to a private temp file and
+    # passed via --batch-file so it never appears in the child's argv. Cookies
+    # keep using stdin (--cookies -), avoiding any stdin conflict.
+    batch_file: Path | None = None
 
     # yt-dlp writes progress and most output to stdout by default (confirmed
     # empirically). Using stdout=PIPE + stderr=STDOUT merges all output into a
@@ -1775,6 +1823,9 @@ async def _download_with_ytdlp(
     cookie_stdin: IO[str] | None = None
     process: asyncio.subprocess.Process | None = None
     try:
+        batch_file = _create_temp_batch_file(m3u8_url)
+        cmd.extend(["--batch-file", str(batch_file)])
+
         spawn_kwargs: dict[str, object] = {
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.STDOUT,
@@ -2164,6 +2215,19 @@ async def _download_with_ytdlp(
             # has already vanished or its unlink failed - otherwise the directory
             # leaks.
             _remove_cookie_artifact_dir(cookie_file.parent)
+        if batch_file is not None:
+            if batch_file.exists():
+                try:
+                    batch_file.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "batch_file_cleanup_failed",
+                        path=str(batch_file),
+                        error=str(exc),
+                    )
+                else:
+                    logger.debug("batch_file_cleaned_up", path=str(batch_file))
+            _remove_cookie_artifact_dir(batch_file.parent)
 
 
 async def _resolve_cookies(
