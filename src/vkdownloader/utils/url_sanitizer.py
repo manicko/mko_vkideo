@@ -42,6 +42,38 @@ _ARTEFACT_LEAD = r"(?<![^\s'\"<>])(?:[^\s'\"<>]*[\\/])?"
 _COOKIE_FILE_ARTEFACT_REGEX = re.compile(_ARTEFACT_LEAD + r"vk_cookies_[a-z0-9_]+\.cookies\.txt")
 _COOKIE_DIR_ARTEFACT_REGEX = re.compile(_ARTEFACT_LEAD + r"vk_cookies__dir[a-z0-9_]+")
 
+# Cookie header redaction (SEC-003). Redacts the entire value of ``Cookie:`` /
+# ``Set-Cookie:`` headers, including any attributes, so secret cookie values
+# cannot leak through child-process output or exception messages. The header
+# name itself is preserved for diagnostic context.
+_COOKIE_HEADER_REGEX = re.compile(r"(?i)((?:set-cookie|cookie):)\s*.*")
+
+# Bare cookie-pair redaction (SEC-003). Targets common cookie/secret-bearing
+# keys rather than every ``key=value`` run, so ordinary diagnostic fields such
+# as ``status=ok`` or ``count=42`` survive untouched. Only the value is
+# replaced; the key is preserved as non-secret diagnostic context.
+_COOKIE_PAIR_KEYS = (
+    "session",
+    "sessionid",
+    "session_id",
+    "sid",
+    "csrftoken",
+    "csrf_token",
+    "xsrf",
+    "xsrf_token",
+    "auth",
+    "authorization",
+    "token",
+    "access_token",
+    "refresh_token",
+    "jwt",
+    "cookie",
+    "secret",
+)
+_COOKIE_PAIR_REGEX = re.compile(
+    r"(?i)\b(" + "|".join(re.escape(key) for key in _COOKIE_PAIR_KEYS) + r")\s*=\s*[^\s;]+"
+)
+
 
 def _strip_auth_params(url: str) -> str:
     """
@@ -81,14 +113,17 @@ def sanitize_text_for_log(text: str) -> str:
 
     Shapes that ARE matched:
         - ``https?://`` URLs (reduced to ``scheme://host/***REDACTED***``).
+        - ``Cookie:`` / ``Set-Cookie:`` header values (entire value redacted).
+        - Bare cookie pairs for common cookie/secret-bearing keys such as
+          ``session=...`` or ``token=...`` (value only redacted).
         - ``vk_cookies_<tail>.cookies.txt`` file artefacts, including any
           leading parent path, which is consumed so the username-bearing temp
           root is removed (CWE-532).
         - ``vk_cookies__dir<tail>`` directory artefacts, same rule.
 
     Shapes that are NOT matched:
-        - ``Cookie:`` / ``Set-Cookie:`` header values (D-5 resolved to Alt A;
-          B4-AUDIT measured no child process emits one to any sink).
+        - Ordinary ``key=value`` diagnostics whose key is not a known
+          cookie/secret-bearing key (e.g. ``status=ok``, ``count=42``).
         - Bare ``name=value`` pairs and user-chosen output paths that do not
           bear one of the artefact shapes above.
 
@@ -121,6 +156,8 @@ def sanitize_text_for_log(text: str) -> str:
         artefact tokens redacted to ``***REDACTED***``.
     """
     text = _URL_REGEX.sub(lambda m: _strip_auth_params(m.group(0)), text)
+    text = _COOKIE_HEADER_REGEX.sub(r"\1 ***REDACTED***", text)
+    text = _COOKIE_PAIR_REGEX.sub(lambda m: f"{m.group(1)}=***REDACTED***", text)
     text = _COOKIE_FILE_ARTEFACT_REGEX.sub("***REDACTED***", text)
     text = _COOKIE_DIR_ARTEFACT_REGEX.sub("***REDACTED***", text)
     return text
@@ -285,6 +322,10 @@ def redact_log_event(
 
 
 __all__ = [
+    "_COOKIE_DIR_ARTEFACT_REGEX",
+    "_COOKIE_FILE_ARTEFACT_REGEX",
+    "_COOKIE_HEADER_REGEX",
+    "_COOKIE_PAIR_REGEX",
     "_strip_auth_params",
     "redact_log_event",
     "sanitize_text_for_log",
