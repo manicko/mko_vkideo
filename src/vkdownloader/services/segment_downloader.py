@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urljoin
 
 from structlog import get_logger
@@ -2148,6 +2148,68 @@ async def download_hls_with_resume(
         raw_cookies = request.cookies.get_secret_value()
     # SEC-008: base headers carry no Cookie; per-request scoping builds it.
 
+    # Resume reconciliation: classify on-disk state before downloading.
+    if workspace is not None:
+        try:
+            from .state_machine import CommitRecoveryDirective, DownloadStateMachine
+
+            if state_machine is None:
+                try:
+                    state_machine = DownloadStateMachine.load(workspace, job_id=workspace.job_id)
+                except Exception:  # noqa: BLE001
+                    state_machine = None
+            expected_height_recon = None
+            try:
+                expected_height_recon = int(str(request.quality).rstrip("p"))
+            except TypeError, ValueError:
+                expected_height_recon = None
+            from .state_migration import reconcile_commit_state
+
+            directive, usable = await reconcile_commit_state(
+                workspace, state_machine, expected_height=expected_height_recon
+            )
+            if directive == CommitRecoveryDirective.ALREADY_COMMITTED and usable is not None:
+                return usable
+            if directive == CommitRecoveryDirective.PUBLISH_STAGING and usable is not None:
+                try:
+                    from .ffmpeg_utils import check_ffprobe_available
+                    from .media_validation import validate_media_file
+                    from .workspace import (
+                        acquire_publish_lock,
+                        cleanup_owned_job_artifacts,
+                        publish_verified_file,
+                    )
+
+                    if not check_ffprobe_available():
+                        logger.error("ffprobe_missing", path=str(usable))
+                        return None
+                    await validate_media_file(usable, expected_height=expected_height_recon)
+                    final_lock = acquire_publish_lock(workspace.final_path, 10.0)
+                    _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
+                    publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
+                    await validate_media_file(
+                        workspace.final_path, expected_height=expected_height_recon
+                    )
+                    if not (
+                        workspace.final_path.exists()
+                        and workspace.final_path.is_file()
+                        and workspace.final_path.stat().st_size > 0
+                    ):
+                        return None
+                    _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
+                    _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
+                    cleanup_owned_job_artifacts(workspace)
+                    return workspace.final_path
+                except asyncio.CancelledError, KeyboardInterrupt:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("publish_staging_failed", error=str(exc))
+                    return None
+        except asyncio.CancelledError, KeyboardInterrupt:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reconcile_failed", error=str(exc))
+
     success = False
     try:
         result = await _run_download_session(
@@ -2177,7 +2239,7 @@ async def download_hls_with_resume(
             if workspace is not None:
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
-                    from .media_validation import validate_media_file
+                    from .media_validation import MediaValidationError, validate_media_file
                     from .workspace import (
                         acquire_publish_lock,
                         cleanup_owned_job_artifacts,
@@ -2191,34 +2253,40 @@ async def download_hls_with_resume(
                         expected_height = None
 
                     if state_machine is not None:
-                        try:
-                            state_machine.transition(DownloadState.ALL_SEGMENTS_VERIFIED)
-                            state_machine.transition(DownloadState.MERGING_IN_STAGING)
-                            state_machine.transition(DownloadState.CANDIDATE_READY)
-                            state_machine.transition(DownloadState.VALIDATING)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        _safe_transition(state_machine, DownloadState.ALL_SEGMENTS_VERIFIED)
+                        _safe_transition(state_machine, DownloadState.MERGING_IN_STAGING)
+                        _safe_transition(state_machine, DownloadState.CANDIDATE_READY)
+                        _safe_transition(state_machine, DownloadState.VALIDATING)
 
                     if not check_ffprobe_available():
+                        logger.error("ffprobe_missing", path=str(result))
                         return None
                     try:
                         await validate_media_file(result, expected_height=expected_height)
                     except Exception:  # noqa: BLE001
+                        logger.warning("media_validation_failed", path=str(result))
                         return None
 
                     if state_machine is not None:
-                        try:
-                            state_machine.transition(DownloadState.VALIDATED)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        _safe_transition(state_machine, DownloadState.VALIDATED)
 
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
                     if state_machine is not None:
-                        try:
-                            state_machine.transition(DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
-                        except Exception:  # noqa: BLE001
-                            pass
-                    publish_verified_file(result, workspace.final_path, final_lock=final_lock)
+                        _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
+                    try:
+                        publish_verified_file(result, workspace.final_path, final_lock=final_lock)
+                    except (
+                        MediaValidationError,
+                        FileNotFoundError,
+                        FileExistsError,
+                        OSError,
+                        TimeoutError,
+                    ) as exc:
+                        logger.warning("publish_failed", error=str(exc))
+                        return None
+                    except asyncio.CancelledError, KeyboardInterrupt:
+                        raise
+
                     if job_lock is not None:
                         try:
                             job_lock.release()  # type: ignore[attr-defined]
@@ -2229,6 +2297,7 @@ async def download_hls_with_resume(
                             workspace.final_path, expected_height=expected_height
                         )
                     except Exception:  # noqa: BLE001
+                        logger.warning("media_validation_failed", path=str(workspace.final_path))
                         return None
                     if not (
                         workspace.final_path.exists()
@@ -2237,26 +2306,49 @@ async def download_hls_with_resume(
                     ):
                         return None
                     if state_machine is not None:
-                        try:
-                            state_machine.transition(DownloadState.FINAL_COMMITTED)
-                            state_machine.transition(DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
+                        _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
                     cleanup_owned_job_artifacts(workspace)
                     result = workspace.final_path
-                except FileExistsError, OSError, FileNotFoundError, Exception:
+                except (
+                    MediaValidationError,
+                    FileNotFoundError,
+                    FileExistsError,
+                    OSError,
+                    TimeoutError,
+                ) as exc:
+                    logger.warning("commit_failed", error=str(exc))
+                    return None
+                except asyncio.CancelledError, KeyboardInterrupt:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("commit_unexpected", error=str(exc))
                     return None
             else:
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
-                    from .media_validation import validate_media_file
+                    from .media_validation import MediaValidationError, validate_media_file
 
                     if result.exists() and result.is_file():
                         if not check_ffprobe_available():
+                            logger.error("ffprobe_missing", path=str(result))
                             return None
                         await validate_media_file(result)
+                    if state_machine is not None:
+                        _safe_transition(state_machine, DownloadState.ALL_SEGMENTS_VERIFIED)
+                        _safe_transition(state_machine, DownloadState.MERGING_IN_STAGING)
+                        _safe_transition(state_machine, DownloadState.CANDIDATE_READY)
+                        _safe_transition(state_machine, DownloadState.VALIDATING)
+                        _safe_transition(state_machine, DownloadState.VALIDATED)
+                        _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
                     _cleanup_segments(segments_dir)
-                except Exception:  # noqa: BLE001
+                except (MediaValidationError, OSError, TimeoutError) as exc:
+                    logger.warning("media_validation_failed", error=str(exc))
+                    return None
+                except asyncio.CancelledError, KeyboardInterrupt:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("merge_unexpected", error=str(exc))
                     return None
             success = True
             return result
@@ -2309,3 +2401,63 @@ def _log_preserve_segments(segments_dir: Path) -> None:
         ),
         next_action="resume from the preserved working directory; clear it only if segments are corrupt",
     )
+
+
+def _safe_transition(state_machine: object, target: object) -> None:
+    """Transition *state_machine* to *target* when legal, else log at debug."""
+    import asyncio
+
+    if state_machine is None:
+        return
+    try:
+        from structlog import get_logger
+
+        _logger = get_logger(__name__)
+    except Exception:  # noqa: BLE001
+        _logger = None
+    try:
+        if hasattr(state_machine, "can_transition") and cast(
+            "DownloadStateMachine", state_machine
+        ).can_transition(cast("DownloadState", target)):
+            cast("DownloadStateMachine", state_machine).transition(cast("DownloadState", target))
+        else:
+            if _logger is not None:
+                _logger.debug(
+                    "transition_skipped",
+                    current=getattr(state_machine, "state", None),
+                    target=str(target),
+                )
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if _logger is not None:
+            _logger.debug(
+                "transition_skipped",
+                current=getattr(state_machine, "state", None),
+                target=str(target),
+                error=str(exc),
+            )
+
+
+def ensure_download_phase(state_machine: object) -> None:
+    """Walk CREATED -> RESOLVE_STREAM -> VALIDATE_VARIANT -> DOWNLOAD legally."""
+    if state_machine is None:
+        return
+    import asyncio
+
+    try:
+        from ..models.enums import DownloadState
+
+        for target in (
+            DownloadState.RESOLVE_STREAM,
+            DownloadState.VALIDATE_VARIANT,
+            DownloadState.DOWNLOAD,
+        ):
+            if hasattr(state_machine, "can_transition") and cast(
+                "DownloadStateMachine", state_machine
+            ).can_transition(target):
+                cast("DownloadStateMachine", state_machine).transition(target)
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception:  # noqa: BLE001
+        pass

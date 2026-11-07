@@ -17,13 +17,13 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pydantic import ValidationError
 from structlog import get_logger
 
 from .checkpoint import CHECKPOINT_SCHEMA_VERSION, JobCheckpoint, write_checkpoint_atomic
-from .state_machine import DownloadJobState
+from .state_machine import CommitRecoveryDirective, DownloadJobState, DownloadStateMachine
 
 logger = get_logger(__name__)
 
@@ -379,4 +379,196 @@ __all__ = [
     "preserve_bytes",
     "try_parse_checkpoint",
     "try_parse_job_state",
+]
+
+
+def _safe_transition_state(sm: object, target: object) -> None:
+    if sm is None:
+        return
+    import asyncio
+
+    try:
+        if hasattr(sm, "can_transition") and sm.can_transition(target):
+            from typing import cast
+
+            cast("DownloadStateMachine", sm).transition(target)
+        else:
+            try:
+                from structlog import get_logger
+
+                get_logger(__name__).debug(
+                    "transition_skipped", current=getattr(sm, "state", None), target=str(target)
+                )
+            except Exception:  # noqa: BLE001
+                pass
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def ensure_download_phase_state(sm: object) -> None:
+    if sm is None:
+        return
+    import asyncio
+
+    try:
+        from ..models.enums import DownloadState
+
+        for target in (
+            DownloadState.RESOLVE_STREAM,
+            DownloadState.VALIDATE_VARIANT,
+            DownloadState.DOWNLOAD,
+        ):
+            if hasattr(sm, "can_transition") and sm.can_transition(target):
+                cast(DownloadStateMachine, sm).transition(target)
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def reconcile_commit_state(
+    workspace: DownloadWorkspace,
+    state_machine: DownloadStateMachine | None = None,
+    *,
+    expected_height: int | None = None,
+) -> tuple[CommitRecoveryDirective, Path | None]:
+    """Classify on-disk commit state for *workspace*; never delete bytes."""
+    import asyncio
+    from pathlib import Path
+
+    from .ffmpeg_utils import check_ffprobe_available
+
+    final_path = Path(workspace.final_path)
+    staging_dir = Path(workspace.staging_dir)
+    segments_dir = Path(workspace.segments_dir)
+    staging_path = staging_dir / final_path.name
+
+    sm = state_machine
+
+    # 1. Already committed final.
+    if final_path.exists() and final_path.is_file() and final_path.stat().st_size > 0:
+        ffprobe_ok = False
+        try:
+            ffprobe_ok = check_ffprobe_available()
+        except Exception:  # noqa: BLE001
+            ffprobe_ok = False
+        if not ffprobe_ok:
+            try:
+                from structlog import get_logger
+
+                get_logger(__name__).error("ffprobe_missing", path=str(final_path))
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                from .media_validation import validate_media_file
+
+                await validate_media_file(final_path, expected_height=expected_height)
+                # Advance state to FINAL_COMMITTED when possible.
+                ensure_download_phase_state(sm)
+                from ..models.enums import DownloadState
+
+                for target in (
+                    DownloadState.ALL_SEGMENTS_VERIFIED,
+                    DownloadState.MERGING_IN_STAGING,
+                    DownloadState.CANDIDATE_READY,
+                    DownloadState.VALIDATING,
+                    DownloadState.VALIDATED,
+                    DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION,
+                    DownloadState.FINAL_COMMITTED,
+                ):
+                    _safe_transition_state(sm, target)
+                if sm is not None and hasattr(sm, "persist"):
+                    try:
+                        sm.persist()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return CommitRecoveryDirective.ALREADY_COMMITTED, final_path
+            except asyncio.CancelledError, KeyboardInterrupt:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+
+    # 2. Validated staging candidate.
+    if staging_path.exists() and staging_path.is_file() and staging_path.stat().st_size > 0:
+        ffprobe_ok = False
+        try:
+            ffprobe_ok = check_ffprobe_available()
+        except Exception:  # noqa: BLE001
+            ffprobe_ok = False
+        if not ffprobe_ok:
+            try:
+                from structlog import get_logger
+
+                get_logger(__name__).error("ffprobe_missing", path=str(staging_path))
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                from .media_validation import validate_media_file
+
+                await validate_media_file(staging_path, expected_height=expected_height)
+                ensure_download_phase_state(sm)
+                from ..models.enums import DownloadState
+
+                for target in (
+                    DownloadState.ALL_SEGMENTS_VERIFIED,
+                    DownloadState.MERGING_IN_STAGING,
+                    DownloadState.CANDIDATE_READY,
+                    DownloadState.VALIDATING,
+                    DownloadState.VALIDATED,
+                ):
+                    _safe_transition_state(sm, target)
+                if sm is not None and hasattr(sm, "persist"):
+                    try:
+                        sm.persist()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return CommitRecoveryDirective.PUBLISH_STAGING, staging_path
+            except asyncio.CancelledError, KeyboardInterrupt:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+
+    # 3. Preserved segments.
+    if segments_dir.exists():
+        try:
+            if any(segments_dir.glob("*.ts")):
+                ensure_download_phase_state(sm)
+                from ..models.enums import DownloadState
+
+                # Walk at least to DOWNLOAD if legal.
+                _safe_transition_state(sm, DownloadState.DOWNLOAD)
+                if sm is not None and hasattr(sm, "persist"):
+                    try:
+                        sm.persist()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return CommitRecoveryDirective.RESUME_SEGMENTS, None
+        except asyncio.CancelledError, KeyboardInterrupt:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 4. Fresh.
+    if sm is not None and hasattr(sm, "persist"):
+        try:
+            sm.persist()
+        except Exception:  # noqa: BLE001
+            pass
+    return CommitRecoveryDirective.FRESH, None
+
+
+__all__ = [
+    "LegacyStateClassification",
+    "MigrationResult",
+    "CommitRecoveryDirective",
+    "classify_legacy_state",
+    "migrate_legacy_state",
+    "preserve_bytes",
+    "try_parse_checkpoint",
+    "try_parse_job_state",
+    "reconcile_commit_state",
 ]

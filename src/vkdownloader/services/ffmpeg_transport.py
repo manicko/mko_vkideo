@@ -226,13 +226,20 @@ class FfmpegTransport:
 
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
-                    from .media_validation import validate_media_file
+                    from .media_validation import MediaValidationError, validate_media_file
 
                     if not check_ffprobe_available():
+                        logger.warning("ffprobe_missing", output=str(output_file))
                         return None
                     await validate_media_file(output_file)
-                except Exception:  # noqa: BLE001
+                except MediaValidationError as exc:
+                    logger.warning("media_validation_failed", reason=str(exc))
                     return None
+                except (OSError, TimeoutError, FileNotFoundError) as exc:
+                    logger.warning("media_validation_io_error", error=str(exc))
+                    return None
+                except asyncio.CancelledError:
+                    raise
 
                 logger.info("ffmpeg_download_completed", output=str(output_file))
                 return output_file
@@ -243,6 +250,13 @@ class FfmpegTransport:
             finally:
                 if process.returncode is None:
                     await cancel_subprocess(process)
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                await cancel_subprocess(process)
+            raise
+        except (OSError, TimeoutError, FileNotFoundError) as exc:
+            logger.error("ffmpeg_transport_error", error=sanitize_exception(exc))
+            return None
         except Exception as exc:  # noqa: BLE001
             logger.error("ffmpeg_transport_error", error=sanitize_exception(exc))
             return None

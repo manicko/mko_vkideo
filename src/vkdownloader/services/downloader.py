@@ -7,16 +7,17 @@ extracted to :mod:`vkdownloader.services.ytdlp_downloader`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import QualityNotAvailableError
-from ..models.enums import CookieSource, DownloadMethod
+from ..models.enums import CookieSource, DownloadMethod, DownloadState
 from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
@@ -228,6 +229,67 @@ async def perform_download(
             job_lock = None
             raise
 
+    # Resume reconciliation before backend starts.
+    if workspace is not None:
+        try:
+            from .state_machine import CommitRecoveryDirective, DownloadStateMachine
+
+            if state_machine is None:
+                try:
+                    state_machine = DownloadStateMachine.load(workspace, job_id=workspace.job_id)
+                except Exception:  # noqa: BLE001
+                    state_machine = None
+            expected_height = None
+            try:
+                expected_height = int(str(quality).rstrip("p"))
+            except TypeError, ValueError:
+                expected_height = None
+            from .state_migration import reconcile_commit_state
+
+            directive, usable = await reconcile_commit_state(
+                workspace, state_machine, expected_height=expected_height
+            )
+            if directive == CommitRecoveryDirective.ALREADY_COMMITTED and usable is not None:
+                return usable
+            if directive == CommitRecoveryDirective.PUBLISH_STAGING and usable is not None:
+                try:
+                    from .ffmpeg_utils import check_ffprobe_available
+                    from .media_validation import MediaValidationError, validate_media_file
+                    from .workspace import (
+                        acquire_publish_lock,
+                        cleanup_owned_job_artifacts,
+                        publish_verified_file,
+                    )
+
+                    if not check_ffprobe_available():
+                        logger.error("ffprobe_missing", path=str(usable))
+                        return None
+                    await validate_media_file(usable, expected_height=expected_height)
+                    final_lock = acquire_publish_lock(workspace.final_path, 10.0)
+
+                    _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
+                    publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
+                    await validate_media_file(workspace.final_path, expected_height=expected_height)
+                    if not (
+                        workspace.final_path.exists()
+                        and workspace.final_path.is_file()
+                        and workspace.final_path.stat().st_size > 0
+                    ):
+                        return None
+                    _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
+                    _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
+                    cleanup_owned_job_artifacts(workspace)
+                    return workspace.final_path
+                except asyncio.CancelledError, KeyboardInterrupt:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("publish_staging_failed", error=str(exc))
+                    return None
+        except asyncio.CancelledError, KeyboardInterrupt:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reconcile_failed", error=str(exc))
+
     try:
         async with semaphore_context:
             match method:
@@ -322,46 +384,84 @@ async def perform_download(
                             and candidate.stat().st_size > 0
                         ):
                             from .ffmpeg_utils import check_ffprobe_available
-                            from .media_validation import validate_media_file
+                            from .media_validation import MediaValidationError, validate_media_file
                             from .workspace import (
                                 acquire_publish_lock,
                                 cleanup_owned_job_artifacts,
                                 publish_verified_file,
                             )
 
+                            expected_height = None
+                            try:
+                                expected_height = int(str(quality).rstrip("p"))
+                            except TypeError, ValueError:
+                                expected_height = None
+
                             if not check_ffprobe_available():
+                                logger.error("ffprobe_missing", path=str(candidate))
                                 return None
                             try:
-                                await validate_media_file(candidate)
-                            except Exception:  # noqa: BLE001
+                                await validate_media_file(
+                                    candidate, expected_height=expected_height
+                                )
+                            except (MediaValidationError, OSError, TimeoutError) as exc:
+                                logger.warning("media_validation_failed", error=str(exc))
                                 return None
 
+                            if state_machine is not None:
+                                ensure_download_phase(state_machine)
+
+                                _safe_transition(state_machine, DownloadState.ALL_SEGMENTS_VERIFIED)
+                                _safe_transition(state_machine, DownloadState.MERGING_IN_STAGING)
+                                _safe_transition(state_machine, DownloadState.CANDIDATE_READY)
+                                _safe_transition(state_machine, DownloadState.VALIDATING)
+                                _safe_transition(state_machine, DownloadState.VALIDATED)
+
                             final_lock = acquire_publish_lock(workspace.final_path, 10.0)
+                            if state_machine is not None:
+                                _safe_transition(
+                                    state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION
+                                )
                             try:
                                 publish_verified_file(
                                     candidate, workspace.final_path, final_lock=final_lock
                                 )
-                            except Exception:  # noqa: BLE001
+                            except (
+                                FileExistsError,
+                                OSError,
+                                FileNotFoundError,
+                                TimeoutError,
+                            ) as exc:
+                                logger.warning("publish_failed", error=str(exc))
                                 return None
+
                             if job_lock is not None:
                                 try:
                                     job_lock.release()
                                 except Exception:  # noqa: BLE001
                                     pass
                                 job_lock = None
-                            cleanup_owned_job_artifacts(workspace)
+                            try:
+                                await validate_media_file(
+                                    workspace.final_path, expected_height=expected_height
+                                )
+                            except (MediaValidationError, OSError, TimeoutError) as exc:
+                                logger.warning("media_validation_failed", error=str(exc))
+                                return None
                             if not (
                                 workspace.final_path.exists()
                                 and workspace.final_path.is_file()
                                 and workspace.final_path.stat().st_size > 0
                             ):
                                 return None
-                            try:
-                                await validate_media_file(workspace.final_path)
-                            except Exception:  # noqa: BLE001
-                                return None
+                            if state_machine is not None:
+                                _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
+                                _safe_transition(
+                                    state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS
+                                )
+                            cleanup_owned_job_artifacts(workspace)
                             return workspace.final_path
-                    return staged
+                        return staged
                 case _:
                     logger.error(
                         "unknown_download_method",
@@ -523,3 +623,61 @@ async def download_video(
         workspace=workspace,
         state_machine=state_machine,
     )
+
+
+def _safe_transition(state_machine: object, target: object) -> None:
+    import asyncio
+
+    if state_machine is None:
+        return
+    try:
+        from structlog import get_logger
+
+        _logger = get_logger(__name__)
+    except Exception:  # noqa: BLE001
+        _logger = None
+    try:
+        if hasattr(state_machine, "can_transition") and cast(
+            "DownloadStateMachine", state_machine
+        ).can_transition(cast("DownloadState", target)):
+            cast("DownloadStateMachine", state_machine).transition(cast("DownloadState", target))
+        else:
+            if _logger is not None:
+                _logger.debug(
+                    "transition_skipped",
+                    current=getattr(state_machine, "state", None),
+                    target=str(target),
+                )
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if _logger is not None:
+            _logger.debug(
+                "transition_skipped",
+                current=getattr(state_machine, "state", None),
+                target=str(target),
+                error=str(exc),
+            )
+
+
+def ensure_download_phase(state_machine: object) -> None:
+    if state_machine is None:
+        return
+    import asyncio
+
+    try:
+        from ..models.enums import DownloadState
+
+        for target in (
+            DownloadState.RESOLVE_STREAM,
+            DownloadState.VALIDATE_VARIANT,
+            DownloadState.DOWNLOAD,
+        ):
+            if hasattr(state_machine, "can_transition") and cast(
+                "DownloadStateMachine", state_machine
+            ).can_transition(target):
+                cast("DownloadStateMachine", state_machine).transition(target)
+    except asyncio.CancelledError, KeyboardInterrupt:
+        raise
+    except Exception:  # noqa: BLE001
+        pass

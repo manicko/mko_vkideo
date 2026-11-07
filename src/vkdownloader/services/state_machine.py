@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 from structlog import get_logger
@@ -638,3 +639,81 @@ def write_job_state_atomic(path: str | Path, payload: object) -> None:
     from .checkpoint import write_checkpoint_atomic
 
     write_checkpoint_atomic(path, payload)
+
+
+class CommitRecoveryDirective(StrEnum):
+    """Recovery directive returned by ``reconcile_commit_state``."""
+
+    ALREADY_COMMITTED = "already_committed"
+    PUBLISH_STAGING = "publish_staging"
+    RESUME_SEGMENTS = "resume_segments"
+    FRESH = "fresh"
+
+
+def _safe_transition(state_machine: object, target: object) -> None:
+    """Transition *state_machine* to *target* when legal, else log at debug.
+
+    Never raises for an illegal transition on resume; cancellation signals
+    propagate.
+    """
+    import asyncio
+
+    if state_machine is None:
+        return
+    try:
+        sm = cast(DownloadStateMachine, state_machine)
+        tgt = cast(DownloadState, target)
+        if hasattr(sm, "can_transition") and sm.can_transition(tgt):
+            sm.transition(tgt)
+        else:
+            logger.debug(
+                "transition_skipped",
+                current=getattr(sm, "state", None),
+                target=str(tgt),
+            )
+    except asyncio.CancelledError:
+        raise
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "transition_skipped",
+            current=getattr(state_machine, "state", None),
+            target=str(target),
+            error=str(exc),
+        )
+
+
+def ensure_download_phase(state_machine: object) -> None:
+    """Walk CREATED -> RESOLVE_STREAM -> VALIDATE_VARIANT -> DOWNLOAD legally."""
+    if state_machine is None:
+        return
+    import asyncio
+
+    from ..models.enums import DownloadState
+
+    for target in (
+        DownloadState.RESOLVE_STREAM,
+        DownloadState.VALIDATE_VARIANT,
+        DownloadState.DOWNLOAD,
+    ):
+        try:
+            sm = cast(DownloadStateMachine, state_machine)
+            if sm.can_transition(target):
+                sm.transition(target)
+        except asyncio.CancelledError, KeyboardInterrupt:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("ensure_download_phase_skipped", target=str(target))
+
+
+async def reconcile_commit_state(
+    workspace: DownloadWorkspace,
+    state_machine: DownloadStateMachine | None = None,
+    *,
+    expected_height: int | None = None,
+) -> object:
+    """Delegate to ``state_migration.reconcile_commit_state`` (lazy import)."""
+    from .state_migration import reconcile_commit_state as _impl
+
+    return await _impl(workspace, state_machine, expected_height=expected_height)
