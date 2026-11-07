@@ -671,7 +671,10 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.headers = {
+            "content-type": "application/json",
+            "content-length": "60",
+        }
         mock_response.body = AsyncMock(
             return_value=b'{"url": "https://cdn.example.com/stream.m3u8", "data": "value"}'
         )
@@ -679,6 +682,7 @@ class TestNetworkMonitor:
         await monitor._intercept_response(mock_response)
 
         assert "https://cdn.example.com/stream.m3u8" in monitor.m3u8_urls
+        assert mock_response.body.call_count == 1
 
     def test_extract_urls_from_json_dict(self) -> None:
         """Test _extract_urls_from_json extracts URLs from dict data."""
@@ -709,13 +713,17 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.headers = {
+            "content-type": "application/json",
+            "content-length": "18",
+        }
         mock_response.body = AsyncMock(return_value=b"invalid json data")
 
         # Should not raise - exception handled gracefully
         await monitor._intercept_response(mock_response)
         # No URL should be extracted (invalid JSON)
         assert len(monitor.m3u8_urls) == 0
+        assert mock_response.body.call_count == 1
 
     @pytest.mark.asyncio
     async def test_network_monitor_error_graceful(self) -> None:
@@ -726,13 +734,17 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://api.example.com/video"
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.headers = {
+            "content-type": "application/json",
+            "content-length": "10",
+        }
         mock_response.body = AsyncMock(side_effect=RuntimeError("network error"))
 
         # Should not raise - exception handled gracefully
         await monitor._intercept_response(mock_response)
         # No URL should be extracted (error)
         assert len(monitor.m3u8_urls) == 0
+        assert mock_response.body.call_count == 1
 
     @pytest.mark.asyncio
     async def test_network_monitor_skips_oversized_body_without_content_length(self) -> None:
@@ -751,6 +763,7 @@ class TestNetworkMonitor:
 
         # No URL should be extracted (body too large)
         assert len(monitor.m3u8_urls) == 0
+        assert mock_response.body.call_count == 0
 
     @pytest.mark.parametrize(
         ("address_form", "expected"),
@@ -956,8 +969,8 @@ class TestNetworkMonitor:
 
         result = monitor.select()
 
-        # Host filter suspended: unconstrained set is returned.
-        assert result == monitor.m3u8_urls
+        # Host filter is fail-closed: no untrusted URL is returned.
+        assert result == []
         assert monitor._host_filter_suspended_logged is True
 
     def test_select_host_filter_suspension_logs_once(self) -> None:
@@ -1027,12 +1040,16 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://cdn.vkvideo.ru/master.m3u8"
-        mock_response.body = AsyncMock(return_value=b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1234\n")
+        mock_response.headers = {"content-length": "42"}
+        mock_response.body = AsyncMock(
+            return_value=b"#EXTM3U\\n#EXT-X-STREAM-INF:BANDWIDTH=1234\\n"
+        )
 
         await monitor._intercept_response(mock_response)
 
         assert "https://cdn.vkvideo.ru/master.m3u8" in monitor.m3u8_urls
         assert monitor._playlist_types["https://cdn.vkvideo.ru/master.m3u8"] == _PlaylistType.MASTER
+        assert mock_response.body.call_count == 1
 
     @pytest.mark.asyncio
     async def test_intercept_response_classifies_media_playlist(self) -> None:
@@ -1043,13 +1060,15 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://cdn.vkvideo.ru/media.m3u8"
+        mock_response.headers = {"content-length": "49"}
         mock_response.body = AsyncMock(
-            return_value=b"#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:10\n"
+            return_value=b"#EXTM3U\\n#EXT-X-PLAYLIST-TYPE:VOD\\n#EXT-X-TARGETDURATION:10\\n"
         )
 
         await monitor._intercept_response(mock_response)
 
         assert monitor._playlist_types["https://cdn.vkvideo.ru/media.m3u8"] == _PlaylistType.MEDIA
+        assert mock_response.body.call_count == 1
 
     @pytest.mark.asyncio
     async def test_intercept_response_classifies_unclassified_playlist(self) -> None:
@@ -1060,7 +1079,8 @@ class TestNetworkMonitor:
 
         mock_response = MagicMock()
         mock_response.url = "https://cdn.vkvideo.ru/unknown.m3u8"
-        mock_response.body = AsyncMock(return_value=b"#EXTM3U\n#EXT-X-TARGETDURATION:10\n")
+        mock_response.headers = {"content-length": "36"}
+        mock_response.body = AsyncMock(return_value=b"#EXTM3U\\n#EXT-X-TARGETDURATION:10\\n")
 
         await monitor._intercept_response(mock_response)
 
@@ -1068,6 +1088,7 @@ class TestNetworkMonitor:
             monitor._playlist_types["https://cdn.vkvideo.ru/unknown.m3u8"]
             == _PlaylistType.UNCLASSIFIED
         )
+        assert mock_response.body.call_count == 1
 
     def test_select_sorts_media_first(self) -> None:
         """B7: select() ranks media playlists above unclassified above master.

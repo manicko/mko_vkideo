@@ -615,11 +615,11 @@ class TestComputeBackoffDelay:
         assert result == 0.0
 
     def test_retry_after_ceiling_applies_after_max(self) -> None:
-        """Retry-After above the 30s ceiling is clamped, not passed through (NET-018)."""
+        """Retry-After above the 30s local jitter cap is honored, not clamped (NET-002)."""
         with patch("vkdownloader.services.downloader_throttle.random.uniform", return_value=5.0):
             result = _compute_backoff_delay(429, 0, 600.0)
 
-        assert result == 30.0  # 600 clamped to ceiling
+        assert result == 600.0  # server floor preserved above local ceiling
 
     def test_retry_after_overrides_delay(self) -> None:
         """Test Retry-After header value overrides calculated delay."""

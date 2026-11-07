@@ -2523,7 +2523,7 @@ class TestDownloadMethodLogging:
     async def test_child_receives_selected_address(
         self, test_settings: Settings, tmp_path: Path
     ) -> None:
-        """Verify yt-dlp's final positional argument is the m3u8_url, not the video_url."""
+        """Verify yt-dlp receives the m3u8_url via --batch-file, not argv or video_url."""
         from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
 
         output_file = tmp_path / "video.mp4"
@@ -2551,7 +2551,10 @@ class TestDownloadMethodLogging:
                     test_settings,
                 )
 
-        assert captured_cmd[-1] == "https://example.com/playlist.m3u8"
+        flat_cmd = " ".join(captured_cmd)
+        assert "https://example.com/playlist.m3u8" not in flat_cmd
+        assert "--batch-file" in captured_cmd
+        assert "https://vkvideo.ru/video-12345_67890" not in flat_cmd
 
 
 class TestIterProcessLines:
@@ -3704,10 +3707,10 @@ class TestSetupSignalHandlers:
         try:
             with patch.object(asyncio, "get_running_loop", return_value=_SucceedingLoop()):
                 with patch.object(signal_module, "signal") as mock_signal:
-                    signal_handlers.setup_signal_handlers()
+                    with patch.object(signal_module, "getsignal", return_value=None):
+                        signal_handlers.setup_signal_handlers()
 
-                    # signal.signal must NOT be called when the loop path succeeds.
-                    assert mock_signal.call_count == 0
+                        assert mock_signal.call_count == 0
 
             # The loop-path callback takes no arguments.
             callback = cast(Callable[[], None], registered[signal_module.SIGINT])
@@ -5611,26 +5614,27 @@ class TestB13AvailabilityProbe:
     (``perform_download``) can still react to it on every invocation.
     """
 
-    def test_check_ffmpeg_available_write_once_when_false(self) -> None:
-        """Write-once cache: when ffmpeg is absent, False is cached and a
-        second call returns the cached value without re-probing."""
+    def test_check_ffmpeg_available_rechecks_after_path_change(self) -> None:
+        """Negative results are not pinned: a binary that appears later is
+        observed by the next call instead of a stale ``False`` (PRC-001)."""
         import vkdownloader.services.ffmpeg_utils as fu
 
         original = fu._ffmpeg_available
         try:
             fu._ffmpeg_available = None
 
-            # First call discovers the absence and caches False
+            # First call discovers the absence.
             with patch("shutil.which", return_value=None):
                 result = check_ffmpeg_available()
             assert result is False
             assert fu._ffmpeg_available is False
 
-            # Second call returns cached False — write-once, no re-probe
+            # A binary appearing later is seen by the next call.
             with patch("shutil.which", return_value="/usr/bin/ffmpeg") as mock_which:
                 result2 = check_ffmpeg_available()
-            assert result2 is False  # cached, not silent
-            mock_which.assert_not_called()
+            assert result2 is True
+            assert fu._ffmpeg_available is True
+            mock_which.assert_called()
         finally:
             fu._ffmpeg_available = original
 

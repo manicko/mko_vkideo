@@ -219,7 +219,7 @@ class NetworkMonitor:
             return None
         try:
             size = int(content_length)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if size < 0 or size >= self.MAX_JSON_BODY_BYTES:
             return None
@@ -414,12 +414,10 @@ class NetworkMonitor:
             if content_length is not None:
                 try:
                     size_bytes = int(content_length)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     size_bytes = None
 
-            chunked = transfer_encoding is not None and "chunked" in str(
-                transfer_encoding
-            ).lower()
+            chunked = transfer_encoding is not None and "chunked" in str(transfer_encoding).lower()
 
             if (
                 content_length is None

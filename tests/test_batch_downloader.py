@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from vkdownloader import cli
 from vkdownloader.config import Settings
 from vkdownloader.exceptions import QualityNotAvailableError
 from vkdownloader.models.enums import (
@@ -22,7 +23,6 @@ from vkdownloader.services.batch_downloader import (
     ConcurrencyTracker,
     DownloadContext,
     _download_single,
-    _print_batch_summary,
     _run_batch_with_progress,
     _TrackedSemaphore,
     run_batch,
@@ -429,7 +429,7 @@ class TestBatchDownloaderSemaphore:
             ("https://vkvideo.ru/video-1_2", "", "failed"),
         ]
 
-        exit_code = _print_batch_summary(results, peak_concurrent_videos=2, skipped_count=0)
+        exit_code = cli._print_batch_summary(results, peak_concurrent_videos=2, skipped_count=0)
 
         assert exit_code == 1
         captured = capsys.readouterr()
@@ -469,7 +469,7 @@ class TestBatchCancellationReporting:
                     ),
                     timeout=30,
                 )
-            exit_code = _print_batch_summary(results, peak, 0)
+            exit_code = cli._print_batch_summary(results, peak, 0)
         finally:
             _shutdown_event_ctx.reset(token)
 
@@ -491,7 +491,7 @@ class TestBatchCancellationReporting:
         try:
             _shutdown_event_ctx.get().set()
             with _batch_runtime(download):
-                exit_code = await asyncio.wait_for(
+                batch_result = await asyncio.wait_for(
                     run_batch(
                         urls,
                         QualitySpec.parse("best"),
@@ -501,6 +501,7 @@ class TestBatchCancellationReporting:
                     ),
                     timeout=30,
                 )
+                exit_code = cli._print_batch_summary(batch_result)
         finally:
             _shutdown_event_ctx.reset(token)
 
@@ -537,7 +538,7 @@ class TestBatchCancellationReporting:
                     ),
                     timeout=30,
                 )
-            exit_code = _print_batch_summary(results, peak, 0)
+            exit_code = cli._print_batch_summary(results, peak, 0)
         finally:
             _shutdown_event_ctx.reset(token)
 
@@ -580,7 +581,7 @@ class TestBatchCancellationReporting:
                     ),
                     timeout=30,
                 )
-            exit_code = _print_batch_summary(results, peak, 0)
+            exit_code = cli._print_batch_summary(results, peak, 0)
         finally:
             _shutdown_event_ctx.reset(token)
 
@@ -613,7 +614,7 @@ class TestBatchCancellationReporting:
         token = _shutdown_event_ctx.set(asyncio.Event())
         try:
             with _batch_runtime(download):
-                exit_code = await asyncio.wait_for(
+                batch_result = await asyncio.wait_for(
                     run_batch(
                         urls,
                         QualitySpec.parse("best"),
@@ -623,6 +624,7 @@ class TestBatchCancellationReporting:
                     ),
                     timeout=30,
                 )
+                exit_code = cli._print_batch_summary(batch_result)
         finally:
             _shutdown_event_ctx.reset(token)
 
@@ -641,7 +643,7 @@ class TestBatchCancellationReporting:
             ("https://vkvideo.ru/video-1_1", "", ProgressStatus.CANCELLED.value),
             ("https://vkvideo.ru/video-1_2", "", "quality_not_available"),
         ]
-        exit_code = _print_batch_summary(cancelled_results, peak_concurrent_videos=1)
+        exit_code = cli._print_batch_summary(cancelled_results, peak_concurrent_videos=1)
         cancelled_output = capsys.readouterr().out
 
         assert exit_code == 130
@@ -653,7 +655,7 @@ class TestBatchCancellationReporting:
         failed_results: list[tuple[str, str, str]] = [
             ("https://vkvideo.ru/video-1_1", "", "video_not_found")
         ]
-        exit_code = _print_batch_summary(failed_results, peak_concurrent_videos=1)
+        exit_code = cli._print_batch_summary(failed_results, peak_concurrent_videos=1)
         failed_output = capsys.readouterr().out
 
         assert exit_code == 1
@@ -667,7 +669,7 @@ class TestBatchCancellationReporting:
                 ProgressStatus.SUCCESS.value,
             )
         ]
-        exit_code = _print_batch_summary(success_results, peak_concurrent_videos=1)
+        exit_code = cli._print_batch_summary(success_results, peak_concurrent_videos=1)
         success_output = capsys.readouterr().out
 
         assert exit_code == 0
@@ -677,7 +679,7 @@ class TestBatchCancellationReporting:
 
 class TestBatchCancellationPropagates:
     """Route B: a child that *raises* CancelledError re-raises through run_batch,
-    never reaching _print_batch_summary.
+    never reaching cli._print_batch_summary.
 
     This is the raising route (B), distinct from the returning route tested by
     TestBatchCancellationReporting (A): the former propagates CancelledError
@@ -687,12 +689,12 @@ class TestBatchCancellationPropagates:
     @pytest.mark.asyncio
     async def test_run_batch_re_raises_cancelled_when_child_raises(self, tmp_path: Path) -> None:
         """When a child download raises CancelledError, run_batch re-raises it
-        and _print_batch_summary is never called.
+        and cli._print_batch_summary is never called.
 
         Route B (raising): the CancelledError propagates out of
         _run_batch_with_progress before run_batch can invoke
-        _print_batch_summary. The exit code 130 is produced by cli.py's
-        CancelledError arm, not by _print_batch_summary.
+        cli._print_batch_summary. The exit code 130 is produced by cli.py's
+        CancelledError arm, not by cli._print_batch_summary.
         """
         settings = _make_settings(tmp_path)
         urls = _batch_urls(1)
@@ -701,9 +703,7 @@ class TestBatchCancellationPropagates:
         token = _shutdown_event_ctx.set(asyncio.Event())
         try:
             with _batch_runtime(download):
-                with patch(
-                    "vkdownloader.services.batch_downloader._print_batch_summary"
-                ) as mock_summary:
+                with patch("vkdownloader.cli._print_batch_summary") as mock_summary:
                     try:
                         await asyncio.wait_for(
                             run_batch(
@@ -918,7 +918,7 @@ class TestBatchLiveTaskBounding:
         assert statuses == [ProgressStatus.CANCELLED.value] * len(urls)
         assert peak <= ceiling
 
-        exit_code = _print_batch_summary(results, peak, 0)
+        exit_code = cli._print_batch_summary(results, peak, 0)
         captured = capsys.readouterr()
         assert exit_code == 130
         assert "Successful: 0" in captured.out
@@ -1077,7 +1077,7 @@ class TestBatchDedupSkip:
                 timeout=30,
             )
 
-        exit_code = _print_batch_summary(results, 1, 0)
+        exit_code = cli._print_batch_summary(results, 1, 0)
         captured = capsys.readouterr()
 
         # Total videos includes skipped items in len(results).
@@ -1256,7 +1256,7 @@ class TestBatchSummarySkippedAggregation:
             ("https://vkvideo.ru/video-1_2", "", ProgressStatus.SKIPPED.value),
         ]
 
-        exit_code = _print_batch_summary(results, peak_concurrent_videos=1, skipped_count=0)
+        exit_code = cli._print_batch_summary(results, peak_concurrent_videos=1, skipped_count=0)
         captured = capsys.readouterr()
 
         # Total videos includes skipped items in len(results).

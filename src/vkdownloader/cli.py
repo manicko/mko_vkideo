@@ -580,7 +580,9 @@ def _print_batch_summary(
                 while len(seq) < 3:
                     seq.append("")
                 items.append(
-                    BatchDownloadItemResult(url=str(seq[0]), output_path=str(seq[1]), status=str(seq[2]))
+                    BatchDownloadItemResult(
+                        url=str(seq[0]), output_path=str(seq[1]), status=str(seq[2])
+                    )
                 )
             else:
                 items.append(entry)
@@ -592,10 +594,16 @@ def _print_batch_summary(
 
     # Print per-item status lines.
     for item in batch_result.items:
-        typer.echo(f"{item.url}: {item.status}" + (f" -> {item.output_path}" if item.output_path else ""))
+        typer.echo(
+            f"{item.url}: {item.status}" + (f" -> {item.output_path}" if item.output_path else "")
+        )
 
-    successful = sum(1 for item in batch_result.items if item.status == ProgressStatus.SUCCESS.value)
-    cancelled = sum(1 for item in batch_result.items if item.status == ProgressStatus.CANCELLED.value)
+    successful = sum(
+        1 for item in batch_result.items if item.status == ProgressStatus.SUCCESS.value
+    )
+    cancelled = sum(
+        1 for item in batch_result.items if item.status == ProgressStatus.CANCELLED.value
+    )
     skipped = sum(1 for item in batch_result.items if item.status == ProgressStatus.SKIPPED.value)
     failed = sum(
         1

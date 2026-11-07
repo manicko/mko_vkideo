@@ -221,8 +221,7 @@ class Settings(BaseSettings):
     log_backup_count: int = Field(
         default=5,
         ge=0,
-        description="Number of rotated log file backups to retain. "
-        "Zero retains no backups.",
+        description="Number of rotated log file backups to retain. Zero retains no backups.",
     )
 
     @field_validator("download_dir", mode="before")

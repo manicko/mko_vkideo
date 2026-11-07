@@ -130,4 +130,3 @@ async def test_ytdlp_argv_lacks_signed_url_without_cookies(
     assert "SECRET456" not in flat_cmd
     assert "--batch-file" in captured["cmd"]
     assert captured["kwargs"].get("stdin") is None
-

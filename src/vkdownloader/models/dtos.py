@@ -81,7 +81,9 @@ class BatchDownloadItemResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     url: str
-    output_path: str = Field(default="", validation_alias=AliasChoices("output_path", "output", "path"))
+    output_path: str = Field(
+        default="", validation_alias=AliasChoices("output_path", "output", "path")
+    )
     status: str
 
     @property

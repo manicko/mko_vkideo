@@ -206,7 +206,7 @@ def cleanup_signal_handlers() -> None:
             try:
                 loop.remove_signal_handler(sig)
                 removed_ok = True
-            except (NotImplementedError, KeyError, RuntimeError, OSError, ValueError):
+            except NotImplementedError, KeyError, RuntimeError, OSError, ValueError:
                 # Ignore errors if handler wasn't registered or loop closed
                 removed_ok = False
 
@@ -219,7 +219,7 @@ def cleanup_signal_handlers() -> None:
                     if previous is not None:
                         try:
                             signal.signal(sig, previous)
-                        except (OSError, ValueError, RuntimeError):
+                        except OSError, ValueError, RuntimeError:
                             pass
             else:
                 # Fallback path (or closed loop): identity-guarded restore.

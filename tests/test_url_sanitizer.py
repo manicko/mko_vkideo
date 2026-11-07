@@ -373,11 +373,11 @@ class TestSanitizeTextForLog:
 
         assert sanitize_text_for_log(text) == f"{REDACTED}\nmiddle line preserved\n{REDACTED}"
 
-    def test_benign_cookie_header_is_byte_identical(self) -> None:
-        """A ``Cookie:`` HTTP header is NOT matched (D-5 / Alt A) — byte-identical."""
+    def test_cookie_header_is_redacted(self) -> None:
+        """A ``Cookie:`` HTTP header value is redacted (SEC-003)."""
         text = "Cookie: a=b; c=d"
 
-        assert sanitize_text_for_log(text) == text
+        assert sanitize_text_for_log(text) == "Cookie: ***REDACTED***"
 
     def test_unquoted_key_value_loses_key_as_collateral(self) -> None:
         """``key=path/...`` is consumed by the artefact's greedy lead (accepted collateral).
