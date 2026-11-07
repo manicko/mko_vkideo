@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -50,3 +51,83 @@ def test_block_g_state_machine_importable() -> None:
     assert DownloadState is not None
     assert ErrorCategory is not None
     assert DownloadStateMachine is not None
+
+
+@pytest.mark.asyncio
+async def test_ytdlp_argv_lacks_signed_url_with_cookies(
+    test_settings: Settings, tmp_path: Path
+) -> None:
+    from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+    output_file = tmp_path / "video.mp4"
+    mock_process = AsyncMock()
+    mock_process.returncode = 0
+    mock_process.pid = 12345
+    mock_process.stdout = AsyncMock()
+    mock_process.stdout.readline = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+
+    captured: dict[str, object] = {"cmd": [], "kwargs": {}}
+
+    async def mock_create_subprocess_exec(*cmd: object, **kwargs: object) -> object:
+        captured["cmd"] = [str(c) for c in cmd]
+        captured["kwargs"] = kwargs
+        return mock_process
+
+    signed_url = "https://example.com/playlist.m3u8?token=SECRET123"
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+        with patch("vkdownloader.services.ytdlp_downloader.logger"):
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                signed_url,
+                output_file,
+                "720",
+                test_settings,
+                cookies="vk=abc123",
+            )
+
+    flat_cmd = " ".join(captured["cmd"])  # type: ignore[arg-type]
+    assert signed_url not in flat_cmd
+    assert "SECRET123" not in flat_cmd
+    assert "--batch-file" in captured["cmd"]
+    assert captured["kwargs"].get("stdin") is not None
+
+
+@pytest.mark.asyncio
+async def test_ytdlp_argv_lacks_signed_url_without_cookies(
+    test_settings: Settings, tmp_path: Path
+) -> None:
+    from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+    output_file = tmp_path / "video.mp4"
+    mock_process = AsyncMock()
+    mock_process.returncode = 0
+    mock_process.pid = 12345
+    mock_process.stdout = AsyncMock()
+    mock_process.stdout.readline = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+
+    captured: dict[str, object] = {"cmd": [], "kwargs": {}}
+
+    async def mock_create_subprocess_exec(*cmd: object, **kwargs: object) -> object:
+        captured["cmd"] = [str(c) for c in cmd]
+        captured["kwargs"] = kwargs
+        return mock_process
+
+    signed_url = "https://example.com/playlist.m3u8?token=SECRET456"
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+        with patch("vkdownloader.services.ytdlp_downloader.logger"):
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                signed_url,
+                output_file,
+                "720",
+                test_settings,
+            )
+
+    flat_cmd = " ".join(captured["cmd"])  # type: ignore[arg-type]
+    assert signed_url not in flat_cmd
+    assert "SECRET456" not in flat_cmd
+    assert "--batch-file" in captured["cmd"]
+    assert captured["kwargs"].get("stdin") is None
+

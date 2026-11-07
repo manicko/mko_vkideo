@@ -29,8 +29,9 @@ from ..exceptions import (
     VideoNotFoundError,
     VKDownloadError,
 )
-from ..models.enums import DownloadMethod, ProgressStatus
 from ..models.dtos import BatchDownloadItemResult, BatchDownloadResult
+from ..models.enums import DownloadMethod, ProgressStatus
+from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.downloader import download_video
 from ..services.downloader_throttle import URLBackoffCoordinator, get_shutdown_event

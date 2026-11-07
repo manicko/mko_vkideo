@@ -206,7 +206,7 @@ class NetworkMonitor:
         headers = getattr(response, "headers", None)
         content_length = None
         transfer_encoding = None
-        if hasattr(headers, "get"):
+        if headers is not None and hasattr(headers, "get"):
             try:
                 content_length = headers.get("content-length")
                 transfer_encoding = headers.get("transfer-encoding")
@@ -402,7 +402,7 @@ class NetworkMonitor:
             headers = getattr(response, "headers", None)
             content_length = None
             transfer_encoding = None
-            if hasattr(headers, "get"):
+            if headers is not None and hasattr(headers, "get"):
                 try:
                     content_length = headers.get("content-length")
                     transfer_encoding = headers.get("transfer-encoding")

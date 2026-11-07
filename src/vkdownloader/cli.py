@@ -35,8 +35,8 @@ from .exceptions import (
     VideoNotFoundError,
     VKDownloadError,
 )
-from .models.enums import CookieSource, DownloadMethod, LogLevel, ProgressStatus
 from .models.dtos import BatchDownloadResult
+from .models.enums import CookieSource, DownloadMethod, LogLevel, ProgressStatus
 from .models.quality import QualitySpec
 from .services.downloader_throttle import get_shutdown_event
 from .services.extractor import is_valid_video_url
@@ -572,7 +572,7 @@ def _print_batch_summary(
             )
     else:
         items: list[BatchDownloadItemResult] = []
-        for entry in result:  # type: ignore[union-attr]
+        for entry in result:  # type: ignore[attr-defined]
             if isinstance(entry, BatchDownloadItemResult):
                 items.append(entry)
             elif isinstance(entry, tuple):
@@ -583,7 +583,7 @@ def _print_batch_summary(
                     BatchDownloadItemResult(url=str(seq[0]), output_path=str(seq[1]), status=str(seq[2]))
                 )
             else:
-                items.append(entry)  # type: ignore[arg-type]
+                items.append(entry)
         batch_result = BatchDownloadResult(
             items=items,
             peak_concurrent_videos=peak_concurrent_videos or 0,
@@ -720,7 +720,6 @@ def batch_download(
         service layer's heavy dependencies (yt-dlp, playwright, aiohttp,
         rich) (ENT-013).
         """
-        from .models.dtos import BatchDownloadResult
         from .services.batch_downloader import run_batch
 
         setup_signal_handlers()

@@ -23,6 +23,7 @@ from vkdownloader.exceptions import (
     QualityNotAvailableError,
     VideoNotFoundError,
 )
+from vkdownloader.models.dtos import BatchDownloadResult
 from vkdownloader.models.enums import (
     TERMINAL_STATUSES,
     CookieSource,
@@ -594,7 +595,7 @@ class TestBatchCommand:
         with patch(
             "vkdownloader.services.batch_downloader.run_batch",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=BatchDownloadResult(),
         ) as mock_run_batch:
             result = runner.invoke(
                 app,
@@ -2065,7 +2066,7 @@ class TestMethodFfmpegRestored:
             patch(
                 "vkdownloader.services.batch_downloader.run_batch",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value=BatchDownloadResult(),
             ),
             patch("vkdownloader.cli._run_command_preamble") as mock_preamble,
         ):
@@ -2292,10 +2293,11 @@ class TestBatchErrorHandler:
     def test_batch_non_utf8_url_file_reports_designed_error(self, tmp_path: Path) -> None:
         """A URL file that is not valid UTF-8 must print the designed message and exit 1.
 
-        ``urls_file.read_text()`` raises ``UnicodeDecodeError``, which subclasses
-        ``ValueError`` rather than ``OSError``, so it reaches the generic handler
-        rather than the OSError arm. The handler reports ``len(valid_urls)``, so
-        this also pins that the read path is covered by the handler at all.
+        ``urls_file.read_text()`` raises ``UnicodeDecodeError`` (a ``UnicodeError``
+        subclass), which is now caught alongside ``OSError`` around the read so
+        the file is reported as ``Failed to read URL file`` with its path and
+        exit code 1. The read happens before ``valid_urls`` is populated, so
+        this also pins that the handler does not reference an unbound name.
         """
         urls_file = tmp_path / "urls.txt"
         urls_file.write_bytes(
@@ -2305,7 +2307,8 @@ class TestBatchErrorHandler:
         result = runner.invoke(app, ["batch", str(urls_file)], catch_exceptions=False)
 
         assert result.exit_code == 1
-        assert "An error occurred during batch download" in result.output
+        assert "Failed to read URL file" in result.output
+        assert str(urls_file) in result.output
         assert "UnboundLocalError" not in result.output
 
     def test_batch_non_utf8_env_file_reports_preamble_failure(
@@ -3457,7 +3460,7 @@ class TestPreambleCalledOncePerCommand:
             ) as mock_run_batch,
         ):
             mock_preamble.return_value = MagicMock(log_file=None)
-            mock_run_batch.return_value = 0
+            mock_run_batch.return_value = BatchDownloadResult()
 
             result = runner.invoke(
                 app,
@@ -3917,7 +3920,7 @@ class TestLogLevelOption:
             patch(
                 "vkdownloader.services.batch_downloader.run_batch",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value=BatchDownloadResult(),
             ),
         ):
             result = runner.invoke(
@@ -3982,7 +3985,7 @@ class TestLogLevelOption:
             patch(
                 "vkdownloader.services.batch_downloader.run_batch",
                 new_callable=AsyncMock,
-                return_value=0,
+                return_value=BatchDownloadResult(),
             ),
         ):
             result = runner.invoke(
