@@ -199,18 +199,16 @@ def _compute_backoff_delay(
         # 5xx errors use shorter base delay per AWS SDK guidance
         base_delay = 0.05
 
-    # Calculate delay with full jitter: random(0, min(base_delay * 2^attempt, 30.0))
-    # The 30s ceiling bounds the jitter RANGE passed to random.uniform —
-    # test_delay_caps_at_30_seconds asserts this and must stay green unchanged.
+    # Local jitter ceiling: bounds only the computed backoff range passed to
+    # random.uniform. This is independent of any server-provided Retry-After
+    # floor, which must be honored even above this ceiling (NET-002).
     delay = random.uniform(0, min(base_delay * (2**attempt), 30.0))
 
-    # Retry-After header is a floor on the calculated delay. The 30s ceiling
-    # is applied AFTER this max, so Retry-After is a clamped floor (NET-018):
-    # values above the ceiling are clamped, not passed through uncapped.
+    # Retry-After header is a floor on the calculated delay. It is NOT clamped
+    # by the local 30s jitter ceiling: a server-requested cooldown longer than
+    # the local cap must be respected rather than retried early.
     if retry_after_seconds is not None:
         delay = max(delay, retry_after_seconds)
-
-    delay = min(delay, 30.0)
 
     return delay
 
