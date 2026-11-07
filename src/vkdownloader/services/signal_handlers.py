@@ -157,7 +157,13 @@ def setup_signal_handlers() -> None:
     if loop is not None:
         for sig in _HANDLED_SIGNALS:
             try:
+                # Capture the process-level disposition this module is about to
+                # displace BEFORE loop registration, so cleanup can put it back.
+                _capture_previous_handler(sig)
                 loop.add_signal_handler(sig, _handle_signal)
+                # Record what the loop installed at the process level (asyncio's
+                # own _sighandler_noop) so cleanup can detect third-party takeover.
+                _installed_handlers[sig] = signal.getsignal(sig)
                 _registered_signals.add(sig)
             except NotImplementedError:
                 # Windows ProactorEventLoop.add_signal_handler is unavailable; fall back
@@ -192,18 +198,36 @@ def cleanup_signal_handlers() -> None:
 
     if loop is not None:
         for sig in list(_registered_signals):
+            installed = _installed_handlers.get(sig)
+            current = signal.getsignal(sig)
+            third_party = installed is not None and current is not installed
+
+            removed_ok = False
             try:
                 loop.remove_signal_handler(sig)
-            except NotImplementedError, KeyError, RuntimeError:
+                removed_ok = True
+            except (NotImplementedError, KeyError, RuntimeError, OSError, ValueError):
                 # Ignore errors if handler wasn't registered or loop closed
-                pass
+                removed_ok = False
 
-    # Hoisted out of the loop/non-loop split so both paths share one restore. On a loop
-    # that supports remove_signal_handler this is a no-op (nothing was captured there),
-    # and where the loop-level restore is unavailable the identity guard puts the
-    # process-level handler back -- never signal.SIG_DFL, which is wrong for SIGINT.
-    for sig in list(_registered_signals):
-        _restore_previous_handler(sig)
+            if removed_ok:
+                # Loop-registration path: remove_signal_handler reset the process-level
+                # disposition to the default; put the captured handler back, unless a
+                # third party has since taken ownership.
+                if not third_party:
+                    previous = _previous_handlers.get(sig)
+                    if previous is not None:
+                        try:
+                            signal.signal(sig, previous)
+                        except (OSError, ValueError, RuntimeError):
+                            pass
+            else:
+                # Fallback path (or closed loop): identity-guarded restore.
+                if not third_party:
+                    _restore_previous_handler(sig)
+    else:
+        for sig in list(_registered_signals):
+            _restore_previous_handler(sig)
 
     # Cleared as one group: a store that outlives a cycle makes the next one re-use a
     # stale value instead of re-capturing.
