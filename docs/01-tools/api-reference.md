@@ -82,7 +82,7 @@ for stream in video.streams:
     print(f"{stream.quality}: {stream.url}")
 ```
 
-#### `extract_streams_with_cookies(url: str, force_browser: bool = False) -> tuple[list[Stream], str | None]`
+#### `extract_streams_with_cookies(url: str, force_browser: bool = False) -> tuple[list[Stream], str | None, list[Cookie] | None]`
 
 Extract streams using browser automation to capture cookies for CDN authentication.
 
@@ -92,15 +92,23 @@ Extract streams using browser automation to capture cookies for CDN authenticati
 | url | str | Required | VK video URL to extract streams from. |
 | force_browser | bool | False | Force browser launch even when cookie_source=NONE (for token refresh scenarios). |
 
-**Returns:** Tuple of (streams list, cookies string) for CDN headers.
+**Returns:** Tuple of (streams list, cookies string for ffmpeg/CDN headers, raw cookie collection). The cookie string and raw cookie collection are both `None` when no browser is launched (i.e. `cookie_source=NONE` and `force_browser=False`); otherwise the raw collection is the Playwright `Cookie` list captured from the active session.
 
 **Behavior:**
-- When `cookie_source=NONE` and `force_browser=False`: Returns streams without cookies via yt-dlp
+- When `cookie_source=NONE` and `force_browser=False`: Returns streams without cookies via yt-dlp; cookies string and raw cookie collection are both `None`
 - When `cookie_source=BROWSER`: Launches browser, captures cookies from active session
 - When `force_browser=True`: Forces browser launch regardless of cookie_source setting
 
 **Raises:** `ValueError` if URL does not contain valid video identifier.
 `VideoNotFoundError` if no streams are found.
+
+**Example:**
+```python
+streams, cookies, raw_cookies = await extractor.extract_streams_with_cookies(
+    "https://vkvideo.ru/video-123_456"
+)
+# cookies is None (and raw_cookies is None) when cookie_source=NONE and force_browser=False
+```
 
 ---
 
