@@ -78,17 +78,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set +e
+          trap 'rm -f /tmp/vkr.txt' EXIT
           uv export --locked --group dev --no-emit-project -o /tmp/vkr.txt && uv run pip-audit -r /tmp/vkr.txt 2>&1
           rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "No known vulnerabilities detected."
           elif [ "$rc" -eq 1 ]; then
             echo "::error::Known vulnerabilities found in dependencies"
-            exit 1
           else
-            echo "::warning::Advisory database or scanner error (exit $rc) — audit skipped"
+            echo "::error::Advisory scan or dependency export failed (exit $rc)"
           fi
-          rm -f /tmp/vkr.txt
+          exit "$rc"
       - name: Build distribution artefacts
         run: uv build --out-dir dist/
       - name: Wheel entry-point smoke
