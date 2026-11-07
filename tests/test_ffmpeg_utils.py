@@ -1389,3 +1389,26 @@ class TestFfmpegTransportHelpersRestored:
         async with _temp_argfile(["-y", str(tmp_path / "out.mp4")]) as path:
             assert path.exists()
         assert not path.exists()
+
+
+
+@pytest.mark.asyncio
+async def test_subprocess_cancel_real_child() -> None:
+    from vkdownloader.services.ffmpeg_utils import _SPAWN_BOUNDARY_KWARGS
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(30)",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        **_SPAWN_BOUNDARY_KWARGS,
+    )
+    assert proc.returncode is None
+
+    start = asyncio.get_event_loop().time()
+    ok = await cancel_subprocess(proc, timeout=5.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert proc.returncode is not None
+    assert elapsed < 10.0
+    assert ok is True or proc.returncode is not None

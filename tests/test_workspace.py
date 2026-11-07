@@ -194,37 +194,72 @@ def test_cyrillic_and_long_path(tmp_path: Path) -> None:
     assert len(ws.stable_job_id("vid-кириллица", "best", final_path.name)) <= 120
 
 
-def test_publish_collision_no_overwrite(tmp_path: Path) -> None:
+def test_publish_exdev_leaves_both_files(tmp_path: Path, monkeypatch) -> None:
     ws = _import_workspace()
+    import errno
+    import os
+
     staged = tmp_path / "staged.mp4"
     final = tmp_path / "final.mp4"
-    staged.write_bytes(b"new content")
-    final.write_bytes(b"existing user data")
+    staged.write_bytes(b"staged-content")
+    final.write_bytes(b"final-content")
+
+    def _raise_exdev(*args, **kwargs):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(os, "link", _raise_exdev)
 
     with pytest.raises(FileExistsError):
         ws.publish_verified_file(staged, final)
-    assert final.read_bytes() == b"existing user data"
+
     assert staged.exists()
+    assert staged.read_bytes() == b"staged-content"
+    assert final.exists()
+    assert final.read_bytes() == b"final-content"
 
 
 def test_publish_race_no_overwrite(tmp_path: Path) -> None:
     ws = _import_workspace()
-    staged = tmp_path / "staged.mp4"
-    final = tmp_path / "final.mp4"
-    staged.write_bytes(b"new")
-    errors = []
 
-    def worker():
+    final = tmp_path / "final.mp4"
+    staged_a = tmp_path / "staged_a.mp4"
+    staged_b = tmp_path / "staged_b.mp4"
+    staged_a.write_bytes(b"content-a")
+    staged_b.write_bytes(b"content-b")
+
+    barrier = threading.Barrier(2)
+    results: list[object] = []
+    lock = threading.Lock()
+
+    def worker(staged: Path) -> None:
+        barrier.wait()
         try:
             ws.publish_verified_file(staged, final)
-        except Exception as e:  # noqa: BLE001
-            errors.append(e)
+            with lock:
+                results.append(("ok", staged.read_bytes()))
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                results.append(("err", exc))
 
-    final.write_bytes(b"existing")
-    t = threading.Thread(target=worker)
-    t.start()
-    t.join()
-    assert errors and isinstance(errors[0], FileExistsError)
+    ta = threading.Thread(target=worker, args=(staged_a,))
+    tb = threading.Thread(target=worker, args=(staged_b,))
+    ta.start()
+    tb.start()
+    ta.join()
+    tb.join()
+
+    assert len(results) == 2
+    oks = [r for r in results if r[0] == "ok"]
+    errs = [r for r in results if r[0] == "err"]
+    assert len(oks) == 1, results
+    assert len(errs) == 1, results
+    assert isinstance(errs[0][1], FileExistsError)
+    # final bytes unchanged relative to winner and still present
+    assert final.exists()
+    assert final.read_bytes() in (b"content-a", b"content-b")
+    # both staged files survive
+    assert staged_a.exists()
+    assert staged_b.exists()
 
 
 def test_segment_merge_targets_staging() -> None:
@@ -245,6 +280,24 @@ def test_legacy_root_part_not_touched(tmp_path: Path) -> None:
     assert legacy_part.exists()
     assert isinstance(result, list)
     assert any(getattr(a, "path", None) == legacy_part for a in result)
+
+
+def test_legacy_part_15gib_detected(tmp_path: Path) -> None:
+    ws = _import_workspace()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    legacy_part = out_dir / "video.mp4.part"
+    size = 15 * 1024 ** 3
+    with open(legacy_part, "wb") as handle:
+        handle.seek(size - 1)
+        handle.write(b"\x00")
+
+    result = ws.discover_legacy_artifacts(out_dir)
+    assert legacy_part.exists()
+    assert isinstance(result, list)
+    match = [a for a in result if getattr(a, "path", None) == legacy_part]
+    assert match, result
+    assert getattr(match[0], "size", None) == size
 
 
 def test_job_lock_basic(tmp_path: Path) -> None:
@@ -274,12 +327,51 @@ def test_cleanup_owned_job_artifacts(tmp_path: Path) -> None:
     assert not workspace.root.exists()
 
 
-def test_filelock_fallback_monkeypatch(monkeypatch) -> None:
+def test_job_lock_real_process(tmp_path: Path) -> None:
     ws = _import_workspace()
-    monkeypatch.setattr(ws, "FileLock", None, raising=False)
+    import subprocess
     import sys
+    import time
 
-    mod = sys.modules.get("vkdownloader.services.workspace")
-    if mod is not None:
-        monkeypatch.setattr(mod, "FileLock", None, raising=False)
-    assert True
+    final_path = tmp_path / "out" / "video.mp4"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace = ws.make_workspace(final_path, "vid1", "best")
+
+    src_root = str(Path(__file__).resolve().parents[2] / "src")
+    script = (
+        f"import sys, time; sys.path.insert(0, {src_root!r}); "
+        "from pathlib import Path; "
+        "from vkdownloader.services.workspace import _acquire_lock_at_path; "
+        f"lock = _acquire_lock_at_path(Path({str(workspace.lock_path)!r}), 10.0); "
+        "print('READY', flush=True); "
+        "time.sleep(10); "
+        "lock.release()"
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    # Wait for READY
+    ready = False
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        line = proc.stdout.readline() if proc.stdout else ""
+        if "READY" in (line or ""):
+            ready = True
+            break
+        if proc.poll() is not None:
+            break
+    assert ready, proc.stderr.read() if proc.stderr else ""
+
+    try:
+        with pytest.raises(DownloadError):
+            ws.acquire_job_lock(workspace, timeout=0.2)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()

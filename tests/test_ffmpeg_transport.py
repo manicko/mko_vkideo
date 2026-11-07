@@ -189,13 +189,35 @@ async def test_ffmpeg_transport_no_secrets_in_argv(tmp_path: Path) -> None:
 
     assert result is None
     assert captured["kwargs"].get("shell") is not True
-    assert isinstance(captured.get("args"), (list, tuple))
-    assert captured["args"] and str(captured["args"][0]) == "ffmpeg"
-    # FFmpeg requires the input URL (and scoped Cookie header via -headers) in
-    # argv; this is a documented bounded risk reviewed in Block G. The capture
-    # above is inspected for invocation shape and non-empty argv.
-    argv_text = " ".join(str(a) for a in captured["args"])
-    assert argv_text and "ffmpeg" in argv_text
+    argv = [str(a) for a in captured["args"]]
+    assert argv and argv[0] == "ffmpeg"
+
+    headers_idx = argv.index("-headers")
+    headers_element = argv[headers_idx + 1]
+    i_idx = argv.index("-i")
+    i_element = argv[i_idx + 1]
+    output_path = argv[-1]
+
+    for marker in ("cookie-secret", "raw-cookie-secret"):
+        for idx, element in enumerate(argv):
+            if marker in element:
+                assert idx == headers_idx + 1, (
+                    f"secret marker {marker!r} found outside -headers at argv[{idx}]"
+                )
+
+    assert "token=SECRET" in i_element
+
+    for idx, element in enumerate(argv):
+        if "SECRET" in element and idx != headers_idx + 1:
+            assert idx == i_idx + 1 and "token=SECRET" in element, (
+                f"SECRET leaked at argv[{idx}]: {element!r}"
+            )
+
+    for marker in ("SECRET", "cookie-secret", "raw-cookie-secret"):
+        assert marker not in output_path, f"{marker!r} in output path"
+
+    assert i_element != output_path
+    _ = (headers_element, i_element)
 
 
 def test_helpers_importable() -> None:

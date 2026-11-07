@@ -231,7 +231,7 @@ def test_no_tmp_or_corrupt_marked_verified(tmp_path: Path) -> None:
         sha256=hashlib.sha256(b"").hexdigest(),
         generation_id="g",
     )
-    assert cp.verify_segment_record(rec, base) is False or True
+    assert cp.verify_segment_record(rec, base) is False
 
 
 # --------------------------------------------------------------------------- #

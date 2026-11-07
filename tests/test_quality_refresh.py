@@ -520,3 +520,37 @@ def test_quality_mismatch_error_code() -> None:
     assert err.requested == "1440"
     assert err.available == ["1080"]
     assert err.actual_height == 1080
+
+
+
+@pytest.mark.asyncio
+async def test_exact_1440_refresh_no_duplicates() -> None:
+    try:
+        from vkdownloader.services.quality_refresh import StreamBinding, refresh_stream
+    except ImportError as exc:
+        pytest.fail(f"quality_refresh not implemented: {exc}")
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    from vkdownloader.models.enums import StreamFormat
+    from vkdownloader.models.video import Stream, VideoWithStreams
+
+    url = "https://cdn.example.com/fresh/1440.m3u8?token=new"
+    extractor = MagicMock()
+    extractor.extract_streams = AsyncMock(
+        return_value=VideoWithStreams(
+            id="v",
+            streams=[Stream(url=url, format=StreamFormat.HLS, quality="1440", height=1440)],
+        )
+    )
+    previous = StreamBinding(
+        media_playlist_url="https://cdn.example.com/expired/1440.m3u8?token=old",
+        requested_quality="1440",
+        actual_height=1440,
+        variant_id="v1",
+    )
+
+    binding = await refresh_stream("https://vkvideo.ru/video-12345_67890", "1440", previous, extractor)
+    assert binding.requested_quality == "1440"
+    assert binding.actual_height == 1440
+    assert binding.media_playlist_url == url

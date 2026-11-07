@@ -129,6 +129,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "tests/integration/__init__.py",
         "tests/integration/fixtures/__init__.py",
         "tests/integration/fixtures/hls_server.py",
+        "tests/integration/test_hls_fixture.py",
         "tests/test_import_graph.py",
         "tests/test_batch_downloader.py",
         "tests/test_browser_infrastructure.py",
@@ -616,3 +617,60 @@ def test_configuration_template_ships_no_secret() -> None:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert not assignments, f".env.example must hold only commented settings, found: {assignments}"
+
+
+
+@pytest.mark.skipif(
+    not (os.getenv("CI") or os.getenv("RUN_WHEEL_SMOKE")),
+    reason="wheel smoke runs only on CI or when RUN_WHEEL_SMOKE=1",
+)
+def test_wheel_entrypoint_smoke(artefacts: BuiltArtefacts, tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv not available")
+    venv = tmp_path / "smoke-venv"
+    build = subprocess.run(
+        [uv, "venv", str(venv)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if build.returncode != 0:
+        pytest.skip(f"venv creation failed: {build.stderr}")
+    if os.name == "nt":
+        python = venv / "Scripts" / "python.exe"
+        entrypoint = venv / "Scripts" / "vkdownloader.exe"
+    else:
+        python = venv / "bin" / "python"
+        entrypoint = venv / "bin" / "vkdownloader"
+
+    install = subprocess.run(
+        [uv, "pip", "install", "--python", str(python), str(artefacts.wheel)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if install.returncode != 0:
+        pytest.skip(f"wheel install failed (network?): {install.stderr}")
+
+    help_run = subprocess.run(
+        [str(entrypoint), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert help_run.returncode == 0, help_run.stderr
+
+    stealth = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import vkdownloader, pathlib; "
+            "p = pathlib.Path(vkdownloader.__file__).parent / 'stealth.min.js'; "
+            "print(p.read_text(encoding='utf-8')[:20])",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert stealth.returncode == 0, stealth.stderr

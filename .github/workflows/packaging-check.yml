@@ -69,7 +69,7 @@ jobs:
       - name: Type check
         run: uv run mypy src
       - name: Behavioural tests
-        run: uv run pytest tests/ -rs
+        run: uv run pytest tests/ tests/integration/ -rs
       - name: Coverage measurement
         run: uv run coverage run -m pytest tests/
       - name: Coverage report

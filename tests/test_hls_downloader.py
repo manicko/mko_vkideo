@@ -1,4 +1,4 @@
-"""Tests for download service, ytdlp/segment download paths, and utilities."""
+"""Tests for HLS downloader, segment handling, and checkpoint integration."""
 
 import asyncio
 import logging

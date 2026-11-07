@@ -2085,3 +2085,13 @@ class TestDownloadPolicyReprRedaction:
         policy = self._make_policy()
         rendered = repr(policy)
         assert "test-agent" in rendered
+
+
+
+def test_exact_1440_refresh_no_duplicates() -> None:
+    from vkdownloader.services.segment_downloader import _parse_m3u8_segments
+
+    content = "\n".join(f"https://cdn.example.com/seg{i}.ts" for i in range(1440))
+    segments = _parse_m3u8_segments(content)
+    assert len(segments) == 1440
+    assert len(set(segments)) == 1440
