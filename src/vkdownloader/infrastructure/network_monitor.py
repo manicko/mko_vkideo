@@ -195,7 +195,37 @@ class NetworkMonitor:
         B7: Reuses ``MAX_JSON_BODY_BYTES`` as the bound for the bounded body
         read used in media-over-master classification. Returns ``None`` on any
         read error so the caller falls through to ``UNCLASSIFIED``.
+
+        NET-003: Memory-safety precondition — Playwright's ``Response.body()``
+        materialises the entire response, so it is only called when the
+        response advertises a known, non-negative Content-Length strictly
+        below ``MAX_JSON_BODY_BYTES`` and is not chunked. Otherwise we skip
+        without materialising. The post-read length check remains as a
+        secondary guard for a body that disagrees with its header.
         """
+        headers = getattr(response, "headers", None)
+        content_length = None
+        transfer_encoding = None
+        if hasattr(headers, "get"):
+            try:
+                content_length = headers.get("content-length")
+                transfer_encoding = headers.get("transfer-encoding")
+            except Exception:
+                content_length = None
+                transfer_encoding = None
+
+        # Precondition: known, parseable, non-negative, strictly bounded size.
+        if content_length is None:
+            return None
+        try:
+            size = int(content_length)
+        except (TypeError, ValueError):
+            return None
+        if size < 0 or size >= self.MAX_JSON_BODY_BYTES:
+            return None
+        if transfer_encoding is not None and "chunked" in str(transfer_encoding).lower():
+            return None
+
         try:
             body = await response.body()
         except Exception as e:
@@ -205,6 +235,7 @@ class NetworkMonitor:
                 error=str(e.__class__.__name__),
             )
             return None
+        # Secondary guard: a body that disagrees with its advertised length.
         if len(body) > self.MAX_JSON_BODY_BYTES:
             return body[: self.MAX_JSON_BODY_BYTES]
         return body
@@ -363,26 +394,52 @@ class NetworkMonitor:
         if "video" in url and response.headers.get("content-type", "").startswith(
             "application/json"
         ):
-            # Guard: skip oversized JSON bodies to avoid memory issues
-            content_length = response.headers.get("content-length")
+            # NET-003: memory-safety precondition. Playwright's Response.body()
+            # materialises the entire response, so only read when the response
+            # advertises a known, non-negative Content-Length strictly below
+            # MAX_JSON_BODY_BYTES and is not chunked. Otherwise skip without
+            # materialising. URL capture above is unaffected.
+            headers = getattr(response, "headers", None)
+            content_length = None
+            transfer_encoding = None
+            if hasattr(headers, "get"):
+                try:
+                    content_length = headers.get("content-length")
+                    transfer_encoding = headers.get("transfer-encoding")
+                except Exception:
+                    content_length = None
+                    transfer_encoding = None
+
+            size_bytes: int | None = None
             if content_length is not None:
                 try:
                     size_bytes = int(content_length)
-                    if size_bytes >= self.MAX_JSON_BODY_BYTES:
-                        logger.debug(
-                            "skipping_oversized_json_response",
-                            url=_strip_auth_params(url),
-                            size=size_bytes,
-                        )
-                        return
-                except ValueError:
-                    pass  # Invalid content-length header, fall through to body check
+                except (TypeError, ValueError):
+                    size_bytes = None
+
+            chunked = transfer_encoding is not None and "chunked" in str(
+                transfer_encoding
+            ).lower()
+
+            if (
+                content_length is None
+                or size_bytes is None
+                or size_bytes < 0
+                or size_bytes >= self.MAX_JSON_BODY_BYTES
+                or chunked
+            ):
+                logger.debug(
+                    "skipping_unbounded_json_response",
+                    url=_strip_auth_params(url),
+                )
+                return
 
             # The byte cap below bounds PARSING work (json.loads), not memory:
             # Playwright's Response.body() is all-or-nothing and cannot be
             # partially read, so on the chunked/streamed path (no
             # Content-Length, or an unparseable one) the entire body is
-            # materialised before the cap is consulted (NET-011).
+            # materialised before the cap is consulted (NET-011). With the
+            # precondition above, such responses are now skipped instead.
             try:
                 body = await response.body()
             except Exception as e:
