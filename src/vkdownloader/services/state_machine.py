@@ -373,6 +373,22 @@ class DownloadStateMachine:
         if isinstance(error, OSError):
             code = getattr(error, "errno", None)
             msg = str(error).lower()
+            winerror = getattr(error, "winerror", None)
+            # File lock / sharing violation detection must precede the generic
+            # permission branch so a locked .part/staging file is not
+            # misclassified as a plain permission error.
+            file_lock_substrings = (
+                "sharing violation",
+                "being used by another process",
+                "resource busy",
+                "winerror 32",
+            )
+            if winerror == 32:
+                return ErrorCategory.FILE_LOCKED
+            if code in (_errno.EACCES, _errno.EPERM, _errno.EBUSY, _errno.EAGAIN) and any(
+                s in msg for s in file_lock_substrings
+            ):
+                return ErrorCategory.FILE_LOCKED
             if code == _errno.ENOSPC or "no space left" in msg or "enospc" in msg:
                 self.job_state.disk_full = True
                 return ErrorCategory.DISK_FULL
@@ -385,6 +401,14 @@ class DownloadStateMachine:
         if "no space left" in msg:
             self.job_state.disk_full = True
             return ErrorCategory.DISK_FULL
+        file_lock_substrings = (
+            "sharing violation",
+            "being used by another process",
+            "resource busy",
+            "winerror 32",
+        )
+        if any(s in msg for s in file_lock_substrings):
+            return ErrorCategory.FILE_LOCKED
         if "permission denied" in msg:
             return ErrorCategory.PERMISSION_ERROR
         if "cancelled" in msg:

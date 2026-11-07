@@ -371,7 +371,7 @@ class TestBlockBYtDlp:
         _ytdlp_temp_name(output_file).write_bytes(b"partial")
 
         with patch(
-            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -415,7 +415,7 @@ class TestBlockBYtDlp:
         (tmp_path / (output_file.name + ".part-Frag1")).write_bytes(b"frag")
 
         with patch(
-            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -922,6 +922,10 @@ class TestYtdlpCliCommand:
 
         assert "--throttled-rate" not in cmd
         assert "--ignore-config" in cmd
+        assert "--file-access-retries" in cmd
+        assert cmd[cmd.index("--file-access-retries") + 1] == "3"
+        assert "--retry-sleep" in cmd
+        assert cmd[cmd.index("--retry-sleep") + 1] == "file_access:0.5"
 
     def test_cli_command_excludes_http_chunk_size_by_default(self, test_settings: Settings) -> None:
         """Test CLI command does NOT include --http-chunk-size by default.
@@ -5930,14 +5934,15 @@ class TestYtDlpRetryBackoff:
 
         call_count = {"n": 0}
 
-        async def mock_download_ytdlp(*args: object, **kwargs: object) -> Path | None:
+        async def mock_download_ytdlp(*args: object, **kwargs: object):
+            from vkdownloader.services.ytdlp_downloader import YtdlpLaunchResult
             call_count["n"] += 1
             if call_count["n"] == 1:
-                return None  # First attempt fails
-            return output_file  # Second attempt succeeds
+                return YtdlpLaunchResult(path=None, phase="failed")  # First attempt fails
+            return YtdlpLaunchResult(path=output_file, phase="completed")  # Second attempt succeeds
 
         with patch(
-            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
             side_effect=mock_download_ytdlp,
         ):
             with patch(
@@ -5985,14 +5990,15 @@ class TestYtDlpRetryBackoff:
 
         call_count = {"n": 0}
 
-        async def mock_download_ytdlp(*args: object, **kwargs: object) -> Path | None:
+        async def mock_download_ytdlp(*args: object, **kwargs: object):
+            from vkdownloader.services.ytdlp_downloader import YtdlpLaunchResult
             call_count["n"] += 1
             if call_count["n"] == 1:
-                return None
-            return output_file
+                return YtdlpLaunchResult(path=None, phase="failed")
+            return YtdlpLaunchResult(path=output_file, phase="completed")
 
         with patch(
-            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+            "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
             side_effect=mock_download_ytdlp,
         ):
             with patch(

@@ -102,6 +102,7 @@ def test_error_category_is_strenum():
         "slow_throughput",
         "disk_full",
         "permission_error",
+        "file_locked",
         "invalid_output_path",
         "cancelled",
         "incompatible_playlist",

@@ -62,6 +62,9 @@ logger = get_logger(__name__)
 
 _YTDLP_LAUNCH_COUNTER = itertools.count(1)
 
+_YTDLP_FILE_ACCESS_RETRIES = 3
+_YTDLP_FILE_ACCESS_RETRY_SLEEP = 0.5
+
 # Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602, SEC-006).
 # These literals are frozen by B2: ``vk_cookies_`` is what the sweep is keyed
 # on, and ``.cookies.txt`` is what the redaction rule in
@@ -1075,6 +1078,10 @@ def _build_ytdlp_cli_command(
         "1",
         "--fragment-retries",
         "1",
+        "--file-access-retries",
+        str(_YTDLP_FILE_ACCESS_RETRIES),
+        "--retry-sleep",
+        f"file_access:{_YTDLP_FILE_ACCESS_RETRY_SLEEP}",
         "-N",
         str(settings.max_concurrent_segments),
         "--user-agent",
@@ -1151,6 +1158,21 @@ class YtdlpArtifacts:
         except OSError:
             pass
         return False
+
+
+@dataclass(frozen=True)
+class YtdlpLaunchResult:
+    """Typed outcome of a single yt-dlp launch."""
+
+    path: Path | None = None
+    phase: str = "failed"
+    returncode: int | None = None
+    last_error_code: str | None = None
+    http_status: int | None = None
+    error_category: ErrorCategory = ErrorCategory.UNKNOWN
+    candidate_path: Path | None = None
+    file_conflict: bool = False
+    cancelled: bool = False
 
 
 def _ytdlp_artifacts_for(
@@ -1403,7 +1425,7 @@ async def download_with_ytdlp_with_resume_fallback(
             logger.debug("reconcile_failed", error=str(exc))
 
     while retry_count <= settings.max_retries:
-        result = await _download_with_ytdlp(
+        result = await _download_with_ytdlp_result(
             video_url,
             m3u8_url,
             output_file,
@@ -1420,10 +1442,41 @@ async def download_with_ytdlp_with_resume_fallback(
             state_machine=state_machine,
         )
 
-        if result:
+        if result is not None and result.path is not None:
             if retry_count > 0:
                 logger.info("download_completed_after_retries", retries=retry_count)
-            return result
+            return result.path
+
+        if result is not None and result.cancelled:
+            if state_machine is not None:
+                try:
+                    state_machine.record_cancellation()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+
+        # Terminal local outcomes: file lock or staging candidate failure.
+        if result is not None and (
+            result.file_conflict
+            or result.error_category == ErrorCategory.FILE_LOCKED
+            or result.phase in {"file_locked", "local_block", "missing_output"}
+        ):
+            if state_machine is not None:
+                try:
+                    reason_code = (
+                        "file_lock_conflict"
+                        if result.file_conflict or result.error_category == ErrorCategory.FILE_LOCKED or result.phase == "file_locked"
+                        else "staging_candidate_failed"
+                    )
+                    _ec = result.error_category
+                    # Persist without a state transition that may be illegal.
+                    state_machine.job_state.reason_code = reason_code
+                    state_machine.job_state.error_category = _ec
+                    state_machine.job_state.updated_at = __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
+                    state_machine.persist()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
 
         retry_count += 1
 
@@ -1733,19 +1786,14 @@ def _derive_last_error_code(sanitized_tail: str) -> str | None:
     for pattern in (
         r"HTTP Error\s+(\d{3})",
         r"HTTP\s+(\d{3})",
-        r"(?:status|status code)[:\s]+(\d{3})",
+        r"(?:status|status code|http status)[:\s=]+(\d{3})",
     ):
         match = re.search(pattern, sanitized_tail, re.IGNORECASE)
         if match is not None:
             return match.group(1)
-    match = re.search(r"\b([45]\d{2})\b", sanitized_tail)
+    match = re.search(r"ERROR:\s*(\d{3})\b", sanitized_tail)
     if match is not None:
         return match.group(1)
-    match = re.search(r"ERROR:\s*(.+)", sanitized_tail)
-    if match is not None:
-        code = match.group(1).strip()
-        if code:
-            return code[:64]
     return None
 
 
@@ -1774,7 +1822,28 @@ def _retain_transcript_line(output: bytearray, line: bytes) -> None:
         del output[: len(output) - _MAX_CHILD_OUTPUT_BYTES]
 
 
-async def _download_with_ytdlp(
+def _ytdlp_candidate_path(output_file: Path, workspace: DownloadWorkspace | None = None) -> Path | None:
+    """Return a non-empty staging candidate path when available."""
+    if workspace is not None:
+        candidate = workspace.staging_dir / workspace.final_path.name
+    else:
+        candidate = Path(output_file)
+    try:
+        if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    except OSError:
+        pass
+    # Fall back to yt-dlp .part artifact when present.
+    try:
+        art = _ytdlp_artifacts_for(output_file, workspace)
+        if art.temp_path.exists() and art.temp_path.is_file() and art.temp_path.stat().st_size > 0:
+            return art.temp_path
+    except OSError:
+        pass
+    return None
+
+
+async def _download_with_ytdlp_result(
     video_url: str,
     m3u8_url: str,
     output_file: Path,
@@ -1791,7 +1860,7 @@ async def _download_with_ytdlp(
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
     job_lock: object | None = None,
-) -> Path | None:
+) -> YtdlpLaunchResult:
     """Download video using yt-dlp via subprocess.
 
     Uses ``asyncio.create_subprocess_exec`` instead of ``run_in_executor``
@@ -2137,6 +2206,8 @@ async def _download_with_ytdlp(
                 _tail = b""
             if _tail:
                 output_chunks.extend(_tail)
+                if len(output_chunks) > _MAX_CHILD_OUTPUT_BYTES:
+                    del output_chunks[: len(output_chunks) - _MAX_CHILD_OUTPUT_BYTES]
                 if diagnostic_sink is not None:
                     try:
                         getattr(diagnostic_sink, "write_line", lambda *a, **k: None)(
@@ -2161,7 +2232,17 @@ async def _download_with_ytdlp(
                     "yt_dlp_download_stall_timeout",
                     stall_timeout=settings.download_stall_timeout,
                 )
-                return None
+                return YtdlpLaunchResult(
+                    path=None,
+                    phase="failed",
+                    returncode=getattr(process, "returncode", None),
+                    last_error_code=None,
+                    http_status=None,
+                    error_category=ErrorCategory.UNKNOWN,
+                    candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                    file_conflict=False,
+                    cancelled=False,
+                )
 
         elapsed_seconds = time.monotonic() - started_at
         output_data = bytes(output_chunks) if output_chunks else b""
@@ -2188,7 +2269,17 @@ async def _download_with_ytdlp(
 
         if shutdown_event.is_set():
             logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
-            return None
+            return YtdlpLaunchResult(
+                path=None,
+                phase="cancelled",
+                returncode=getattr(process, "returncode", None),
+                last_error_code=last_error_code,
+                http_status=None,
+                error_category=ErrorCategory.CANCELLED,
+                candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                file_conflict=False,
+                cancelled=True,
+            )
 
         if process.returncode != 0:
             # SEC-002: sanitize subprocess output to redact any signed
@@ -2203,13 +2294,46 @@ async def _download_with_ytdlp(
                 error=error_msg,
                 attempt_id=attempt_id,
             )
-            return None
+            _error_category = ErrorCategory.UNKNOWN
+            _file_conflict = False
+            try:
+                if state_machine is not None:
+                    _error_category = state_machine.classify_error(error_msg)
+                else:
+                    _msg = str(error_msg).lower()
+                    if "sharing violation" in _msg or "being used by another process" in _msg or "resource busy" in _msg or "winerror 32" in _msg:
+                        _error_category = ErrorCategory.FILE_LOCKED
+            except Exception:  # noqa: BLE001
+                _error_category = ErrorCategory.UNKNOWN
+            if _error_category == ErrorCategory.FILE_LOCKED:
+                _file_conflict = True
+            return YtdlpLaunchResult(
+                path=None,
+                phase="file_locked" if _file_conflict else "failed",
+                returncode=process.returncode,
+                last_error_code=last_error_code,
+                http_status=None,
+                error_category=_error_category,
+                candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                file_conflict=_file_conflict,
+                cancelled=False,
+            )
 
         logger.info("ytdlp_download_completed", output=str(output_file))
         if workspace is not None:
             staged = workspace.staging_dir / workspace.final_path.name
             if not staged.exists() or not staged.is_file() or staged.stat().st_size <= 0:
-                return None
+                return YtdlpLaunchResult(
+                    path=None,
+                    phase="missing_output",
+                    returncode=process.returncode,
+                    last_error_code=last_error_code,
+                    http_status=None,
+                    error_category=ErrorCategory.INVALID_OUTPUT_PATH,
+                    candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                    file_conflict=False,
+                    cancelled=False,
+                )
             try:
                 from .ffmpeg_utils import check_ffprobe_available
                 from .media_validation import MediaValidationError, validate_media_file
@@ -2227,12 +2351,32 @@ async def _download_with_ytdlp(
 
                 if not check_ffprobe_available():
                     logger.error("ffprobe_missing", path=str(staged))
-                    return None
+                    return YtdlpLaunchResult(
+                        path=None,
+                        phase="local_block",
+                        returncode=process.returncode,
+                        last_error_code=last_error_code,
+                        http_status=None,
+                        error_category=ErrorCategory.INTEGRITY_FAILURE,
+                        candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                        file_conflict=False,
+                        cancelled=False,
+                    )
                 try:
                     await validate_media_file(staged, expected_height=expected_height)
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
-                    return None
+                    return YtdlpLaunchResult(
+                        path=None,
+                        phase="local_block",
+                        returncode=process.returncode,
+                        last_error_code=last_error_code,
+                        http_status=None,
+                        error_category=ErrorCategory.INTEGRITY_FAILURE,
+                        candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                        file_conflict=False,
+                        cancelled=False,
+                    )
 
                 if state_machine is not None:
                     ensure_download_phase(state_machine)
@@ -2250,7 +2394,17 @@ async def _download_with_ytdlp(
                     publish_verified_file(staged, workspace.final_path, final_lock=final_lock)
                 except (FileExistsError, OSError, FileNotFoundError, TimeoutError) as exc:
                     logger.warning("publish_failed", error=str(exc))
-                    return None
+                    return YtdlpLaunchResult(
+                        path=None,
+                        phase="local_block",
+                        returncode=process.returncode,
+                        last_error_code=last_error_code,
+                        http_status=None,
+                        error_category=ErrorCategory.INVALID_OUTPUT_PATH,
+                        candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                        file_conflict=False,
+                        cancelled=False,
+                    )
 
                 if job_lock is not None:
                     try:
@@ -2261,13 +2415,33 @@ async def _download_with_ytdlp(
                     await validate_media_file(workspace.final_path, expected_height=expected_height)
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
-                    return None
+                    return YtdlpLaunchResult(
+                        path=None,
+                        phase="local_block",
+                        returncode=process.returncode,
+                        last_error_code=last_error_code,
+                        http_status=None,
+                        error_category=ErrorCategory.INTEGRITY_FAILURE,
+                        candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                        file_conflict=False,
+                        cancelled=False,
+                    )
                 if not (
                     workspace.final_path.exists()
                     and workspace.final_path.is_file()
                     and workspace.final_path.stat().st_size > 0
                 ):
-                    return None
+                    return YtdlpLaunchResult(
+                        path=None,
+                        phase="missing_output",
+                        returncode=process.returncode,
+                        last_error_code=last_error_code,
+                        http_status=None,
+                        error_category=ErrorCategory.INVALID_OUTPUT_PATH,
+                        candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                        file_conflict=False,
+                        cancelled=False,
+                    )
                 if state_machine is not None:
                     _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
                     _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
@@ -2282,14 +2456,54 @@ async def _download_with_ytdlp(
                 TimeoutError,
             ) as exc:
                 logger.warning("commit_failed", error=str(exc))
-                return None
+                return YtdlpLaunchResult(
+                    path=None,
+                    phase="local_block",
+                    returncode=process.returncode,
+                    last_error_code=last_error_code,
+                    http_status=None,
+                    error_category=ErrorCategory.INTEGRITY_FAILURE,
+                    candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                    file_conflict=False,
+                    cancelled=False,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.error("commit_unexpected", error=str(exc))
-                return None
-            return workspace.final_path
+                return YtdlpLaunchResult(
+                    path=None,
+                    phase="local_block",
+                    returncode=process.returncode,
+                    last_error_code=last_error_code,
+                    http_status=None,
+                    error_category=ErrorCategory.INTEGRITY_FAILURE,
+                    candidate_path=_ytdlp_candidate_path(output_file, workspace),
+                    file_conflict=False,
+                    cancelled=False,
+                )
+            return YtdlpLaunchResult(
+                path=workspace.final_path,
+                phase="completed",
+                returncode=process.returncode,
+                last_error_code=last_error_code,
+                http_status=None,
+                error_category=ErrorCategory.UNKNOWN,
+                candidate_path=workspace.final_path,
+                file_conflict=False,
+                cancelled=False,
+            )
         if output_file.exists():
             logger.info("download_final_size", size=output_file.stat().st_size)
-        return output_file
+        return YtdlpLaunchResult(
+            path=output_file,
+            phase="completed",
+            returncode=process.returncode,
+            last_error_code=last_error_code,
+            http_status=None,
+            error_category=ErrorCategory.UNKNOWN,
+            candidate_path=None,
+            file_conflict=False,
+            cancelled=False,
+        )
 
     except FileNotFoundError as exc:
         # yt-dlp binary / Python interpreter not found on PATH
@@ -2299,7 +2513,17 @@ async def _download_with_ytdlp(
             path=exc.filename,
             exc_info=True,
         )
-        return None
+        return YtdlpLaunchResult(
+            path=None,
+            phase="failed",
+            returncode=None,
+            last_error_code=last_error_code if "last_error_code" in locals() else None,
+            http_status=None,
+            error_category=ErrorCategory.UNKNOWN,
+            candidate_path=_ytdlp_candidate_path(output_file, workspace),
+            file_conflict=False,
+            cancelled=False,
+        )
     except asyncio.CancelledError:
         logger.info("yt_dlp_download_cancelled", url=_strip_auth_params(video_url))
         if process is not None and process.returncode is None:
@@ -2358,6 +2582,47 @@ async def _download_with_ytdlp(
                 else:
                     logger.debug("batch_file_cleaned_up", path=str(batch_file))
             _remove_cookie_artifact_dir(batch_file.parent)
+
+
+async def _download_with_ytdlp(
+    video_url: str,
+    m3u8_url: str,
+    output_file: Path,
+    quality: str,
+    settings: Settings,
+    cookies: str | None = None,
+    raw_cookies: list[Cookie] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    progress_snapshot_callback: Callable[[str, object], None] | None = None,
+    *,
+    echo: bool = True,
+    diagnostic_sink: object | None = None,
+    attempt_id: int | None = None,
+    workspace: DownloadWorkspace | None = None,
+    state_machine: DownloadStateMachine | None = None,
+    job_lock: object | None = None,
+) -> Path | None:
+    """Compatibility shim returning Path | None."""
+    result = await _download_with_ytdlp_result(
+        video_url,
+        m3u8_url,
+        output_file,
+        quality,
+        settings,
+        cookies,
+        raw_cookies,
+        progress_callback,
+        progress_snapshot_callback=progress_snapshot_callback,
+        echo=echo,
+        diagnostic_sink=diagnostic_sink,
+        attempt_id=attempt_id,
+        workspace=workspace,
+        state_machine=state_machine,
+        job_lock=job_lock,
+    )
+    if result is not None and result.phase == "completed":
+        return result.path
+    return None
 
 
 async def bounded_drain(

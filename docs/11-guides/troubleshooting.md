@@ -189,3 +189,23 @@ correlate the holder of the `.mp4.part` file with the diagnostic child process.
 5. Save the capture as both `.PML` and `.CSV`. Keep the capture window bounded;
    Process Monitor overhead affects timing, so use it for correlation only, not
    acceptance metrics.
+
+
+## File access retries and terminal file conflict
+
+Managed yt-dlp now uses `--file-access-retries 3` and
+`--retry-sleep file_access:0.5` to handle transient file locks/sharing
+violations deterministically (3 attempts with 0.5 s sleep).
+
+A persistent file lock (for example another process holding the `.part` or
+staging file) is a terminal local outcome: no network retry, no token refresh,
+no segment fallback. The job ends with `reason_code` `file_lock_*` and
+`error_category` `file_locked`.
+
+Remediation: close the holding process (Task Manager / `taskkill` on Windows),
+retry the job, or change the output location. Partial artifacts are preserved
+for resume.
+
+File-access retries only cover `EACCES` / WinError 32 as retried by yt-dlp;
+other errno values (for example `EBUSY` on some platforms) terminate after one
+attempt.

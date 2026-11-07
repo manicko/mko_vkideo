@@ -146,6 +146,7 @@ class ErrorCategory(StrEnum):
     SLOW_THROUGHPUT = "slow_throughput"
     DISK_FULL = "disk_full"
     PERMISSION_ERROR = "permission_error"
+    FILE_LOCKED = "file_locked"
     INVALID_OUTPUT_PATH = "invalid_output_path"
     CANCELLED = "cancelled"
     INCOMPATIBLE_PLAYLIST = "incompatible_playlist"
