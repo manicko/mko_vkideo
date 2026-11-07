@@ -21,6 +21,7 @@ STRUCTURED_DIAGNOSTIC_EVENTS = (
     "workspace_opened",
     "backend_started",
     "backend_stopped",
+    "child_started",
     "child_exit",
     "segment_request_failed",
     "retry_scheduled",
@@ -50,6 +51,11 @@ STRUCTURED_DIAGNOSTIC_FIELDS = (
     "http_status",
     "host",
     "path",
+    "pid",
+    "launch_number",
+    "phase",
+    "next_action",
+    "artifact_snapshot",
 )
 
 
@@ -70,6 +76,11 @@ class DiagnosticContext:
     http_status: int | None = None
     host: str | None = None
     path: str | None = None
+    pid: int | None = None
+    launch_number: int | None = None
+    phase: str | None = None
+    next_action: str | None = None
+    artifact_snapshot: object | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

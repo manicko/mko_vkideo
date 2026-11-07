@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
+
 import aiohttp
 import pytest
 
-from tests.integration.fixtures.hls_server import HlsServer, make_server
+from tests.integration.fixtures.hls_server import HlsServer, make_12_fragment_scenario, make_server
 
 
 @pytest.mark.asyncio
@@ -33,7 +35,6 @@ async def test_fault_403_token_refresh() -> None:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{server.base_url}/seg/1?token=token-old") as resp:
                 assert resp.status == 403
-            # after rotation, new token succeeds
             async with session.get(f"{server.base_url}/seg/1?token=token-new") as resp:
                 assert resp.status == 200
 
@@ -74,7 +75,6 @@ async def test_fault_bad_byterange() -> None:
 
 @pytest.mark.asyncio
 async def test_fault_missing_map_not_applicable() -> None:
-    # Ensure media playlist is served and contains segments.
     async with make_server(faults={}) as server:
         async with aiohttp.ClientSession() as session:
             async with session.get(server.media_url) as resp:
@@ -91,4 +91,56 @@ async def test_hls_server_context_manager_scenario() -> None:
             async with session.get(f"{server.base_url}/seg/1") as resp:
                 assert resp.status == 404
             async with session.get(f"{server.base_url}/seg/0") as resp:
+                assert resp.status == 200
+
+
+
+
+@pytest.mark.asyncio
+async def test_twelve_fragment_scenario_helper() -> None:
+    scenario = make_12_fragment_scenario(slow_fragment=2, first_byte_delay_seconds=0.05, chunk_size=16, chunk_delay_seconds=0.05)
+    assert scenario.fragment_count == 12
+    async with HlsServer(scenario=scenario) as server:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(server.media_url) as resp:
+                text = await resp.text()
+            assert "/seg/11" in text
+            r0 = await session.get(f"{server.base_url}/seg/0")
+            d0 = await r0.read()
+            await r0.release()
+            r1 = await session.get(f"{server.base_url}/seg/1")
+            d1 = await r1.read()
+            await r1.release()
+            assert d0 != d1
+
+
+@pytest.mark.asyncio
+async def test_slow_fragment_timing_and_range() -> None:
+    scenario = make_12_fragment_scenario(slow_fragment=3, first_byte_delay_seconds=0.1, chunk_size=8, chunk_delay_seconds=0.1)
+    async with HlsServer(scenario=scenario) as server:
+        async with aiohttp.ClientSession() as session:
+            start = time.monotonic()
+            async with session.get(f"{server.base_url}/seg/3") as resp:
+                assert resp.headers.get("Content-Type") == "video/mp2t"
+                data = await resp.read()
+            elapsed = time.monotonic() - start
+            assert elapsed >= 0.15
+            assert len(data) == server.fragment_size
+            async with session.get(f"{server.base_url}/seg/3", headers={"Range": "bytes=0-4"}) as resp:
+                assert resp.status == 206
+                body = await resp.read()
+                assert len(body) == 5
+
+
+@pytest.mark.asyncio
+async def test_reset_connection_on_consumable() -> None:
+    scenario = make_12_fragment_scenario(reset_connection_on={1})
+    async with HlsServer(scenario=scenario) as server:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"{server.base_url}/seg/1") as resp:
+                    await resp.read()
+            except Exception:
+                pass
+            async with session.get(f"{server.base_url}/seg/1") as resp:
                 assert resp.status == 200

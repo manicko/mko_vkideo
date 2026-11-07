@@ -130,3 +130,110 @@ async def test_ytdlp_argv_lacks_signed_url_without_cookies(
     assert "SECRET456" not in flat_cmd
     assert "--batch-file" in captured["cmd"]
     assert captured["kwargs"].get("stdin") is None
+@pytest.mark.asyncio
+async def test_bounded_drain_cap_and_truncation() -> None:
+    from vkdownloader.services.ytdlp_downloader import bounded_drain
+
+    class FakeStream:
+        def __init__(self):
+            self.data = b"a" * 1000
+
+        async def read(self, n):
+            if not self.data:
+                return b""
+            chunk = self.data[:n]
+            self.data = self.data[n:]
+            return chunk
+
+    stream = FakeStream()
+    result = await bounded_drain(stream, timeout=5.0, max_bytes=100, chunk_size=60)
+    assert len(result) == 100
+
+
+@pytest.mark.asyncio
+async def test_bounded_drain_eof() -> None:
+    from vkdownloader.services.ytdlp_downloader import bounded_drain
+
+    class FakeStream:
+        async def read(self, n):
+            return b""
+
+    result = await bounded_drain(FakeStream(), timeout=5.0, max_bytes=100, chunk_size=60)
+    assert result == b""
+
+
+@pytest.mark.asyncio
+async def test_child_started_emitted_right_after_spawn(test_settings, tmp_path) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+
+    output_file = tmp_path / "video.mp4"
+    mock_process = AsyncMock()
+    mock_process.returncode = 0
+    mock_process.pid = 999
+    mock_process.stdout = AsyncMock()
+    mock_process.stdout.readline = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+
+    async def mock_create_subprocess_exec(*cmd, **kwargs):
+        return mock_process
+
+    events = []
+
+    class FakeLogger:
+        def info(self, event, **kw):
+            events.append((event, kw))
+        def warning(self, *a, **k):
+            pass
+        def error(self, *a, **k):
+            pass
+        def debug(self, *a, **k):
+            pass
+
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+        with patch("vkdownloader.services.ytdlp_downloader.logger", FakeLogger()):
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
+                output_file,
+                "720",
+                test_settings,
+            )
+
+    names = [e[0] for e in events]
+    assert "child_started" in names
+    cs = next(e[1] for e in events if e[0] == "child_started")
+    assert cs.get("pid") == 999
+    ce = next(e[1] for e in events if e[0] == "child_exit")
+    assert ce.get("pid") == 999
+
+
+@pytest.mark.asyncio
+async def test_correlation_id_bound(test_settings, tmp_path) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from vkdownloader.services.ytdlp_downloader import _download_with_ytdlp
+    from vkdownloader.utils import correlation
+
+    output_file = tmp_path / "video.mp4"
+    mock_process = AsyncMock()
+    mock_process.returncode = 0
+    mock_process.pid = 1
+    mock_process.stdout = AsyncMock()
+    mock_process.stdout.readline = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+
+    async def mock_create_subprocess_exec(*cmd, **kwargs):
+        return mock_process
+
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+        with patch("vkdownloader.services.ytdlp_downloader.logger"):
+            await _download_with_ytdlp(
+                "https://vkvideo.ru/video-12345_67890",
+                "https://example.com/playlist.m3u8",
+                output_file,
+                "720",
+                test_settings,
+            )
+    assert hasattr(correlation, "generate_correlation_id")

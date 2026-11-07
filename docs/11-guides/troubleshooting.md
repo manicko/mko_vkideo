@@ -171,3 +171,21 @@ Reverting application code to an older version does not delete job workspaces cr
 - [Limitations and Workarounds](vkdownloader-limitations.md)
 - [Configuration Guide](configuration.md)
 - [CLI Reference](../99-reference/cli-reference.md)
+
+## Process Monitor (Windows) Correlation for SHARING VIOLATION
+
+When a download fails with a Windows sharing violation, use Process Monitor to
+correlate the holder of the `.mp4.part` file with the diagnostic child process.
+
+1. Start Process Monitor and set a filter:
+   - `Path` contains `.mp4.part`
+   - AND (`Process Name` is `python.exe` or `yt-dlp.exe`-equivalent, OR `Result` is `SHARING VIOLATION`).
+2. Capture operations: `CreateFile`, `CloseFile`, `ReadFile`, `WriteFile`,
+   `SetRenameInformationFile` (rename), and `SetDispositionInformationFile`.
+3. Display columns: `Time`, `Process Name`, `PID`, `Operation`, `Path`, `Result`,
+   and `Detail` (including `Desired Access` and `Share Mode`).
+4. Correlate the holder PID with the diagnostic `child_started.pid` and
+   `launch_number` emitted by `_download_with_ytdlp`.
+5. Save the capture as both `.PML` and `.CSV`. Keep the capture window bounded;
+   Process Monitor overhead affects timing, so use it for correlation only, not
+   acceptance metrics.

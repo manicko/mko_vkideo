@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import itertools
 import math
 import os
 import re
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
     from .downloader_throttle import URLBackoffCoordinator
 
 logger = get_logger(__name__)
+
+_YTDLP_LAUNCH_COUNTER = itertools.count(1)
 
 # Cookie artefact lifecycle constants (SEC-001, SEC-002, VAL-602, SEC-006).
 # These literals are frozen by B2: ``vk_cookies_`` is what the sweep is keyed
@@ -1158,6 +1161,53 @@ def _ytdlp_artifacts_for(
     return YtdlpArtifacts(directory=output_file.parent, final_name=output_file.name)
 
 
+def _acquire_job_lock(job_lock: object | None) -> object | None:
+    return job_lock
+
+
+def _capture_ytdlp_artifact_snapshot(artifacts: YtdlpArtifacts, job_lock: object | None = None) -> dict[str, int] | None:
+    """Capture relative artifact name -> size snapshot.
+
+    Returns ``None`` on ``OSError``. Captured under ``job_lock`` when provided.
+    """
+
+    def _capture() -> dict[str, int] | None:
+        try:
+            snapshot: dict[str, int] = {}
+            candidates = [artifacts.temp_path, artifacts.ytdl_path] + list(artifacts.fragment_paths())
+            for path in candidates:
+                try:
+                    if path.exists():
+                        snapshot[path.name] = int(path.stat().st_size)
+                except OSError:
+                    raise
+            return snapshot
+        except OSError:
+            return None
+
+    if job_lock is None:
+        return _capture()
+    if hasattr(job_lock, "__enter__") and hasattr(job_lock, "__exit__"):
+        with job_lock:
+            return _capture()
+    acquire = getattr(job_lock, "acquire", None)
+    release = getattr(job_lock, "release", None)
+    if callable(acquire) and callable(release):
+        acquire()
+        try:
+            return _capture()
+        finally:
+            release()
+    return _capture()
+
+
+# Public-ish aliases for tests/importers.
+capture_artifact_snapshot = _capture_ytdlp_artifact_snapshot
+capture_ytdlp_artifact_snapshot = _capture_ytdlp_artifact_snapshot
+_ytdlp_artifact_snapshot = _capture_ytdlp_artifact_snapshot
+_artifact_snapshot = _capture_ytdlp_artifact_snapshot
+
+
 def _has_recoverable_ytdlp_artifacts(
     output_file: Path, workspace: DownloadWorkspace | None = None
 ) -> bool:
@@ -1777,12 +1827,26 @@ async def _download_with_ytdlp(
     Returns:
         Path to the output file on success, None on failure.
     """
+    try:
+        from ..utils.correlation import (
+            bind_correlation_id,
+            clear_correlation_id,
+            generate_correlation_id,
+            get_correlation_id,
+        )
+
+        _correlation_id = get_correlation_id() or generate_correlation_id()
+        bind_correlation_id(_correlation_id)
+    except Exception:  # noqa: BLE001
+        _correlation_id = None
+
     logger.info(
         "starting_ytdlp_download",
         url=_strip_auth_params(m3u8_url),
         output=str(output_file),
         quality=quality,
         attempt_id=attempt_id,
+        correlation_id=_correlation_id,
     )
 
     quality_str = quality.replace("p", "") if quality else "720"
@@ -1834,9 +1898,37 @@ async def _download_with_ytdlp(
         if cookie_file is not None:
             cookie_stdin = open(cookie_file)
             spawn_kwargs["stdin"] = cookie_stdin
+        _artifacts = _ytdlp_artifacts_for(output_file, workspace)
+        _snapshot_before = _capture_ytdlp_artifact_snapshot(_artifacts, job_lock)
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             **spawn_kwargs,  # type: ignore[arg-type]
+        )
+
+        _launch_number = next(_YTDLP_LAUNCH_COUNTER)
+        try:
+            _phase = getattr(state_machine, "state", None)
+            _phase = str(_phase) if _phase is not None else "downloading"
+        except Exception:  # noqa: BLE001
+            _phase = "downloading"
+        _next_action = "read_stdout"
+        _effective_settings = {
+            "N": int(getattr(settings, "max_concurrent_segments", 0)),
+            "throttled_rate": int(getattr(settings, "throttled_rate", 0)),
+            "ignore_config": "--ignore-config" in cmd,
+        }
+        logger.info(
+            "child_started",
+            pid=process.pid,
+            launch_number=_launch_number,
+            attempt_number=attempt_id if attempt_id is not None else 0,
+            attempt_id=attempt_id,
+            phase=_phase,
+            next_action=_next_action,
+            artifact_snapshot=_snapshot_before,
+            settings=_effective_settings,
+            correlation_id=_correlation_id,
         )
 
         output_chunks: bytearray = bytearray()
@@ -2028,6 +2120,25 @@ async def _download_with_ytdlp(
             drain_task = asyncio.create_task(_drain_output())
             await _await_first_and_cancel_others(process_task, drain_task)
 
+        # Bounded final drain: capture any tail still buffered after the primary
+        # reader completed/cancelled, append to output_chunks and transcript sink.
+        if getattr(process, "stdout", None) is not None:
+            try:
+                _tail = await bounded_drain(
+                    process.stdout, timeout=2.0, max_bytes=262144, chunk_size=65536
+                )
+            except Exception:  # noqa: BLE001
+                _tail = b""
+            if _tail:
+                output_chunks.extend(_tail)
+                if diagnostic_sink is not None:
+                    try:
+                        getattr(diagnostic_sink, "write_line", lambda *a, **k: None)(
+                            _tail.decode(errors="replace")
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
         # Reap the child exactly once before reading ``returncode``. In normal
         # operation the process has already exited and ``wait()`` returns
         # immediately; bound this one-shot re-wait with ``download_stall_timeout``
@@ -2054,12 +2165,19 @@ async def _download_with_ytdlp(
         )
         last_error_code = _derive_last_error_code(sanitized_tail)
 
+        _snapshot_after = _capture_ytdlp_artifact_snapshot(_artifacts, job_lock)
+
         logger.info(
             "child_exit",
+            pid=process.pid,
+            launch_number=_launch_number,
             attempt_id=attempt_id,
             returncode=process.returncode,
             elapsed_seconds=elapsed_seconds,
             last_error_code=last_error_code,
+            phase="exited",
+            next_action="finalize",
+            artifact_snapshot=_snapshot_after,
         )
 
         if shutdown_event.is_set():
@@ -2187,6 +2305,12 @@ async def _download_with_ytdlp(
                 )
         raise
     finally:
+        try:
+            from ..utils.correlation import clear_correlation_id
+
+            clear_correlation_id()
+        except Exception:  # noqa: BLE001
+            pass
         if cookie_stdin is not None:
             cookie_stdin.close()
         if cookie_file is not None:
@@ -2228,6 +2352,57 @@ async def _download_with_ytdlp(
                 else:
                     logger.debug("batch_file_cleaned_up", path=str(batch_file))
             _remove_cookie_artifact_dir(batch_file.parent)
+
+
+async def bounded_drain(
+    stream: object,
+    *,
+    timeout: float = 2.0,
+    max_bytes: int = 262144,
+    chunk_size: int = 65536,
+) -> bytes:
+    """Bounded final drain of a subprocess stream.
+
+    Reads up to ``max_bytes`` from ``stream`` within ``timeout`` seconds using
+    a monotonic deadline. Stops at EOF, timeout, or byte cap. Logs
+    ``child_drain_truncated`` with the captured byte count when the cap is hit.
+    """
+    result = bytearray()
+    deadline = time.monotonic() + float(timeout)
+    truncated = False
+    read = getattr(stream, "read", None)
+    if read is None:
+        return bytes(result)
+    while len(result) < max_bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(read(chunk_size), timeout=remaining)
+        except Exception:  # noqa: BLE001
+            # Treat timeout and read errors as end-of-drain.
+            break
+        if not chunk:
+            break
+        data = bytes(chunk)
+        if len(result) + len(data) > max_bytes:
+            allowed = max_bytes - len(result)
+            if allowed > 0:
+                result.extend(data[:allowed])
+            truncated = True
+            break
+        result.extend(data)
+    if truncated or len(result) >= max_bytes:
+        try:
+            logger.info("child_drain_truncated", captured_bytes=len(result))
+        except Exception:  # noqa: BLE001
+            pass
+    return bytes(result)
+
+
+# Backwards-compatible alias used by tests/importers.
+bounded_drain_stream = bounded_drain
+
 
 
 async def _resolve_cookies(

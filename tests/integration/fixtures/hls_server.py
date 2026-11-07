@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -20,6 +21,10 @@ class Scenario:
     byte_range: bool = False
     fragment_size: int = 1024
     faults: dict[int, Any] = field(default_factory=dict)
+    slow_fragment: int | None = None
+    first_byte_delay_seconds: float = 0.0
+    chunk_size: int = 1024
+    chunk_delay_seconds: float = 0.0
 
 
 @dataclass
@@ -32,12 +37,18 @@ class HlsServer:
     fragment_size: int = 1024
     token: str = "token-old"
     rotated_token: str = "token-new"
+    slow_fragment: int | None = None
+    first_byte_delay_seconds: float = 0.0
+    chunk_size: int = 1024
+    chunk_delay_seconds: float = 0.0
+    reset_connection_on: set[int] = field(default_factory=set)
     _runner: web.AppRunner | None = field(default=None, init=False, repr=False)
     _site: web.TCPSite | None = field(default=None, init=False, repr=False)
     _attempts: dict[int, int] = field(
         default_factory=lambda: defaultdict(int), init=False, repr=False
     )
     _master_token: str = field(default="token-old", init=False, repr=False)
+    _reset_remaining: set[int] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.scenario is not None:
@@ -52,9 +63,17 @@ class HlsServer:
                     for idx in indices:
                         faults[idx] = {"status": status}
                 self.faults = faults
+            self.slow_fragment = self.scenario.slow_fragment
+            self.first_byte_delay_seconds = self.scenario.first_byte_delay_seconds
+            self.chunk_size = self.scenario.chunk_size
+            self.chunk_delay_seconds = self.scenario.chunk_delay_seconds
+            self.reset_connection_on = set(self.scenario.reset_connection_on)
         if self.faults is None:
             self.faults = {}
         self._master_token = self.token
+        if not self.reset_connection_on and self.scenario is not None:
+            self.reset_connection_on = set(self.scenario.reset_connection_on)
+        self._reset_remaining = set(self.reset_connection_on)
 
     @property
     def base_url(self) -> str:
@@ -113,6 +132,26 @@ class HlsServer:
         seed = hashlib.sha256(str(n).encode()).digest()
         return (seed * (size // len(seed) + 1))[:size]
 
+    def segment_payloads(self) -> list[bytes]:
+        return [self._segment_payload(i) for i in range(self.fragment_count)]
+
+    @staticmethod
+    def _parse_range(rng: str | None, total: int) -> tuple[int, int]:
+        if not rng or not rng.startswith("bytes="):
+            return 0, total - 1
+        spec = rng[6:].split(",")[0].strip()
+        parts = spec.split("-")
+        start_s = parts[0].strip() if len(parts) > 0 else ""
+        end_s = parts[1].strip() if len(parts) > 1 else ""
+        start = int(start_s) if start_s else 0
+        end = int(end_s) if end_s else total - 1
+        if start < 0:
+            start = max(0, total + start)
+        end = min(end, total - 1)
+        if end < start:
+            end = start
+        return start, end
+
     async def _master(self, request: web.Request) -> web.Response:
         body = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720\n/media.m3u8\n"
         return web.Response(text=body, content_type="application/vnd.apple.mpegurl")
@@ -127,8 +166,20 @@ class HlsServer:
             text="\n".join(lines) + "\n", content_type="application/vnd.apple.mpegurl"
         )
 
-    async def _segment(self, request: web.Request) -> web.Response:
+    async def _segment(self, request: web.Request) -> web.Response | web.StreamResponse:
         n = int(request.match_info["n"])
+
+        # Reset-connection consumption (consumable).
+        if n in self._reset_remaining:
+            self._reset_remaining.discard(n)
+            transport = request.transport
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise ConnectionResetError("reset connection on configured fragment")
+
         fault = self._normalize_fault(self._fault_for(n))
         self._attempts[n] += 1
         attempt = self._attempts[n]
@@ -187,6 +238,44 @@ class HlsServer:
                 headers={"Content-Range": "bytes 0-0/1", "Content-Length": "1"},
             )
 
+        # Slow fragment delivery.
+        slow = self.slow_fragment
+        if self.scenario is not None and self.scenario.slow_fragment is not None:
+            slow = self.scenario.slow_fragment
+        if slow is not None and n == slow:
+            first_delay = self.first_byte_delay_seconds
+            chunk_size = self.chunk_size
+            chunk_delay = self.chunk_delay_seconds
+            if self.scenario is not None:
+                first_delay = self.scenario.first_byte_delay_seconds
+                chunk_size = self.scenario.chunk_size
+                chunk_delay = self.scenario.chunk_delay_seconds
+            payload = self._segment_payload(n)
+            rng = request.headers.get("Range")
+            status = 200
+            data = payload
+            headers = {"Content-Type": "video/mp2t"}
+            if rng:
+                start, end = self._parse_range(rng, len(payload))
+                data = payload[start : end + 1]
+                status = 206
+                headers["Content-Range"] = f"bytes {start}-{end}/{len(payload)}"
+                headers["Content-Length"] = str(len(data))
+            resp = web.StreamResponse(status=status, headers=headers)
+            await resp.prepare(request)
+            await asyncio.sleep(first_delay)
+            if data:
+                await resp.write(data[:1])
+                rest = data[1:]
+                chunk = rest[:chunk_size]
+                if chunk:
+                    await resp.write(chunk)
+                await asyncio.sleep(chunk_delay)
+                if len(rest) > chunk_size:
+                    await resp.write(rest[chunk_size:])
+            await resp.write_eof()
+            return resp
+
         # Normal range handling.
         if rng:
             # Minimal correct 206.
@@ -217,9 +306,44 @@ def make_server(faults: dict[int, Any] | None = None, **kwargs: Any) -> HlsServe
     return HlsServer(**kwargs)
 
 
+def make_12_fragment_scenario(
+    slow_fragment: int | None = None,
+    reset_connection_on: Any = None,
+    **kwargs: Any,
+) -> Scenario:
+    return Scenario(
+        fragment_count=12,
+        slow_fragment=slow_fragment,
+        reset_connection_on=set(reset_connection_on or ()),
+        **kwargs,
+    )
+
+
+def make_twelve_fragment_scenario(*args: Any, **kwargs: Any) -> Scenario:
+    return make_12_fragment_scenario(*args, **kwargs)
+
+
+twelve_fragment_scenario = make_12_fragment_scenario
+slow_fragment_scenario = make_12_fragment_scenario
+
+# Attach helpers to HlsServer for convenience.
+HlsServer.make_12_fragment_scenario = staticmethod(make_12_fragment_scenario)  # type: ignore[attr-defined]
+HlsServer.twelve_fragment_scenario = staticmethod(make_12_fragment_scenario)  # type: ignore[attr-defined]
+HlsServer.build_12_fragment_scenario = staticmethod(make_12_fragment_scenario)  # type: ignore[attr-defined]
+
+
 def make_segment_bytes(index: int, size: int = 1024) -> bytes:
     seed = hashlib.sha256(str(index).encode()).digest()
     return (seed * (size // len(seed) + 1))[:size]
 
 
-__all__ = ["Scenario", "HlsServer", "make_server", "make_segment_bytes"]
+__all__ = [
+    "Scenario",
+    "HlsServer",
+    "make_server",
+    "make_segment_bytes",
+    "make_12_fragment_scenario",
+    "make_twelve_fragment_scenario",
+    "twelve_fragment_scenario",
+    "slow_fragment_scenario",
+]

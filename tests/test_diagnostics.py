@@ -56,3 +56,61 @@ def test_secrets_canary_not_in_sink(tmp_path: Path) -> None:
     content = sink_path.read_text(encoding="utf-8")
     assert secret not in content
     assert "session=abc" not in content
+
+
+def test_child_started_event_listed() -> None:
+    from vkdownloader.services.diagnostics import (
+        STRUCTURED_DIAGNOSTIC_EVENTS,
+        STRUCTURED_DIAGNOSTIC_FIELDS,
+    )
+
+    assert "child_started" in STRUCTURED_DIAGNOSTIC_EVENTS
+    for f in ("pid", "launch_number", "phase", "next_action", "artifact_snapshot"):
+        assert f in STRUCTURED_DIAGNOSTIC_FIELDS
+
+
+def test_diagnostic_context_has_new_fields() -> None:
+    from vkdownloader.services.diagnostics import DiagnosticContext
+
+    ctx = DiagnosticContext(pid=1, launch_number=2, phase="x", next_action="y", artifact_snapshot={"a": 1})
+    d = ctx.to_dict()
+    assert d["pid"] == 1
+    assert d["artifact_snapshot"] == {"a": 1}
+
+
+def test_artifact_snapshot_helper_shape() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from vkdownloader.services.ytdlp_downloader import (
+        YtdlpArtifacts,
+        _capture_ytdlp_artifact_snapshot,
+    )
+
+    d = Path(tempfile.mkdtemp())
+    art = YtdlpArtifacts(directory=d, final_name="video.mp4")
+    (d / "video.mp4.part").write_bytes(b"abc")
+    snap = _capture_ytdlp_artifact_snapshot(art)
+    assert snap is not None
+    assert "video.mp4.part" in snap
+    assert snap["video.mp4.part"] == 3
+
+
+def test_artifact_snapshot_returns_none_on_oserror(monkeypatch) -> None:
+    import tempfile
+    from pathlib import Path
+
+    from vkdownloader.services.ytdlp_downloader import (
+        YtdlpArtifacts,
+        _capture_ytdlp_artifact_snapshot,
+    )
+
+    d = Path(tempfile.mkdtemp())
+    art = YtdlpArtifacts(directory=d, final_name="video.mp4")
+
+    def boom(self):
+        raise OSError("boom")
+
+    monkeypatch.setattr(Path, "exists", boom)
+    snap = _capture_ytdlp_artifact_snapshot(art)
+    assert snap is None
