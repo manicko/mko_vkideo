@@ -153,6 +153,11 @@ class DownloadJobState(BaseModel):
     slow_throughput_observed: bool = False
     playlist_reverified: bool = False
     preserve_artifacts: bool = True
+    artifact_generation: str = "gen-0"
+    artifact_stream_variant_id: str | None = None
+    artifact_playlist_fingerprint: str | None = None
+    artifact_init_map_sha256: str | None = None
+    artifact_classification: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 

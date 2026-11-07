@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import itertools
+import json
 import math
 import os
 import re
@@ -16,6 +17,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, cast
 
@@ -1119,6 +1121,15 @@ def _build_ytdlp_cli_command(
     return cmd, cookie_file
 
 
+class YtdlpArtifactCompatibility(StrEnum):
+    """Compatibility classification for yt-dlp resume artifacts."""
+
+    COMPATIBLE_RESUME = "compatible_resume"
+    RECOVERY_CANDIDATE = "recovery_candidate"
+    AMBIGUOUS = "ambiguous"
+    NONE = "none"
+
+
 @dataclass(frozen=True)
 class YtdlpArtifacts:
     """Track the real yt-dlp temp paths for one job."""
@@ -1230,23 +1241,324 @@ _ytdlp_artifact_snapshot = _capture_ytdlp_artifact_snapshot
 _artifact_snapshot = _capture_ytdlp_artifact_snapshot
 
 
-def _has_recoverable_ytdlp_artifacts(
-    output_file: Path, workspace: DownloadWorkspace | None = None
-) -> bool:
-    """Report whether any recoverable yt-dlp partial artifact exists."""
-    art = _ytdlp_artifacts_for(output_file, workspace)
-    if art.has_artifacts():
-        return True
-    segments_dir = (
-        workspace.segments_dir
-        if workspace is not None
-        else Path(output_file).parent / f".{Path(output_file).stem}_segments"
-    )
+def parse_ytdl_file(path: object, *, max_bytes: int = 65536) -> dict[str, object] | None:
+    """Safely parse a yt-dlp ``.ytdl`` resume hint file.
+
+    Returns a small normalized dict containing only ``index`` and optional
+    ``fragment_count``. Returns ``None`` on any validation failure. The file
+    is never modified.
+    """
     try:
-        if segments_dir.exists() and any(segments_dir.iterdir()):
-            return True
+        p = Path(str(path))
+        if p.is_symlink():
+            return None
+        if not p.is_file():
+            return None
+        try:
+            size = p.stat().st_size
+        except OSError:
+            return None
+        if size > max_bytes:
+            return None
+        raw = p.read_bytes()
     except OSError:
+        return None
+    if len(raw) > max_bytes:
+        return None
+    try:
+        text = raw.decode("utf-8")
+        data = json.loads(text)
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    downloader = data.get("downloader")
+    if not isinstance(downloader, dict):
+        return None
+    current = downloader.get("current_fragment")
+    if not isinstance(current, dict):
+        return None
+    index = current.get("index")
+    if isinstance(index, bool) or not isinstance(index, int):
+        return None
+    if index < 0:
+        return None
+    result: dict[str, object] = {"index": index}
+
+    fragment_count: object = None
+    has_fc = False
+    if "fragment_count" in current:
+        fragment_count = current.get("fragment_count")
+        has_fc = True
+    elif "fragment_count" in downloader:
+        fragment_count = downloader.get("fragment_count")
+        has_fc = True
+    if has_fc:
+        if fragment_count is None:
+            # Treat missing as absent; but if key present with None reject.
+            return None
+        if isinstance(fragment_count, bool) or not isinstance(fragment_count, int):
+            return None
+        if fragment_count < index:
+            return None
+        result["fragment_count"] = fragment_count
+    return result
+
+
+def _has_repeated_ytdlp_blocks(path: object, *, block_size: int = 65536) -> bool:
+    """Return True when the initial block appears again later in *path*."""
+    try:
+        p = Path(str(path))
+        if p.is_symlink() or not p.is_file():
+            return False
+        with open(p, "rb") as handle:
+            first = handle.read(block_size)
+            if not first:
+                return False
+            rest = handle.read()
+        return first in rest
+    except OSError:
+        return False
+
+
+def _owned_ytdlp_guard_failure(output_file: Path, workspace: object) -> bool:
+    """Return True if ownership guards fail."""
+    try:
+        from .workspace import (
+            is_owned_ytdlp_artifact_path,
+            resolve_owned_job_root,
+            resolve_owned_ytdlp_dir,
+        )
+    except Exception:  # noqa: BLE001
+        return True
+    if workspace is None:
+        return True
+    try:
+        root = resolve_owned_job_root(workspace)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        return True
+    if root is None:
+        return True
+    try:
+        ytdlp_dir = resolve_owned_ytdlp_dir(workspace)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        return True
+    if ytdlp_dir is None:
+        return True
+    artifacts = _ytdlp_artifacts_for(output_file, cast("DownloadWorkspace", workspace))
+    try:
+        if artifacts.final_name != cast("DownloadWorkspace", workspace).final_path.name:
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    candidates = []
+    try:
+        candidates = [artifacts.temp_path, artifacts.ytdl_path] + list(artifacts.fragment_paths())
+    except Exception:  # noqa: BLE001
+        return True
+    for cand in candidates:
+        try:
+            if cand.exists():
+                if not is_owned_ytdlp_artifact_path(cand, artifacts, cast("DownloadWorkspace", workspace)):
+                    return True
+        except OSError:
+            return True
+    return False
+
+
+def classify_ytdlp_artifacts(
+    output_file: Path,
+    workspace: object = None,
+    *,
+    state_machine: object = None,
+    stream_variant_id: object = None,
+    playlist_fingerprint: object = None,
+    init_map_sha256: object = None,
+    job_lock: object = None,
+) -> YtdlpArtifactCompatibility:
+    """Classify yt-dlp artifacts for resume compatibility."""
+    artifacts = _ytdlp_artifacts_for(output_file, cast("DownloadWorkspace", workspace))
+
+    # No artifacts at all -> NONE.
+    try:
+        has = artifacts.has_artifacts()
+    except Exception:  # noqa: BLE001
+        has = False
+    if not has:
+        return YtdlpArtifactCompatibility.NONE
+
+    # Legacy / no workspace: conservative (unowned) -> AMBIGUOUS.
+    if workspace is None:
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # Ownership guards first.
+    if _owned_ytdlp_guard_failure(output_file, workspace):
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # Resolve expected identity.
+    expected_variant = stream_variant_id
+    expected_fingerprint = playlist_fingerprint
+    expected_init = init_map_sha256
+    if expected_variant is None and state_machine is not None:
+        try:
+            sm_state = getattr(state_machine, "job_state", None)
+            expected_variant = getattr(sm_state, "artifact_stream_variant_id", None)
+            if not expected_variant:
+                expected_variant = getattr(sm_state, "stream_variant_id", None)
+        except Exception:  # noqa: BLE001
+            expected_variant = None
+    if expected_fingerprint is None and state_machine is not None:
+        try:
+            sm_state = getattr(state_machine, "job_state", None)
+            expected_fingerprint = getattr(sm_state, "artifact_playlist_fingerprint", None)
+        except Exception: # noqa: BLE001
+            expected_fingerprint = None
+    if expected_init is None and state_machine is not None:
+        try:
+            sm_state = getattr(state_machine, "job_state", None)
+            expected_init = getattr(sm_state, "artifact_init_map_sha256", None)
+        except Exception:  # noqa: BLE001
+            expected_init = None
+
+    if not isinstance(expected_variant, str) or not expected_variant.strip():
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+    if not isinstance(expected_fingerprint, str) or not expected_fingerprint.strip():
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # Compare to persisted identity fields when present.
+    if state_machine is not None:
+        try:
+            sm_state = getattr(state_machine, "job_state", None)
+            persisted_variant = getattr(sm_state, "artifact_stream_variant_id", None)
+            if persisted_variant is None:
+                persisted_variant = getattr(sm_state, "stream_variant_id", None)
+            persisted_fp = getattr(sm_state, "artifact_playlist_fingerprint", None)
+            persisted_init = getattr(sm_state, "artifact_init_map_sha256", None)
+        except Exception:  # noqa: BLE001
+            persisted_variant = None
+            persisted_fp = None
+            persisted_init = None
+        if persisted_variant is not None and persisted_variant != expected_variant:
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+        if persisted_fp is not None and persisted_fp != expected_fingerprint:
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+        if (
+            persisted_init is not None
+            and expected_init is not None
+            and persisted_init != expected_init
+        ):
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # Inspect .ytdl if present.
+    ytdl_path = artifacts.ytdl_path
+    ytdl_present = False
+    ytdl_index = 0
+    try:
+        if ytdl_path.exists():
+            ytdl_present = True
+    except OSError:
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+    if ytdl_present:
+        parsed = parse_ytdl_file(ytdl_path)
+        if parsed is None:
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+        ytdl_index = int(cast("int", parsed.get("index", 0)))
+        fc = parsed.get("fragment_count")
+        if isinstance(fc, int) and fc < ytdl_index:
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # Repeated TS blocks -> AMBIGUOUS.
+    temp_path = artifacts.temp_path
+    part_non_empty = False
+    try:
+        if temp_path.exists() and temp_path.is_file():
+            try:
+                if temp_path.stat().st_size > 0:
+                    part_non_empty = True
+            except OSError:
+                return YtdlpArtifactCompatibility.AMBIGUOUS
+            if _has_repeated_ytdlp_blocks(temp_path):
+                return YtdlpArtifactCompatibility.AMBIGUOUS
+    except OSError:
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    try:
+        if temp_path.exists() and temp_path.is_file() and temp_path.stat().st_size == 0 and ytdl_present and ytdl_index > 0:
+            return YtdlpArtifactCompatibility.AMBIGUOUS
+    except OSError:
+        return YtdlpArtifactCompatibility.AMBIGUOUS
+
+    # fragments count as artifacts
+    try:
+        if artifacts.fragment_paths():
+            part_non_empty = True
+    except Exception:  # noqa: BLE001
         pass
+
+    if ytdl_present:
+        if part_non_empty:
+            return YtdlpArtifactCompatibility.COMPATIBLE_RESUME
+        return YtdlpArtifactCompatibility.RECOVERY_CANDIDATE
+    if part_non_empty:
+        return YtdlpArtifactCompatibility.RECOVERY_CANDIDATE
+    return YtdlpArtifactCompatibility.NONE
+
+
+_classify_ytdlp_artifacts = classify_ytdlp_artifacts
+
+
+def _has_recoverable_ytdlp_artifacts(
+    output_file: Path, workspace: DownloadWorkspace | None = None, **kwargs: object
+) -> bool:
+    """Report whether yt-dlp artifacts are recoverable (compatible_resume)."""
+    state_machine = kwargs.pop("state_machine", None)
+    stream_variant_id = kwargs.pop("stream_variant_id", None)
+    playlist_fingerprint = kwargs.pop("playlist_fingerprint", None)
+    init_map_sha256 = kwargs.pop("init_map_sha256", None)
+    job_lock = kwargs.pop("job_lock", None)
+    segments_fallback = False
+    for key in (
+        "allow_segments",
+        "segments_fallback",
+        "check_segments",
+        "include_segments",
+        "segments_dir_check",
+    ):
+        if kwargs.pop(key, False):
+            segments_fallback = True
+
+    # Legacy (no workspace) layout preserves the previous existence-based behavior.
+    if workspace is None:
+        art = _ytdlp_artifacts_for(output_file, None)
+        if art.has_artifacts():
+            return True
+        if segments_fallback:
+            segments_dir = Path(output_file).parent / f".{Path(output_file).stem}_segments"
+            try:
+                if segments_dir.exists() and any(segments_dir.iterdir()):
+                    return True
+            except OSError:
+                pass
+        return False
+
+    compat = classify_ytdlp_artifacts(
+        output_file,
+        workspace,
+        state_machine=state_machine,
+        stream_variant_id=stream_variant_id,
+        playlist_fingerprint=playlist_fingerprint,
+        init_map_sha256=init_map_sha256,
+        job_lock=job_lock,
+    )
+    if compat == YtdlpArtifactCompatibility.COMPATIBLE_RESUME:
+        return True
+    if segments_fallback:
+        segments_dir = workspace.segments_dir
+        try:
+            if segments_dir.exists() and any(segments_dir.iterdir()):
+                return True
+        except OSError:
+            pass
     return False
 
 
@@ -1528,8 +1840,79 @@ async def download_with_ytdlp_with_resume_fallback(
         # yt-dlp writes to <output>.part until the download completes, so we
         # probe for recoverable artifacts, not just the .part file (Block B).
         validated_output = validate_output_path(output_file)
-        if not _has_recoverable_ytdlp_artifacts(validated_output, workspace):
-            return None
+        if workspace is None:
+            if not _has_recoverable_ytdlp_artifacts(validated_output, None, allow_segments=True, segments_fallback=True):
+                return None
+        else:
+            expected_variant = stream_variant_id
+            expected_fingerprint = None
+            expected_init = None
+            if state_machine is not None:
+                try:
+                    if expected_variant is None:
+                        expected_variant = state_machine.job_state.stream_variant_id
+                    expected_fingerprint = state_machine.job_state.artifact_playlist_fingerprint
+                    expected_init = state_machine.job_state.artifact_init_map_sha256
+                except Exception:  # noqa: BLE001
+                    pass
+            compat = classify_ytdlp_artifacts(
+                validated_output,
+                workspace,
+                state_machine=state_machine,
+                stream_variant_id=expected_variant,
+                playlist_fingerprint=expected_fingerprint,
+                init_map_sha256=expected_init,
+                job_lock=job_lock,
+            )
+            try:
+                if state_machine is not None:
+                    state_machine.job_state.artifact_classification = compat.value
+                    if not state_machine.job_state.artifact_generation:
+                        state_machine.job_state.artifact_generation = "gen-0"
+                    if expected_variant and not state_machine.job_state.artifact_stream_variant_id:
+                        state_machine.job_state.artifact_stream_variant_id = expected_variant
+                    if expected_fingerprint and not state_machine.job_state.artifact_playlist_fingerprint:
+                        state_machine.job_state.artifact_playlist_fingerprint = expected_fingerprint
+                    if expected_init and not state_machine.job_state.artifact_init_map_sha256:
+                        state_machine.job_state.artifact_init_map_sha256 = expected_init
+                    state_machine.persist()
+            except Exception:  # noqa: BLE001
+                pass
+
+            if compat == YtdlpArtifactCompatibility.AMBIGUOUS:
+                try:
+                    from .checkpoint import quarantine_generation
+
+                    old_gen = "gen-0"
+                    if state_machine is not None:
+                        old_gen = state_machine.job_state.artifact_generation or old_gen
+                    num = 0
+                    if isinstance(old_gen, str) and old_gen.startswith("gen-"):
+                        try:
+                            num = int(old_gen.split("-", 1)[1])
+                        except (TypeError, ValueError):
+                            num = 0
+                    new_gen = f"gen-{num + 1}"
+                    quarantine_generation(workspace.ytdlp_dir, old_gen)
+                    workspace.ytdlp_dir.mkdir(parents=True, exist_ok=True)
+                    if state_machine is not None:
+                        state_machine.job_state.artifact_generation = new_gen
+                        state_machine.job_state.reason_code = "ytdlp_artifacts_quarantined"
+                        state_machine.persist()
+                except Exception:  # noqa: BLE001
+                    if state_machine is not None:
+                        try:
+                            state_machine.job_state.reason_code = "artifact_isolation_failed"
+                            state_machine.job_state.error_category = ErrorCategory.INTEGRITY_FAILURE
+                            state_machine.persist()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return None
+                return None
+
+            if compat != YtdlpArtifactCompatibility.COMPATIBLE_RESUME:
+                # Preserve recovery candidates / none; do not append to unproven .part.
+                return None
 
         # Attempt segment resume with fresh token
         if state_machine is not None:

@@ -17,7 +17,7 @@ from structlog import get_logger
 
 from ..config import Settings
 from ..exceptions import QualityNotAvailableError
-from ..models.enums import CookieSource, DownloadMethod, DownloadState
+from ..models.enums import CookieSource, DownloadMethod, DownloadState, ErrorCategory
 from ..models.quality import QualitySpec
 from ..models.video import Stream, VideoWithStreams
 from ..services.extractor import VKVideoExtractor
@@ -233,6 +233,93 @@ async def perform_download(
         except Exception:  # noqa: BLE001
             job_lock = None
             raise
+
+    # Classify yt-dlp artifacts under the already held job lock before launch.
+    if workspace is not None:
+        try:
+            from .ytdlp_downloader import (
+                YtdlpArtifactCompatibility,
+                classify_ytdlp_artifacts,
+            )
+
+            if state_machine is None:
+                try:
+                    from .state_machine import DownloadStateMachine
+
+                    state_machine = DownloadStateMachine.load(workspace, job_id=workspace.job_id)
+                except Exception:  # noqa: BLE001
+                    state_machine = None
+
+            expected_variant = None
+            expected_fingerprint = None
+            expected_init = None
+            if state_machine is not None:
+                try:
+                    expected_variant = state_machine.job_state.stream_variant_id
+                    expected_fingerprint = state_machine.job_state.artifact_playlist_fingerprint
+                    expected_init = state_machine.job_state.artifact_init_map_sha256
+                except Exception:  # noqa: BLE001
+                    pass
+
+            compat = classify_ytdlp_artifacts(
+                output_file,
+                workspace,
+                state_machine=state_machine,
+                stream_variant_id=expected_variant,
+                playlist_fingerprint=expected_fingerprint,
+                init_map_sha256=expected_init,
+                job_lock=job_lock,
+            )
+
+            if state_machine is not None:
+                try:
+                    state_machine.job_state.artifact_classification = compat.value
+                    if not state_machine.job_state.artifact_generation:
+                        state_machine.job_state.artifact_generation = "gen-0"
+                    if expected_variant and not state_machine.job_state.artifact_stream_variant_id:
+                        state_machine.job_state.artifact_stream_variant_id = expected_variant
+                    if expected_fingerprint and not state_machine.job_state.artifact_playlist_fingerprint:
+                        state_machine.job_state.artifact_playlist_fingerprint = expected_fingerprint
+                    if expected_init and not state_machine.job_state.artifact_init_map_sha256:
+                        state_machine.job_state.artifact_init_map_sha256 = expected_init
+                    state_machine.persist()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if compat == YtdlpArtifactCompatibility.AMBIGUOUS:
+                try:
+                    from .checkpoint import quarantine_generation
+
+                    old_gen = "gen-0"
+                    if state_machine is not None:
+                        old_gen = state_machine.job_state.artifact_generation or old_gen
+                    # increment
+                    num = 0
+                    if isinstance(old_gen, str) and old_gen.startswith("gen-"):
+                        try:
+                            num = int(old_gen.split("-", 1)[1])
+                        except (TypeError, ValueError):
+                            num = 0
+                    new_gen = f"gen-{num + 1}"
+                    quarantine_generation(workspace.ytdlp_dir, old_gen)
+                    workspace.ytdlp_dir.mkdir(parents=True, exist_ok=True)
+                    if state_machine is not None:
+                        state_machine.job_state.artifact_generation = new_gen
+                        state_machine.job_state.reason_code = "ytdlp_artifacts_quarantined"
+                        state_machine.job_state.artifact_classification = YtdlpArtifactCompatibility.AMBIGUOUS.value
+                        state_machine.persist()
+                except Exception:  # noqa: BLE001
+                    if state_machine is not None:
+                        try:
+                            state_machine.job_state.reason_code = "artifact_isolation_failed"
+                            state_machine.job_state.error_category = ErrorCategory.INTEGRITY_FAILURE
+                            state_machine.job_state.artifact_classification = YtdlpArtifactCompatibility.AMBIGUOUS.value
+                            state_machine.persist()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return None
+        except Exception:  # noqa: BLE001
+            pass
 
     # Resume reconciliation before backend starts.
     if workspace is not None:

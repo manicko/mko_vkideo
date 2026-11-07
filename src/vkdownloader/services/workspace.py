@@ -362,6 +362,103 @@ class LegacyArtifact:
     kind: str
 
 
+def is_owned_job_root(root: object, job_id: object) -> bool:
+    """Return True when *root* is an owned, non-symlink job directory."""
+    try:
+        root_path = Path(str(root))
+        if root_path.is_symlink():
+            return False
+        resolved = root_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if resolved.name != str(job_id):
+        return False
+    if resolved.parent.name != "jobs":
+        return False
+    marker = resolved / ".vkdownloader-job"
+    try:
+        marker_text = marker.read_text(encoding="utf-8").strip() if (marker.is_file() and not marker.is_symlink()) else ""
+    except OSError:
+        marker_text = ""
+    return marker_text == str(job_id)
+
+
+def resolve_owned_job_root(workspace: DownloadWorkspace) -> Path | None:
+    """Resolve and validate the owned job root for *workspace*, or None."""
+    try:
+        root = Path(workspace.root)
+        if root.is_symlink():
+            return None
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    try:
+        tmp_jobs = (Path(workspace.final_path).parent / "tmp" / "jobs").resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved_root.parent != tmp_jobs:
+        return None
+    if resolved_root.name != workspace.job_id:
+        return None
+
+    marker = resolved_root / ".vkdownloader-job"
+    try:
+        marker_text = marker.read_text(encoding="utf-8").strip() if (marker.is_file() and not marker.is_symlink()) else ""
+    except OSError:
+        marker_text = ""
+    if marker_text != workspace.job_id:
+        return None
+    return resolved_root
+
+
+def resolve_owned_ytdlp_dir(workspace: DownloadWorkspace) -> Path | None:
+    """Resolve and validate the owned ytdlp directory for *workspace*."""
+    root = resolve_owned_job_root(workspace)
+    if root is None:
+        return None
+    try:
+        ytdlp = Path(workspace.ytdlp_dir)
+        if ytdlp.is_symlink():
+            return None
+        resolved_ytdlp = ytdlp.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved_ytdlp.parent != root:
+        return None
+    if resolved_ytdlp.name != "ytdlp":
+        return None
+    if not resolved_ytdlp.is_dir():
+        return None
+    return resolved_ytdlp
+
+
+def is_owned_ytdlp_artifact_path(path: object, artifacts: object, workspace: DownloadWorkspace) -> bool:
+    """Return True when *path* is a safe, owned artifact directly in ytdlp_dir."""
+    try:
+        root = resolve_owned_job_root(workspace)
+        if root is None:
+            return False
+        ytdlp_dir = resolve_owned_ytdlp_dir(workspace)
+        if ytdlp_dir is None:
+            return False
+        if artifacts is not None:
+            final_name = getattr(artifacts, "final_name", None)
+            if final_name is not None and final_name != workspace.final_path.name:
+                return False
+        p = Path(str(path))
+        if p.is_symlink():
+            return False
+        resolved_p = p.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if resolved_p.parent != ytdlp_dir:
+        return False
+    if not resolved_p.is_file():
+        return False
+    return True
+
+
 def cleanup_owned_job_artifacts(workspace: DownloadWorkspace) -> None:
     """Remove the owned job directory after a verified commit."""
     root = Path(workspace.root)
@@ -527,6 +624,10 @@ __all__ = [
     "acquire_publish_lock",
     "cleanup_owned_job_artifacts",
     "discover_legacy_artifacts",
+    "is_owned_job_root",
+    "is_owned_ytdlp_artifact_path",
+    "resolve_owned_job_root",
+    "resolve_owned_ytdlp_dir",
     "migrate_legacy_artifacts",
     "publish_verified_file",
     "stable_job_id",

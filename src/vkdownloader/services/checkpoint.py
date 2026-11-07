@@ -364,6 +364,7 @@ def quarantine_generation(
 
     parent = segments_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
+
     quarantine_root = parent / "generations"
 
     target = quarantine_root / gen
