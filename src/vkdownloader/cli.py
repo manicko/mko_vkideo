@@ -651,7 +651,7 @@ def batch_download(
         # (e.g. from the batch run) falls through to the generic catch-all.
         try:
             raw_urls = urls_file.read_text()
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
             typer.echo(f"Failed to read URL file: {urls_file} — {e}", err=True)
             raise typer.Exit(code=1) from None
 
