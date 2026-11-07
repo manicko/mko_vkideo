@@ -48,6 +48,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# SEC-001: FFmpeg transport is disabled at runtime until a safe input contract
+# is defined. Keeping the enum value accepted for compatibility, but the
+# transport must never execute (and must never receive cookies/secrets).
+FFMPEG_TRANSPORT_DISABLED = True
+
 
 def _semaphore_context(
     semaphore: SemaphoreLike | None,
@@ -347,9 +352,17 @@ async def perform_download(
                         job_lock=job_lock,
                     )
                 case DownloadMethod.FFMPEG:
+                    if FFMPEG_TRANSPORT_DISABLED:
+                        logger.warning(
+                            "ffmpeg_transport_disabled",
+                            reason="SEC-001: FFmpeg transport disabled pending safe input contract",
+                        )
+                        return None
                     m3u8_url, cookies, raw_cookies = await _resolve_cookies(
                         extractor, settings, url, m3u8_url, quality
                     )
+                    # Guard retained for when transport is re-enabled; unreachable
+                    # while FFMPEG_TRANSPORT_DISABLED is True.
                     binding = binding_from_selected(
                         selected_stream or (streams[0] if streams else None),
                         requested_quality=quality,

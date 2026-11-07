@@ -510,4 +510,4 @@ class TestPerformDownloadFfmpegBranch:
                     selected_stream=_STREAM,
                 )
 
-        assert result == output_file
+        assert result is None
