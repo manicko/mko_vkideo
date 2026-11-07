@@ -210,7 +210,7 @@ class TestExtractionErrors:
             assert ydl_opts["socket_timeout"] == 600
             assert ydl_opts["retries"] == 5
             assert ydl_opts["fragment_retries"] == 5
-            assert ydl_opts["throttled_rate"] == 50000
+            assert "throttled_rate" not in ydl_opts
 
     @pytest.mark.asyncio
     async def test_extract_with_ytdlp_timeout_raises_extraction_error(self) -> None:

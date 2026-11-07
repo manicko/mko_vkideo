@@ -333,7 +333,7 @@ class VKVideoExtractor:
         """Extract streams and title using yt-dlp (handles VK protections).
 
         Propagates relevant :class:`Settings` fields (``socket_timeout``,
-        ``retries``, ``fragment_retries``, ``throttled_rate``) into the
+        ``retries``, ``fragment_retries``) into the
         yt-dlp options dict and wraps the blocking extraction in
         ``asyncio.wait_for`` with ``settings.download_timeout``.
 
@@ -360,12 +360,11 @@ class VKVideoExtractor:
             "user_agent": self.settings.user_agent,
             "http_headers": {"User-Agent": self.settings.user_agent},
             # Propagate Settings to yt-dlp library-mode so it
-            # respects the same timeout/retry/throttle config as the
+            # respects the same timeout/retry config as the
             # subprocess CLI path (downloader.py _build_ytdlp_cli_command).
             "socket_timeout": self.settings.download_timeout,
             "retries": self.settings.max_retries,
             "fragment_retries": self.settings.max_retries,
-            "throttled_rate": self.settings.throttled_rate,
         }
 
         def _sync_extract() -> tuple[list[Stream], str | None]:

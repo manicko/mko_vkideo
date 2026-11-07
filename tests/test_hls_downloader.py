@@ -909,8 +909,8 @@ class TestSanitizeCookieValue:
 class TestYtdlpCliCommand:
     """Tests for yt-dlp CLI command builder."""
 
-    def test_cli_command_includes_throttled_rate(self, test_settings: Settings) -> None:
-        """Test CLI command includes --throttled-rate from settings."""
+    def test_cli_command_excludes_throttled_rate(self, test_settings: Settings) -> None:
+        """Test CLI command excludes --throttled-rate and includes --ignore-config."""
         cmd, _ = _build_ytdlp_cli_command(
             output_file=Path("/tmp/test.mp4"),
             quality_str="720",
@@ -920,9 +920,8 @@ class TestYtdlpCliCommand:
             raw_cookies=None,
         )
 
-        assert "--throttled-rate" in cmd
-        idx = cmd.index("--throttled-rate")
-        assert cmd[idx + 1] == str(test_settings.throttled_rate)
+        assert "--throttled-rate" not in cmd
+        assert "--ignore-config" in cmd
 
     def test_cli_command_excludes_http_chunk_size_by_default(self, test_settings: Settings) -> None:
         """Test CLI command does NOT include --http-chunk-size by default.
@@ -976,9 +975,6 @@ class TestYtdlpCliCommand:
         assert "-N" in cmd
         idx = cmd.index("-N")
         assert cmd[idx + 1] == "8"
-
-        idx = cmd.index("--throttled-rate")
-        assert cmd[idx + 1] == "200000"
 
         idx = cmd.index("--http-chunk-size")
         assert cmd[idx + 1] == "5242880"

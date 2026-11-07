@@ -35,7 +35,7 @@ All settings support environment variables via Pydantic Settings. Create a `.env
 | `download_dir` | `VKDOWNLOADER_DOWNLOAD_DIR` | ~/Downloads/vkdownloader | Output directory |
 | `max_concurrent_downloads` | `VKDOWNLOADER_MAX_CONCURRENT_DOWNLOADS` | 4 | Maximum number of videos downloading concurrently in a batch (1-16); the batch semaphore gates one permit per video, each video's segment fan-out is bounded by `max_concurrent_segments`, and each segment download's aiohttp connection pool is sized to this value for both the total and per-origin ceiling — 1 disables batch parallelism |
 | `max_concurrent_segments` | `VKDOWNLOADER_MAX_CONCURRENT_SEGMENTS` | 4 | Maximum number of segments to download concurrently per video (1-16); governs the segment fan-out semaphore and yt-dlp's `-N` (fragment concurrency) flag. The batch-level video gate remains governed by `max_concurrent_downloads`. Setting this to 1 enables sequential segment download with an anti-detection delay |
-| `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 100000 | Minimum download rate in bytes/sec (50000-1000000). If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s). |
+| `throttled_rate` | `VKDOWNLOADER_THROTTLED_RATE` | 0 | Diagnostic low-speed threshold in bytes/sec (0-1000000) for sustained sampling in the yt-dlp progress reader. Positive values only emit a `ytdlp_low_speed` warning when the sustained rate stays below the threshold; there is no download abort, state change, or refresh. 0 disables the warning |
 | `http_chunk_size` | `VKDOWNLOADER_HTTP_CHUNK_SIZE` | 0 | HTTP chunk size in bytes (0-104857600) for yt-dlp range-request downloads. 0 disables the flag for reliable HLS segment downloads; non-zero values are for advanced users only |
 | `cookie_source` | `VKDOWNLOADER_COOKIE_SOURCE` | none | Cookie acquisition strategy: none or browser |
 | `log_level` | `VKDOWNLOADER_LOG_LEVEL` | INFO | Logging level |
@@ -231,6 +231,16 @@ VKDOWNLOADER_LOG_BACKUP_COUNT=0
 # Retain 3 backups
 VKDOWNLOADER_LOG_BACKUP_COUNT=3
 ```
+
+## External yt-dlp configuration boundary
+
+The managed yt-dlp child process is launched with `--ignore-config`, so system and
+user yt-dlp configuration files are **not** loaded. This makes the managed argv
+reproducible and prevents an external config from reintroducing `--throttled-rate`
+or changing `.part`/fragment-skip policy. The managed invocation passes cookies
+via stdin, User-Agent, Referer, quality, and output template explicitly. Proxy
+configuration continues to work through the `HTTP_PROXY`/`HTTPS_PROXY` environment
+variables.
 
 ## Environment Variable Caveats
 

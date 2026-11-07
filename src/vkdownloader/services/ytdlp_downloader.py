@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1067,6 +1068,7 @@ def _build_ytdlp_cli_command(
         "--newline",
         "--hls-prefer-native",
         "--no-warnings",
+        "--ignore-config",
         "--socket-timeout",
         str(settings.download_timeout),
         "-R",
@@ -1075,8 +1077,6 @@ def _build_ytdlp_cli_command(
         "1",
         "-N",
         str(settings.max_concurrent_segments),
-        "--throttled-rate",
-        str(settings.throttled_rate),
         "--user-agent",
         user_agent,
         "--referer",
@@ -1960,6 +1960,8 @@ async def _download_with_ytdlp(
                         except Exception:
                             pass
                     progress_state = _parse_ytdlp_progress_state(decoded)
+                    if progress_state is not None:
+                        low_speed_tracker.observe(progress_state.downloaded)
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
                             progress_callback(
@@ -2045,6 +2047,8 @@ async def _download_with_ytdlp(
                         except Exception:
                             pass
                     progress_state = _parse_ytdlp_progress_state(decoded)
+                    if progress_state is not None:
+                        low_speed_tracker.observe(progress_state.downloaded)
                     if progress_state is not None and progress_callback is not None:
                         if progress_state.fragment_count > 0:
                             progress_callback(
@@ -2110,6 +2114,8 @@ async def _download_with_ytdlp(
                     pid=process.pid,
                     error=str(exc),
                 )
+
+        low_speed_tracker = LowSpeedWarningTracker(settings.throttled_rate)
 
         if progress_callback:
             process_task = asyncio.create_task(process.wait())
@@ -2515,3 +2521,80 @@ def ensure_download_phase(state_machine: object) -> None:
         raise
     except Exception:  # noqa: BLE001
         pass
+
+
+
+class LowSpeedWarningTracker:
+    """Sustained low-speed diagnostic warning tracker."""
+
+    def __init__(
+        self,
+        threshold_bytes_per_sec: int,
+        *,
+        sample_count: int = 3,
+        min_window_seconds: float = 3.0,
+        cooldown_seconds: float = 30.0,
+    ) -> None:
+        self.threshold_bytes_per_sec = int(threshold_bytes_per_sec)
+        self.sample_count = int(sample_count)
+        self.min_window_seconds = float(min_window_seconds)
+        self.cooldown_seconds = float(cooldown_seconds)
+        self._samples: deque[tuple[float, int]] = deque(maxlen=self.sample_count)
+        self._warned_episode = False
+        self._last_warning_at: float | None = None
+
+    def observe(self, downloaded: int, *, now: float | None = None) -> bool:
+        if self.threshold_bytes_per_sec <= 0:
+            return False
+
+        if now is None:
+            current_now = time.monotonic()
+        else:
+            current_now = now
+        now_value = float(current_now)
+        downloaded = int(downloaded)
+
+        self._samples.append((now_value, downloaded))
+
+        if len(self._samples) < self.sample_count:
+            return False
+
+        first_ts, first_bytes = self._samples[0]
+        last_ts, last_bytes = self._samples[-1]
+        span = last_ts - first_ts
+        if span < self.min_window_seconds:
+            return False
+
+        if span <= 0:
+            rate = 0.0
+        else:
+            rate = (last_bytes - first_bytes) / span
+
+        if rate <= 0:
+            self._warned_episode = False
+            self._last_warning_at = None
+            return False
+
+        if rate >= self.threshold_bytes_per_sec:
+            self._warned_episode = False
+            self._last_warning_at = None
+            return False
+
+        should_warn = (
+            not self._warned_episode
+            or self._last_warning_at is None
+            or (now_value - self._last_warning_at) >= self.cooldown_seconds
+        )
+        if should_warn:
+            logger.warning(
+                "ytdlp_low_speed",
+                rate_bytes_per_sec=float(rate),
+                threshold_bytes_per_sec=self.threshold_bytes_per_sec,
+                sample_count=self.sample_count,
+                window_seconds=float(span),
+                downloaded=downloaded,
+            )
+            self._warned_episode = True
+            self._last_warning_at = now_value
+            return True
+        return False

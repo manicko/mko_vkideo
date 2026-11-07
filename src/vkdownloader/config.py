@@ -174,10 +174,16 @@ class Settings(BaseSettings):
         "Setting this to 1 enables sequential segment download with an anti-detection delay.",
     )
     throttled_rate: int = Field(
-        default=100000,
-        ge=50000,
+        default=0,
+        ge=0,
         le=1000000,
-        description="Minimum download rate in bytes/sec. If yt-dlp's download rate falls below this threshold, yt-dlp aborts the download; the application then retries with a fresh token re-extract. Default is 100000 (100KB/s).",
+        description="Diagnostic low-speed threshold in bytes/sec for the yt-dlp progress "
+        "reader. Positive values emit a 'ytdlp_low_speed' warning when the sustained "
+        "download rate stays below this threshold; 0 disables the warning. This is "
+        "NOT an abort or re-extract trigger: the managed yt-dlp child no longer "
+        "passes --throttled-rate and ignores external config files (--ignore-config), "
+        "so low speed alone never aborts or re-extracts a download. Old positive "
+        "values (50000..1000000) remain valid as thresholds.",
     )
     http_chunk_size: int = Field(
         default=0,

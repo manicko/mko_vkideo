@@ -163,20 +163,20 @@ def test_cookie_source_from_env() -> None:
 
 
 def test_throttled_rate_default(test_settings: Settings) -> None:
-    """Test throttled_rate default value is 100000."""
-    assert test_settings.throttled_rate == 100000
+    """Test throttled_rate default value is 0."""
+    assert test_settings.throttled_rate == 0
 
 
 def test_throttled_rate_validation(test_settings: Settings) -> None:
     """Test throttled_rate accepts valid values and rejects invalid ones."""
-    test_settings = Settings(throttled_rate=50000)
-    assert test_settings.throttled_rate == 50000
+    test_settings = Settings(throttled_rate=0)
+    assert test_settings.throttled_rate == 0
 
     test_settings = Settings(throttled_rate=1000000)
     assert test_settings.throttled_rate == 1000000
 
     with pytest.raises(ValidationError):
-        Settings(throttled_rate=49999)  # Below minimum
+        Settings(throttled_rate=-1)  # Below minimum
 
     with pytest.raises(ValidationError):
         Settings(throttled_rate=1000001)  # Above maximum
@@ -1372,7 +1372,7 @@ class TestEnvironmentIsolation:
         assert settings.max_concurrent_downloads == 4
         assert settings.max_concurrent_segments == 4
         assert settings.download_timeout == 300
-        assert settings.throttled_rate == 100000
+        assert settings.throttled_rate == 0
         assert settings.log_level == LogLevel.INFO
         assert settings.log_file is None
 
