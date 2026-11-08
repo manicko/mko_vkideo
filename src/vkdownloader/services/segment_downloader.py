@@ -987,6 +987,25 @@ async def _fetch_playlist_with_retry(
             # D1: compute the exponential-backoff delay and honour shutdown
             # before looping. Manifest retry has no Retry-After, so pass None.
             delay = _compute_backoff_delay(_TRANSPORT_FAILURE_STATUS, attempt, None)
+            if state_machine is not None:
+                try:
+                    if state_machine.is_budget_exhausted():
+                        try:
+                            state_machine.transition(
+                                DownloadState.FAILED_RETRY_BUDGET,
+                                reason_code="retry_budget_exhausted",
+                                error_category=ErrorCategory.UNKNOWN,
+                                persist=True,
+                            )
+                        except Exception:  # noqa: BLE001
+                            state_machine.persist()
+                        return None
+                    if not state_machine.record_retry(
+                        "segment", "playlist_transport_retry", delay, http_status=None
+                    ):
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
             shutdown_triggered = await _wait_with_shutdown(
                 delay, shutdown_event, attempt, _strip_auth_params(current_url)
             )
@@ -1023,6 +1042,25 @@ async def _fetch_playlist_with_retry(
             # D1: compute the exponential-backoff delay and honour shutdown
             # before looping. Manifest retry has no Retry-After, so pass None.
             delay = _compute_backoff_delay(status, attempt, None)
+            if state_machine is not None:
+                try:
+                    if state_machine.is_budget_exhausted():
+                        try:
+                            state_machine.transition(
+                                DownloadState.FAILED_RETRY_BUDGET,
+                                reason_code="retry_budget_exhausted",
+                                error_category=ErrorCategory.UNKNOWN,
+                                persist=True,
+                            )
+                        except Exception:  # noqa: BLE001
+                            state_machine.persist()
+                        return None
+                    if not state_machine.record_retry(
+                        "segment", "playlist_status_retry", delay, http_status=status if isinstance(status, int) else None
+                    ):
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
             shutdown_triggered = await _wait_with_shutdown(
                 delay, shutdown_event, attempt, _strip_auth_params(current_url)
             )
@@ -1298,6 +1336,7 @@ async def _tally_and_merge(
     progress_callback: Callable[[str, int, int], None] | None,
     video_url: str,
     checkpoint: object | None = None,
+    state_machine: DownloadStateMachine | None = None,
 ) -> Path | None:
     """Tally download results and merge if all segments downloaded.
 
@@ -1348,6 +1387,17 @@ async def _tally_and_merge(
     if download_results and not all(r for _, r in download_results):
         failed_indices = [idx for idx, r in download_results if not r]
         logger.warning("segment_download_failed", failed_indices=failed_indices)
+        # Persist missing_required_fragment reason for failed segments.
+        if state_machine is not None:
+            try:
+                sm = state_machine
+                sm.job_state.reason_code = "missing_required_fragment"
+                from ..models.enums import ErrorCategory
+
+                sm.job_state.error_category = ErrorCategory.NOT_FOUND
+                sm.persist()
+            except Exception:  # noqa: BLE001
+                pass
         return None
 
     # All segments present on disk — merge
@@ -1358,6 +1408,22 @@ async def _tally_and_merge(
             pass
         return result
 
+    # Missing required fragment.
+    logger.warning(
+        "missing_required_fragment",
+        downloaded_count=downloaded_count,
+        expected_count=len(segments),
+    )
+    if state_machine is not None:
+        try:
+            sm = state_machine
+            sm.job_state.reason_code = "missing_required_fragment"
+            from ..models.enums import ErrorCategory
+
+            sm.job_state.error_category = ErrorCategory.NOT_FOUND
+            sm.persist()
+        except Exception:  # noqa: BLE001
+            pass
     return None
 
 
@@ -1451,6 +1517,7 @@ async def _process_downloaded_segments(
         progress_callback,
         policy.video_url,
         checkpoint=policy.checkpoint,
+        state_machine=policy.state_machine,
     )
 
 
@@ -2252,6 +2319,37 @@ async def download_hls_with_resume(
                     except TypeError, ValueError:
                         expected_height = None
 
+                    if progress_snapshot_callback is not None:
+                        try:
+                            from .progress import JobPhase, ProgressSnapshot
+
+                            sm = state_machine
+                            job_id = sm.job_state.job_id if sm is not None else (video_id or "job")
+                            verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                            network_bytes = (
+                                sm.job_state.network_bytes_this_session if sm is not None else 0
+                            )
+                            attempt = sm.job_state.attempt_id if sm is not None else 0
+                            snapshot = ProgressSnapshot(
+                                job_id=str(job_id),
+                                phase=JobPhase.FINALIZING,
+                                verified_segments=int(sm.job_state.verified_segments if sm is not None else 0),
+                                expected_segments=(sm.job_state.expected_segments if sm is not None else None),
+                                verified_bytes_on_disk=int(verified_bytes or 0),
+                                network_bytes_this_session=int(network_bytes or 0),
+                                transfer_rate_bytes_per_sec=0.0,
+                                eta_seconds=None,
+                                is_estimate=False,
+                                attempt_id=int(attempt or 0),
+                                child_fragment_index=0,
+                                child_fragment_count=0,
+                                measured_at=__import__("time").monotonic(),
+                            )
+                            vid = video_id or str(job_id)
+                            progress_snapshot_callback(vid, snapshot)
+                        except Exception:  # noqa: BLE001
+                            pass
+
                     if state_machine is not None:
                         _safe_transition(state_machine, DownloadState.ALL_SEGMENTS_VERIFIED)
                         _safe_transition(state_machine, DownloadState.MERGING_IN_STAGING)
@@ -2334,6 +2432,36 @@ async def download_hls_with_resume(
                             logger.error("ffprobe_missing", path=str(result))
                             return None
                         await validate_media_file(result)
+                    if progress_snapshot_callback is not None:
+                        try:
+                            from .progress import JobPhase, ProgressSnapshot
+
+                            sm = state_machine
+                            job_id = sm.job_state.job_id if sm is not None else (video_id or "job")
+                            verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                            network_bytes = (
+                                sm.job_state.network_bytes_this_session if sm is not None else 0
+                            )
+                            attempt = sm.job_state.attempt_id if sm is not None else 0
+                            snapshot = ProgressSnapshot(
+                                job_id=str(job_id),
+                                phase=JobPhase.FINALIZING,
+                                verified_segments=int(sm.job_state.verified_segments if sm is not None else 0),
+                                expected_segments=(sm.job_state.expected_segments if sm is not None else None),
+                                verified_bytes_on_disk=int(verified_bytes or 0),
+                                network_bytes_this_session=int(network_bytes or 0),
+                                transfer_rate_bytes_per_sec=0.0,
+                                eta_seconds=None,
+                                is_estimate=False,
+                                attempt_id=int(attempt or 0),
+                                child_fragment_index=0,
+                                child_fragment_count=0,
+                                measured_at=__import__("time").monotonic(),
+                            )
+                            vid = video_id or str(job_id)
+                            progress_snapshot_callback(vid, snapshot)
+                        except Exception:  # noqa: BLE001
+                            pass
                     if state_machine is not None:
                         _safe_transition(state_machine, DownloadState.ALL_SEGMENTS_VERIFIED)
                         _safe_transition(state_machine, DownloadState.MERGING_IN_STAGING)

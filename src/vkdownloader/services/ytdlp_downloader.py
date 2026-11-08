@@ -1739,114 +1739,42 @@ async def download_with_ytdlp_with_resume_fallback(
         except Exception as exc:  # noqa: BLE001
             logger.debug("reconcile_failed", error=str(exc))
 
-    while retry_count <= settings.max_retries:
-        result = await _download_with_ytdlp_result(
-            video_url,
-            m3u8_url,
-            output_file,
-            quality,
-            settings,
-            cookies,
-            raw_cookies,
-            progress_callback,
-            progress_snapshot_callback=progress_snapshot_callback,
-            echo=echo,
-            diagnostic_sink=diagnostic_sink,
-            attempt_id=attempt_id,
-            workspace=workspace,
-            state_machine=state_machine,
-            job_lock=job_lock,
-            deep_decode=deep_decode,
-        )
+    terminal_stop_categories = {
+        ErrorCategory.FILE_LOCKED,
+        ErrorCategory.INVALID_OUTPUT_PATH,
+        ErrorCategory.INTEGRITY_FAILURE,
+        ErrorCategory.INCOMPATIBLE_PLAYLIST,
+        ErrorCategory.INCOMPATIBLE_CODEC,
+        ErrorCategory.NOT_FOUND,
+        ErrorCategory.DISK_FULL,
+        ErrorCategory.PERMISSION_ERROR,
+    }
 
-        if result is not None and result.path is not None:
-            if retry_count > 0:
-                logger.info("download_completed_after_retries", retries=retry_count)
-            return result.path
-
-        if result is not None and result.cancelled:
-            if state_machine is not None:
-                try:
-                    state_machine.record_cancellation()
-                except Exception:  # noqa: BLE001
-                    pass
-            return None
-
-        # Terminal local outcomes: file lock or staging candidate failure.
-        if result is not None and (
-            result.file_conflict
-            or result.error_category == ErrorCategory.FILE_LOCKED
-            or result.phase in {"file_locked", "local_block", "missing_output"}
-        ):
-            if state_machine is not None:
-                try:
-                    reason_code = (
-                        "file_lock_conflict"
-                        if result.file_conflict or result.error_category == ErrorCategory.FILE_LOCKED or result.phase == "file_locked"
-                        else "staging_candidate_failed"
-                    )
-                    _ec = result.error_category
-                    # Persist without a state transition that may be illegal.
-                    state_machine.job_state.reason_code = reason_code
-                    state_machine.job_state.error_category = _ec
-                    state_machine.job_state.updated_at = __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
-                    state_machine.persist()
-                except Exception:  # noqa: BLE001
-                    pass
-            return None
-
-        retry_count += 1
-
-        if shutdown_event.is_set():
-            if state_machine is not None:
-                state_machine.record_cancellation()
-            logger.info(
-                "yt_dlp_download_cancelled",
-                url=_strip_auth_params(video_url),
-            )
-            return None
-
-        # Backoff between yt-dlp retry attempts:
-        # Without this, the retry loop hammers the VK origin on failure.
-        # Use _compute_backoff_delay with a 500 base status (yt-dlp failures
-        # don't carry an HTTP status at this level); _wait_with_shutdown
-        # respects the shared URLBackoffCoordinator's pause state if one is
-        # provided, and allows interruption via the shutdown event.
-        backoff_delay = _compute_backoff_delay(500, retry_count, None)
+    async def _do_segment_switch(refresh_already_consumed: bool = False) -> Path | None:
+        # Bounded guard: at most one segment-backend transition per job.
         if state_machine is not None:
-            allowed = state_machine.record_retry("yt-dlp", "ytdlp_retry", backoff_delay)
-            if not allowed:
-                try:
-                    state_machine.transition(
-                        DownloadState.FAILED_RETRY_BUDGET,
-                        reason_code="retry_budget_exhausted",
-                        error_category=ErrorCategory.UNKNOWN,
+            try:
+                if getattr(state_machine.job_state, "segment_backend_used", False):
+                    try:
+                        state_machine.job_state.reason_code = "backend_switch_already_used"
+                        state_machine.persist()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    logger.info(
+                        "backend_switch_blocked",
+                        reason_code="backend_switch_already_used",
                     )
-                except Exception:  # noqa: BLE001
-                    pass
-                return None
-        if backoff_coordinator is not None:
-            await backoff_coordinator.wait_if_paused(video_url)
-        shutdown_triggered = await _wait_with_shutdown(
-            backoff_delay,
-            shutdown_event,
-            retry_count,
-            _strip_auth_params(video_url),
-        )
-        if shutdown_triggered:
-            if state_machine is not None:
-                state_machine.record_cancellation()
-            logger.info(
-                "yt_dlp_download_cancelled_during_backoff", url=_strip_auth_params(video_url)
-            )
-            return None
+                    return None
+                state_machine.job_state.segment_backend_used = True
+                state_machine.persist()
+            except Exception:  # noqa: BLE001
+                pass
 
-        # Check for partial file - switch to segment download with fresh token.
-        # yt-dlp writes to <output>.part until the download completes, so we
-        # probe for recoverable artifacts, not just the .part file (Block B).
         validated_output = validate_output_path(output_file)
         if workspace is None:
-            if not _has_recoverable_ytdlp_artifacts(validated_output, None, allow_segments=True, segments_fallback=True):
+            if not _has_recoverable_ytdlp_artifacts(
+                validated_output, None, allow_segments=True, segments_fallback=True
+            ):
                 return None
         else:
             expected_variant = stream_variant_id
@@ -1916,10 +1844,8 @@ async def download_with_ytdlp_with_resume_fallback(
                 return None
 
             if compat != YtdlpArtifactCompatibility.COMPATIBLE_RESUME:
-                # Preserve recovery candidates / none; do not append to unproven .part.
                 return None
 
-        # Attempt segment resume with fresh token
         if state_machine is not None:
             try:
                 if state_machine.can_transition(DownloadState.REFRESH_STREAM):
@@ -1928,35 +1854,196 @@ async def download_with_ytdlp_with_resume_fallback(
                     )
             except Exception:  # noqa: BLE001
                 pass
-        if (
-            segment_result := await _attempt_segment_resume(
-                video_url,
-                m3u8_url,
-                validated_output,
-                quality,
-                retry_count,
-                extractor,
-                settings,
-                backoff_coordinator,
-                video_semaphore,
-                progress_callback,
-                progress_snapshot_callback=progress_snapshot_callback,
-                workspace=workspace,
-                stream_variant_id=stream_variant_id,
-                stream_binding=stream_binding,
-                state_machine=state_machine,
-            )
-        ) is not None:
-            return segment_result
+        return await _attempt_segment_resume(
+            video_url,
+            m3u8_url,
+            validated_output,
+            quality,
+            retry_count,
+            extractor,
+            settings,
+            backoff_coordinator,
+            video_semaphore,
+            progress_callback,
+            progress_snapshot_callback=progress_snapshot_callback,
+            workspace=workspace,
+            stream_variant_id=stream_variant_id,
+            stream_binding=stream_binding,
+            state_machine=state_machine,
+            job_lock=job_lock,
+            refresh_already_consumed=refresh_already_consumed,
+        )
 
-    # All retries exhausted without success
+    while retry_count <= settings.max_retries:
+        result = await _download_with_ytdlp_result(
+            video_url,
+            m3u8_url,
+            output_file,
+            quality,
+            settings,
+            cookies,
+            raw_cookies,
+            progress_callback,
+            progress_snapshot_callback=progress_snapshot_callback,
+            echo=echo,
+            diagnostic_sink=diagnostic_sink,
+            attempt_id=attempt_id,
+            workspace=workspace,
+            state_machine=state_machine,
+            job_lock=job_lock,
+            deep_decode=deep_decode,
+        )
+
+        if result is not None and result.path is not None:
+            if retry_count > 0:
+                logger.info("download_completed_after_retries", retries=retry_count)
+            return result.path
+
+        if result is not None and result.cancelled:
+            if state_machine is not None:
+                try:
+                    state_machine.record_cancellation()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+
+        cat = result.error_category if result is not None else ErrorCategory.UNKNOWN
+        http_status = result.http_status if result is not None else None
+
+        # Terminal stop outcomes: no retry, no switch.
+        is_terminal_stop = result is not None and (
+            result.file_conflict
+            or cat in terminal_stop_categories
+            or result.phase in {"file_locked", "local_block", "missing_output"}
+        )
+        if is_terminal_stop:
+            if state_machine is not None:
+                try:
+                    if result.file_conflict or cat == ErrorCategory.FILE_LOCKED or result.phase == "file_locked":
+                        reason_code = "file_lock_conflict"
+                    elif result.phase in ("missing_output", "local_block"):
+                        reason_code = "missing_required_fragment"
+                    else:
+                        reason_code = "staging_candidate_failed"
+                    state_machine.job_state.reason_code = reason_code
+                    state_machine.job_state.error_category = cat
+                    state_machine.job_state.updated_at = __import__("datetime").datetime.now(
+                        __import__("datetime").UTC
+                    ).isoformat()
+                    state_machine.persist()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+
+        # AUTH_EXPIRED: consume refresh allowance, then single segment switch.
+        if cat == ErrorCategory.AUTH_EXPIRED:
+            if state_machine is not None:
+                try:
+                    if not state_machine.request_refresh("token_expired"):
+                        try:
+                            state_machine.job_state.reason_code = "refresh_cap_exhausted"
+                            state_machine.job_state.error_category = cat
+                            state_machine.persist()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
+            # Switch with refreshed binding; _attempt_segment_resume refreshes stream.
+            seg = await _do_segment_switch(True)
+            # Propagate refreshed binding? _attempt_segment_resume handles refresh.
+            return seg
+
+        # RATE_LIMITED (429): honor Retry-After/coordinator, retry yt-dlp, no switch.
+        if cat == ErrorCategory.RATE_LIMITED:
+            retry_count += 1
+            if shutdown_event.is_set():
+                if state_machine is not None:
+                    state_machine.record_cancellation()
+                return None
+            if backoff_coordinator is not None:
+                try:
+                    await backoff_coordinator.pause(
+                        video_url, backoff_coordinator.pause_seconds
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                await backoff_coordinator.wait_if_paused(video_url)
+            else:
+                backoff_delay = _compute_backoff_delay(429, retry_count, http_status)
+                if state_machine is not None:
+                    allowed = state_machine.record_retry(
+                        "yt-dlp", "rate_limited_retry", backoff_delay, http_status=http_status
+                    )
+                    if not allowed:
+                        try:
+                            state_machine.transition(
+                                DownloadState.FAILED_RETRY_BUDGET,
+                                reason_code="retry_budget_exhausted",
+                                error_category=ErrorCategory.UNKNOWN,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return None
+                shutdown_triggered = await _wait_with_shutdown(
+                    backoff_delay,
+                    shutdown_event,
+                    retry_count,
+                    _strip_auth_params(video_url),
+                )
+                if shutdown_triggered:
+                    if state_machine is not None:
+                        state_machine.record_cancellation()
+                    return None
+            continue
+
+        # Network errors (SERVER_ERROR, CONNECTION_TIMEOUT, CONNECTION_RESET, UNKNOWN):
+        # bounded backoff retries; segment switch only after budget exhausted.
+        retry_count += 1
+        if shutdown_event.is_set():
+            if state_machine is not None:
+                state_machine.record_cancellation()
+            return None
+
+        backoff_delay = _compute_backoff_delay(
+            http_status if http_status is not None else 500, retry_count, http_status
+        )
+        if state_machine is not None:
+            allowed = state_machine.record_retry(
+                "yt-dlp", "ytdlp_retry", backoff_delay, http_status=http_status
+            )
+            if not allowed:
+                # Budget exhausted: single segment switch if artifacts compatible.
+                seg = await _do_segment_switch(False)
+                return seg
+        if backoff_coordinator is not None:
+            await backoff_coordinator.wait_if_paused(video_url)
+        shutdown_triggered = await _wait_with_shutdown(
+            backoff_delay,
+            shutdown_event,
+            retry_count,
+            _strip_auth_params(video_url),
+        )
+        if shutdown_triggered:
+            if state_machine is not None:
+                state_machine.record_cancellation()
+            return None
+        # Retry yt-dlp (no switch on ordinary retry).
+        continue
+
+    # All retries exhausted without success: attempt one bounded switch.
+    try:
+        seg = await _do_segment_switch()
+        if seg is not None:
+            return seg
+    except Exception:  # noqa: BLE001
+        pass
     logger.error(
         "max_retries_exceeded",
         url=_strip_auth_params(video_url),
         retries=settings.max_retries,
     )
-    # Block B: preserve partials (.part, fragments, .ytdl) for resume.
-    logger.info("preserving_ytdlp_partials", path=str(validated_output))
+    logger.info("preserving_ytdlp_partials", path=str(validate_output_path(output_file)))
     return None
 
 
@@ -1977,6 +2064,7 @@ async def _attempt_segment_resume(
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
     job_lock: object | None = None,
+    refresh_already_consumed: bool = False,
 ) -> Path | None:
     """Attempt segment-based download with fresh token on yt-dlp failure.
 
@@ -2066,6 +2154,12 @@ async def _attempt_segment_resume(
         except Exception:  # noqa: BLE001
             pass
         try:
+            if state_machine is not None and not refresh_already_consumed:
+                try:
+                    if not state_machine.request_refresh("token_expired"):
+                        return None
+                except Exception:  # noqa: BLE001
+                    return None
             binding = await refresh_stream(video_url, quality, None, extractor)
         except QualityMismatchError as exc:
             logger.error(
@@ -2182,6 +2276,21 @@ def _derive_last_error_code(sanitized_tail: str) -> str | None:
     match = re.search(r"ERROR:\s*(\d{3})\b", sanitized_tail)
     if match is not None:
         return match.group(1)
+    return None
+
+
+def _http_status_from_last_error_code(code: object) -> int | None:
+    """Return ``int(code)`` when *code* is a 3-digit HTTP status, else ``None``."""
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        text = str(code)
+    elif isinstance(code, str):
+        text = code.strip()
+    else:
+        return None
+    if len(text) == 3 and text.isdigit():
+        return int(text)
     return None
 
 
@@ -2687,7 +2796,7 @@ async def _download_with_ytdlp_result(
                     phase="failed",
                     returncode=getattr(process, "returncode", None),
                     last_error_code=None,
-                    http_status=None,
+                    http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                     error_category=ErrorCategory.UNKNOWN,
                     candidate_path=_ytdlp_candidate_path(output_file, workspace),
                     file_conflict=False,
@@ -2724,7 +2833,7 @@ async def _download_with_ytdlp_result(
                 phase="cancelled",
                 returncode=getattr(process, "returncode", None),
                 last_error_code=last_error_code,
-                http_status=None,
+                http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                 error_category=ErrorCategory.CANCELLED,
                 candidate_path=_ytdlp_candidate_path(output_file, workspace),
                 file_conflict=False,
@@ -2762,7 +2871,7 @@ async def _download_with_ytdlp_result(
                 phase="file_locked" if _file_conflict else "failed",
                 returncode=process.returncode,
                 last_error_code=last_error_code,
-                http_status=None,
+                http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                 error_category=_error_category,
                 candidate_path=_ytdlp_candidate_path(output_file, workspace),
                 file_conflict=_file_conflict,
@@ -2770,6 +2879,35 @@ async def _download_with_ytdlp_result(
             )
 
         logger.info("ytdlp_download_completed", output=str(output_file))
+        if progress_snapshot_callback is not None:
+            try:
+                from .progress import JobPhase, ProgressSnapshot
+
+                sm = state_machine
+                job_id = sm.job_state.job_id if sm is not None else video_id
+                verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
+                network_bytes = (
+                    sm.job_state.network_bytes_this_session if sm is not None else 0
+                )
+                attempt = sm.job_state.attempt_id if sm is not None else (attempt_id or 0)
+                snapshot = ProgressSnapshot(
+                    job_id=str(job_id),
+                    phase=JobPhase.FINALIZING,
+                    verified_segments=int(sm.job_state.verified_segments if sm is not None else 0),
+                    expected_segments=(sm.job_state.expected_segments if sm is not None else None),
+                    verified_bytes_on_disk=int(verified_bytes or 0),
+                    network_bytes_this_session=int(network_bytes or 0),
+                    transfer_rate_bytes_per_sec=0.0,
+                    eta_seconds=None,
+                    is_estimate=False,
+                    attempt_id=int(attempt or 0),
+                    child_fragment_index=0,
+                    child_fragment_count=0,
+                    measured_at=time.monotonic(),
+                )
+                progress_snapshot_callback(video_id, snapshot)
+            except Exception:  # noqa: BLE001
+                pass
         if workspace is not None:
             staged = workspace.staging_dir / workspace.final_path.name
             if not staged.exists() or not staged.is_file() or staged.stat().st_size <= 0:
@@ -2778,7 +2916,7 @@ async def _download_with_ytdlp_result(
                     phase="missing_output",
                     returncode=process.returncode,
                     last_error_code=last_error_code,
-                    http_status=None,
+                    http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                     error_category=ErrorCategory.INVALID_OUTPUT_PATH,
                     candidate_path=_ytdlp_candidate_path(output_file, workspace),
                     file_conflict=False,
@@ -2806,7 +2944,7 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=None,
+                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2821,7 +2959,7 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=None,
+                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2849,7 +2987,7 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=None,
+                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                         error_category=ErrorCategory.INVALID_OUTPUT_PATH,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2865,7 +3003,7 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=None,
+                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2881,7 +3019,7 @@ async def _download_with_ytdlp_result(
                         phase="missing_output",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=None,
+                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                         error_category=ErrorCategory.INVALID_OUTPUT_PATH,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2906,7 +3044,7 @@ async def _download_with_ytdlp_result(
                     phase="local_block",
                     returncode=process.returncode,
                     last_error_code=last_error_code,
-                    http_status=None,
+                    http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                     error_category=ErrorCategory.INTEGRITY_FAILURE,
                     candidate_path=_ytdlp_candidate_path(output_file, workspace),
                     file_conflict=False,
@@ -2919,7 +3057,7 @@ async def _download_with_ytdlp_result(
                     phase="local_block",
                     returncode=process.returncode,
                     last_error_code=last_error_code,
-                    http_status=None,
+                    http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                     error_category=ErrorCategory.INTEGRITY_FAILURE,
                     candidate_path=_ytdlp_candidate_path(output_file, workspace),
                     file_conflict=False,
@@ -2930,7 +3068,7 @@ async def _download_with_ytdlp_result(
                 phase="completed",
                 returncode=process.returncode,
                 last_error_code=last_error_code,
-                http_status=None,
+                http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
                 error_category=ErrorCategory.UNKNOWN,
                 candidate_path=workspace.final_path,
                 file_conflict=False,
@@ -2943,7 +3081,7 @@ async def _download_with_ytdlp_result(
             phase="completed",
             returncode=process.returncode,
             last_error_code=last_error_code,
-            http_status=None,
+            http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
             error_category=ErrorCategory.UNKNOWN,
             candidate_path=None,
             file_conflict=False,
@@ -2963,7 +3101,7 @@ async def _download_with_ytdlp_result(
             phase="failed",
             returncode=None,
             last_error_code=last_error_code if "last_error_code" in locals() else None,
-            http_status=None,
+            http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
             error_category=ErrorCategory.UNKNOWN,
             candidate_path=_ytdlp_candidate_path(output_file, workspace),
             file_conflict=False,

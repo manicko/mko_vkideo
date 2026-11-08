@@ -159,6 +159,7 @@ class DownloadJobState(BaseModel):
     artifact_init_map_sha256: str | None = None
     artifact_expected_duration_seconds: float | None = None
     artifact_classification: str | None = None
+    segment_backend_used: bool = False
     created_at: str | None = None
     updated_at: str | None = None
 

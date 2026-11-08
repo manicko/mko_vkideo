@@ -195,7 +195,7 @@ class JobPhase(StrEnum):
     WAITING = "waiting"
     MERGING = "merging"
     VERIFYING = "verifying"
-
+    FINALIZING = "finalizing"
 
 # Terminal statuses: every member except IN_PROGRESS. Derived from the enum
 # so a newly added status is automatically terminal unless it is the
