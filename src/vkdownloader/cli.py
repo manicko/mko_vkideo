@@ -483,7 +483,9 @@ def download(
             try:
                 import sys
 
-                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+                reconfigure = getattr(sys.stdout, "reconfigure", None)
+                if callable(reconfigure):
+                    reconfigure(encoding="utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 pass
             typer.echo(f"Downloaded: {result}")
