@@ -374,3 +374,16 @@ def test_job_lock_real_process(tmp_path: Path) -> None:
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
+
+def test_cleanup_removes_entire_tmp_job_directory(tmp_path: Path) -> None:
+    ws = _import_workspace()
+    final_path = tmp_path / "out" / "video.mp4"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace = ws.make_workspace(final_path, "vid1", "best")
+    log_path = workspace.log_path
+    assert log_path.parent.exists()
+    assert workspace.root.exists()
+    ws.cleanup_owned_job_artifacts(workspace)
+    assert not workspace.root.exists()
+    assert not log_path.exists()
+    assert not (final_path.parent / f"tmp_{workspace.job_id}").exists()
