@@ -1745,6 +1745,11 @@ async def download_with_ytdlp_with_resume_fallback(
                         return None
                     _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
                     _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
+                    if diagnostic_sink is not None and hasattr(diagnostic_sink, "close"):
+                        try:
+                            diagnostic_sink.close()
+                        except Exception:  # noqa: BLE001
+                            pass
                     cleanup_owned_job_artifacts(workspace)
                     return workspace.final_path
                 except asyncio.CancelledError, KeyboardInterrupt:
@@ -3068,6 +3073,11 @@ async def _download_with_ytdlp_result(
                 if state_machine is not None:
                     _safe_transition(state_machine, DownloadState.FINAL_COMMITTED)
                     _safe_transition(state_machine, DownloadState.CLEANUP_OWNED_TEMP_ARTIFACTS)
+                if diagnostic_sink is not None and hasattr(diagnostic_sink, "close"):
+                    try:
+                        diagnostic_sink.close()
+                    except Exception:  # noqa: BLE001
+                        pass
                 cleanup_owned_job_artifacts(workspace)
             except asyncio.CancelledError, KeyboardInterrupt:
                 raise
