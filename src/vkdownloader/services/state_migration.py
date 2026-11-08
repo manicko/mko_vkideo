@@ -510,7 +510,9 @@ async def reconcile_commit_state(
                 expected_duration = None
                 if sm is not None:
                     try:
-                        expected_duration = getattr(sm.job_state, "artifact_expected_duration_seconds", None)
+                        expected_duration = getattr(
+                            sm.job_state, "artifact_expected_duration_seconds", None
+                        )
                     except Exception:  # noqa: BLE001
                         expected_duration = None
                 await validate_media_file(
@@ -585,11 +587,15 @@ async def reconcile_commit_state(
                 expected_duration = None
                 if sm is not None:
                     try:
-                        expected_duration = getattr(sm.job_state, "artifact_expected_duration_seconds", None)
+                        expected_duration = getattr(
+                            sm.job_state, "artifact_expected_duration_seconds", None
+                        )
                     except Exception:  # noqa: BLE001
                         expected_duration = None
                 await validate_media_file(
-                    staging_path, expected_height=expected_height, expected_duration=expected_duration
+                    staging_path,
+                    expected_height=expected_height,
+                    expected_duration=expected_duration,
                 )
                 # Identity verification.
                 identity_ok = False

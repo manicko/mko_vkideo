@@ -1056,7 +1056,10 @@ async def _fetch_playlist_with_retry(
                             state_machine.persist()
                         return None
                     if not state_machine.record_retry(
-                        "segment", "playlist_status_retry", delay, http_status=status if isinstance(status, int) else None
+                        "segment",
+                        "playlist_status_retry",
+                        delay,
+                        http_status=status if isinstance(status, int) else None,
                     ):
                         return None
                 except Exception:  # noqa: BLE001
@@ -2333,8 +2336,12 @@ async def download_hls_with_resume(
                             snapshot = ProgressSnapshot(
                                 job_id=str(job_id),
                                 phase=JobPhase.FINALIZING,
-                                verified_segments=int(sm.job_state.verified_segments if sm is not None else 0),
-                                expected_segments=(sm.job_state.expected_segments if sm is not None else None),
+                                verified_segments=int(
+                                    sm.job_state.verified_segments if sm is not None else 0
+                                ),
+                                expected_segments=(
+                                    sm.job_state.expected_segments if sm is not None else None
+                                ),
                                 verified_bytes_on_disk=int(verified_bytes or 0),
                                 network_bytes_this_session=int(network_bytes or 0),
                                 transfer_rate_bytes_per_sec=0.0,
@@ -2446,8 +2453,12 @@ async def download_hls_with_resume(
                             snapshot = ProgressSnapshot(
                                 job_id=str(job_id),
                                 phase=JobPhase.FINALIZING,
-                                verified_segments=int(sm.job_state.verified_segments if sm is not None else 0),
-                                expected_segments=(sm.job_state.expected_segments if sm is not None else None),
+                                verified_segments=int(
+                                    sm.job_state.verified_segments if sm is not None else 0
+                                ),
+                                expected_segments=(
+                                    sm.job_state.expected_segments if sm is not None else None
+                                ),
                                 verified_bytes_on_disk=int(verified_bytes or 0),
                                 network_bytes_this_session=int(network_bytes or 0),
                                 transfer_rate_bytes_per_sec=0.0,

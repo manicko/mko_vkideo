@@ -231,7 +231,7 @@ async def check_dts_continuity(
             value = pkt.get("dts")
         try:
             dts_values.append(float(value))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     if len(dts_values) < 2:
         raise MediaValidationError("insufficient_packets")

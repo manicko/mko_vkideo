@@ -5936,6 +5936,7 @@ class TestYtDlpRetryBackoff:
 
         async def mock_download_ytdlp(*args: object, **kwargs: object):
             from vkdownloader.services.ytdlp_downloader import YtdlpLaunchResult
+
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return YtdlpLaunchResult(path=None, phase="failed")  # First attempt fails
@@ -5992,6 +5993,7 @@ class TestYtDlpRetryBackoff:
 
         async def mock_download_ytdlp(*args: object, **kwargs: object):
             from vkdownloader.services.ytdlp_downloader import YtdlpLaunchResult
+
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return YtdlpLaunchResult(path=None, phase="failed")

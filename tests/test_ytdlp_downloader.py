@@ -130,6 +130,8 @@ async def test_ytdlp_argv_lacks_signed_url_without_cookies(
     assert "SECRET456" not in flat_cmd
     assert "--batch-file" in captured["cmd"]
     assert captured["kwargs"].get("stdin") is None
+
+
 @pytest.mark.asyncio
 async def test_bounded_drain_cap_and_truncation() -> None:
     from vkdownloader.services.ytdlp_downloader import bounded_drain
@@ -184,10 +186,13 @@ async def test_child_started_emitted_right_after_spawn(test_settings, tmp_path) 
     class FakeLogger:
         def info(self, event, **kw):
             events.append((event, kw))
+
         def warning(self, *a, **k):
             pass
+
         def error(self, *a, **k):
             pass
+
         def debug(self, *a, **k):
             pass
 

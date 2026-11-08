@@ -279,7 +279,10 @@ async def perform_download(
                         state_machine.job_state.artifact_generation = "gen-0"
                     if expected_variant and not state_machine.job_state.artifact_stream_variant_id:
                         state_machine.job_state.artifact_stream_variant_id = expected_variant
-                    if expected_fingerprint and not state_machine.job_state.artifact_playlist_fingerprint:
+                    if (
+                        expected_fingerprint
+                        and not state_machine.job_state.artifact_playlist_fingerprint
+                    ):
                         state_machine.job_state.artifact_playlist_fingerprint = expected_fingerprint
                     if expected_init and not state_machine.job_state.artifact_init_map_sha256:
                         state_machine.job_state.artifact_init_map_sha256 = expected_init
@@ -299,7 +302,7 @@ async def perform_download(
                     if isinstance(old_gen, str) and old_gen.startswith("gen-"):
                         try:
                             num = int(old_gen.split("-", 1)[1])
-                        except (TypeError, ValueError):
+                        except TypeError, ValueError:
                             num = 0
                     new_gen = f"gen-{num + 1}"
                     quarantine_generation(workspace.ytdlp_dir, old_gen)
@@ -307,14 +310,18 @@ async def perform_download(
                     if state_machine is not None:
                         state_machine.job_state.artifact_generation = new_gen
                         state_machine.job_state.reason_code = "ytdlp_artifacts_quarantined"
-                        state_machine.job_state.artifact_classification = YtdlpArtifactCompatibility.AMBIGUOUS.value
+                        state_machine.job_state.artifact_classification = (
+                            YtdlpArtifactCompatibility.AMBIGUOUS.value
+                        )
                         state_machine.persist()
                 except Exception:  # noqa: BLE001
                     if state_machine is not None:
                         try:
                             state_machine.job_state.reason_code = "artifact_isolation_failed"
                             state_machine.job_state.error_category = ErrorCategory.INTEGRITY_FAILURE
-                            state_machine.job_state.artifact_classification = YtdlpArtifactCompatibility.AMBIGUOUS.value
+                            state_machine.job_state.artifact_classification = (
+                                YtdlpArtifactCompatibility.AMBIGUOUS.value
+                            )
                             state_machine.persist()
                         except Exception:  # noqa: BLE001
                             pass
@@ -359,12 +366,18 @@ async def perform_download(
                     if not check_ffprobe_available():
                         logger.error("ffprobe_missing", path=str(usable))
                         return None
-                    await validate_media_file(usable, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        usable, expected_height=expected_height, deep_decode=deep_decode
+                    )
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
 
                     _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
                     publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
-                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        workspace.final_path,
+                        expected_height=expected_height,
+                        deep_decode=deep_decode,
+                    )
                     if not (
                         workspace.final_path.exists()
                         and workspace.final_path.is_file()

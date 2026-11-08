@@ -196,7 +196,10 @@ class TestBatchDownloaderSemaphore:
             ),
             patch(
                 "vkdownloader.services.ytdlp_downloader.classify_ytdlp_artifacts",
-                return_value=__import__("vkdownloader.services.ytdlp_downloader", fromlist=["YtdlpArtifactCompatibility"]).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
+                return_value=__import__(
+                    "vkdownloader.services.ytdlp_downloader",
+                    fromlist=["YtdlpArtifactCompatibility"],
+                ).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
             ),
             patch(
                 "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
@@ -378,7 +381,10 @@ class TestBatchDownloaderSemaphore:
             ),
             patch(
                 "vkdownloader.services.ytdlp_downloader.classify_ytdlp_artifacts",
-                return_value=__import__("vkdownloader.services.ytdlp_downloader", fromlist=["YtdlpArtifactCompatibility"]).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
+                return_value=__import__(
+                    "vkdownloader.services.ytdlp_downloader",
+                    fromlist=["YtdlpArtifactCompatibility"],
+                ).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
             ),
             patch(
                 "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",

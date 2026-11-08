@@ -197,6 +197,7 @@ class JobPhase(StrEnum):
     VERIFYING = "verifying"
     FINALIZING = "finalizing"
 
+
 # Terminal statuses: every member except IN_PROGRESS. Derived from the enum
 # so a newly added status is automatically terminal unless it is the
 # in-progress state, preventing this set from drifting out of sync with the

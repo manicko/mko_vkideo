@@ -1198,7 +1198,9 @@ def _acquire_job_lock(job_lock: object | None) -> object | None:
     return job_lock
 
 
-def _capture_ytdlp_artifact_snapshot(artifacts: YtdlpArtifacts, job_lock: object | None = None) -> dict[str, int] | None:
+def _capture_ytdlp_artifact_snapshot(
+    artifacts: YtdlpArtifacts, job_lock: object | None = None
+) -> dict[str, int] | None:
     """Capture relative artifact name -> size snapshot.
 
     Returns ``None`` on ``OSError``. Captured under ``job_lock`` when provided.
@@ -1207,7 +1209,9 @@ def _capture_ytdlp_artifact_snapshot(artifacts: YtdlpArtifacts, job_lock: object
     def _capture() -> dict[str, int] | None:
         try:
             snapshot: dict[str, int] = {}
-            candidates = [artifacts.temp_path, artifacts.ytdl_path] + list(artifacts.fragment_paths())
+            candidates = [artifacts.temp_path, artifacts.ytdl_path] + list(
+                artifacts.fragment_paths()
+            )
             for path in candidates:
                 try:
                     if path.exists():
@@ -1268,7 +1272,7 @@ def parse_ytdl_file(path: object, *, max_bytes: int = 65536) -> dict[str, object
     try:
         text = raw.decode("utf-8")
         data = json.loads(text)
-    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+    except OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
         return None
@@ -1359,7 +1363,9 @@ def _owned_ytdlp_guard_failure(output_file: Path, workspace: object) -> bool:
     for cand in candidates:
         try:
             if cand.exists():
-                if not is_owned_ytdlp_artifact_path(cand, artifacts, cast("DownloadWorkspace", workspace)):
+                if not is_owned_ytdlp_artifact_path(
+                    cand, artifacts, cast("DownloadWorkspace", workspace)
+                ):
                     return True
         except OSError:
             return True
@@ -1411,7 +1417,7 @@ def classify_ytdlp_artifacts(
         try:
             sm_state = getattr(state_machine, "job_state", None)
             expected_fingerprint = getattr(sm_state, "artifact_playlist_fingerprint", None)
-        except Exception: # noqa: BLE001
+        except Exception:  # noqa: BLE001
             expected_fingerprint = None
     if expected_init is None and state_machine is not None:
         try:
@@ -1483,7 +1489,13 @@ def classify_ytdlp_artifacts(
         return YtdlpArtifactCompatibility.AMBIGUOUS
 
     try:
-        if temp_path.exists() and temp_path.is_file() and temp_path.stat().st_size == 0 and ytdl_present and ytdl_index > 0:
+        if (
+            temp_path.exists()
+            and temp_path.is_file()
+            and temp_path.stat().st_size == 0
+            and ytdl_present
+            and ytdl_index > 0
+        ):
             return YtdlpArtifactCompatibility.AMBIGUOUS
     except OSError:
         return YtdlpArtifactCompatibility.AMBIGUOUS
@@ -1713,12 +1725,18 @@ async def download_with_ytdlp_with_resume_fallback(
                     if not check_ffprobe_available():
                         logger.error("ffprobe_missing", path=str(usable))
                         return None
-                    await validate_media_file(usable, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        usable, expected_height=expected_height, deep_decode=deep_decode
+                    )
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
 
                     _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
                     publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
-                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        workspace.final_path,
+                        expected_height=expected_height,
+                        deep_decode=deep_decode,
+                    )
                     if not (
                         workspace.final_path.exists()
                         and workspace.final_path.is_file()
@@ -1804,7 +1822,10 @@ async def download_with_ytdlp_with_resume_fallback(
                         state_machine.job_state.artifact_generation = "gen-0"
                     if expected_variant and not state_machine.job_state.artifact_stream_variant_id:
                         state_machine.job_state.artifact_stream_variant_id = expected_variant
-                    if expected_fingerprint and not state_machine.job_state.artifact_playlist_fingerprint:
+                    if (
+                        expected_fingerprint
+                        and not state_machine.job_state.artifact_playlist_fingerprint
+                    ):
                         state_machine.job_state.artifact_playlist_fingerprint = expected_fingerprint
                     if expected_init and not state_machine.job_state.artifact_init_map_sha256:
                         state_machine.job_state.artifact_init_map_sha256 = expected_init
@@ -1823,7 +1844,7 @@ async def download_with_ytdlp_with_resume_fallback(
                     if isinstance(old_gen, str) and old_gen.startswith("gen-"):
                         try:
                             num = int(old_gen.split("-", 1)[1])
-                        except (TypeError, ValueError):
+                        except TypeError, ValueError:
                             num = 0
                     new_gen = f"gen-{num + 1}"
                     quarantine_generation(workspace.ytdlp_dir, old_gen)
@@ -1919,7 +1940,11 @@ async def download_with_ytdlp_with_resume_fallback(
         if is_terminal_stop:
             if state_machine is not None:
                 try:
-                    if result.file_conflict or cat == ErrorCategory.FILE_LOCKED or result.phase == "file_locked":
+                    if (
+                        result.file_conflict
+                        or cat == ErrorCategory.FILE_LOCKED
+                        or result.phase == "file_locked"
+                    ):
                         reason_code = "file_lock_conflict"
                     elif result.phase in ("missing_output", "local_block"):
                         reason_code = "missing_required_fragment"
@@ -1927,9 +1952,9 @@ async def download_with_ytdlp_with_resume_fallback(
                         reason_code = "staging_candidate_failed"
                     state_machine.job_state.reason_code = reason_code
                     state_machine.job_state.error_category = cat
-                    state_machine.job_state.updated_at = __import__("datetime").datetime.now(
-                        __import__("datetime").UTC
-                    ).isoformat()
+                    state_machine.job_state.updated_at = (
+                        __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
+                    )
                     state_machine.persist()
                 except Exception:  # noqa: BLE001
                     pass
@@ -1963,9 +1988,7 @@ async def download_with_ytdlp_with_resume_fallback(
                 return None
             if backoff_coordinator is not None:
                 try:
-                    await backoff_coordinator.pause(
-                        video_url, backoff_coordinator.pause_seconds
-                    )
+                    await backoff_coordinator.pause(video_url, backoff_coordinator.pause_seconds)
                 except Exception:  # noqa: BLE001
                     pass
                 await backoff_coordinator.wait_if_paused(video_url)
@@ -2364,9 +2387,7 @@ def _ytdlp_candidate_path(
                         _im = getattr(sm_state, "artifact_init_map_sha256", None)
                 except Exception:  # noqa: BLE001
                     pass
-            has_identity = state_machine is not None or any(
-                x is not None for x in (_sv, _pf, _im)
-            )
+            has_identity = state_machine is not None or any(x is not None for x in (_sv, _pf, _im))
             if has_identity:
                 compat = _classify(
                     output_file,
@@ -2860,7 +2881,12 @@ async def _download_with_ytdlp_result(
                     _error_category = state_machine.classify_error(error_msg)
                 else:
                     _msg = str(error_msg).lower()
-                    if "sharing violation" in _msg or "being used by another process" in _msg or "resource busy" in _msg or "winerror 32" in _msg:
+                    if (
+                        "sharing violation" in _msg
+                        or "being used by another process" in _msg
+                        or "resource busy" in _msg
+                        or "winerror 32" in _msg
+                    ):
                         _error_category = ErrorCategory.FILE_LOCKED
             except Exception:  # noqa: BLE001
                 _error_category = ErrorCategory.UNKNOWN
@@ -2886,9 +2912,7 @@ async def _download_with_ytdlp_result(
                 sm = state_machine
                 job_id = sm.job_state.job_id if sm is not None else video_id
                 verified_bytes = sm.job_state.verified_bytes if sm is not None else 0
-                network_bytes = (
-                    sm.job_state.network_bytes_this_session if sm is not None else 0
-                )
+                network_bytes = sm.job_state.network_bytes_this_session if sm is not None else 0
                 attempt = sm.job_state.attempt_id if sm is not None else (attempt_id or 0)
                 snapshot = ProgressSnapshot(
                     job_id=str(job_id),
@@ -2944,14 +2968,18 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
+                        http_status=_http_status_from_last_error_code(
+                            locals().get("last_error_code")
+                        ),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
                         cancelled=False,
                     )
                 try:
-                    await validate_media_file(staged, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        staged, expected_height=expected_height, deep_decode=deep_decode
+                    )
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
                     return YtdlpLaunchResult(
@@ -2959,7 +2987,9 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
+                        http_status=_http_status_from_last_error_code(
+                            locals().get("last_error_code")
+                        ),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2987,7 +3017,9 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
+                        http_status=_http_status_from_last_error_code(
+                            locals().get("last_error_code")
+                        ),
                         error_category=ErrorCategory.INVALID_OUTPUT_PATH,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -2995,7 +3027,11 @@ async def _download_with_ytdlp_result(
                     )
 
                 try:
-                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
+                    await validate_media_file(
+                        workspace.final_path,
+                        expected_height=expected_height,
+                        deep_decode=deep_decode,
+                    )
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
                     return YtdlpLaunchResult(
@@ -3003,7 +3039,9 @@ async def _download_with_ytdlp_result(
                         phase="local_block",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
+                        http_status=_http_status_from_last_error_code(
+                            locals().get("last_error_code")
+                        ),
                         error_category=ErrorCategory.INTEGRITY_FAILURE,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -3019,7 +3057,9 @@ async def _download_with_ytdlp_result(
                         phase="missing_output",
                         returncode=process.returncode,
                         last_error_code=last_error_code,
-                        http_status=_http_status_from_last_error_code(locals().get("last_error_code")),
+                        http_status=_http_status_from_last_error_code(
+                            locals().get("last_error_code")
+                        ),
                         error_category=ErrorCategory.INVALID_OUTPUT_PATH,
                         candidate_path=_ytdlp_candidate_path(output_file, workspace),
                         file_conflict=False,
@@ -3260,7 +3300,6 @@ async def bounded_drain(
 bounded_drain_stream = bounded_drain
 
 
-
 async def _resolve_cookies(
     extractor: VKVideoExtractor,
     settings: Settings,
@@ -3371,7 +3410,6 @@ def ensure_download_phase(state_machine: object) -> None:
         raise
     except Exception:  # noqa: BLE001
         pass
-
 
 
 class LowSpeedWarningTracker:

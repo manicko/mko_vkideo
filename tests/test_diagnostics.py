@@ -72,7 +72,9 @@ def test_child_started_event_listed() -> None:
 def test_diagnostic_context_has_new_fields() -> None:
     from vkdownloader.services.diagnostics import DiagnosticContext
 
-    ctx = DiagnosticContext(pid=1, launch_number=2, phase="x", next_action="y", artifact_snapshot={"a": 1})
+    ctx = DiagnosticContext(
+        pid=1, launch_number=2, phase="x", next_action="y", artifact_snapshot={"a": 1}
+    )
     d = ctx.to_dict()
     assert d["pid"] == 1
     assert d["artifact_snapshot"] == {"a": 1}

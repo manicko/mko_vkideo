@@ -369,7 +369,7 @@ def is_owned_job_root(root: object, job_id: object) -> bool:
         if root_path.is_symlink():
             return False
         resolved = root_path.resolve()
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return False
     if resolved.name != str(job_id):
         return False
@@ -377,7 +377,11 @@ def is_owned_job_root(root: object, job_id: object) -> bool:
         return False
     marker = resolved / ".vkdownloader-job"
     try:
-        marker_text = marker.read_text(encoding="utf-8").strip() if (marker.is_file() and not marker.is_symlink()) else ""
+        marker_text = (
+            marker.read_text(encoding="utf-8").strip()
+            if (marker.is_file() and not marker.is_symlink())
+            else ""
+        )
     except OSError:
         marker_text = ""
     return marker_text == str(job_id)
@@ -390,12 +394,12 @@ def resolve_owned_job_root(workspace: DownloadWorkspace) -> Path | None:
         if root.is_symlink():
             return None
         resolved_root = root.resolve()
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return None
 
     try:
         tmp_jobs = (Path(workspace.final_path).parent / "tmp" / "jobs").resolve()
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return None
     if resolved_root.parent != tmp_jobs:
         return None
@@ -404,7 +408,11 @@ def resolve_owned_job_root(workspace: DownloadWorkspace) -> Path | None:
 
     marker = resolved_root / ".vkdownloader-job"
     try:
-        marker_text = marker.read_text(encoding="utf-8").strip() if (marker.is_file() and not marker.is_symlink()) else ""
+        marker_text = (
+            marker.read_text(encoding="utf-8").strip()
+            if (marker.is_file() and not marker.is_symlink())
+            else ""
+        )
     except OSError:
         marker_text = ""
     if marker_text != workspace.job_id:
@@ -422,7 +430,7 @@ def resolve_owned_ytdlp_dir(workspace: DownloadWorkspace) -> Path | None:
         if ytdlp.is_symlink():
             return None
         resolved_ytdlp = ytdlp.resolve()
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return None
     if resolved_ytdlp.parent != root:
         return None
@@ -433,7 +441,9 @@ def resolve_owned_ytdlp_dir(workspace: DownloadWorkspace) -> Path | None:
     return resolved_ytdlp
 
 
-def is_owned_ytdlp_artifact_path(path: object, artifacts: object, workspace: DownloadWorkspace) -> bool:
+def is_owned_ytdlp_artifact_path(
+    path: object, artifacts: object, workspace: DownloadWorkspace
+) -> bool:
     """Return True when *path* is a safe, owned artifact directly in ytdlp_dir."""
     try:
         root = resolve_owned_job_root(workspace)
@@ -450,7 +460,7 @@ def is_owned_ytdlp_artifact_path(path: object, artifacts: object, workspace: Dow
         if p.is_symlink():
             return False
         resolved_p = p.resolve()
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return False
     if resolved_p.parent != ytdlp_dir:
         return False
@@ -493,6 +503,29 @@ def cleanup_owned_job_artifacts(workspace: DownloadWorkspace) -> None:
             shutil.rmtree(resolved_root)
     except OSError:
         pass
+
+    # Remove the per-job diagnostic log and lock file, then drop any now-empty
+    # parent directories up to (and including) ``tmp`` so a successful download
+    # leaves no ``tmp`` residue behind. Non-empty directories (e.g. other jobs
+    # or retained logs) are left untouched.
+    tmp_root = workspace.final_path.parent / "tmp"
+    for candidate in (workspace.log_path, workspace.lock_path):
+        try:
+            if candidate.is_file() or candidate.is_symlink():
+                candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
+    for directory in (
+        tmp_root / "jobs",
+        tmp_root / "locks",
+        tmp_root / "logs",
+        tmp_root,
+    ):
+        try:
+            if directory.is_dir() and not any(directory.iterdir()):
+                directory.rmdir()
+        except OSError:
+            pass
 
 
 def discover_legacy_artifacts(output_dir: Path) -> list[LegacyArtifact]:

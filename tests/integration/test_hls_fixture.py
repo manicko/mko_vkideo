@@ -94,11 +94,11 @@ async def test_hls_server_context_manager_scenario() -> None:
                 assert resp.status == 200
 
 
-
-
 @pytest.mark.asyncio
 async def test_twelve_fragment_scenario_helper() -> None:
-    scenario = make_12_fragment_scenario(slow_fragment=2, first_byte_delay_seconds=0.05, chunk_size=16, chunk_delay_seconds=0.05)
+    scenario = make_12_fragment_scenario(
+        slow_fragment=2, first_byte_delay_seconds=0.05, chunk_size=16, chunk_delay_seconds=0.05
+    )
     assert scenario.fragment_count == 12
     async with HlsServer(scenario=scenario) as server:
         async with aiohttp.ClientSession() as session:
@@ -116,7 +116,9 @@ async def test_twelve_fragment_scenario_helper() -> None:
 
 @pytest.mark.asyncio
 async def test_slow_fragment_timing_and_range() -> None:
-    scenario = make_12_fragment_scenario(slow_fragment=3, first_byte_delay_seconds=0.1, chunk_size=8, chunk_delay_seconds=0.1)
+    scenario = make_12_fragment_scenario(
+        slow_fragment=3, first_byte_delay_seconds=0.1, chunk_size=8, chunk_delay_seconds=0.1
+    )
     async with HlsServer(scenario=scenario) as server:
         async with aiohttp.ClientSession() as session:
             start = time.monotonic()
@@ -126,7 +128,9 @@ async def test_slow_fragment_timing_and_range() -> None:
             elapsed = time.monotonic() - start
             assert elapsed >= 0.15
             assert len(data) == server.fragment_size
-            async with session.get(f"{server.base_url}/seg/3", headers={"Range": "bytes=0-4"}) as resp:
+            async with session.get(
+                f"{server.base_url}/seg/3", headers={"Range": "bytes=0-4"}
+            ) as resp:
                 assert resp.status == 206
                 body = await resp.read()
                 assert len(body) == 5
