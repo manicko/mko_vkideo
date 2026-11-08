@@ -480,6 +480,12 @@ def download(
         result = asyncio.run(_download())
 
         if result:
+            try:
+                import sys
+
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
             typer.echo(f"Downloaded: {result}")
         else:
             typer.echo("Download failed", err=True)
