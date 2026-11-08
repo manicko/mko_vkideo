@@ -1584,6 +1584,7 @@ async def download_with_ytdlp_with_resume_fallback(
     stream_binding: object | None = None,
     state_machine: DownloadStateMachine | None = None,
     job_lock: object | None = None,
+    deep_decode: bool = False,
 ) -> Path | None:
     """
     Flow:
@@ -1697,6 +1698,8 @@ async def download_with_ytdlp_with_resume_fallback(
             )
             if directive == CommitRecoveryDirective.ALREADY_COMMITTED and usable is not None:
                 return usable
+            if directive == CommitRecoveryDirective.DESTINATION_CONFLICT:
+                return None
             if directive == CommitRecoveryDirective.PUBLISH_STAGING and usable is not None:
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
@@ -1710,12 +1713,12 @@ async def download_with_ytdlp_with_resume_fallback(
                     if not check_ffprobe_available():
                         logger.error("ffprobe_missing", path=str(usable))
                         return None
-                    await validate_media_file(usable, expected_height=expected_height)
+                    await validate_media_file(usable, expected_height=expected_height, deep_decode=deep_decode)
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
 
                     _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
                     publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
-                    await validate_media_file(workspace.final_path, expected_height=expected_height)
+                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
                     if not (
                         workspace.final_path.exists()
                         and workspace.final_path.is_file()
@@ -1752,6 +1755,8 @@ async def download_with_ytdlp_with_resume_fallback(
             attempt_id=attempt_id,
             workspace=workspace,
             state_machine=state_machine,
+            job_lock=job_lock,
+            deep_decode=deep_decode,
         )
 
         if result is not None and result.path is not None:
@@ -2205,7 +2210,17 @@ def _retain_transcript_line(output: bytearray, line: bytes) -> None:
         del output[: len(output) - _MAX_CHILD_OUTPUT_BYTES]
 
 
-def _ytdlp_candidate_path(output_file: Path, workspace: DownloadWorkspace | None = None) -> Path | None:
+def _ytdlp_candidate_path(
+    output_file: Path,
+    workspace: DownloadWorkspace | None = None,
+    *,
+    state_machine: object = None,
+    stream_variant_id: object = None,
+    playlist_fingerprint: object = None,
+    init_map_sha256: object = None,
+    job_lock: object = None,
+    **_kwargs: object,
+) -> Path | None:
     """Return a non-empty staging candidate path when available."""
     if workspace is not None:
         candidate = workspace.staging_dir / workspace.final_path.name
@@ -2216,7 +2231,58 @@ def _ytdlp_candidate_path(output_file: Path, workspace: DownloadWorkspace | None
             return candidate
     except OSError:
         pass
-    # Fall back to yt-dlp .part artifact when present.
+    # Fall back to yt-dlp .part artifact when present, unless classification
+    # says it is ambiguous or foreign.
+    allow_part = True
+    if workspace is not None:
+        try:
+            from .ytdlp_downloader import classify_ytdlp_artifacts as _classify
+
+            # Resolve identity kwargs from state machine when not provided.
+            _sv = stream_variant_id
+            _pf = playlist_fingerprint
+            _im = init_map_sha256
+            if state_machine is not None:
+                try:
+                    sm_state = getattr(state_machine, "job_state", None)
+                    if _sv is None:
+                        _sv = getattr(sm_state, "artifact_stream_variant_id", None)
+                        if not _sv:
+                            _sv = getattr(sm_state, "stream_variant_id", None)
+                    if _pf is None:
+                        _pf = getattr(sm_state, "artifact_playlist_fingerprint", None)
+                    if _im is None:
+                        _im = getattr(sm_state, "artifact_init_map_sha256", None)
+                except Exception:  # noqa: BLE001
+                    pass
+            has_identity = state_machine is not None or any(
+                x is not None for x in (_sv, _pf, _im)
+            )
+            if has_identity:
+                compat = _classify(
+                    output_file,
+                    workspace,
+                    state_machine=state_machine,
+                    stream_variant_id=_sv,
+                    playlist_fingerprint=_pf,
+                    init_map_sha256=_im,
+                    job_lock=job_lock,
+                )
+                from .ytdlp_downloader import YtdlpArtifactCompatibility
+
+                if compat in (
+                    YtdlpArtifactCompatibility.AMBIGUOUS,
+                    YtdlpArtifactCompatibility.NONE,
+                ):
+                    allow_part = False
+            else:
+                # Conservative: ownership guards only.
+                if _owned_ytdlp_guard_failure(output_file, workspace):
+                    allow_part = False
+        except Exception:  # noqa: BLE001
+            allow_part = False
+    if not allow_part:
+        return None
     try:
         art = _ytdlp_artifacts_for(output_file, workspace)
         if art.temp_path.exists() and art.temp_path.is_file() and art.temp_path.stat().st_size > 0:
@@ -2243,6 +2309,7 @@ async def _download_with_ytdlp_result(
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
     job_lock: object | None = None,
+    deep_decode: bool = False,
 ) -> YtdlpLaunchResult:
     """Download video using yt-dlp via subprocess.
 
@@ -2746,7 +2813,7 @@ async def _download_with_ytdlp_result(
                         cancelled=False,
                     )
                 try:
-                    await validate_media_file(staged, expected_height=expected_height)
+                    await validate_media_file(staged, expected_height=expected_height, deep_decode=deep_decode)
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
                     return YtdlpLaunchResult(
@@ -2789,13 +2856,8 @@ async def _download_with_ytdlp_result(
                         cancelled=False,
                     )
 
-                if job_lock is not None:
-                    try:
-                        job_lock.release()  # type: ignore[attr-defined]
-                    except Exception:  # noqa: BLE001
-                        pass
                 try:
-                    await validate_media_file(workspace.final_path, expected_height=expected_height)
+                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
                 except (MediaValidationError, OSError, TimeoutError) as exc:
                     logger.warning("media_validation_failed", error=str(exc))
                     return YtdlpLaunchResult(
@@ -2984,6 +3046,7 @@ async def _download_with_ytdlp(
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
     job_lock: object | None = None,
+    deep_decode: bool = False,
 ) -> Path | None:
     """Compatibility shim returning Path | None."""
     result = await _download_with_ytdlp_result(
@@ -3002,6 +3065,7 @@ async def _download_with_ytdlp(
         workspace=workspace,
         state_machine=state_machine,
         job_lock=job_lock,
+        deep_decode=deep_decode,
     )
     if result is not None and result.phase == "completed":
         return result.path

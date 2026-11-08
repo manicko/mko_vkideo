@@ -157,6 +157,7 @@ class DownloadJobState(BaseModel):
     artifact_stream_variant_id: str | None = None
     artifact_playlist_fingerprint: str | None = None
     artifact_init_map_sha256: str | None = None
+    artifact_expected_duration_seconds: float | None = None
     artifact_classification: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -677,6 +678,7 @@ class CommitRecoveryDirective(StrEnum):
     PUBLISH_STAGING = "publish_staging"
     RESUME_SEGMENTS = "resume_segments"
     FRESH = "fresh"
+    DESTINATION_CONFLICT = "destination_conflict"
 
 
 def _safe_transition(state_machine: object, target: object) -> None:

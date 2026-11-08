@@ -86,6 +86,7 @@ async def perform_download(
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
+    deep_decode: bool = False,
 ) -> Path | None:
     """Perform video download using the specified method.
 
@@ -343,6 +344,8 @@ async def perform_download(
             )
             if directive == CommitRecoveryDirective.ALREADY_COMMITTED and usable is not None:
                 return usable
+            if directive == CommitRecoveryDirective.DESTINATION_CONFLICT:
+                return None
             if directive == CommitRecoveryDirective.PUBLISH_STAGING and usable is not None:
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
@@ -356,12 +359,12 @@ async def perform_download(
                     if not check_ffprobe_available():
                         logger.error("ffprobe_missing", path=str(usable))
                         return None
-                    await validate_media_file(usable, expected_height=expected_height)
+                    await validate_media_file(usable, expected_height=expected_height, deep_decode=deep_decode)
                     final_lock = acquire_publish_lock(workspace.final_path, 10.0)
 
                     _safe_transition(state_machine, DownloadState.ATOMIC_NO_CLOBBER_PUBLICATION)
                     publish_verified_file(usable, workspace.final_path, final_lock=final_lock)
-                    await validate_media_file(workspace.final_path, expected_height=expected_height)
+                    await validate_media_file(workspace.final_path, expected_height=expected_height, deep_decode=deep_decode)
                     if not (
                         workspace.final_path.exists()
                         and workspace.final_path.is_file()
@@ -408,6 +411,7 @@ async def perform_download(
                         workspace=workspace,
                         state_machine=state_machine,
                         job_lock=job_lock,
+                        deep_decode=deep_decode,
                     )
                 case DownloadMethod.AUTO:
                     # Auto mode downloads via yt-dlp's native HLS downloader with segment-level resume
@@ -437,6 +441,7 @@ async def perform_download(
                         workspace=workspace,
                         state_machine=state_machine,
                         job_lock=job_lock,
+                        deep_decode=deep_decode,
                     )
                 case DownloadMethod.FFMPEG:
                     if FFMPEG_TRANSPORT_DISABLED:
@@ -598,6 +603,7 @@ async def download_video(
     attempt_id: int | None = None,
     workspace: DownloadWorkspace | None = None,
     state_machine: DownloadStateMachine | None = None,
+    deep_decode: bool = False,
 ) -> Path | None:
     """Extract streams, select quality, resolve output, and download a video.
 
@@ -722,6 +728,7 @@ async def download_video(
         attempt_id=attempt_id,
         workspace=workspace,
         state_machine=state_machine,
+        deep_decode=deep_decode,
     )
 
 

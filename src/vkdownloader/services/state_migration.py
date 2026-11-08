@@ -428,6 +428,48 @@ def ensure_download_phase_state(sm: object) -> None:
         pass
 
 
+def _identity_matches(
+    state_machine: object,
+    expected_generation: object,
+    expected_variant: object,
+    expected_fingerprint: object,
+    expected_init: object,
+) -> bool:
+    """Return True only when provided persisted identity fields match."""
+    if state_machine is None:
+        return False
+    try:
+        sm_state = getattr(state_machine, "job_state", None)
+    except Exception:  # noqa: BLE001
+        return False
+    if sm_state is None:
+        return False
+    try:
+        persisted_generation = getattr(sm_state, "artifact_generation", None)
+        persisted_variant = getattr(sm_state, "artifact_stream_variant_id", None)
+        if persisted_variant is None:
+            persisted_variant = getattr(sm_state, "stream_variant_id", None)
+        persisted_fp = getattr(sm_state, "artifact_playlist_fingerprint", None)
+        persisted_init = getattr(sm_state, "artifact_init_map_sha256", None)
+    except Exception:  # noqa: BLE001
+        return False
+
+    provided = False
+    pairs = (
+        (expected_generation, persisted_generation),
+        (expected_variant, persisted_variant),
+        (expected_fingerprint, persisted_fp),
+        (expected_init, persisted_init),
+    )
+    for expected, persisted in pairs:
+        if expected is None:
+            continue
+        provided = True
+        if persisted is None or expected != persisted:
+            return False
+    return provided
+
+
 async def reconcile_commit_state(
     workspace: DownloadWorkspace,
     state_machine: DownloadStateMachine | None = None,
@@ -465,7 +507,38 @@ async def reconcile_commit_state(
             try:
                 from .media_validation import validate_media_file
 
-                await validate_media_file(final_path, expected_height=expected_height)
+                expected_duration = None
+                if sm is not None:
+                    try:
+                        expected_duration = getattr(sm.job_state, "artifact_expected_duration_seconds", None)
+                    except Exception:  # noqa: BLE001
+                        expected_duration = None
+                await validate_media_file(
+                    final_path, expected_height=expected_height, expected_duration=expected_duration
+                )
+                # Identity verification: only treat as committed when identity is proven.
+                identity_ok = False
+                if sm is not None:
+                    try:
+                        js = sm.job_state
+                        identity_ok = _identity_matches(
+                            sm,
+                            getattr(js, "artifact_generation", None),
+                            getattr(js, "artifact_stream_variant_id", None)
+                            or getattr(js, "stream_variant_id", None),
+                            getattr(js, "artifact_playlist_fingerprint", None),
+                            getattr(js, "artifact_init_map_sha256", None),
+                        )
+                    except Exception:  # noqa: BLE001
+                        identity_ok = False
+                if not identity_ok:
+                    if sm is not None:
+                        try:
+                            sm.job_state.reason_code = "destination_conflict"
+                            sm.persist()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return CommitRecoveryDirective.DESTINATION_CONFLICT, None
                 # Advance state to FINAL_COMMITTED when possible.
                 ensure_download_phase_state(sm)
                 from ..models.enums import DownloadState
@@ -509,7 +582,38 @@ async def reconcile_commit_state(
             try:
                 from .media_validation import validate_media_file
 
-                await validate_media_file(staging_path, expected_height=expected_height)
+                expected_duration = None
+                if sm is not None:
+                    try:
+                        expected_duration = getattr(sm.job_state, "artifact_expected_duration_seconds", None)
+                    except Exception:  # noqa: BLE001
+                        expected_duration = None
+                await validate_media_file(
+                    staging_path, expected_height=expected_height, expected_duration=expected_duration
+                )
+                # Identity verification.
+                identity_ok = False
+                if sm is not None:
+                    try:
+                        js = sm.job_state
+                        identity_ok = _identity_matches(
+                            sm,
+                            getattr(js, "artifact_generation", None),
+                            getattr(js, "artifact_stream_variant_id", None)
+                            or getattr(js, "stream_variant_id", None),
+                            getattr(js, "artifact_playlist_fingerprint", None),
+                            getattr(js, "artifact_init_map_sha256", None),
+                        )
+                    except Exception:  # noqa: BLE001
+                        identity_ok = False
+                if not identity_ok:
+                    if sm is not None:
+                        try:
+                            sm.job_state.reason_code = "destination_conflict"
+                            sm.persist()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return CommitRecoveryDirective.DESTINATION_CONFLICT, None
                 ensure_download_phase_state(sm)
                 from ..models.enums import DownloadState
 
@@ -571,4 +675,5 @@ __all__ = [
     "try_parse_checkpoint",
     "try_parse_job_state",
     "reconcile_commit_state",
+    "_identity_matches",
 ]
