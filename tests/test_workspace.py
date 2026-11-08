@@ -375,6 +375,7 @@ def test_job_lock_real_process(tmp_path: Path) -> None:
         except Exception:
             proc.kill()
 
+
 def test_cleanup_removes_entire_tmp_job_directory(tmp_path: Path) -> None:
     ws = _import_workspace()
     final_path = tmp_path / "out" / "video.mp4"
