@@ -356,7 +356,12 @@ async def perform_download(
             if directive == CommitRecoveryDirective.PUBLISH_STAGING and usable is not None:
                 try:
                     from .ffmpeg_utils import check_ffprobe_available
-                    from .media_validation import MediaValidationError, validate_media_file
+                    from .media_validation import (
+                        MediaValidationError,
+                        remux_ts_to_mp4,
+                        validate_complete_ts,
+                        validate_media_file,
+                    )
                     from .workspace import (
                         acquire_publish_lock,
                         cleanup_owned_job_artifacts,
@@ -366,6 +371,29 @@ async def perform_download(
                     if not check_ffprobe_available():
                         logger.error("ffprobe_missing", path=str(usable))
                         return None
+
+                    expected_duration = None
+                    if state_machine is not None:
+                        try:
+                            expected_duration = getattr(
+                                state_machine.job_state,
+                                "artifact_expected_duration_seconds",
+                                None,
+                            )
+                        except Exception:  # noqa: BLE001
+                            expected_duration = None
+
+                    try:
+                        await validate_complete_ts(
+                            usable,
+                            expected_height=expected_height,
+                            expected_duration=expected_duration,
+                            deep_decode=deep_decode,
+                        )
+                        usable = await remux_ts_to_mp4(usable, usable)
+                    except MediaValidationError, OSError, TimeoutError, RuntimeError:
+                        pass
+
                     await validate_media_file(
                         usable, expected_height=expected_height, deep_decode=deep_decode
                     )

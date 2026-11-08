@@ -2953,7 +2953,12 @@ async def _download_with_ytdlp_result(
                 )
             try:
                 from .ffmpeg_utils import check_ffprobe_available
-                from .media_validation import MediaValidationError, validate_media_file
+                from .media_validation import (
+                    MediaValidationError,
+                    remux_ts_to_mp4,
+                    validate_complete_ts,
+                    validate_media_file,
+                )
                 from .workspace import (
                     acquire_publish_lock,
                     cleanup_owned_job_artifacts,
@@ -2981,6 +2986,28 @@ async def _download_with_ytdlp_result(
                         file_conflict=False,
                         cancelled=False,
                     )
+                expected_duration = None
+                if state_machine is not None:
+                    try:
+                        expected_duration = getattr(
+                            state_machine.job_state,
+                            "artifact_expected_duration_seconds",
+                            None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        expected_duration = None
+
+                try:
+                    await validate_complete_ts(
+                        staged,
+                        expected_height=expected_height,
+                        expected_duration=expected_duration,
+                        deep_decode=deep_decode,
+                    )
+                    staged = await remux_ts_to_mp4(staged, staged)
+                except MediaValidationError, OSError, TimeoutError, RuntimeError:
+                    pass
+
                 try:
                     await validate_media_file(
                         staged, expected_height=expected_height, deep_decode=deep_decode
