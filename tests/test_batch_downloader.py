@@ -187,12 +187,16 @@ class TestBatchDownloaderSemaphore:
                 side_effect=_make_mock_extract_streams(),
             ),
             patch(
-                "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+                "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
                 return_value=None,
             ),
             patch(
                 "vkdownloader.services.ytdlp_downloader._has_recoverable_ytdlp_artifacts",
                 return_value=True,
+            ),
+            patch(
+                "vkdownloader.services.ytdlp_downloader.classify_ytdlp_artifacts",
+                return_value=__import__("vkdownloader.services.ytdlp_downloader", fromlist=["YtdlpArtifactCompatibility"]).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
             ),
             patch(
                 "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",
@@ -365,12 +369,16 @@ class TestBatchDownloaderSemaphore:
                 return_value=mock_video,
             ),
             patch(
-                "vkdownloader.services.ytdlp_downloader._download_with_ytdlp",
+                "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result",
                 return_value=None,
             ),
             patch(
                 "vkdownloader.services.ytdlp_downloader._has_recoverable_ytdlp_artifacts",
                 return_value=True,
+            ),
+            patch(
+                "vkdownloader.services.ytdlp_downloader.classify_ytdlp_artifacts",
+                return_value=__import__("vkdownloader.services.ytdlp_downloader", fromlist=["YtdlpArtifactCompatibility"]).YtdlpArtifactCompatibility.COMPATIBLE_RESUME,
             ),
             patch(
                 "vkdownloader.services.downloader.VKVideoExtractor.extract_streams_with_cookies",

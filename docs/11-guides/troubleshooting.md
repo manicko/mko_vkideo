@@ -166,6 +166,18 @@ No `--keep-temp` flag is required: failed or cancelled jobs always retain usable
 
 Reverting application code to an older version does not delete job workspaces created by the newer version. Treat `output/tmp` as user data: older code simply ignores it. Do not run broad cleanup commands against `output/tmp`.
 
+## Staging recovery
+
+A terminal `file_locked` outcome preserves the staging candidate. Recovery is local: close the holder, retry the job, or change the output location. After the lock clears there are zero HTTP requests, and partial artifacts are preserved for resume.
+
+## Rollout and rollback
+
+Rollout: ship the locked wheel/sdist from CI artifacts; run on a real VK VOD in a separate output directory; use `--method auto` and `--method yt-dlp`; inspect `<output>/tmp/logs/<job>.jsonl` for one downloader start, one extraction, and the failing phase/next action; verify against fixture expected duration/frame sequence or reference checksums before declaring success.
+
+Rollback: stop the active process; do not delete or rewrite generations; run the previous version in a different output directory; quarantine (rename) ambiguous generations rather than deleting; cross-device quarantine failure leaves the original untouched and marks the job terminal for manual handling.
+
+No database migration is involved; `output/tmp` is user data and older code ignores unknown generations.
+
 ## See Also
 
 - [Limitations and Workarounds](vkdownloader-limitations.md)

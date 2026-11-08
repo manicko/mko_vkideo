@@ -129,6 +129,7 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "tests/integration/__init__.py",
         "tests/integration/fixtures/__init__.py",
         "tests/integration/fixtures/hls_server.py",
+        "tests/integration/fixtures/windows_lock.py",
         "tests/integration/test_hls_fixture.py",
         "tests/test_import_graph.py",
         "tests/test_batch_downloader.py",
@@ -160,6 +161,8 @@ EXPECTED_SDIST_ENTRIES = frozenset(
         "tests/test_ytdlp_downloader.py",
         "tests/test_url_sanitizer.py",
         "tests/test_workspace.py",
+        "tests/test_windows_lock.py",
+        "tests/test_ytdlp_low_speed.py",
         "uv.lock",
     }
 )

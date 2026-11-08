@@ -163,6 +163,19 @@ output/
 - Resume uses the checkpoint (`state.json`) and verifies each segment by size and SHA-256, so a token-only URL change reuses valid segments instead of restarting at byte zero. If media identity is ambiguous, the old generation is quarantined rather than mixed.
 - Exact `--quality 1440` is preserved across refresh, retry, and backend selection, or fails with an explicit error and the available ladder; there is no silent downgrade.
 
+### Throttled-rate semantics
+
+- `VKDOWNLOADER_THROTTLED_RATE` defaults to `0`, which disables yt-dlp throttled re-extraction. Positive values are a diagnostic low-speed threshold only: they never trigger a download abort, refresh, or backend switch.
+- The managed argv uses `--ignore-config`, so the invocation is reproducible and global yt-dlp configuration is not auto-applied.
+
+### Staging recovery
+
+A terminal `file_locked` outcome preserves the staging candidate. Recovery is local: close the holder, retry the job, or change the output location. After the lock clears there are zero HTTP requests, and partial artifacts are preserved for resume.
+
+### Windows lock-owner pointer
+
+On Windows, a `SHARING VIOLATION` holder can be correlated with `child_started.pid` / `launch_number` using the Process Monitor subsection in [Troubleshooting Guide](docs/11-guides/troubleshooting.md).
+
 See [Troubleshooting Guide](docs/11-guides/troubleshooting.md) for log location, diagnostics bundle, manual cleanup, and migration/rollback notes.
 
 ### Exception Hierarchy

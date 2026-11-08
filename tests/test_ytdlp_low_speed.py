@@ -91,7 +91,7 @@ def test_recovery_resets_episode() -> None:
         tracker.observe(10000, now=7.5)
         tracker.observe(10000, now=9.0)
         tracker.observe(10100, now=10.5)
-        result = tracker.observe(10200, now=12.0)
+        tracker.observe(10200, now=12.0)
         assert mock_logger.warning.call_count == 2
 
 
@@ -104,7 +104,7 @@ def test_no_byte_growth_no_warning_and_reset() -> None:
         mock_logger.warning.assert_not_called()
         tracker.observe(100, now=4.5)
         tracker.observe(200, now=6.0)
-        result = tracker.observe(300, now=7.5)
+        tracker.observe(300, now=7.5)
         assert mock_logger.warning.call_count == 1
 
 

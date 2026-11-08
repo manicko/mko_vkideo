@@ -11,9 +11,9 @@ Code context: Auditor findings (session ses_e4846e44dffeFXBvbgk1vwIASN)
 | D1 Slow channel & managed child process | P0 | D0 | ready (task: .ai/tasks/todo/D1_slow_channel_managed_child.yaml) |
 | D2 Typed outcome & file retry | P0 | D0 | ready (task: .ai/tasks/todo/D2_typed_outcome_file_retry.yaml) |
 | D3 Artifact compatibility & resume | P0 | D2 | ready (task: .ai/tasks/todo/D3_artifact_compatibility_resume.yaml) |
-| D4 Safe finalization & recovery | P0 | D2, D3 | pending |
-| D5 Network fallback & progress | P1 | D1, D2, D3 | pending |
-| D6 Windows acceptance & release | P0 | D1–D5 | pending |
+| D4 Safe finalization & recovery | P0 | D2, D3 | ready (task: .ai/tasks/todo/D4_safe_finalization_recovery.yaml) |
+| D5 Network fallback & progress | P1 | D1, D2, D3 | ready (task: .ai/tasks/todo/D5_network_fallback_progress.yaml) |
+| D6 Windows acceptance & release | P0 | D1–D5 | ready (task: .ai/tasks/todo/D6_windows_acceptance_release.yaml) |
 
 ## Global constraints
 - Python 3.14, uv, ruff/mypy strict.
@@ -28,7 +28,7 @@ Code context: Auditor findings (session ses_e4846e44dffeFXBvbgk1vwIASN)
 - D3: ready; artifact compatibility classification and safe quarantine implemented.
 - D4: partial; publish_verified_file, validate_media_file exist; deep_decode unused.
 - D5: partial; fallback too broad; progress snapshot exists.
-- D6: partial; docs stale.
+- D6: ready; task created (tests/docs/CI only).
 
 ## Notes
 Each block will be executed with Auditor/Researcher/Planner as needed, then Implementor, then local validation + commit.
@@ -244,3 +244,422 @@ Each block will be executed with Auditor/Researcher/Planner as needed, then Impl
 - Adding persisted identity fields changes `DownloadJobState`; old state files remain valid only if defaults are provided and missing keys are tolerated.
 - Keeping legacy artifacts in place leaves operator-visible residue; cleanup remains tied to successful final publication.
 - ffprobe-based media evidence is a later D4 dependency; D3 can only classify and isolate, not prove completeness.
+
+## D4 research notes (researcher, 2026-11-08)
+
+### Verified facts
+
+1. **ffmpeg stream copy is sufficient for TS->MP4.**
+   - `ffmpeg -i input.ts -map 0:v:0 -map 0:a:0? -c copy ... output.mp4` remuxes without
+     decoding; H.264 video and AAC audio are accepted by the MP4 muxer. AAC in TS is ADTS and
+     must be converted with `-bsf:a aac_adtstoasc` for MP4. `-movflags +faststart` is optional
+     and only reorders atoms after the copy.
+   - The command changes the container only; it does not repair corrupt packets or timestamps.
+     Therefore it is valid only after independent completeness proof of the TS candidate.
+
+2. **ffprobe is the existing validation primitive.**
+   - `validate_media_file` already checks existence, size, ffprobe JSON, streams, height,
+     duration tolerance, container token, and optional deep decode.
+   - For a TS candidate, call it with `expected_container="mpegts"` (or `"ts"`) before remux.
+   - For the remuxed result and final MP4, call it with `expected_container="mp4"`.
+
+3. **The incident candidate is complete-looking but duplicated.**
+   - ffprobe reports a plausible ~118.8 s duration even though the TS contains repeated blocks
+     and DTS resets. Duration alone is therefore insufficient; timeline continuity is required.
+
+4. **deep_decode is already implemented but unused.**
+   - `_deep_decode` runs `ffmpeg -i <file> -f null -` and fails on decode errors. It is an
+     additional integrity check, not a container/timestamp check.
+
+5. **Publication is already atomic and no-clobber.**
+   - `publish_verified_file` copies to a temp file, fsyncs, commits with `os.link` (no-clobber),
+     has an `os.replace` fallback only for unsupported hard-link errors, sweeps stale temp
+     files, and refuses to overwrite an existing final.
+   - `reconcile_commit_state` already recognizes a valid final or staging candidate after a
+     crash.
+
+### Chosen approach (minimal)
+
+1. **Candidate proof before remux (under the job lock).**
+   - Resolve the candidate path from `_ytdlp_candidate_path` / staging and require D3 identity
+     match (job root, variant, playlist fingerprint, init-map, generation).
+   - Run ffprobe with `expected_container="mpegts"` (or `"ts"`), expected height, and expected
+     duration when available. Duration tolerance: `max(2.0, 0.01 * expected_duration)`.
+   - Run a timeline-continuity check on the video stream using
+     `ffprobe -select_streams v:0 -show_entries packet=dts`:
+     * require at least two packets;
+     * count backward DTS jumps larger than 0.1 s;
+     * allow at most the declared discontinuity count from the playlist;
+     * require the final DTS to be within the duration tolerance of the expected duration.
+   - If any check fails, classify the candidate as `recovery_candidate` or `ambiguous`
+     (per D3), preserve it, and do not remux or publish.
+
+2. **Remux only a proven candidate.**
+   - Build the ffmpeg argv as:
+     `ffmpeg -hide_banner -loglevel error -y -i <candidate> -map 0:v:0 -map 0:a:0? -dn -sn -c copy`
+     plus `-bsf:a aac_adtstoasc` only when ffprobe reports AAC audio, plus
+     `-movflags +faststart`, writing to `<staging_dir>/.<final>.remux-<pid>.tmp`.
+   - If ffmpeg is missing or exits non-zero, preserve the candidate and return a
+     `local_block`/`ffmpeg_missing` or `remux_failed` outcome; do not delete the candidate.
+   - After ffmpeg exits 0, validate the temp with ffprobe (`expected_container="mp4"`,
+     height, duration). Then atomically `os.replace` it to `staging_path`.
+
+3. **Optional deep decode.**
+   - Call `validate_media_file(..., deep_decode=True)` on the remuxed staging file before
+     publication only for D4-recovered candidates, or when the caller explicitly requests it.
+   - Keep `deep_decode=False` for ordinary yt-dlp finalization to avoid avoidable CPU cost.
+   - On failure, preserve the candidate and return `local_block`.
+
+4. **Publish and finalize under the job lock.**
+   - Acquire the publish lock inside the held job lock.
+   - `publish_verified_file(staged, final, final_lock=publish_lock)`.
+   - Validate the final MP4 with ffprobe (`deep_decode` only if requested for recovery).
+   - Advance state to `FINAL_COMMITTED` / `CLEANUP_OWNED_TEMP_ARTIFACTS`, call
+     `cleanup_owned_job_artifacts`, persist state, then release the job lock in `finally`.
+
+5. **Durable completion evidence (reuse identity fields).**
+   - Do not invent a separate completion flag. The evidence is the existing tuple
+     `(artifact_generation, artifact_stream_variant_id, artifact_playlist_fingerprint,
+     artifact_init_map_sha256)` plus `fragment_total`/`expected_segments` and, when available,
+     an optional `artifact_expected_duration_seconds` (default `None` for old state files).
+   - While a candidate is being recovered, keep `artifact_classification="recovery_candidate"`.
+   - After successful publication, the durable proof is the committed MP4 plus
+     `FINAL_COMMITTED`; restart recognition happens through `reconcile_commit_state`.
+
+6. **No-clobber identity verification.**
+   - If `final` already exists, `reconcile_commit_state` may return `ALREADY_COMMITTED`
+     only after ffprobe validation and identity match against the persisted job state.
+   - If the final exists but identity cannot be established, do not overwrite it; return a
+     distinct `DESTINATION_CONFLICT` directive (preferred) or an equivalent reason code and
+     preserve artifacts. `publish_verified_file` remains the hard no-clobber guard.
+
+7. **Crash recovery.**
+   - Reuse `reconcile_commit_state`: a valid final returns `ALREADY_COMMITTED`; a valid
+     staging candidate returns `PUBLISH_STAGING`; otherwise preserve/reprove the TS candidate.
+   - Leftover ffmpeg/publish temp files are swept by the next `publish_verified_file`.
+   - Candidate proof and remux are idempotent; a crash before state persistence simply
+     repeats the proof on restart.
+
+### Rationale
+
+- Reuses existing primitives (`validate_media_file`, `publish_verified_file`,
+  `reconcile_commit_state`, job/publish locks, identity fields) instead of introducing a new
+  artifact store or copying media.
+- Separates proof (TS) from remux (MP4) from publication, giving distinct outcomes and
+  preserving ambiguous candidates.
+- Avoids re-encoding, preserving quality and keeping CPU cost low; deep decode is opt-in.
+- Keeps the no-clobber and crash-recovery behavior already implemented for staging/final.
+
+### Risks
+
+- TS duration plus DTS continuity is strong but not a byte-for-byte fragment audit; a
+  candidate could still contain an extra trailing fragment while remaining decodable. Mitigate
+  by requiring exact expected duration tolerance and zero unexpected backward DTS jumps.
+- ffmpeg codec compatibility is assumed (H.264/AAC for VK VOD). If a future source uses
+  codecs the MP4 muxer rejects, remux fails and the candidate is preserved rather than
+  published.
+- deep_decode can be expensive and may time out on large files; keep it opt-in and bounded.
+- Holding the job lock through ffmpeg remux serializes same-job work; acceptable because
+  remux is bounded and runs only on the recovery path.
+- `DESTINATION_CONFLICT` requires a small enum addition to `CommitRecoveryDirective`; if
+  avoided, the same safety can be represented by a reason code, but the distinct directive is
+  clearer.
+
+## D5 research notes (researcher, 2026-11-08)
+
+### Verified facts
+
+1. **Reason classification primitives already exist.** `classify_http_status` in
+   `retry_policies.py` maps 401/403/410 -> `AUTH_EXPIRED`, 429 -> `RATE_LIMITED`,
+   5xx -> `SERVER_ERROR`, 408 -> `CONNECTION_TIMEOUT`. `YtdlpLaunchResult` already
+   carries `error_category`, `last_error_code`, `http_status` (currently always
+   `None`), `file_conflict`, `cancelled`. `_derive_last_error_code` extracts a
+   3-digit status from the child tail. So routing can be done without new
+   parsing code — only wiring.
+
+2. **Refresh allowance exists but is not consumed on the segment path.** `_fetch_playlist_with_retry`
+   calls `state_machine.request_refresh("token_expired")` before `_handle_token_refresh`
+   and aborts when the cap (2) is exhausted. `_attempt_segment_resume` calls
+   `refresh_stream` directly and never calls `request_refresh`, so the cap is
+   bypassed there. Variant/quality re-check already exists in `_attempt_segment_resume`
+   (lines ~2087-2111) and returns `PRESERVE_AND_STOP` on mismatch.
+
+3. **Backend switch is unbounded today.** `download_with_ytdlp_with_resume_fallback`
+   can call `_attempt_segment_resume` once per retry iteration; nothing prevents a
+   second switch after the first fails. The diagnostic event `backend_switch_blocked`
+   is reserved in `STRUCTURED_DIAGNOSTIC_EVENTS` but never emitted. No
+   `segment_backend_used` field exists in `DownloadJobState`.
+
+4. **Network retry charging is mostly correct but not segment-aware.** The yt-dlp
+   loop increments `retry_count` and calls `record_retry` only after the terminal-local
+   check and before the backoff wait, so local/file outcomes are not charged. The
+   segment downloader does not call `record_retry` at all, so its retries do not
+   share the combined budget (6).
+
+5. **Progress already separates verified disk bytes from network bytes.**
+   `ProgressSnapshot` has `verified_bytes_on_disk` and `network_bytes_this_session`;
+   both yt-dlp and segment paths populate them from `job_state`. yt-dlp sets
+   `eta_seconds=progress_state.eta_seconds` with `is_estimate=progress_state.is_estimate`,
+   so negative/unreliable ETAs are already filtered by the parser. There is no
+   `FINALIZING` phase in `JobPhase`.
+
+6. **Missing-fragment handling exists but lacks a reason code.** `_tally_and_merge`
+   returns `None` when `downloaded_count != len(segments)` and on any failed
+   segment index; the caller preserves artifacts. No state transition or
+   `reason_code` is recorded for "missing required fragment".
+
+### Chosen approach (minimal)
+
+1. **Populate `http_status` on the yt-dlp result.** In `_download_with_ytdlp_result`,
+   set `http_status=int(last_error_code)` when `last_error_code` is a 3-digit HTTP
+   status, else `None`. No new parsing. This is the single enabler for reason-based
+   routing.
+
+2. **Reason-based routing in `download_with_ytdlp_with_resume_fallback`.** After the
+   existing terminal-local check, branch on `result.error_category` / `http_status`:
+   - `CANCELLED` -> record cancellation, return `None`.
+   - `FILE_LOCKED`, `INVALID_OUTPUT_PATH`, `INTEGRITY_FAILURE`,
+     `INCOMPATIBLE_PLAYLIST`, `INCOMPATIBLE_CODEC`, `NOT_FOUND`, `DISK_FULL`,
+     `PERMISSION_ERROR` -> persist reason + category, return `None` (no retry,
+     no switch). Add `INCOMPATIBLE_*`/`INTEGRITY_FAILURE` to this terminal set.
+   - `AUTH_EXPIRED` (401/403/410): consume refresh allowance *first* via
+     `state_machine.request_refresh(...)`; on False, persist `refresh_cap_exhausted`,
+     return `None`. On True, refresh stream, run the existing quality/variant check;
+     on mismatch persist `refresh_mismatch` + `INTEGRITY_FAILURE`, return `None`.
+     On success, attempt the segment switch (step 4) with the refreshed binding.
+   - `RATE_LIMITED` (429): if a coordinator is present, `await coordinator.pause(...)`
+     (using `pause_seconds`); otherwise use `_compute_backoff_delay(429, retry_count, None)`.
+     Honor any `Retry-After` parsed from the sanitized tail if present. Then retry
+     yt-dlp (do not switch backends for a pure rate limit).
+   - `SERVER_ERROR`, `CONNECTION_TIMEOUT`, `CONNECTION_RESET`, `UNKNOWN` with a
+     network-ish failure: bounded backoff retries (existing path). Only after the
+     retry budget is exhausted *and* artifacts are `COMPATIBLE_RESUME` may the
+     single segment switch (step 4) be attempted.
+
+3. **Charge a retry only when actually scheduled.** Keep `record_retry` where the
+   backoff wait is actually performed. For the segment backend, thread
+   `state_machine` through `_run_download_session` (already present) and call
+   `record_retry(scope="segment", ...)` inside `_fetch_playlist_with_retry` and the
+   segment retry loops *only* when a retry wait is about to happen; on
+   `is_budget_exhausted()` return `None`. This makes segment retries share the
+   combined budget instead of an independent counter.
+
+4. **Bounded backend switch (one per job).** Add `segment_backend_used: bool = False`
+   to `DownloadJobState` (default False, persisted). Before calling
+   `_attempt_segment_resume`:
+   - if `segment_backend_used` is True, emit `backend_switch_blocked` with
+     `reason_code="backend_switch_already_used"`, persist, return `None`.
+   - set `segment_backend_used = True`, persist, then call `_attempt_segment_resume`.
+   - regardless of its result, do **not** return to the yt-dlp loop afterwards
+     (break / return its result) — this prevents unlimited alternation. On failure,
+     return `None` and preserve artifacts.
+   - pass the refreshed binding (from step 2) as `stream_binding` and the original
+     `stream_variant_id`.
+
+5. **HLS compatibility before/within the switch.** Keep the switch attempt inside
+   `_attempt_segment_resume`, which already verifies quality + variant. Add one
+   guard at its start: consume refresh allowance via `request_refresh` when the
+   switch is triggered by an auth-expired result (already done in step 2, so do not
+   double-count). The segment downloader's existing checkpoint reconciliation
+   handles compatible vs incompatible manifests (quarantine + new generation), so an
+   incompatible playlist cannot contribute an old fragment. No new quarantine logic.
+
+6. **Fail on missing mandatory fragment.** In `_tally_and_merge`, when
+   `downloaded_count != len(segments)` or any segment failed, if `state_machine`
+   is present transition to `FAILED` (or `PRESERVE_AND_STOP`) with
+   `reason_code="missing_required_fragment"` and `error_category=NOT_FOUND`/`UNKNOWN`,
+   then return `None`. Preserve artifacts (already). Add the same reason when a
+   zero-exit yt-dlp result has incomplete media (`missing_output`/`local_block`).
+
+7. **Progress reporting.** Add `FINALIZING` to `JobPhase`. In `_download_with_ytdlp_result`,
+   emit a final progress snapshot with `phase=JobPhase.FINALIZING` and
+   `eta_seconds=None` during candidate validation/publication and file-access retries.
+   Keep `verified_bytes_on_disk` from `job_state.verified_bytes` and
+   `network_bytes_this_session` from `job_state.network_bytes_this_session` (never
+   from yt-dlp's `~` estimate); keep `is_estimate` on child-driven snapshots.
+   Ensure `verified_*` counters only move forward (already in
+   `update_progress_counters`).
+
+8. **No unlimited alternation.** Enforce via: refresh cap (2), combined retry
+   budget (6), `segment_backend_used` flag (1), and the rule that a failed segment
+   switch returns `None` instead of re-entering the yt-dlp loop.
+
+### Rationale
+
+- Reuses existing classification (`classify_http_status`, `ErrorCategory`), refresh
+  cap, retry budget, checkpoint reconciliation, and progress snapshot machinery
+  instead of introducing new subsystems.
+- Makes routing depend on the *confirmed* failure reason rather than treating every
+  yt-dlp failure as a network problem, which is the root cause of the "too broad"
+  fallback.
+- Consuming the refresh allowance *before* invoking refresh prevents a refresh that
+  succeeds but is then discarded from silently consuming a later slot; it also makes
+  the 403 fixture consume exactly one refresh.
+- A single boolean guard is the smallest mechanism that bounds backend changes
+  while remaining crash-durable (persisted in job state).
+- Charging retries only at scheduling time keeps the budget honest for both yt-dlp
+  and segment paths and avoids counting immediate failures.
+
+### Risks
+
+- `http_status` derivation from `last_error_code` depends on yt-dlp actually
+  printing an HTTP status; some network failures (DNS, timeout) yield no status and
+  fall into the retry bucket, which is acceptable but means routing is conservative.
+- Adding `segment_backend_used` changes `DownloadJobState` (extra field with
+  default) and requires migration tolerance for old state files; follow the same
+  default-and-tolerate pattern used for `artifact_*` fields.
+- Adding `JobPhase.FINALIZING` changes the `JobPhase` enum and any exhaustive
+  match/display code; verify progress display handles unknown phases gracefully.
+- Refresh consumption before variant verification means a variant mismatch still
+  spends one refresh slot; this is intentional (the refresh happened) but should
+  be documented. If the variant check is moved before refresh, the cap semantics
+  change.
+- Sharing the combined budget between yt-dlp and segment paths could exhaust it
+  faster on jobs that legitimately need both; the existing cap (6) and refresh cap
+  (2) are the agreed bounds and should not be raised in this block.
+- Segment-path retry charging requires careful placement to avoid double-counting
+  when `_fetch_playlist_with_retry` retries and then segment fan-out also retries;
+  prefer charging at the playlist level only, and keep per-segment retries inside
+  the existing `max_retries` budget without separate `record_retry` calls.
+
+## D6 research notes (researcher, 2026-11-08)
+
+### Verified facts
+
+1. **Real Windows handle holder already exists.**
+   - `tests/integration/fixtures/windows_lock.py` provides `WindowsDescriptorHolder` and
+     `windows_lock`, which on Windows opens the target with `CreateFileW` using
+     `FILE_SHARE_READ | FILE_SHARE_WRITE` (deliberately omitting
+     `FILE_SHARE_DELETE`) and holds it until released by event/timeout.
+   - `tests/test_windows_lock.py` exercises the holder and is gated by
+     `@pytest.mark.skipif(sys.platform != "win32", ...)`. On POSIX the helper falls
+     back to `fcntl.flock`, which cannot reproduce delete-sharing semantics.
+   - Conclusion: the real-descriptor path can be exercised on `windows-latest` CI
+     without new dependencies; Linux coverage stays on deterministic fault
+     injection (monkeypatch `os.replace`/`Path.rename` to raise
+     `PermissionError(winerror=32)` or a message containing "sharing violation").
+
+2. **CI matrix already covers both platforms.**
+   - `.github/workflows/packaging-check.yml` runs on `ubuntu-latest` and
+     `windows-latest` with Python 3.14, `uv sync --locked`, ruff, mypy, full
+     `pytest tests/ tests/integration/`, coverage `--fail-under=85`, packaging,
+     wheel smoke (Linux), pip-audit (Linux), and gitleaks.
+   - The four command groups in the plan are subsets of the full suite already run
+     in CI; they remain useful as a fast, named release checklist.
+
+3. **Documentation is largely already aligned.**
+   - `.env.example`, `docs/11-guides/configuration.md`, and
+     `docs/11-guides/troubleshooting.md` already document `VKDOWNLOADER_THROTTLED_RATE`
+     semantics (0 disables, positive = diagnostic threshold), `--ignore-config`,
+     staging recovery/preservation, and the Process Monitor correlation procedure
+     for `SHARING VIOLATION`.
+   - README already documents the per-job workspace, resume, and troubleshooting link.
+   - Remaining doc work is additive and low-risk: an explicit rollout/rollback
+     subsection and a staging-recovery note in troubleshooting.
+
+4. **Rollout/rollback primitives already documented.**
+   - Troubleshooting already states: failed/cancelled jobs retain temp data; successful
+     jobs remove only owned intermediates; revert of application code ignores newer
+     workspaces; do not run broad cleanup against `output/tmp`.
+   - D3 quarantine (`quarantine_generation`) and D4 no-clobber publication provide
+     the filesystem-level safety that the rollback note relies on.
+
+### Chosen approach
+
+1. **Windows acceptance strategy: two-tier, no new infrastructure.**
+   - Tier 1 (Linux/CI simulation): keep deterministic fault injection for
+     `WinError 32` / sharing-violation classification, used for all unit/integration
+     tests and for the four command groups. This is the only portable way to assert
+     exact retry budgets and HTTP-request counts.
+   - Tier 2 (real Windows): rely on the existing `windows-latest` matrix job to run
+     the real `WindowsDescriptorHolder` path (`test_windows_lock.py`) and any
+     Windows-gated end-to-end scenario. For the end-to-end sharing-violation case,
+     hold a descriptor over the staging `.part` during a real download and release it
+     after the 3 x 0.5 s budget; assert terminal `file_locked` outcome, preserved
+     artifacts, and zero post-failure HTTP requests. Keep Process Monitor capture
+     as correlation evidence only (documented; never an acceptance metric, because
+     ProcMon overhead changes timing).
+   - Do not add a second Windows runner type, a self-hosted runner, or a new
+     dependency (no `pywin32`/`portalocker`).
+
+2. **Documentation: additive edits only, in the same release commit.**
+   - `.env.example`: keep the existing `VKDOWNLOADER_THROTTLED_RATE=0` block and its
+     explanation; no new keys (file-access retry counts stay internal constants
+     per D2).
+   - `README.md`: add a one-line pointer to the troubleshooting rollout/rollback
+     subsection (no duplication of the workspace tree).
+   - `docs/11-guides/troubleshooting.md`: add a short "Staging recovery" note
+     (terminal `file_locked` preserves the candidate; recovery runs locally with zero
+     HTTP requests after the lock clears) and a "Rollout and rollback" subsection:
+     * Rollout: use a separate output directory on a real VK VOD; run with
+       `--method auto` and `--method yt-dlp`; inspect `<output>/tmp/logs/<job>.jsonl`
+       for one downloader start, one extraction, and the failing phase/next action.
+     * Rollback: stop the active process; preserve `output/tmp/jobs/*` generations
+       separately; run the old version in a *different* output directory so it
+       cannot append to a new or damaged generation; never delete `output/tmp/logs`.
+   - No changes to `docs/11-guides/configuration.md` beyond what D1/D5 already
+     added; `throttled_rate` semantics are already there.
+
+3. **CI/release gate: keep the existing matrix, add a documented command checklist.**
+   - Keep `packaging-check.yml` as the single gate: both OSes, Python 3.14, locked
+     deps, ruff check/format, mypy strict, full pytest, coverage >= 85, build,
+     wheel smoke, packaging manifest test, secret scan.
+   - Publish the four plan command groups as the *targeted* pre-merge checklist
+     (run locally and in release notes), not as separate workflow jobs, to avoid
+     duplicating the full suite:
+     1. `uv run pytest tests/test_ytdlp_downloader.py tests/test_hls_downloader.py -q`
+     2. `uv run pytest tests/test_download_state.py tests/test_workspace.py tests/test_media_validation.py -q`
+     3. `uv run pytest tests/test_checkpoint.py tests/test_diagnostics.py tests/integration/test_hls_fixture.py -q`
+     4. `uv run pytest tests/test_cli.py tests/test_batch_downloader.py tests/test_progress.py tests/test_progress_display.py -q`
+   - Release acceptance (manual, recorded in the release notes):
+     * one downloader start and one generic extraction during an uninterrupted slow
+       transfer;
+     * zero additional HTTP requests after a terminal finalization failure;
+     * exactly one copy of every required fragment;
+     * publication of only a verified MP4;
+     * logs identify the failing phase and next action;
+     * temp artifacts preserved on cancellation or unrecoverable failure.
+
+4. **Rollout/rollback procedure (minimal, documented only).**
+   - Rollout: ship the locked wheel/sdist from the CI artifacts; start with a real
+     VK VOD in a separate output directory; keep the old version's output directory
+     untouched; verify against the fixture's expected duration/frame sequence or
+     reference checksums before declaring success.
+   - Rollback: stop the active process; do not delete or rewrite generations; run
+     the previous version in a separate output directory; quarantine (rename)
+     ambiguous generations rather than deleting. Cross-device quarantine failure
+     leaves the original untouched and marks the job terminal for manual handling.
+   - No database migration is involved; `output/tmp` is user data and older code
+     ignores unknown generations.
+
+### Rationale
+
+- The real-descriptor holder and the fault-injection path are both already
+  implemented and tested; D6 only needs to *run* and *document* them, not build a
+  new harness. This keeps the release gate honest on Windows while staying green on
+  Linux CI.
+- Keeping the four command groups as a documented checklist rather than new
+  workflow jobs avoids duplicating the full suite and keeps CI cost unchanged.
+- Additive documentation avoids touching the locked settings contract or the
+  workspace layout, and reuses the existing quarantine/publication safety.
+- A separate output directory for rollback is the smallest mechanism that prevents
+  the old version from appending to a new or damaged generation, and matches the
+  existing "treat `output/tmp` as user data" guidance.
+
+### Risks
+
+- Real Windows CI is the only place the delete-sharing path is exercised end to
+  end; if `windows-latest` is unavailable or the holder test is skipped, the
+  acceptance claim rests on fault injection plus a controlled manual run. Mitigate
+  by recording the Windows run (and its Process Monitor correlation) in the release
+  notes.
+- Process Monitor capture is correlation-only; timing-sensitive acceptance
+  metrics must come from the un-instrumented run.
+- Documentation drift: the rollout/rollback subsection must be updated whenever the
+  workspace layout or quarantine naming changes; keep it short and link to the plan.
+- Coverage threshold (85%) applies to the whole suite; Windows-only branches
+  (real holder) are excluded by skipif on Linux, so they do not affect the Linux
+  coverage number. Ensure the Windows job also enforces the threshold or accept
+  that Windows coverage is informational.
+- No code or schema migration is performed in D6; if a later block adds fields to
+  `DownloadJobState`, the release notes and troubleshooting must be refreshed.
