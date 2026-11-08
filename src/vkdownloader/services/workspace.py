@@ -82,25 +82,24 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
     quality = _validate_quality(quality)
     validated_final = validate_final_output_path(Path(final_path))
     job_id = stable_job_id(video_id, quality, validated_final.name)
-    tmp = validated_final.parent / "tmp"
-    job = tmp / "jobs" / job_id
+    root = validated_final.parent / f"tmp_{job_id}"
 
     ws = DownloadWorkspace(
         final_path=validated_final,
-        root=job,
-        ytdlp_dir=job / "ytdlp",
-        segments_dir=job / "segments",
-        staging_dir=job / "staging",
-        diagnostics_dir=job / "diagnostics",
-        job_state_path=job / "job_state.v2.json",
-        segment_checkpoint_path=job / "segment_checkpoint.v2.json",
-        state_path=job / "state.json",
-        log_path=tmp / "logs" / f"{job.name}.jsonl",
-        lock_path=tmp / "locks" / f"{job_id}.lock",
+        root=root,
+        ytdlp_dir=root / "ytdlp",
+        segments_dir=root / "segments",
+        staging_dir=root / "staging",
+        diagnostics_dir=root / "diagnostics",
+        job_state_path=root / "job_state.v2.json",
+        segment_checkpoint_path=root / "segment_checkpoint.v2.json",
+        state_path=root / "state.json",
+        log_path=root / f"{job_id}.jsonl",
+        lock_path=root / f"{job_id}.lock",
         job_id=job_id,
     )
     # Create lock parent before acquiring lock (unlocked).
-    (tmp / "locks").mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     creation_lock = _acquire_lock_at_path(ws.lock_path, 10.0)
     try:
         for d in (
@@ -109,7 +108,6 @@ def make_workspace(final_path: Path, video_id: str, quality: str) -> DownloadWor
             ws.segments_dir,
             ws.staging_dir,
             ws.diagnostics_dir,
-            tmp / "logs",
         ):
             d.mkdir(parents=True, exist_ok=True)
         marker = ws.root / ".vkdownloader-job"
@@ -371,9 +369,7 @@ def is_owned_job_root(root: object, job_id: object) -> bool:
         resolved = root_path.resolve()
     except OSError, RuntimeError, ValueError:
         return False
-    if resolved.name != str(job_id):
-        return False
-    if resolved.parent.name != "jobs":
+    if resolved.name != f"tmp_{job_id}":
         return False
     marker = resolved / ".vkdownloader-job"
     try:
@@ -398,12 +394,12 @@ def resolve_owned_job_root(workspace: DownloadWorkspace) -> Path | None:
         return None
 
     try:
-        tmp_jobs = (Path(workspace.final_path).parent / "tmp" / "jobs").resolve()
+        tmp_root = Path(workspace.final_path).parent.resolve()
     except OSError, RuntimeError, ValueError:
         return None
-    if resolved_root.parent != tmp_jobs:
+    if resolved_root.parent != tmp_root:
         return None
-    if resolved_root.name != workspace.job_id:
+    if resolved_root.name != f"tmp_{workspace.job_id}":
         return None
 
     marker = resolved_root / ".vkdownloader-job"
@@ -481,11 +477,11 @@ def cleanup_owned_job_artifacts(workspace: DownloadWorkspace) -> None:
         logger.warning("cleanup_refused_resolve", root=str(root))
         return
 
-    tmp_jobs = (workspace.final_path.parent / "tmp" / "jobs").resolve()
-    if resolved_root.parent != tmp_jobs:
+    tmp_root = Path(workspace.final_path).parent.resolve()
+    if resolved_root.parent != tmp_root:
         logger.warning("cleanup_refused_containment", root=str(resolved_root))
         return
-    if resolved_root.name != workspace.job_id:
+    if resolved_root.name != f"tmp_{workspace.job_id}":
         logger.warning("cleanup_refused_name", root=str(resolved_root))
         return
 
@@ -503,29 +499,6 @@ def cleanup_owned_job_artifacts(workspace: DownloadWorkspace) -> None:
             shutil.rmtree(resolved_root)
     except OSError:
         pass
-
-    # Remove the per-job diagnostic log and lock file, then drop any now-empty
-    # parent directories up to (and including) ``tmp`` so a successful download
-    # leaves no ``tmp`` residue behind. Non-empty directories (e.g. other jobs
-    # or retained logs) are left untouched.
-    tmp_root = workspace.final_path.parent / "tmp"
-    for candidate in (workspace.log_path, workspace.lock_path):
-        try:
-            if candidate.is_file() or candidate.is_symlink():
-                candidate.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for directory in (
-        tmp_root / "jobs",
-        tmp_root / "locks",
-        tmp_root / "logs",
-        tmp_root,
-    ):
-        try:
-            if directory.is_dir() and not any(directory.iterdir()):
-                directory.rmdir()
-        except OSError:
-            pass
 
 
 def discover_legacy_artifacts(output_dir: Path) -> list[LegacyArtifact]:

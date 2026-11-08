@@ -62,7 +62,7 @@ def test_make_workspace_layout(tmp_path: Path) -> None:
     workspace = make(final_path, "vid123", "best")
 
     assert workspace.final_path == final_path.resolve()
-    assert workspace.root == final_path.parent / "tmp" / "jobs" / expected_job
+    assert workspace.root == final_path.parent / f"tmp_{expected_job}"
     for d in (
         workspace.root,
         workspace.ytdlp_dir,
@@ -78,10 +78,9 @@ def test_make_workspace_layout(tmp_path: Path) -> None:
     assert workspace.segment_checkpoint_path.name == "segment_checkpoint.v2.json"
     assert workspace.job_state_path.parent == workspace.root
     assert workspace.segment_checkpoint_path.parent == workspace.root
-    assert workspace.lock_path.parent == (final_path.parent / "tmp" / "locks")
+    assert workspace.lock_path.parent == workspace.root
     assert workspace.lock_path.parent.exists()
-    assert (final_path.parent / "tmp").exists()
-    assert (final_path.parent / "tmp" / "logs").exists()
+    assert workspace.root.exists()
 
 
 def test_stable_job_id_stable_and_bounded() -> None:
