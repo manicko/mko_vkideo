@@ -181,4 +181,4 @@ This ensures users are informed when their quality preference cannot be met, rat
 
 ## Preservation Across Refresh and Resume
 
-Exact quality is preserved across token refresh, retry, resume, and backend selection. If the requested height cannot be verified, the download fails explicitly with the available ladder and preserves partial data. See the [Troubleshooting Guide](../11-guides/troubleshooting.md#exact-quality-failures).
+Exact quality is preserved across token refresh, retry, resume, and backend selection. If the requested height cannot be verified, the download fails explicitly with the available ladder and preserves partial data. On refresh, the refreshed stream is verified to be the same variant before it is used. See the [Troubleshooting Guide](../11-guides/troubleshooting.md#exact-quality-failures).

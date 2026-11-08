@@ -418,6 +418,18 @@ Remove-Item -LiteralPath "output\tmp\jobs\<job-id>" -Recurse -Force
 
 Reverting application code to an older version does not delete job workspaces created by the newer version. Treat `output/tmp` as user data: older code simply ignores it. Do not run broad cleanup commands against `output/tmp`.
 
+### Staging recovery
+
+A terminal `file_locked` outcome preserves the staging candidate. Recovery is local: close the holder, retry the job, or change the output location. After the lock clears there are zero HTTP requests, and partial artifacts are preserved for resume.
+
+### File-access retries
+
+Managed yt-dlp uses `--file-access-retries 3` and `--retry-sleep file_access:0.5` for transient file locks/sharing violations (3 attempts, 0.5 s sleep). A persistent lock is terminal (`reason_code` `file_lock_*`, `error_category` `file_locked`): no network retry, token refresh, or segment fallback.
+
+### Windows lock-owner correlation
+
+On Windows, a `SHARING VIOLATION` holder can be correlated with `child_started.pid` / `launch_number` using Process Monitor. See the [Process Monitor subsection](../11-guides/troubleshooting.md#process-monitor-windows-correlation-for-sharing-violation) in the Troubleshooting Guide.
+
 ## See Also
 
 - [Configuration Guide](../11-guides/configuration.md) — detailed configuration options.

@@ -121,7 +121,7 @@ User Request
 The `Settings` class in `config.py` provides:
 
 - **Browser settings**: User agent, locale, timezone for browser context identity; `headless` mode toggle for server/CI/Docker
-- **Download settings**: Timeout, concurrent downloads, output directory, download method
+- **Download settings**: Timeout, concurrent downloads, output directory, download method, diagnostic low-speed threshold (`throttled_rate`, default 0 disables), and the managed yt-dlp argv boundary (`--ignore-config`)
 - **Security settings**: SSL verification (enabled by default)
 - **Logging settings**: Log level and optional file output
 
@@ -140,6 +140,8 @@ Both commands support:
 - `--output/-o`: Output directory (defaults to `Settings.download_dir` when not provided)
 
 New downloads automatically use a per-job workspace under `output/tmp`. See the [Troubleshooting Guide](../11-guides/troubleshooting.md).
+
+A terminal `file_locked` outcome (Windows sharing violation on the staging candidate) preserves the staging candidate and partial artifacts; recovery is local (close the holder, retry the job, or change the output location) with zero HTTP requests after the lock clears. See [Staging recovery](../11-guides/troubleshooting.md#staging-recovery). To correlate a Windows `SHARING VIOLATION` holder with the diagnostic child process, see the [Process Monitor subsection](../11-guides/troubleshooting.md#process-monitor-windows-correlation-for-sharing-violation).
 
 ## Download Methods
 

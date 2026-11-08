@@ -131,6 +131,28 @@ A Windows Job Object would close this residual, but it is rejected as overengine
 
 **Abrupt parent death**: if the application itself is killed without unwinding (Task Manager "End task", console close, `SIGKILL`), the termination ladder never runs and children survive on **both** platforms. Graceful Ctrl+C and graceful `SIGTERM`/`SIGINT` are fully covered on both.
 
+## Staging Recovery and File Contention
+
+### Staging recovery
+
+A terminal `file_locked` outcome (Windows sharing violation on the staging candidate) preserves the staging candidate and partial artifacts. Recovery is local: close the holder, retry the job, or change the output location. After the lock clears there are zero HTTP requests, and partial artifacts are preserved for resume. See the [Staging recovery subsection](../11-guides/troubleshooting.md#staging-recovery) in the Troubleshooting Guide.
+
+### File-access retries
+
+Managed yt-dlp uses `--file-access-retries 3` and `--retry-sleep file_access:0.5` to handle transient file locks/sharing violations (3 attempts with 0.5 s sleep). A persistent lock is a terminal local outcome (`reason_code` `file_lock_*`, `error_category` `file_locked`): no network retry, token refresh, or segment fallback. File-access retries cover `EACCES` / WinError 32; other errno values terminate after one attempt.
+
+### Windows lock-owner correlation
+
+On Windows, a `SHARING VIOLATION` holder can be correlated with `child_started.pid` / `launch_number` using Process Monitor. See the [Process Monitor subsection](../11-guides/troubleshooting.md#process-monitor-windows-correlation-for-sharing-violation). Process Monitor capture is correlation evidence only, never an acceptance metric.
+
+### Artifact quarantine (generation isolation)
+
+When resume artifacts are ambiguous or foreign (missing/foreign `.ytdl`, truncated checkpoint, repeated TS blocks), the whole `ytdlp/` directory is quarantined by rename into a generation subdirectory instead of being mixed or deleted. The active generation is incremented and a new empty directory is used. Quarantine is rename-only and never copies media. Cross-device quarantine failure leaves the original untouched and marks the job terminal for manual handling.
+
+### TS completeness and finalization
+
+A proven-complete MPEG-TS candidate is remuxed to MP4 in staging (independent TS completeness proof; deep decode only on recovery). The job lock is held through finalization and cleanup. An existing final that cannot be proven (unproven destination) yields `DESTINATION_CONFLICT` rather than overwriting. `FINALIZING` is reported as a progress phase during file retry/publish; verified disk bytes are tracked separately from estimates.
+
 ## What Works
 
 1. **Browser automation (non-headless)** - Captures m3u8 URLs and cookies

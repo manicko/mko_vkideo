@@ -678,6 +678,50 @@ Cookie acquisition strategy for video downloads. Controls whether browser is lau
 
 ---
 
+### ErrorCategory
+
+Location: `vkdownloader.models.enums`
+
+Classification of a download failure for state-machine transitions (used by the yt-dlp launch outcome and reason-based routing).
+
+| Value | Description |
+|-------|-------------|
+| `CONNECTION_TIMEOUT` | "connection_timeout" |
+| `CONNECTION_RESET` | "connection_reset" |
+| `AUTH_EXPIRED` | "auth_expired" |
+| `RATE_LIMITED` | "rate_limited" |
+| `SERVER_ERROR` | "server_error" |
+| `NOT_FOUND` | "not_found" |
+| `SLOW_THROUGHPUT` | "slow_throughput" |
+| `DISK_FULL` | "disk_full" |
+| `PERMISSION_ERROR` | "permission_error" |
+| `FILE_LOCKED` | "file_locked" — Windows sharing violation / WinError 32 on the staging candidate; terminal local outcome |
+| `INVALID_OUTPUT_PATH` | "invalid_output_path" |
+| `CANCELLED` | "cancelled" |
+| `INCOMPATIBLE_PLAYLIST` | "incompatible_playlist" |
+| `INCOMPATIBLE_CODEC` | "incompatible_codec" |
+| `INTEGRITY_FAILURE` | "integrity_failure" |
+| `UNKNOWN` | "unknown" |
+
+---
+
+### JobPhase
+
+Location: `vkdownloader.models.enums`
+
+High-level phase of a download job for progress reporting. `FINALIZING` is reported during file retry/publish.
+
+| Value | Description |
+|-------|-------------|
+| `DOWNLOADING` | "downloading" |
+| `REFRESHING_TOKEN` | "refreshing_token" |
+| `WAITING` | "waiting" |
+| `MERGING` | "merging" |
+| `VERIFYING` | "verifying" |
+| `FINALIZING` | "finalizing" — file retry/publish phase |
+
+---
+
 ## Infrastructure
 
 ### BrowserManager
