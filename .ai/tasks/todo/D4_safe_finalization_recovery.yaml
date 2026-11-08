@@ -1,0 +1,477 @@
+# Implementation task for Block D4 — Safe finalization & recovery.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D4_safe_finalization_recovery
+
+title: D4 — Safe finalization and recovery (TS completeness proof, remux, durable completion evidence, no-clobber destination conflict)
+
+priority: high
+
+depends_on:
+  - task_D2_typed_outcome_file_retry
+  - task_D3_artifact_compatibility_resume
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D4. Recover finalization locally"
+source_blocks:
+  - "D4 — Recover finalization locally"
+
+description: >
+  Add an independent completeness proof for an interrupted yt-dlp .part (D3 identity match plus
+  ffprobe MPEG-TS container/height/duration plus DTS continuity with backward jumps bounded by
+  declared discontinuities and final timestamp within duration tolerance); add a remux step that
+  converts a proven complete MPEG-TS candidate into an MP4 via ffmpeg -c copy (with
+  -bsf:a aac_adtstoasc for AAC) into a unique staging temp, validates it as MP4, and atomically
+  replaces staging; persist durable completion evidence by reusing the persisted identity fields
+  plus an optional artifact_expected_duration_seconds; enable deep_decode=True only on the D4
+  recovery path or an explicit request (off for ordinary finalization); hold the job lock through
+  final validation, state persistence, and cleanup in both _download_with_ytdlp_result and the
+  PUBLISH_STAGING recovery path; update reconcile_commit_state to verify generation/variant/
+  fingerprint/init-map identity for final and staging candidates and to return a distinct
+  DESTINATION_CONFLICT when an existing final cannot be proven; prevent _ytdlp_candidate_path from
+  exposing ambiguous or foreign .part by consulting classify_ytdlp_artifacts. Preserve old state
+  files, never clobber an existing destination, and clean up only after a confirmed result.
+
+goals:
+  - Prove a .part is complete independently of .ytdl using D3 identity + ffprobe MPEG-TS
+    container/height/duration + DTS continuity (backward jumps <= declared discontinuities,
+    final DTS within duration tolerance).
+  - Remux a proven complete MPEG-TS candidate to MP4 with ffmpeg -c copy and AAC ADTS->ASC
+    bitstream filter into a unique staging temp, validate as MP4, then atomically replace staging.
+  - Persist durable completion evidence as the existing identity tuple plus optional
+    artifact_expected_duration_seconds (default None for old state files).
+  - Enable deep_decode=True only on the D4 recovery path or an explicit request; keep it False
+    for ordinary finalization.
+  - Hold job_lock through final validation, state persistence, and cleanup in both
+    _download_with_ytdlp_result and the PUBLISH_STAGING recovery path.
+  - Update reconcile_commit_state to verify generation/variant/fingerprint/init-map identity for
+    final and staging candidates and to return DESTINATION_CONFLICT when an existing final cannot
+    be proven.
+  - Prevent _ytdlp_candidate_path from exposing ambiguous or foreign .part by consulting
+    classify_ytdlp_artifacts.
+  - Add DESTINATION_CONFLICT to CommitRecoveryDirective.
+  - Update tests for remux, completeness proof, lock holding, identity verification, and
+    destination conflict.
+
+extra_context: |
+  Researcher notes (2026-11-08):
+  - ffmpeg stream copy is sufficient for TS->MP4. ffmpeg -i input.ts -map 0:v:0 -map 0:a:0? -c copy
+    remuxes without decoding; H.264 video and AAC audio are accepted by the MP4 muxer. AAC in TS
+    is ADTS and must be converted with -bsf:a aac_adtstoasc for MP4. -movflags +faststart is
+    optional. The command changes the container only; it does not repair corrupt packets or
+    timestamps. Therefore it is valid only after independent completeness proof of the TS candidate.
+  - ffprobe is the existing validation primitive. validate_media_file already checks existence,
+    size, ffprobe JSON, streams, height, duration tolerance, container token, and optional deep
+    decode. For a TS candidate, call it with expected_container="mpegts" (or "ts") before remux.
+    For the remuxed result and final MP4, call it with expected_container="mp4".
+  - The incident candidate is complete-looking but duplicated: ffprobe reports a plausible ~118.8 s
+    duration even though the TS contains repeated blocks and DTS resets. Duration alone is
+    therefore insufficient; timeline continuity is required.
+  - deep_decode is already implemented but unused. _deep_decode runs ffmpeg -i <file> -f null -
+    and fails on decode errors. It is an additional integrity check, not a container/timestamp
+    check.
+  - Publication is already atomic and no-clobber. publish_verified_file copies to a temp file,
+    fsyncs, commits with os.link (no-clobber), has an os.replace fallback only for unsupported
+    hard-link errors, sweeps stale temp files, and refuses to overwrite an existing final.
+    reconcile_commit_state already recognizes a valid final or staging candidate after a crash.
+  - Chosen approach (minimal):
+    * Candidate proof before remux (under the job lock): resolve the candidate path from
+      _ytdlp_candidate_path / staging and require D3 identity match (job root, variant, playlist
+      fingerprint, init-map, generation). Run ffprobe with expected_container="mpegts", expected
+      height, and expected duration when available. Duration tolerance:
+      max(2.0, 0.01 * expected_duration). Run a timeline-continuity check on the video stream
+      using ffprobe -select_streams v:0 -show_entries packet=dts (or pkt_dts_time): require at
+      least two packets; count backward DTS jumps larger than 0.1 s; allow at most the declared
+      discontinuity count from the playlist; require the final DTS to be within the duration
+      tolerance of the expected duration. If any check fails, classify the candidate as
+      recovery_candidate or ambiguous (per D3), preserve it, and do not remux or publish.
+    * Remux only a proven candidate. Build the ffmpeg argv as:
+      ffmpeg -hide_banner -loglevel error -y -i <candidate> -map 0:v:0 -map 0:a:0? -dn -sn -c copy
+      plus -bsf:a aac_adtstoasc only when ffprobe reports AAC audio, plus -movflags +faststart,
+      writing to <staging_dir>/.<final>.remux-<pid>.tmp (unique temp). If ffmpeg is missing or
+      exits non-zero, preserve the candidate and return a local_block/ffmpeg_missing or
+      remux_failed outcome; do not delete the candidate. After ffmpeg exits 0, validate the temp
+      with ffprobe (expected_container="mp4", height, duration). Then atomically os.replace it to
+      staging_path.
+    * Optional deep decode. Call validate_media_file(..., deep_decode=True) on the remuxed
+      staging file before publication only for D4-recovered candidates, or when the caller
+      explicitly requests it. Keep deep_decode=False for ordinary yt-dlp finalization to avoid
+      avoidable CPU cost. On failure, preserve the candidate and return local_block.
+    * Publish and finalize under the job lock. Acquire the publish lock inside the held job lock.
+      publish_verified_file(staged, final, final_lock=publish_lock). Validate the final MP4 with
+      ffprobe (deep_decode only if requested for recovery). Advance state to FINAL_COMMITTED /
+      CLEANUP_OWNED_TEMP_ARTIFACTS, call cleanup_owned_job_artifacts, persist state, then release
+      the job lock in finally.
+    * Durable completion evidence (reuse identity fields). Do not invent a separate completion
+      flag. The evidence is the existing tuple (artifact_generation, artifact_stream_variant_id,
+      artifact_playlist_fingerprint, artifact_init_map_sha256) plus fragment_total/expected_segments
+      and, when available, an optional artifact_expected_duration_seconds (default None for old
+      state files). While a candidate is being recovered, keep
+      artifact_classification="recovery_candidate". After successful publication, the durable
+      proof is the committed MP4 plus FINAL_COMMITTED; restart recognition happens through
+      reconcile_commit_state.
+    * No-clobber identity verification. If final already exists, reconcile_commit_state may
+      return ALREADY_COMMITTED only after ffprobe validation and identity match against the
+      persisted job state. If the final exists but identity cannot be established, do not
+      overwrite it; return a distinct DESTINATION_CONFLICT directive (preferred) or an equivalent
+      reason code and preserve artifacts. publish_verified_file remains the hard no-clobber guard.
+    * Crash recovery. Reuse reconcile_commit_state: a valid final returns ALREADY_COMMITTED; a
+      valid staging candidate returns PUBLISH_STAGING; otherwise preserve/reprove the TS candidate.
+      Leftover ffmpeg/publish temp files are swept by the next publish_verified_file. Candidate
+      proof and remux are idempotent; a crash before state persistence simply repeats the proof
+      on restart.
+  - Risks:
+    * TS duration plus DTS continuity is strong but not a byte-for-byte fragment audit; a candidate
+      could still contain an extra trailing fragment while remaining decodable. Mitigate by
+      requiring exact expected duration tolerance and zero unexpected backward DTS jumps.
+    * ffmpeg codec compatibility is assumed (H.264/AAC for VK VOD). If a future source uses
+      codecs the MP4 muxer rejects, remux fails and the candidate is preserved rather than
+      published.
+    * deep_decode can be expensive and may time out on large files; keep it opt-in and bounded.
+    * Holding the job lock through ffmpeg remux serializes same-job work; acceptable because
+      remux is bounded and runs only on the recovery path.
+    * DESTINATION_CONFLICT requires a small enum addition to CommitRecoveryDirective; if avoided,
+      the same safety can be represented by a reason code, but the distinct directive is clearer.
+  - Scope notes:
+    * _ytdlp_candidate_path currently falls back to the yt-dlp .part artifact. It must consult
+      classify_ytdlp_artifacts and must not expose an ambiguous/foreign .part. Only expose the .part
+      temp path when classification is COMPATIBLE_RESUME or RECOVERY_CANDIDATE; otherwise return
+      None (or a valid staging candidate only).
+    * Lock holding: in _download_with_ytdlp_result, do not release job_lock before final
+      validation/state persistence/cleanup. In perform_download's PUBLISH_STAGING recovery path,
+      acquire and hold job_lock across validation, publish, final validation, state persistence,
+      and cleanup.
+    * reconcile_commit_state identity verification: for a present final, require ffprobe validity
+      AND identity match (generation/variant/fingerprint/init-map) against state_machine job_state
+      artifact_* fields when a state machine is provided. On identity mismatch or unprovable
+      identity, do not return ALREADY_COMMITTED; return DESTINATION_CONFLICT (or set reason_code
+      destination_conflict) and preserve artifacts. Same for staging candidate (PUBLISH_STAGING
+      only when identity matches; otherwise DESTINATION_CONFLICT or preserve).
+    * deep_decode plumbing: add an optional deep_decode: bool = False parameter to
+      _download_with_ytdlp_result (and to the recovery helper) and to perform_download where a
+      recovery path is invoked; default False. Ordinary finalization keeps False.
+
+files:
+  - path: src/vkdownloader/services/media_validation.py
+    targets:
+      - type: function
+        name: validate_media_file
+      - type: function
+        name: run_ffprobe_json
+    semantic_anchors:
+      ts_completeness_after:
+        type: function
+        name: validate_media_file
+      dts_continuity_insert_near:
+        type: function
+        name: run_ffprobe_json
+    changes:
+      - action: add_function
+        description: >
+          Add an async DTS continuity check, for example:
+            async def check_dts_continuity(path, *, allowed_backward_jumps=0,
+                                          expected_duration=None,
+                                          duration_tolerance_seconds=2.0,
+                                          timeout_seconds=60.0) -> None
+          Requirements:
+            - Run ffprobe with -select_streams v:0 -show_entries packet=dts (or pkt_dts_time)
+              and parse the resulting DTS values.
+            - Require at least two packets; raise MediaValidationError("insufficient_packets")
+              otherwise.
+            - Count backward DTS jumps larger than 0.1 s.
+            - Raise MediaValidationError("dts_backward_jump_exceeded") when the count exceeds
+              allowed_backward_jumps.
+            - When expected_duration is not None, require the final DTS to be within
+              max(duration_tolerance_seconds, 0.01 * expected_duration) of expected_duration;
+              raise MediaValidationError("final_timestamp_out_of_tolerance") otherwise.
+            - Raise MediaValidationError("ffprobe_missing") when ffprobe is unavailable.
+          Add an async completeness proof helper, for example:
+            async def validate_complete_ts(path, *, expected_height=None, expected_duration=None,
+                                         allowed_backward_jumps=0,
+                                         duration_tolerance_seconds=2.0, deep_decode=False,
+                                         timeout_seconds=60.0) -> MediaInfo
+          that calls validate_media_file(path, expected_container="mpegts",
+          expected_height=expected_height, expected_duration=expected_duration,
+          duration_tolerance_seconds=duration_tolerance_seconds, deep_decode=deep_decode)
+          and then check_dts_continuity(...). Return the MediaInfo on success; raise
+          MediaValidationError on any failure. Never mutate the input file.
+      - action: add_function
+        description: >
+          Add an async remux helper, for example:
+            async def remux_ts_to_mp4(ts_path, mp4_path, *, timeout_seconds=300.0) -> Path
+          Requirements:
+            - Verify ffmpeg is available (reuse ffmpeg_utils discovery); raise
+              MediaValidationError("ffmpeg_missing") when absent.
+            - Probe the TS audio codec (reuse validate_media_file/ffprobe or a small helper) to
+              decide whether to add -bsf:a aac_adtstoasc.
+            - Build argv:
+                ffmpeg -hide_banner -loglevel error -y -i <ts> -map 0:v:0 -map 0:a:0? -dn -sn
+                -c copy [-bsf:a aac_adtstoasc] [-movflags +faststart] <unique_tmp>
+              writing to a unique temp path in mp4_path.parent named
+              .<mp4_path.name>.remux-<pid>-<uuid>.tmp.
+            - Run the subprocess with the platform spawn boundary kwargs and timeout_seconds;
+              on non-zero exit or timeout, delete the temp and raise MediaValidationError
+              ("remux_failed" or "remux_timeout"); preserve the source TS.
+            - After exit 0, validate the temp with validate_media_file(temp,
+              expected_container="mp4", expected_height=..., expected_duration=...,
+              deep_decode=False) (height/duration passed by caller or probed from the TS).
+            - On validation success, os.replace(temp, mp4_path) atomically and fsync the parent
+              directory (best-effort). Return mp4_path.
+            - On validation failure, delete the temp and raise MediaValidationError; never
+              replace mp4_path with an unvalidated file.
+            - Sweep stale .remux-*.tmp files in mp4_path.parent at start (best-effort).
+          Add a small helper to detect the audio codec from a MediaInfo/ffprobe result when
+          needed; reuse existing ffprobe JSON rather than re-running when possible.
+
+  - path: src/vkdownloader/services/state_machine.py
+    targets:
+      - type: class
+        name: DownloadJobState
+      - type: class
+        name: CommitRecoveryDirective
+    changes:
+      - action: add_fields
+        description: >
+          Add to DownloadJobState (with defaults so old state files remain valid):
+            artifact_expected_duration_seconds: float | None = None
+          Keep model_config extra="forbid". Persist through the existing atomic writer.
+      - action: add_enum_member
+        description: >
+          Add to CommitRecoveryDirective:
+            DESTINATION_CONFLICT = "destination_conflict"
+          (Existing members unchanged.)
+
+  - path: src/vkdownloader/services/state_migration.py
+    targets:
+      - type: function
+        name: reconcile_commit_state
+    changes:
+      - action: verify_identity
+        description: >
+          Update reconcile_commit_state to verify generation/variant/fingerprint/init-map
+          identity for final and staging candidates:
+            - Add an optional state_machine-aware identity check. When state_machine is provided
+              and a candidate (final or staging) passes ffprobe validation, compare the persisted
+              artifact_generation / artifact_stream_variant_id / artifact_playlist_fingerprint /
+              artifact_init_map_sha256 against the same fields on state_machine.job_state (when
+              present). Mismatch => do not treat as ALREADY_COMMITTED/PUBLISH_STAGING.
+            - For a present final that passes ffprobe but fails identity verification (or when
+              identity cannot be established because no state machine / no persisted identity is
+              available while the final pre-exists), return
+              CommitRecoveryDirective.DESTINATION_CONFLICT, None and set state_machine reason_code
+              to "destination_conflict" (when state_machine is not None), persist, and preserve
+              artifacts. Never overwrite the existing final.
+            - For a present staging candidate that passes ffprobe but fails identity verification,
+              preserve it and return CommitRecoveryDirective.DESTINATION_CONFLICT, None (or
+              preserve and return FRESH with reason_code=destination_conflict) rather than
+              PUBLISH_STAGING. Prefer DESTINATION_CONFLICT for clarity.
+            - Keep the existing ffprobe-missing and validation-failure behavior.
+            - Ensure job_lock is not required by this function's signature; callers hold it.
+          Add a helper, for example:
+            def _identity_matches(state_machine, expected_generation, expected_variant,
+                                 expected_fingerprint, expected_init) -> bool
+          that returns True only when all provided persisted fields match (missing persisted
+          fields are treated as "no evidence" => False when a candidate already exists).
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: _ytdlp_candidate_path
+      - type: function
+        name: _download_with_ytdlp_result
+    semantic_anchors:
+      candidate_path_after:
+        type: function
+        name: _ytdlp_candidate_path
+      lock_hold_in:
+        type: function
+        name: _download_with_ytdlp_result
+    changes:
+      - action: guard_candidate_path
+        description: >
+          Update _ytdlp_candidate_path to consult classify_ytdlp_artifacts before exposing a .part:
+            - When workspace is not None, call classify_ytdlp_artifacts(output_file, workspace,
+              state_machine=..., ...) using any state_machine available from kwargs or a best-effort
+              load under the (already held) job lock.
+            - If classification is AMBIGUOUS or NONE, do not return the .part temp path; return
+              None unless a valid staging candidate exists.
+            - If classification is COMPATIBLE_RESUME or RECOVERY_CANDIDATE, the existing behavior
+              (return staging candidate or non-empty .part temp path) is retained.
+            - Add an optional state_machine keyword argument (and identity kwargs) to
+              _ytdlp_candidate_path for callers; default to a conservative classification when no
+              state machine is available (treat unclassified .part as RECOVERY_CANDIDATE only if
+              ownership guards pass, else None).
+          Keep the function side-effect free.
+      - action: hold_lock_through_finalize
+        description: >
+          In _download_with_ytdlp_result, hold job_lock through final validation, state
+          persistence, and cleanup:
+            - Do not release job_lock before the final validate_media_file(final) call, state
+              persistence, or cleanup_owned_job_artifacts.
+            - Move any job_lock.release() to a finally block that runs after cleanup (or remove
+              the early release and rely on perform_download's finally).
+            - Add an optional deep_decode: bool = False parameter. When True, pass
+              deep_decode=True to the final validate_media_file(final) (and to the staging
+              validation when a remux was performed). Default False for ordinary finalization.
+            - For a proven complete TS candidate that needs recovery, invoke the completeness
+              proof + remux path (validate_complete_ts + remux_ts_to_mp4) before publication,
+              enabling deep_decode=True on the remuxed staging file when requested.
+            - Keep the existing no-clobber publish_verified_file call; on FileExistsError treat as
+              DESTINATION_CONFLICT-equivalent (preserve artifacts, return None).
+      - action: add_parameter
+        description: >
+          Add deep_decode: bool = False to _download_with_ytdlp_result's signature and propagate
+          it to validate_media_file calls on the staging and final paths. Ordinary finalization
+          passes False.
+
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: perform_download
+    semantic_anchors:
+      publish_staging_block:
+        type: function_call
+        value: reconcile_commit_state
+    changes:
+      - action: hold_lock_publish_staging
+        description: >
+          In the PUBLISH_STAGING recovery branch of perform_download, hold job_lock through final
+          validation, state persistence, and cleanup:
+            - Ensure job_lock (acquired earlier in perform_download) is not released before
+              publish_verified_file, final validate_media_file, state transitions, persist, and
+              cleanup_owned_job_artifacts.
+            - On DESTINATION_CONFLICT from reconcile_commit_state, preserve artifacts and return
+              None without publishing or cleaning up.
+            - Add an optional deep_decode: bool = False parameter to perform_download and propagate
+              it to the recovery validation calls (default False).
+      - action: add_parameter
+        description: >
+          Add deep_decode: bool = False to perform_download's signature (keyword-only, default
+          False) and propagate to _download_with_ytdlp_with_resume_fallback and validation calls.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+    changes:
+      - action: propagate_deep_decode
+        description: >
+          Add deep_decode: bool = False parameter to download_with_ytdlp_with_resume_fallback
+          and propagate it to _download_with_ytdlp_result. Ordinary finalization keeps False.
+
+  - path: tests/test_media_validation.py
+    targets:
+      - type: module
+        name: test_media_validation
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - check_dts_continuity accepts a monotonic DTS sequence with final timestamp within
+              tolerance.
+            - check_dts_continuity rejects too many backward jumps.
+            - check_dts_continuity rejects final timestamp outside tolerance.
+            - validate_complete_ts rejects a TS with repeated blocks / DTS reset even when duration
+              matches.
+            - remux_ts_to_mp4 builds the expected argv (includes -c copy, -bsf:a aac_adtstoasc
+              only when AAC audio detected, unique temp path) and validates the result as MP4
+              (mocked subprocess/ffprobe).
+            - remux_ts_to_mp4 does not replace staging on validation failure or non-zero ffmpeg
+              exit; temp is cleaned up.
+            - deep_decode is invoked only when requested (mocked _deep_decode).
+
+  - path: tests/test_workspace.py
+    targets:
+      - type: module
+        name: test_workspace
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - _ytdlp_candidate_path returns None for an ambiguous/foreign .part (mocked classifier).
+            - _ytdlp_candidate_path returns the .part path for compatible/recovery candidates.
+            - Lock is held during final validation/cleanup (mocked job_lock asserting release
+              occurs after cleanup).
+
+  - path: tests/test_download_state.py
+    targets:
+      - type: module
+        name: test_download_state
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - CommitRecoveryDirective includes DESTINATION_CONFLICT.
+            - DownloadJobState accepts artifact_expected_duration_seconds (default None) and
+              round-trips through the atomic writer; old state files without the field still
+              validate.
+            - ErrorCategory set unchanged (no new category required; DESTINATION_CONFLICT is a
+              directive, not an error category).
+
+  - path: tests/test_ytdlp_downloader.py
+    targets:
+      - type: module
+        name: test_ytdlp_downloader
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - reconcile_commit_state returns DESTINATION_CONFLICT when final exists but identity
+              cannot be proven (mocked ffprobe + state machine).
+            - reconcile_commit_state returns ALREADY_COMMITTED only after identity match.
+            - _download_with_ytdlp_result holds job_lock through final validation and cleanup
+              (mocked lock).
+            - deep_decode defaults to False on ordinary finalization and True only when requested.
+            - Completeness proof + remux path is invoked for a proven complete TS candidate.
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    changes:
+      - action: update_status
+        description: >
+          Mark D4 as ready with task path .ai/tasks/todo/D4_safe_finalization_recovery.yaml.
+          Leave D5/D6 statuses unchanged.
+
+acceptance_criteria:
+  - An independent completeness proof exists for interrupted .part - D3 identity match + ffprobe
+    MPEG-TS container/height/duration + DTS continuity (backward jumps <= declared
+    discontinuities, final timestamp within duration tolerance).
+  - A proven complete TS is remuxed with ffmpeg -c copy (and -bsf:a aac_adtstoasc for AAC) into a
+    unique staging temp, validated as MP4, and atomically replaces staging; source TS is preserved
+    on any failure.
+  - Durable completion evidence reuses the persisted identity fields plus optional
+    artifact_expected_duration_seconds (default None for old state files).
+  - deep_decode=True is used only on the D4 recovery path or an explicit request; ordinary
+    finalization keeps it False.
+  - job_lock is held through final validation, state persistence, and cleanup in both
+    _download_with_ytdlp_result and the PUBLISH_STAGING recovery path.
+  - reconcile_commit_state verifies generation/variant/fingerprint/init-map identity for final and
+    staging candidates and returns DESTINATION_CONFLICT when an existing final cannot be proven;
+    no overwrite occurs.
+  - _ytdlp_candidate_path consults classify_ytdlp_artifacts and does not expose ambiguous or
+    foreign .part.
+  - CommitRecoveryDirective includes DESTINATION_CONFLICT.
+  - test_media_validation, test_workspace, test_download_state, and test_ytdlp_downloader pass
+    for remux, completeness proof, lock holding, identity verification, and destination conflict.
+  - ruff and mypy pass for changed Python files.
+  - Execution plan status for D4 is updated.
+
+verification_steps:
+  - uv run ruff check src/vkdownloader/services/media_validation.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/state_migration.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/downloader.py
+  - uv run mypy src/vkdownloader/services/media_validation.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/state_migration.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/downloader.py
+  - uv run pytest tests/test_media_validation.py tests/test_workspace.py tests/test_download_state.py tests/test_ytdlp_downloader.py -q
+
+constraints:
+  - No production code distortion for tests; do not change production source in this planning task.
+  - Preserve old state files via defaults (artifact_expected_duration_seconds defaults to None).
+  - No-clobber: never overwrite an existing final; publish_verified_file remains the hard guard.
+  - Cleanup only after a confirmed result (final validation + state persistence).
+  - Hold job_lock across final validation, persistence, and cleanup; release in finally.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
+  - deep_decode remains off for ordinary finalization.
+  - Legacy discovery remains read-only.
+  - Quarantine remains rename-only; no media copy.

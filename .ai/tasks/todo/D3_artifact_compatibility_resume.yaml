@@ -1,0 +1,404 @@
+# Implementation task for Block D3 — Artifact compatibility & resume.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D3_artifact_compatibility_resume
+
+title: D3 — Artifact compatibility and resume (yt-dlp artifacts, quarantine, identity, .ytdl parsing, perform_download classification)
+
+priority: high
+
+depends_on:
+  - task_D2_typed_outcome_file_retry
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D3. Validate resume artifacts"
+source_blocks:
+  - "D3 — Validate resume artifacts"
+
+description: >
+  Add yt-dlp artifact compatibility classification under the job lock, parse .ytdl as an untrusted
+  resume hint only, enforce ownership/cross-job/symlink/neighbor guards before adopting artifacts,
+  quarantine ambiguous or foreign artifacts by renaming the whole ytdlp/ directory into
+  ytdlp/generations/<gen> and recreating an empty active directory without copying media, persist
+  artifact generation and identity fields in DownloadJobState with defaults for old files, use
+  compute_playlist_fingerprint for identity checks while keeping the segment checkpoint independent,
+  update _has_recoverable_ytdlp_artifacts to require compatibility evidence, keep legacy discovery
+  read-only, and update perform_download / fallback to classify before launch with a durable decision
+  across restart. Preserve old files and never distort production code for tests.
+
+goals:
+  - Add a compatibility classification with values compatible_resume, recovery_candidate, ambiguous, none.
+  - Parse .ytdl safely with strict JSON shape and bounds; never treat its index as a prefix length.
+  - Reuse cleanup containment guards before adopting any yt-dlp artifact.
+  - Quarantine ambiguous/foreign artifacts by directory rename only; no media copy; terminal on rename failure.
+  - Persist artifact_generation and identity fields in DownloadJobState with defaults for old state files.
+  - Use compute_playlist_fingerprint for yt-dlp job identity; keep segment checkpoint independent.
+  - Make _has_recoverable_ytdlp_artifacts require compatibility evidence, not mere existence.
+  - Keep legacy artifact discovery read-only; no automatic media copy or adoption.
+  - Update perform_download and download_with_ytdlp_with_resume_fallback to classify before launch.
+  - Add tests for classification, quarantine, ownership guards, and restart idempotency.
+
+extra_context: |
+  Researcher notes (2026-11-08):
+  - yt-dlp .ytdl format is identical in locked 2026.07.04 and installed 2026.10.26.
+    File: <final>.ytdl, JSON object {"downloader": {"current_fragment": {"index": int},
+    "extra_state"?: ..., "fragment_count"?: int}}. There is no schema/version field and no byte-length,
+    fragment-hash, or media-duration field. current_fragment.index is the count of fully appended
+    fragments (0-based next fragment to download), written after each fragment append. It is a resume
+    hint only. On resume, yt-dlp requires continuedl and an existing .ytdl; a corrupt file or index > 0
+    with .part size 0 resets both to 0. If .part exists without .ytdl, yt-dlp appends in ab mode
+    starting at fragment 0, which can duplicate earlier bytes.
+    Conclusion: .ytdl alone cannot prove the committed prefix length. Parse it as an untrusted hint;
+    never adopt a .part solely because .ytdl exists.
+  - Safe .ytdl parsing: read bytes only; json.loads; validate exact shape and bounds
+    (index >= 0, fragment_count is None or >= index, no extra executable content). Reject
+    symlink/foreign/non-regular files before reading. Do not delete an unreadable .ytdl; preserve it and
+    mark artifact state ambiguous.
+  - Stable VOD manifest fingerprint already exists: compute_playlist_fingerprint excludes URLs/tokens and
+    includes variant id, codecs, resolution, target duration, HLS version, media sequence, discontinuity
+    sequence, init-map identity, endlist/live, and per-segment duration/byte range/discontinuity/media
+    sequence/init identity/key method. Use this as the required identity key; do not hash segment URLs.
+  - Workspace ownership and locking: perform_download acquires the job lock before reconcile_commit_state.
+    download_with_ytdlp_with_resume_fallback receives that same job_lock. Artifact classification must run
+    under that lock, without acquiring a second lock.
+  - Quarantine primitive exists: quarantine_generation renames a directory to
+    generations/<sanitized-gen> and recreates an empty active directory. This is rename-only, no media
+    copy, and is crash-durable on the same filesystem.
+  - Chosen path:
+    * Do not treat .ytdl as proof of prefix length. Use it only as an optional hint. For yt-dlp
+      artifacts, compatibility requires all of:
+        - job ownership guards (resolved path under tmp/jobs/<job_id>, not a symlink, marker
+          .vkdownloader-job content == job_id, artifact final_name == workspace final basename);
+        - exact persisted identity match (stream_variant_id, structural playlist_fingerprint, and
+          init_map_sha256 when available);
+        - independent media evidence for a complete .part is a D4 concern; D3 may classify a consistent
+          .part + .ytdl as compatible_resume and an incomplete/unproven .part as recovery_candidate.
+      An incomplete or unproven .part is never appended to; it is either a candidate for local recovery
+      (D4) or ambiguous.
+    * Classify artifacts under the job lock before launching another child. Return one of:
+        compatible_resume (own job, identity match, .ytdl consistent, media evidence acceptable where
+        required) -> allow yt-dlp to continue with the existing .part/.ytdl;
+        recovery_candidate (complete media with valid identity but not proven as a resumable prefix) ->
+        preserve for D4 local recovery;
+        ambiguous (foreign/missing/inconsistent identity, truncated, repeated TS blocks, bad .ytdl,
+        symlink/neighbor path) -> quarantine and start a new generation;
+        none.
+      Ambiguous/foreign artifacts are quarantined by renaming the whole ytdlp/ directory to
+      ytdlp/generations/<gen> and recreating an empty ytdlp/; no media is copied. If the rename fails,
+      stop and preserve the data (reason_code=artifact_isolation_failed) instead of reusing or deleting it.
+    * Generation identity: reuse the existing gen-N convention. Persist artifact_generation: str = "gen-0"
+      (and the playlist fingerprint/variant id) in DownloadJobState so the decision survives restart.
+      Increment and quarantine on incompatibility. Segment and yt-dlp generations remain independent; the
+      segment checkpoint is never derived from .part-Frag*.
+    * Legacy artifacts: keep discover_legacy_artifacts read-only. Do not auto-copy media into a workspace.
+      Adoption, if explicitly requested, happens only under the job lock with the same ownership/symlink
+      guards and is quarantined when identity cannot be proven. Legacy sets are preserved in place unless
+      positively verified.
+    * Crash-safe durable decision: encode the decision in filesystem layout plus persisted identity
+      fields, not in an in-memory directive. A restarted run reclassifies under the lock;
+      already-quarantined generations are ignored, so an ambiguous file cannot be appended to after a
+      crash. The operation is idempotent and safe to retry.
+    * Manifest fingerprint: use compute_playlist_fingerprint (structural, secret-free) for both segment
+      checkpoints and yt-dlp job identity. Require exact match before any resume/recovery; on mismatch,
+      quarantine and start a new generation.
+  - Risks:
+    * Classifying a complete .part as compatible_resume still depends on yt-dlp's own consistency; media
+      evidence is required before trusting it, or a duplicated-prefix file could be reused.
+    * Rename-based quarantine assumes the active and quarantine directories are on the same
+      filesystem/volume; a cross-device failure must leave the original untouched and mark the job
+      terminal for manual handling.
+    * Adding persisted identity fields changes DownloadJobState; old state files remain valid only if
+      defaults are provided and missing keys are tolerated.
+    * Keeping legacy artifacts in place leaves operator-visible residue; cleanup remains tied to
+      successful final publication.
+    * ffprobe-based media evidence is a later D4 dependency; D3 can only classify and isolate, not prove
+      completeness.
+
+files:
+  - path: src/vkdownloader/services/state_machine.py
+    targets:
+      - type: class
+        name: DownloadJobState
+    changes:
+      - action: add_fields
+        description: >
+          Add persisted identity fields with defaults so old state files remain valid:
+            artifact_generation: str = "gen-0"
+            artifact_stream_variant_id: str | None = None
+            artifact_playlist_fingerprint: str | None = None
+            artifact_init_map_sha256: str | None = None
+            artifact_classification: str | None = None
+          Keep model_config extra="forbid". These are additive fields with defaults; no migration is
+          required because Pydantic tolerates missing keys on load and applies defaults. Persist them
+          through the existing atomic writer.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: class
+        name: YtdlpArtifacts
+      - type: function
+        name: _ytdlp_artifacts_for
+      - type: function
+        name: _has_recoverable_ytdlp_artifacts
+      - type: function
+        name: _capture_ytdlp_artifact_snapshot
+    semantic_anchors:
+      classifier_insert_after:
+        type: class
+        name: YtdlpArtifacts
+      ytdl_parser_insert_near:
+        type: function
+        name: _ytdlp_artifacts_for
+    changes:
+      - action: add_enum
+        description: >
+          Add a StrEnum named YtdlpArtifactCompatibility in ytdlp_downloader.py with members:
+            COMPATIBLE_RESUME = "compatible_resume"
+            RECOVERY_CANDIDATE = "recovery_candidate"
+            AMBIGUOUS = "ambiguous"
+            NONE = "none"
+          Export it from the module for tests and callers.
+      - action: add_parser
+        description: >
+          Add a safe .ytdl parser, for example:
+            def parse_ytdl_file(path, *, max_bytes=65536) -> dict[str, object] | None
+          Requirements:
+            - Reject symlink, non-regular, foreign, or unreadable files before reading.
+            - Read bytes only; enforce max_bytes; reject larger files.
+            - json.loads only; reject non-dict top-level values.
+            - Validate exact shape: top-level dict containing "downloader" dict; downloader containing
+              "current_fragment" dict; current_fragment containing integer "index" >= 0.
+            - Optional "fragment_count" must be an integer >= index when present.
+            - Reject extra executable content or unexpected types; do not eval or exec.
+            - Return a small normalized dict containing only index and optional fragment_count; return
+              None on any validation failure.
+            - Never delete or modify the file; preserve it for inspection.
+          Add a helper to detect repeated TS blocks, for example:
+            def _has_repeated_ytdlp_blocks(path, *, block_size=65536) -> bool
+          that returns True when the initial block appears again later in the file. Keep it conservative
+          and side-effect free.
+      - action: add_ownership_guards
+        description: >
+          Reuse the containment checks from cleanup_owned_job_artifacts before adopting artifacts:
+            - Resolve workspace.root and verify it is not a symlink.
+            - Verify resolved_root.parent == tmp/jobs resolved parent and resolved_root.name == job_id.
+            - Verify marker .vkdownloader-job exists, is a regular file, and its stripped content == job_id.
+            - Verify ytdlp_dir is a real directory inside resolved_root and is not a symlink.
+            - Verify each candidate artifact is a regular file directly inside ytdlp_dir (no traversal,
+              no symlink, no neighbor path).
+            - Verify artifacts.final_name == workspace.final_path.name.
+          Add a helper, for example is_owned_ytdlp_artifact_path(path, artifacts, workspace) -> bool, that
+          returns False on any OSError or containment failure. Do not raise for ordinary guard failures.
+      - action: add_classifier
+        description: >
+          Add a classifier, for example:
+            def classify_ytdlp_artifacts(output_file, workspace=None, *, state_machine=None,
+                                        stream_variant_id=None, playlist_fingerprint=None,
+                                        init_map_sha256=None, job_lock=None) -> YtdlpArtifactCompatibility
+          It must run only under an already held job lock; it must not acquire a second lock. Behavior:
+            - If workspace is None, derive the legacy single-directory layout and classify conservatively.
+            - Return NONE when no .part, fragments, or .ytdl exist and no staging candidate exists.
+            - Run ownership guards first. Any guard failure => AMBIGUOUS.
+            - Resolve identity from explicit args, then state_machine.job_state.artifact_* fields, then
+              state_machine.job_state.stream_variant_id / artifact_playlist_fingerprint. Require
+              stream_variant_id and playlist_fingerprint to be non-empty for compatibility.
+            - Compare expected identity to persisted identity fields. Mismatch or missing expected identity
+              => AMBIGUOUS, not recovery.
+            - Parse .ytdl if present. Missing .ytdl is not fatal by itself but downgrades a .part from
+              compatible_resume to recovery_candidate unless independent media evidence is supplied by the
+              caller/D4. Corrupt/inconsistent .ytdl => AMBIGUOUS.
+            - Repeated TS blocks => AMBIGUOUS.
+            - A foreign, truncated, or marker-mismatched .part => AMBIGUOUS.
+            - If identity matches and .ytdl is consistent and ownership guards pass => COMPATIBLE_RESUME.
+            - If identity matches but .ytdl is absent or incomplete, and the .part is non-empty => 
+              RECOVERY_CANDIDATE.
+            - Never mutate files or copy media.
+          Add module aliases for tests, such as classify_ytdlp_artifacts and _classify_ytdlp_artifacts.
+      - action: update_has_recoverable
+        description: >
+          Change _has_recoverable_ytdlp_artifacts so it returns True only when classify_ytdlp_artifacts(...)
+          == YtdlpArtifactCompatibility.COMPATIBLE_RESUME. Preserve the existing signature and add optional
+          identity keyword arguments for callers. Keep the segments_dir existence check as a separate
+          fallback only when explicitly requested by the caller; by default, yt-dlp artifact recovery
+          requires compatibility evidence. Do not treat mere .part/.ytdl existence as recoverable.
+
+  - path: src/vkdownloader/services/workspace.py
+    targets:
+      - type: function
+        name: cleanup_owned_job_artifacts
+      - type: function
+        name: discover_legacy_artifacts
+      - type: function
+        name: migrate_legacy_artifacts
+    changes:
+      - action: extract_guards
+        description: >
+          Refactor the containment checks already present in cleanup_owned_job_artifacts into reusable
+          helpers, for example:
+            def is_owned_job_root(root, job_id) -> bool
+            def resolve_owned_job_root(workspace) -> Path | None
+          Use these helpers from both cleanup and artifact classification. Do not weaken the existing
+          cleanup checks.
+      - action: keep_legacy_read_only
+        description: >
+          Keep discover_legacy_artifacts read-only and do not auto-copy media. Ensure migrate_legacy_artifacts
+          remains opt-in, defaults to dry_run=True, and preserves both copies until verification. Any
+          adoption path must call the ownership guards and must quarantine when identity cannot be
+          proven. Do not add automatic invocation of media migration in perform_download.
+
+  - path: src/vkdownloader/services/checkpoint.py
+    targets:
+      - type: function
+        name: quarantine_generation
+    changes:
+      - action: reuse_for_ytdlp
+        description: >
+          Reuse quarantine_generation for ytdlp_dir by passing workspace.ytdlp_dir as segments_dir. It must
+          rename ytdlp/ to ytdlp/generations/<sanitized-gen> when non-empty and recreate an empty active
+          ytdlp/. Add no media copy. If the rename fails, propagate or return a clear failure so the caller
+          can mark the job terminal with reason_code=artifact_isolation_failed; do not delete or reuse the
+          original directory.
+
+  - path: src/vkdownloader/services/downloader.py
+    targets:
+      - type: function
+        name: perform_download
+    semantic_anchors:
+      classify_before_launch:
+        type: function_call
+        value: download_with_ytdlp_with_resume_fallback
+    changes:
+      - action: classify_under_lock
+        description: >
+          Under the already held job lock, before reconcile/launch, classify yt-dlp artifacts using
+          state_machine and persisted identity. Persist artifact_generation, artifact_stream_variant_id,
+          artifact_playlist_fingerprint, artifact_init_map_sha256, and artifact_classification.
+          - compatible_resume: leave artifacts in place and allow native yt-dlp resume.
+          - recovery_candidate: preserve artifacts in place, persist classification, and continue to launch
+            only through a clean active generation or D4 recovery path; do not append to an unproven .part.
+          - ambiguous: quarantine the whole ytdlp/ directory. On success, update artifact_generation to the
+            next gen, persist reason_code=ytdlp_artifacts_quarantined, and launch with an empty active dir.
+            On rename failure, persist reason_code=artifact_isolation_failed and
+            error_category=INTEGRITY_FAILURE, then return None without launching.
+          - none: ensure artifact_generation has its default and launch normally.
+          Use compute_playlist_fingerprint for expected identity when a parsed playlist/variant is
+          available; otherwise use the persisted identity already stored in state. Never derive yt-dlp
+          identity from .ytdl index or from segment checkpoint data.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+    changes:
+      - action: classify_before_launch
+        description: >
+          Before each yt-dlp launch and before segment resume, classify artifacts under job_lock. Gate
+          segment resume on compatibility == compatible_resume; otherwise do not call
+          _attempt_segment_resume. For ambiguous artifacts, quarantine first; if isolation fails, persist
+          terminal state and return None. For recovery_candidate, preserve artifacts and either route to
+          D4 recovery or start a clean generation, but never append to the unproven .part. Persist the
+          durable decision in DownloadJobState so a crash and restart reclassifies consistently.
+      - action: use_fingerprint
+        description: >
+          Use compute_playlist_fingerprint output (already available from stream extraction or state) as
+          the identity input to classify_ytdlp_artifacts. Do not hash segment URLs or signed URLs.
+
+  - path: tests/test_workspace.py
+    targets:
+      - type: module
+        name: test_workspace
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - Ownership guard rejects symlinked workspace root, symlinked ytdlp_dir, foreign marker content,
+              and artifact paths outside ytdlp_dir or in a neighboring directory.
+            - Quarantine renames ytdlp/ to ytdlp/generations/<gen>, recreates an empty active ytdlp/,
+              and performs no media copy (source generation remains, active dir empty).
+            - Quarantine is terminal/idempotent on rename failure: original directory remains and no partial
+              active directory is created.
+            - Re-running make_workspace/classification does not append to a quarantined generation.
+
+  - path: tests/test_checkpoint.py
+    targets:
+      - type: module
+        name: test_checkpoint
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - quarantine_generation rename-only behavior for a directory containing files.
+            - Quarantined generation path is under generations/ and sanitized.
+            - Repeated quarantine calls do not overwrite an existing generation directory.
+            - Old checkpoint/state files without artifact fields still validate with defaults.
+
+  - path: tests/test_ytdlp_downloader.py
+    targets:
+      - type: module
+        name: test_ytdlp_downloader
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for:
+            - YtdlpArtifactCompatibility values are exactly compatible_resume, recovery_candidate,
+              ambiguous, none.
+            - parse_ytdl_file accepts a valid shape and returns only index/fragment_count.
+            - parse_ytdl_file rejects symlink, oversized, malformed JSON, missing index, negative index,
+              fragment_count < index, and non-dict top-level values.
+            - classify returns NONE when no artifacts exist.
+            - classify returns COMPATIBLE_RESUME for owned job, matching identity, consistent .ytdl.
+            - classify returns RECOVERY_CANDIDATE for owned job, matching identity, non-empty .part without .ytdl.
+            - classify returns AMBIGUOUS for foreign marker, identity mismatch, bad .ytdl, repeated TS
+              blocks, symlink, or truncated .part.
+            - _has_recoverable_ytdlp_artifacts returns False for ambiguous/recovery/none and True only for
+              compatible_resume.
+            - Restart idempotency: quarantined generations are ignored on reclassification.
+            - perform_download/fallback classification is invoked before launch (mocked classifier).
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    changes:
+      - action: update_status
+        description: >
+          Mark D3 as ready with task path .ai/tasks/todo/D3_artifact_compatibility_resume.yaml.
+          Leave D4/D5/D6 statuses unchanged.
+
+acceptance_criteria:
+  - YtdlpArtifactCompatibility exists with values compatible_resume, recovery_candidate, ambiguous, none.
+  - parse_ytdl_file safely validates strict JSON shape and bounds and never treats index as prefix length.
+  - Ownership/cross-job/symlink/neighbor guards run before adopting any artifact.
+  - Ambiguous or foreign artifacts are quarantined by renaming ytdlp/ to ytdlp/generations/<gen> and
+    recreating an empty active dir; no media is copied.
+  - Rename failure is terminal: original data is preserved and the job is marked
+    reason_code=artifact_isolation_failed without launching.
+  - DownloadJobState persists artifact_generation and identity fields with defaults for old files.
+  - compute_playlist_fingerprint is used for identity checks; segment checkpoint remains independent.
+  - _has_recoverable_ytdlp_artifacts requires compatibility evidence and is not true for mere existence.
+  - Legacy discovery remains read-only; no automatic media copy or adoption.
+  - perform_download and fallback classify before launch and persist a durable decision.
+  - A crash and retry cannot append to an ambiguous file.
+  - test_workspace, test_checkpoint, and test_ytdlp_downloader pass for classification, quarantine,
+    ownership guards, and restart idempotency.
+  - ruff and mypy pass for changed Python files.
+  - Execution plan status for D3 is updated.
+
+verification_steps:
+  - uv run ruff check src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/workspace.py src/vkdownloader/services/checkpoint.py src/vkdownloader/services/downloader.py
+  - uv run mypy src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/workspace.py src/vkdownloader/services/checkpoint.py src/vkdownloader/services/downloader.py
+  - uv run pytest tests/test_workspace.py tests/test_checkpoint.py tests/test_ytdlp_downloader.py -q
+
+constraints:
+  - No media copy; quarantine is rename-only.
+  - No symlink or neighbor artifact adoption.
+  - Terminal on isolation failure; preserve original data.
+  - Preserve old state files via defaults.
+  - Keep segment checkpoint independent of .part-Frag*.
+  - Do not append to ambiguous or foreign artifacts.
+  - No production code distortion for tests.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
+  - Do not modify production source code in this planning task.
+  - Legacy discovery remains read-only unless an explicit, guarded adoption is requested.

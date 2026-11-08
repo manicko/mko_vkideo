@@ -1,0 +1,251 @@
+# Implementation task for Block D6 — Windows acceptance & release.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D6_windows_acceptance_release
+
+title: D6 — Windows acceptance & release (test staleness, lint/format gate, docs, release checklist)
+
+priority: high
+
+depends_on:
+  - task_D1_slow_channel_managed_child
+  - task_D2_typed_outcome_file_retry
+  - task_D3_artifact_compatibility_resume
+  - task_D4_safe_finalization_recovery
+  - task_D5_network_fallback_progress
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D6. Verify on Windows and document rollout"
+source_blocks:
+  - "D6 — Windows acceptance & release"
+
+description: >
+  Close the release block by fixing test staleness left by D2/D5, enforcing the lint/format
+  gate, and adding the remaining release documentation (throttled-rate semantics, staging
+  recovery, Windows lock-owner / Process Monitor pointer, staging recovery subsection,
+  rollout/rollback procedure). No production source changes are made; this block is tests,
+  documentation, and CI verification only. Update the execution plan status and run the four
+  documented pytest command groups plus ruff, mypy, and packaging checks.
+
+goals:
+  - Patch tests/test_batch_downloader.py to mock _download_with_ytdlp_result (2 occurrences)
+    instead of the now-internal _download_with_ytdlp wrapper.
+  - Accept the state_machine keyword argument in the 2 fake_tally mocks in
+    tests/test_segment_downloader.py.
+  - Add the 3 newly tracked files to EXPECTED_SDIST_ENTRIES in tests/test_packaging.py.
+  - Fix the 2 unused locals and missing trailing newline in tests/test_ytdlp_low_speed.py.
+  - Run ruff format on the changed Python files and verify ruff check is clean.
+  - Add throttled-rate semantics, staging recovery procedure, and a Windows lock-owner
+    (Process Monitor) pointer to README.md.
+  - Add a staging recovery subsection and a rollout/rollback procedure to
+    docs/11-guides/troubleshooting.md.
+  - Optionally add a manual Windows acceptance runbook under docs/ (if added, also add it
+    to EXPECTED_SDIST_ENTRIES and link it from README/troubleshooting).
+  - Update the execution plan block row for D6 to ready with this task path.
+  - Run all four documented pytest command groups plus ruff, mypy, and packaging checks.
+
+files:
+  - path: tests/test_batch_downloader.py
+    targets:
+      - type: module
+        name: test_batch_downloader
+    semantic_anchors:
+      first_patch:
+        type: call
+        value: patch("vkdownloader.services.ytdlp_downloader._download_with_ytdlp")
+      second_patch:
+        type: call
+        value: patch("vkdownloader.services.ytdlp_downloader._download_with_ytdlp")
+    changes:
+      - action: update_patch_target
+        description: >
+          Replace both occurrences of the patch target string
+          "vkdownloader.services.ytdlp_downloader._download_with_ytdlp" with
+          "vkdownloader.services.ytdlp_downloader._download_with_ytdlp_result". Keep the
+          return value None; production code already treats a None launch result as a
+          non-completed launch and proceeds to the segment path. Do not change the surrounding
+          assertions or timeout.
+
+  - path: tests/test_segment_downloader.py
+    targets:
+      - type: function
+        name: fake_tally
+    semantic_anchors:
+      first_mock:
+        type: function
+        value: fake_tally
+      second_mock:
+        type: function
+        value: fake_tally
+    changes:
+      - action: add_parameter
+        description: >
+          Add `state_machine=None` (or `state_machine: object | None = None`) to both
+          fake_tally signatures so the mock accepts the keyword now passed by
+          _tally_and_merge. No body change is required.
+
+  - path: tests/test_packaging.py
+    targets:
+      - type: set
+        name: EXPECTED_SDIST_ENTRIES
+    semantic_anchors:
+      manifest_set:
+        type: constant
+        value: EXPECTED_SDIST_ENTRIES
+    changes:
+      - action: add_entries
+        description: >
+          Add these three relative paths to EXPECTED_SDIST_ENTRIES:
+            "tests/integration/fixtures/windows_lock.py"
+            "tests/test_windows_lock.py"
+            "tests/test_ytdlp_low_speed.py"
+          Preserve the existing frozenset style and ordering conventions. If the optional
+          Windows acceptance runbook is added under docs/, add its path here in the same change.
+
+  - path: tests/test_ytdlp_low_speed.py
+    targets:
+      - type: module
+        name: test_ytdlp_low_speed
+    semantic_anchors:
+      unused_locals:
+        type: assignment
+        value: result
+      trailing_newline:
+        type: file_end
+        value: EOF
+    changes:
+      - action: remove_unused_assignment
+        description: >
+          Remove the unused `result =` assignment in the two flagged observe() calls,
+          keeping the call expressions. Add a trailing newline at EOF. No assertion or test
+          logic changes.
+
+  - path: README.md
+    targets:
+      - type: section
+        name: "Temporary Workspace and Resume"
+    semantic_anchors:
+      insert_after:
+        type: heading
+        value: "## Temporary Workspace and Resume"
+    changes:
+      - action: add_documentation
+        description: >
+          Add concise subsections (or a short paragraph plus bullet list) covering:
+            1. Throttled-rate semantics: default 0 disables yt-dlp throttled re-extraction;
+               positive values are a diagnostic low-speed threshold only and never trigger a
+               download abort, refresh, or backend switch. Mention --ignore-config makes the
+               managed argv reproducible and that global yt-dlp config is not auto-applied.
+            2. Staging recovery procedure: a terminal file_locked outcome preserves the
+               staging candidate; recovery is local (close the holder, retry the job, or change
+               output location) with zero HTTP requests after the lock clears; partial
+               artifacts are preserved for resume.
+            3. Windows lock-owner pointer: link to the Process Monitor subsection in
+               troubleshooting.md for correlating a SHARING VIOLATION holder PID with
+               child_started.pid / launch_number.
+          Keep the addition additive and do not duplicate the full workspace tree.
+
+  - path: docs/11-guides/troubleshooting.md
+    targets:
+      - type: section
+        name: "Migration and Rollback"
+    semantic_anchors:
+      insert_before:
+        type: heading
+        value: "## See Also"
+    changes:
+      - action: add_documentation
+        description: >
+          Add a "Staging recovery" subsection describing terminal file_locked preservation
+          of the candidate, local remediation (close holder / retry / change output), and
+          zero HTTP requests after the lock clears.
+          Add a "Rollout and rollback" subsection:
+            Rollout: ship the locked wheel/sdist from CI artifacts; run on a real VK VOD in a
+            separate output directory; use --method auto and --method yt-dlp; inspect
+            <output>/tmp/logs/<job>.jsonl for one downloader start, one extraction, and the
+            failing phase/next action; verify against fixture expected duration/frame sequence
+            or reference checksums before declaring success.
+            Rollback: stop the active process; do not delete or rewrite generations; run the
+            previous version in a different output directory; quarantine (rename) ambiguous
+            generations rather than deleting; cross-device quarantine failure leaves the
+            original untouched and marks the job terminal for manual handling.
+            No database migration is involved; output/tmp is user data and older code ignores
+            unknown generations.
+          Keep the existing Process Monitor and file-access-retry sections intact.
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    semantic_anchors:
+      d6_row:
+        type: table_row
+        value: "D6 Windows acceptance & release"
+    changes:
+      - action: update_status
+        description: >
+          Change the D6 row status from "pending" to "ready (task: .ai/tasks/todo/D6_windows_acceptance_release.yaml)".
+          Optionally update the auditor summary line for D6 from "partial; docs stale." to
+          "ready; task created (tests/docs/CI only)."
+
+  - path: docs/11-guides/windows-acceptance-runbook.md
+    targets:
+      - type: document
+        name: windows-acceptance-runbook
+    changes:
+      - action: add_documentation
+        description: >
+          OPTIONAL. Add a manual Windows acceptance runbook (real Windows only) describing:
+            - holding a descriptor over the staging .part during a real download using the
+              existing WindowsDescriptorHolder and releasing it after the 3 x 0.5 s budget;
+            - asserting terminal file_locked outcome, preserved artifacts, and zero post-failure
+              HTTP requests;
+            - Process Monitor capture as correlation evidence only (bounded capture window);
+            - recording the Windows run and correlation in release notes.
+          If this file is created, add its path to EXPECTED_SDIST_ENTRIES in
+          tests/test_packaging.py and link it from README/troubleshooting. Do not add new
+          dependencies or a second runner type.
+
+acceptance_criteria:
+  - tests/test_batch_downloader.py patches _download_with_ytdlp_result in both occurrences and
+    the 2 previously failing semaphore tests pass.
+  - tests/test_segment_downloader.py fake_tally mocks accept state_machine and the affected
+    tests pass.
+  - tests/test_packaging.py EXPECTED_SDIST_ENTRIES contains the 3 new files (and the optional
+    runbook if created).
+  - tests/test_ytdlp_low_speed.py has no ruff F841/W292 findings and ends with a newline.
+  - ruff check and ruff format --check pass for the changed Python files.
+  - mypy passes for any changed Python files (none expected in src/).
+  - README.md documents throttled-rate semantics, staging recovery, and the Process Monitor pointer.
+  - docs/11-guides/troubleshooting.md contains the staging recovery subsection and the
+    rollout/rollback procedure.
+  - Execution plan D6 row is updated to ready with this task path.
+  - All four documented pytest command groups pass:
+      1. uv run pytest tests/test_ytdlp_downloader.py tests/test_hls_downloader.py -q
+      2. uv run pytest tests/test_download_state.py tests/test_workspace.py tests/test_media_validation.py -q
+      3. uv run pytest tests/test_checkpoint.py tests/test_diagnostics.py tests/integration/test_hls_fixture.py -q
+      4. uv run pytest tests/test_cli.py tests/test_batch_downloader.py tests/test_progress.py tests/test_progress_display.py -q
+  - Packaging checks pass: uv run pytest tests/test_packaging.py -q (network permitting) and the
+    sdist/wheel entry sets match the manifest.
+  - No production source code is changed; only tests, documentation, and plan metadata.
+
+verification_steps:
+  - uv run ruff check tests/test_batch_downloader.py tests/test_segment_downloader.py tests/test_packaging.py tests/test_ytdlp_low_speed.py
+  - uv run ruff format --check tests/test_batch_downloader.py tests/test_segment_downloader.py tests/test_packaging.py tests/test_ytdlp_low_speed.py
+  - uv run mypy src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/segment_downloader.py
+  - uv run pytest tests/test_ytdlp_downloader.py tests/test_hls_downloader.py -q
+  - uv run pytest tests/test_download_state.py tests/test_workspace.py tests/test_media_validation.py -q
+  - uv run pytest tests/test_checkpoint.py tests/test_diagnostics.py tests/integration/test_hls_fixture.py -q
+  - uv run pytest tests/test_cli.py tests/test_batch_downloader.py tests/test_progress.py tests/test_progress_display.py -q
+  - uv run pytest tests/test_packaging.py -q
+
+constraints:
+  - No production code changes; only tests, documentation, and plan metadata.
+  - Preserve the external Path | None contract of _download_with_ytdlp.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
+  - Do not introduce new dependencies or a second Windows runner type.
+  - Keep Process Monitor capture correlation-only (never an acceptance metric).
+  - If the optional runbook is added, update the sdist manifest in the same change.
+  - Commit this block separately.

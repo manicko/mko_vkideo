@@ -1,0 +1,265 @@
+# Implementation task for Block D0 — Reproduction & correlation.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D0_reproduction_correlation
+
+title: D0 — Reproduction and correlation (slow HLS + Windows descriptor lock + child diagnostics)
+
+priority: high
+
+depends_on: []
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D0. Reproduction and correlation"
+source_blocks:
+  - "D0 — Reproduction and correlation"
+
+description: >
+  Extend the programmable HLS fixture and add a Windows descriptor-holding helper so the
+  two independent slow-channel and local-file-lock reproduction scenarios can be exercised.
+  Add structured child lifecycle events, a bounded final drain, and artifact snapshots to
+  _download_with_ytdlp. Bind a correlation id and redact before persistence. Add tests for
+  the new fixture behaviors and diagnostic events, and document Process Monitor guidance for
+  SHARING VIOLATION correlation. No production behavior redesign; preserve existing tests.
+
+goals:
+  - Provide a 12-fragment, distinguishable-payload HLS scenario with configurable slow-fragment delivery.
+  - Provide a Windows descriptor holder that omits FILE_SHARE_DELETE, with signal-gated release and budget-exhaustion mode, platform-guarded.
+  - Emit child_started immediately after spawn and include pid on child_exit.
+  - Capture bounded final drain and artifact snapshots (relative names + sizes, only outside active writes).
+  - Bind correlation id in _download_with_ytdlp and keep diagnostic output redacted.
+  - Add non-trivial tests for fixture behaviors and diagnostic events.
+  - Document Process Monitor correlation procedure for SHARING VIOLATION.
+
+# Extra context (verbatim highlights from plan/research)
+extra_context: |
+  Researcher notes (2026-11-07):
+  - Programmable HLS server: extend existing aiohttp tests/integration/fixtures/hls_server.py.
+    Fields: slow_fragment, first_byte_delay_seconds, chunk_size, chunk_delay_seconds, fragment_count (12 for D0).
+    For slow fragment: first byte/chunk after first_byte_delay_seconds, then chunk_size bytes + asyncio.sleep(chunk_delay_seconds).
+    Distinct deterministic payloads per fragment (SHA-256 seeded), Content-Type video/mp2t.
+    Reuse Range handling; return requested slice for slow fragment. Bind 127.0.0.1:0.
+  - Windows file-lock simulation: ctypes.windll.kernel32.CreateFileW with GENERIC_READ|GENERIC_WRITE,
+    dwShareMode=FILE_SHARE_READ|FILE_SHARE_WRITE (omit FILE_SHARE_DELETE), OPEN_ALWAYS/OPEN_EXISTING.
+    Keep handle open until released by event or timeout. POSIX: fcntl.flock(fd, LOCK_EX) (cannot reproduce delete sharing;
+    WinError 32 path covered by fault injection raising PermissionError(winerror=32)).
+  - Structured events: append child_started to STRUCTURED_DIAGNOSTIC_EVENTS; keep child_exit.
+    Extend STRUCTURED_DIAGNOSTIC_FIELDS with pid, launch_number, phase, next_action, artifact_snapshot.
+    Emit child_started immediately after create_subprocess_exec with pid, launch_number, attempt_id, redacted effective settings.
+    Emit child_exit with pid, launch_number, returncode, elapsed_seconds, last_error_code, phase, next_action, artifact snapshot.
+    Capture artifact snapshots only when no write active (before launch and after exit/reap), under job lock, relative paths + sizes; None on OSError.
+    Never include signed URLs, cookies, or absolute temp roots.
+  - Bounded final drain: helper bounded_drain(stream, *, timeout=2.0, max_bytes=262144, chunk_size=65536) -> bytes.
+    Monotonic deadline; read chunks with asyncio.wait_for(stream.read(chunk_size), timeout=remaining).
+    Stop at EOF, timeout, or byte cap; log child_drain_truncated with captured byte count when cap hit.
+    After primary reader completes/cancelled, call bounded_drain to capture tail, append to output_chunks and transcript sink with same redaction, then _await_ytdlp_reap_with_timeout.
+  - Process Monitor (real Windows only): filter Path contains .mp4.part and (Process Name python.exe/yt-dlp.exe equivalent or Result SHARING VIOLATION);
+    capture CreateFile, CloseFile, ReadFile, WriteFile, SetRenameInformationFile/rename, SetDispositionInformationFile;
+    columns Time, Process Name, PID, Operation, Path, Result, Detail (Desired Access, Share Mode);
+    correlate holder PID with diagnostic child_started.pid and launch_number; save .PML and .CSV; bounded capture window.
+
+files:
+  - path: tests/integration/fixtures/hls_server.py
+    targets:
+      - type: dataclass
+        name: Scenario
+      - type: class
+        name: HlsServer
+      - type: method
+        name: _segment
+      - type: method
+        name: _segment_payload
+      - type: function
+        name: make_server
+    semantic_anchors:
+      insert_after:
+        type: dataclass_field
+        value: "reset_connection_on"
+      insert_before:
+        type: method
+        value: "_segment"
+    changes:
+      - action: extend_dataclass
+        description: >
+          Add to Scenario: slow_fragment (int | None), first_byte_delay_seconds (float),
+          chunk_size (int), chunk_delay_seconds (float). Keep fragment_count default 12 for D0 scenarios.
+          Add 12-fragment scenario helper (module-level function) returning Scenario with 12 fragments
+          and configurable slow-fragment delivery + reset_connection_on.
+      - action: extend_method
+        description: >
+          In HlsServer._segment, when n == scenario.slow_fragment, deliver first byte/chunk after
+          first_byte_delay_seconds, then chunk_size bytes followed by asyncio.sleep(chunk_delay_seconds),
+          keeping Content-Type video/mp2t. Consume reset_connection_on: when n in reset_connection_on,
+          drop the connection (reset) on the configured attempt; support repeatable/consumable semantics.
+          Preserve Range handling: for slow fragment return the requested byte slice (not whole payload)
+          so byte-range checks remain meaningful.
+      - action: add_method
+        description: >
+          Add HlsServer helper to build 12-fragment scenario payloads (distinguishable per index) and
+          expose slow-fragment metadata for tests.
+
+  - path: tests/integration/fixtures/windows_lock.py
+    targets:
+      - type: module
+        name: windows_lock
+    changes:
+      - action: add_file
+        description: >
+          New test helper module (platform-guarded). Windows: context manager opening final .part with
+          CreateFileW, dwDesiredAccess GENERIC_READ|GENERIC_WRITE, dwShareMode FILE_SHARE_READ|FILE_SHARE_WRITE
+          (omit FILE_SHARE_DELETE), dwCreationDisposition OPEN_ALWAYS/OPEN_EXISTING, handle held until release.
+          Signal-gated release (threading.Event or asyncio.Event) and budget-exhaustion mode that holds until
+          budget timeout. POSIX: fcntl.flock(fd, LOCK_EX) fallback; real WinError 32 path covered by fault injection.
+          Guard public entrypoints with sys.platform == "win32" / pytest.mark.skipif.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: _download_with_ytdlp
+      - type: call_site
+        name: asyncio.create_subprocess_exec
+      - type: function
+        name: _await_first_and_cancel_others
+      - type: function
+        name: _await_ytdlp_reap_with_timeout
+      - type: class
+        name: YtdlpArtifacts
+      - type: function
+        name: _ytdlp_artifacts_for
+    semantic_anchors:
+      insert_after:
+        type: call
+        value: "asyncio.create_subprocess_exec"
+      insert_before:
+        type: statement
+        value: "output_chunks initialization"
+    changes:
+      - action: add_event_emission
+        description: >
+          Immediately after create_subprocess_exec, emit structured event child_started with pid=process.pid,
+          launch_number (monotonic counter incremented at spawn), attempt_number (from attempt_id/retry index),
+          phase (current download phase / state machine state), next_action, and redacted effective settings
+          (N, throttled rate, ignore-config flag). Use structlog logger and bind correlation id.
+      - action: modify_event
+        description: >
+          Extend existing child_exit log/event to include pid, launch_number, returncode, elapsed_seconds,
+          last_error_code, phase, next_action, and artifact snapshot.
+      - action: add_helper
+        description: >
+          Add bounded_drain(stream, *, timeout=2.0, max_bytes=262144, chunk_size=65536) -> bytes using a
+          monotonic deadline and asyncio.wait_for(stream.read(chunk_size), timeout=remaining). Stop at EOF,
+          timeout, or byte cap; log child_drain_truncated with captured byte count when a cap is hit.
+          After primary reader completes or is cancelled, call bounded_drain to capture the tail, append to
+          output_chunks and the transcript sink with the same redaction, then perform _await_ytdlp_reap_with_timeout.
+      - action: add_helper
+        description: >
+          Add artifact snapshot capture (relative name -> size in bytes) for YtdlpArtifacts paths, taken only
+          when no write is active (before launch and after exit/reap), under the job lock. Record None on OSError.
+          Never include signed URLs, cookies, or absolute temp roots. Call before spawn and after reap; include
+          snapshot in child_started/child_exit events.
+      - action: bind_context
+        description: >
+          Bind correlation id in _download_with_ytdlp at function entry (generate if missing) via
+          utils.correlation so child events carry correlation_id.
+
+  - path: src/vkdownloader/utils/diagnostics.py
+    targets:
+      - type: constant
+        name: STRUCTURED_DIAGNOSTIC_EVENTS
+      - type: constant
+        name: STRUCTURED_DIAGNOSTIC_FIELDS
+      - type: class
+        name: DiagnosticContext
+      - type: function
+        name: bind_diagnostic_context
+    changes:
+      - action: modify_constant
+        description: >
+          Append "child_started" to STRUCTURED_DIAGNOSTIC_EVENTS (keep "child_exit", "backend_started",
+          "backend_stopped"). Extend STRUCTURED_DIAGNOSTIC_FIELDS with pid, launch_number, phase, next_action,
+          artifact_snapshot. Add corresponding optional fields to DiagnosticContext.
+      - action: ensure_redaction
+        description: >
+          Ensure output_chunks/transcript lines are sanitized before storage (reuse sanitize_text_for_log and
+          ChildTranscriptSink.write_line redaction). Minimal: no new redaction paths beyond existing sink logic.
+
+  - path: src/vkdownloader/services/diagnostics.py
+    targets:
+      - type: module
+        name: diagnostics
+    changes:
+      - action: reexport
+        description: >
+          Keep re-export of updated constants/classes; no behavioral change beyond source.
+
+  - path: tests/test_diagnostics.py
+    targets:
+      - type: module
+        name: test_diagnostics
+    changes:
+      - action: add_tests
+        description: >
+          Add tests asserting child_started is in STRUCTURED_DIAGNOSTIC_EVENTS and new fields exist;
+          assert bounded memory/redaction preserved. Add tests for artifact snapshot shape (relative names, sizes,
+          None on OSError) if helper is importable.
+
+  - path: tests/integration/test_hls_fixture.py
+    targets:
+      - type: module
+        name: test_hls_fixture
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for slow-fragment delivery (first-byte delay, chunk size/delay, 12 fragments, distinguishable
+          payloads), reset_connection_on consumption, byte-range slice for slow fragment, and 12-fragment scenario
+          helper. Guard timing assertions loosely.
+
+  - path: tests/integration/fixtures/windows_lock.py
+    targets:
+      - type: module
+        name: windows_lock
+    changes:
+      - action: add_tests
+        description: >
+          Add tests (platform-guarded) for descriptor holding without FILE_SHARE_DELETE, signal-gated release,
+          budget-exhaustion mode. POSIX path covered by fault injection tests in test_ytdlp_downloader.py.
+
+  - path: tests/test_ytdlp_downloader.py
+    targets:
+      - type: module
+        name: test_ytdlp_downloader
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for child_started event emission right after spawn, pid on child_exit, bounded_drain cap/truncation
+          logging, artifact snapshot capture timing, and correlation id binding. Use monkeypatch/fault injection for
+          WinError 32 path.
+
+  - path: docs/11-guides/troubleshooting.md
+    targets:
+      - type: document
+        name: troubleshooting
+    changes:
+      - action: add_section
+        description: >
+          Add Process Monitor guidance: filter Path contains .mp4.part and (Process Name python.exe/yt-dlp.exe
+          equivalent or Result SHARING VIOLATION); capture CreateFile, CloseFile, ReadFile, WriteFile,
+          SetRenameInformationFile/rename, SetDispositionInformationFile; columns Time, Process Name, PID,
+          Operation, Path, Result, Detail (Desired Access, Share Mode); correlate holder PID with diagnostic
+          child_started.pid and launch_number; save .PML and .CSV; bounded capture window (correlation only).
+
+acceptance_criteria:
+  - Slow HTTP and local file conflict are distinguishable by independent signals (diagnostic events + fixture behaviors).
+  - child_started and child_exit events are persisted even on fast process exit.
+  - Artifact snapshots are captured only outside active writes and contain relative names + sizes (None on OSError).
+  - Bounded final drain enforces time + volume caps and logs truncation.
+  - Windows descriptor helper is platform-guarded and omits FILE_SHARE_DELETE.
+  - Existing tests remain green; new tests cover fixture behaviors and diagnostic events.
+  - Process Monitor guidance documented in docs/11-guides/troubleshooting.md.
+
+verification_steps:
+  - uv run ruff check tests/integration/fixtures/hls_server.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/utils/diagnostics.py
+  - uv run mypy src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/utils/diagnostics.py
+  - uv run pytest tests/test_diagnostics.py tests/integration/test_hls_fixture.py -q
+  - uv run pytest tests/test_ytdlp_downloader.py -q

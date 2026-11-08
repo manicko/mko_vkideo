@@ -1,0 +1,312 @@
+# Implementation task for Block D2 — Typed outcome & file retry.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D2_typed_outcome_file_retry
+
+title: D2 — Typed outcome and file retry (YtdlpLaunchResult, FILE_LOCKED, file-access retry flags, terminal file conflict)
+
+priority: high
+
+depends_on:
+  - task_D0_reproduction_correlation
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D2. Typed outcome & file retry"
+source_blocks:
+  - "D2 — Typed outcome & file retry"
+
+description: >
+  Introduce an internal typed launch result for yt-dlp so local/file outcomes can be distinguished
+  from network outcomes, add WinError 32 / sharing-violation classification as FILE_LOCKED, add
+  deterministic file-access retry flags to the managed yt-dlp command, and make file conflicts a
+  terminal local outcome that neither consumes the network/retry budget nor triggers segment resume.
+  Preserve the external Path | None contract of _download_with_ytdlp, cancellation propagation,
+  artifact preservation, and job-lock ordering. Update tests and troubleshooting docs.
+
+goals:
+  - Add frozen dataclass YtdlpLaunchResult in ytdlp_downloader.py with the specified fields.
+  - Add internal _download_with_ytdlp_result returning YtdlpLaunchResult; keep _download_with_ytdlp as a Path | None compatibility shim.
+  - Update download_with_ytdlp_with_resume_fallback to call the typed variant and gate retry/segment resume on not file_conflict.
+  - Add ErrorCategory.FILE_LOCKED and update classify_error to detect winerror==32 / sharing violation before the generic permission branch.
+  - Add --file-access-retries 3 and --retry-sleep file_access:0.5 to _build_ytdlp_cli_command.
+  - Make file conflict terminal: persist state with reason_code file_lock_* and return None without incrementing network/refresh budgets or invoking fallback.
+  - Separate staging-candidate failure as its own diagnostic outcome (reason_code), not routed to the network loop.
+  - Tighten _derive_last_error_code so it no longer matches arbitrary numbers in paths/progress.
+  - Update tests for typed result, file-lock classification, file-access flags, new category, and terminal file-conflict behavior.
+  - Update troubleshooting docs for file-access retries and terminal file conflict.
+  - Update execution plan status for D2.
+
+extra_context: |
+  Researcher notes (2026-11-08):
+  - yt-dlp file-access retry flags (installed 2026.07.04):
+    --file-access-retries RETRIES exists; default is 3. --retry-sleep [TYPE:]EXPR accepts file_access.
+    yt_dlp/downloader/common.py::wrap_file_access wraps sanitize_open, try_remove, try_rename; it catches
+    OSError and retries only when err.errno in (errno.EACCES, errno.EINVAL). On Windows WinError 32
+    (ERROR_SHARING_VIOLATION) surfaces as PermissionError with errno == EACCES (13) and winerror == 32,
+    so it is retried. Sleep comes from params["retry_sleep_functions"]["file_access"] (empty by default).
+    Explicitly passing --file-access-retries 3 and --retry-sleep file_access:0.5 makes the 3 x 0.5 s
+    budget deterministic.
+  - WinError 32 mapping:
+    PermissionError.winerror is 32 on Windows and None on POSIX. On POSIX the equivalent is
+    errno.EACCES/EPERM/EBUSY plus a sharing/lock message; non-Windows coverage relies on fault injection
+    (os.replace/Path.rename raising PermissionError(winerror=32) or a message containing
+    "sharing violation").
+  - Typed result contract:
+    _download_with_ytdlp must keep returning Path | None for all external callers. The typed outcome is an
+    internal detail: add internal coroutine _download_with_ytdlp_result(...) returning a frozen dataclass,
+    with _download_with_ytdlp as a thin compatibility wrapper.
+  - Budget separation (no new counters):
+    File lock is a terminal local outcome: do not call record_retry, do not increment retries_used, do not
+    request a refresh, and do not invoke browser/HLS fallback or a new child. Network/auth/timeout/5xx
+    failures keep using record_retry and the combined budget; refresh keeps using request_refresh/refresh_cap.
+    ffprobe-missing / validation / publish-conflict outcomes are classified as INTEGRITY_FAILURE /
+    INVALID_OUTPUT_PATH (reused) with a distinct reason_code and operation, and are also terminal
+    (no retry, no fallback).
+  - Candidate handling on terminal file lock:
+    After a failed launch, capture candidate as the staging .part/staged path when it exists and is
+    non-empty; otherwise None. The fallback loop skips segment resume when
+    result.error_category == ErrorCategory.FILE_LOCKED (or result.phase in
+    {"file_locked", "local_block", "missing_output"}).
+  - State/schema implications:
+    Adding FILE_LOCKED to ErrorCategory is additive; persisted job_state.v2.json files remain valid.
+    extra="forbid" on DownloadJobState is unaffected because no field is added. No migration required.
+  - _derive_last_error_code tightening:
+    Avoid matching arbitrary numbers in paths/progress. Prefer explicit HTTP/status contexts only.
+
+files:
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: enum
+        name: ErrorCategory
+    changes:
+      - action: add_member
+        description: >
+          Add FILE_LOCKED = "file_locked" to ErrorCategory. Keep all existing members and string values.
+          This is additive; no persisted schema field is added.
+
+  - path: src/vkdownloader/services/state_machine.py
+    targets:
+      - type: method
+        name: classify_error
+    changes:
+      - action: insert_branch
+        description: >
+          Before the generic EACCES/EPERM permission branch, detect file locks:
+          - For OSError, check getattr(error, "winerror", None) == 32 first.
+          - Otherwise check errno in (EACCES, EPERM, EBUSY, EAGAIN) AND a lowercase message containing
+            one of: "sharing violation", "being used by another process", "resource busy", "winerror 32".
+          - Return ErrorCategory.FILE_LOCKED when matched.
+          - For non-OSError objects, inspect str(error).lower() for the same substrings and return
+            ErrorCategory.FILE_LOCKED when matched.
+          - Keep disk-full detection before file-lock detection is not required; file-lock detection must
+            precede the generic permission branch only.
+          - Record the operation/redacted path in logs, not in the category.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: dataclass
+        name: YtdlpLaunchResult
+      - type: function
+        name: _build_ytdlp_cli_command
+      - type: function
+        name: _download_with_ytdlp
+      - type: function
+        name: _download_with_ytdlp_result
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+      - type: function
+        name: _derive_last_error_code
+    semantic_anchors:
+      dataclass_insert_after:
+        type: class
+        name: YtdlpArtifacts
+      cli_flags_insert_near:
+        type: literal
+        value: "--fragment-retries"
+    changes:
+      - action: add_dataclass
+        description: >
+          Add a frozen dataclass named YtdlpLaunchResult in ytdlp_downloader.py. Fields and defaults:
+            path: Path | None = None
+            phase: str = "failed"
+            returncode: int | None = None
+            last_error_code: str | None = None
+            http_status: int | None = None
+            error_category: ErrorCategory = ErrorCategory.UNKNOWN
+            candidate_path: Path | None = None
+            file_conflict: bool = False
+            cancelled: bool = False
+          Allowed phase values: "completed", "failed", "cancelled", "file_locked", "local_block",
+          "missing_output". Keep it internal; export only if tests import it from the module.
+      - action: add_constants
+        description: >
+          Add module constants:
+            _YTDLP_FILE_ACCESS_RETRIES = 3
+            _YTDLP_FILE_ACCESS_RETRY_SLEEP = 0.5
+      - action: add_flags
+        description: >
+          In _build_ytdlp_cli_command, add to the managed argv:
+            --file-access-retries 3
+            --retry-sleep file_access:0.5
+          Use the constants above. Place them near the existing -R / --fragment-retries flags.
+          Do not remove --ignore-config or any D1 behavior.
+      - action: refactor_function
+        description: >
+          Rename the implementation body of _download_with_ytdlp to _download_with_ytdlp_result with the
+          same parameters plus the existing parameters, but return YtdlpLaunchResult instead of Path | None.
+          Map outcomes:
+            - Success: path=<final output path>, phase="completed", candidate_path=<staging candidate when
+              workspace is used>, returncode=process.returncode, last_error_code, http_status,
+              error_category=ErrorCategory.UNKNOWN (or success-equivalent), file_conflict=False,
+              cancelled=False.
+            - Cancellation: phase="cancelled", cancelled=True, returncode preserved, candidate_path set
+              when a staging .part/non-empty candidate exists.
+            - File lock: phase="file_locked", file_conflict=True, error_category=ErrorCategory.FILE_LOCKED,
+              reason_code persisted by caller, candidate_path set when available, no retry/fallback.
+            - Staging candidate failure (ffprobe missing, media validation failure, publish failure,
+              missing staged candidate): phase="local_block" or "missing_output", error_category
+              INTEGRITY_FAILURE or INVALID_OUTPUT_PATH, distinct reason_code and operation, candidate_path
+              set when available, terminal.
+            - Other failures: phase="failed", error_category from classify_error when applicable,
+              candidate_path set when a recoverable staging candidate exists.
+          Preserve cancellation propagation (re-raise CancelledError), artifact preservation, and job-lock
+          ordering. Do not call record_retry/request_refresh inside this function; budget decisions remain
+          in the outer loop.
+      - action: add_compatibility_shim
+        description: >
+          Re-add _download_with_ytdlp with the original signature and return type Path | None. It delegates
+          to _download_with_ytdlp_result and returns result.path when result.phase == "completed", otherwise
+          None. Keep all external callers and tests working.
+      - action: update_outer_loop
+        description: >
+          In download_with_ytdlp_with_resume_fallback:
+            - Replace the _download_with_ytdlp call with _download_with_ytdlp_result.
+            - If result.path is not None: return result.path.
+            - If result.cancelled: record cancellation when state_machine is present and return None.
+            - If result.file_conflict or result.error_category == ErrorCategory.FILE_LOCKED or
+              result.phase in {"file_locked", "local_block", "missing_output"}:
+                treat as terminal local outcome:
+                  * do not call record_retry, do not increment retries_used, do not request refresh,
+                    do not call backoff, do not invoke _attempt_segment_resume or a new child;
+                  * if state_machine is present, set reason_code to a file_lock_* value for file conflicts
+                    (for example "file_lock_conflict") or the distinct staging-candidate reason_code for
+                    staging failures, set error_category accordingly, and persist;
+                  * return None.
+            - Otherwise continue the existing retry/backoff/network logic unchanged.
+            - Gate segment resume on not file_conflict and not terminal local outcome; only call
+              _attempt_segment_resume for ordinary network/refresh failures with recoverable artifacts.
+      - action: tighten_derive_last_error_code
+        description: >
+          Update _derive_last_error_code so it only recognizes HTTP/status codes in explicit contexts:
+            - HTTP Error\s+(\d{3})
+            - HTTP\s+(\d{3})
+            - (?:status|status code|http status)[:\s=]+(\d{3})
+          Remove the generic \b([45]\d{2})\b fallback and the free-text ERROR: capture (or restrict ERROR:
+          to a 3-digit code only). Return None when no explicit HTTP/status code is found. This prevents
+          matching numbers in file paths or progress output.
+
+  - path: tests/test_ytdlp_downloader.py
+    targets:
+      - type: module
+        name: test_ytdlp_downloader
+    changes:
+      - action: update_tests
+        description: >
+          Add/update tests:
+            - Import and assert YtdlpLaunchResult is a frozen dataclass with the specified fields.
+            - _download_with_ytdlp remains callable and returns Path | None (compatibility shim).
+            - _build_ytdlp_cli_command contains --file-access-retries followed by "3" and --retry-sleep
+              followed by "file_access:0.5".
+            - Fault-inject a sharing violation (PermissionError(winerror=32) or message containing
+              "sharing violation") and assert ErrorCategory.FILE_LOCKED classification.
+            - File-conflict terminal behavior: no record_retry call, no retries_used increment, no refresh,
+              no _attempt_segment_resume, no second child; returns None.
+            - Staging-candidate failure is a distinct terminal outcome and is not routed to the network loop.
+            - _derive_last_error_code does not match numbers in paths/progress and still matches explicit
+              HTTP status strings.
+          Keep existing tests passing; update assertions only where the contract intentionally changed.
+
+  - path: tests/test_download_state.py
+    targets:
+      - type: function
+        name: test_error_category_is_strenum
+    changes:
+      - action: update_expected_set
+        description: >
+          Add "file_locked" to the expected ErrorCategory value set.
+
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: method
+        name: test_cli_command_includes_throttled_rate
+      - type: method
+        name: test_cli_command_custom_values
+    changes:
+      - action: update_contract
+        description: >
+          Add assertions that --file-access-retries and value "3", and --retry-sleep and value
+          "file_access:0.5" are present in the built command. Keep existing -R, --fragment-retries,
+          --ignore-config, and -N assertions.
+
+  - path: docs/11-guides/troubleshooting.md
+    targets:
+      - type: section
+        name: file access retries / file conflict
+    changes:
+      - action: add_section
+        description: >
+          Document:
+            - Managed yt-dlp now uses --file-access-retries 3 and --retry-sleep file_access:0.5 to handle
+              transient file locks/sharing violations.
+            - A persistent file lock (for example another process holding the .part/staging file) is a
+              terminal local outcome: no network retry, no token refresh, no segment fallback. The job ends
+              with reason_code file_lock_* and error_category file_locked.
+            - Remediation: close the holding process (Task Manager/taskkill on Windows), retry the job, or
+              change the output location. Partial artifacts are preserved for resume.
+            - File-access retries only cover EACCES/WinError 32 as retried by yt-dlp; other errno values
+              (for example EBUSY on some platforms) terminate after one attempt.
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    changes:
+      - action: update_status
+        description: >
+          Mark D2 as ready with task path .ai/tasks/todo/D2_typed_outcome_file_retry.yaml.
+          Leave D3/D4/D5/D6 statuses unchanged.
+
+acceptance_criteria:
+  - YtdlpLaunchResult exists as a frozen dataclass with fields path, phase, returncode, last_error_code,
+    http_status, error_category, candidate_path, file_conflict, cancelled.
+  - _download_with_ytdlp still returns Path | None and delegates to _download_with_ytdlp_result.
+  - _download_with_ytdlp_result returns the typed result for success, cancellation, file lock, staging
+    failure, and ordinary failure.
+  - _build_ytdlp_cli_command contains --file-access-retries "3" and --retry-sleep "file_access:0.5".
+  - classify_error returns ErrorCategory.FILE_LOCKED for winerror==32 and sharing-violation messages before
+    the generic permission branch.
+  - File conflict is terminal: no record_retry, no retries_used increment, no refresh, no backoff, no
+    segment fallback, no new child; state persisted with reason_code file_lock_* and error_category
+    file_locked; returns None.
+  - Staging-candidate failure is a distinct terminal outcome with its own reason_code and is not routed to
+    the network loop.
+  - _derive_last_error_code does not match arbitrary numbers in paths or progress output.
+  - test_error_category_is_strenum includes "file_locked".
+  - File-conflict terminal behavior tests pass (no HTTP growth, no fallback).
+  - ruff and mypy pass for changed Python files.
+  - Troubleshooting docs updated.
+
+verification_steps:
+  - uv run ruff check src/vkdownloader/models/enums.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py
+  - uv run mypy src/vkdownloader/models/enums.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py
+  - uv run pytest tests/test_ytdlp_downloader.py tests/test_download_state.py tests/test_hls_downloader.py -q
+
+constraints:
+  - Preserve external contract Path | None of _download_with_ytdlp.
+  - Preserve cancellation propagation, artifact preservation, and job-lock ordering.
+  - Do not increment network/refresh budgets or invoke fallback on file conflict.
+  - No production code distortion for tests.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
+  - Do not modify production source code in this planning task.

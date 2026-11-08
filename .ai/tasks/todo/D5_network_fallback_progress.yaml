@@ -1,0 +1,467 @@
+# Implementation task for Block D5 — Bound network fallback & progress.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D5_network_fallback_progress
+
+title: D5 — Bound network fallback and report progress (reason-based routing, segment switch, progress finalizing, bounded alternation)
+
+priority: medium
+
+depends_on:
+  - task_D1_slow_channel_managed_child
+  - task_D2_typed_outcome_file_retry
+  - task_D3_artifact_compatibility_resume
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D5. Bound network fallback and report progress"
+source_blocks:
+  - "D5 — Bound network fallback and report progress"
+
+description: >
+  Bound the network fallback so a confirmed failure reason, not every yt-dlp failure, drives
+  refresh/retry/segment-switch decisions. Populate http_status on YtdlpLaunchResult for
+  reason-based routing. Route confirmed 401/403/410 through the bounded refresh path with
+  pre-consumed refresh allowance and variant check; 429 through Retry-After/coordinator; 5xx/
+  timeout through limited retries; manifest mismatch/integrity/cancel/local outcomes to
+  stop/recovery. Charge a network retry only when actually scheduled and share the combined
+  budget with segment-level retries. Allow at most one segment-backend transition per job
+  (persisted segment_backend_used), gated on a confirmed network failure and HLS compatibility,
+  propagating the original variant binding and rechecking numeric quality, reusing a compatible
+  segment checkpoint or reporting a new segment download, and returning None (no unlimited
+  alternation) after a failed switch. Fail with missing_required_fragment after the retry
+  budget. Add a FINALIZING JobPhase emitted during file retry/publish, separating verified disk
+  bytes from yt-dlp estimates and current-session network bytes, with no percent/ETA as proof.
+  Update the named tests.
+
+goals:
+  - Populate http_status on YtdlpLaunchResult (int(last_error_code) when it is a 3-digit
+    HTTP status, else None).
+  - Implement reason-based routing in download_with_ytdlp_with_resume_fallback branching on
+    result.error_category / http_status.
+  - Consume refresh allowance before invoking refresh for 401/403/410; refresh stream; run the
+    existing quality/variant check; on mismatch persist refresh_mismatch + INTEGRITY_FAILURE.
+  - Handle 429 via coordinator.pause(...) when present (honoring Retry-After) or
+    _compute_backoff_delay(429, retry_count, None), then retry yt-dlp (no backend switch).
+  - Bound 5xx/timeout retries with the existing backoff; allow a single segment switch only
+    after the retry budget is exhausted and artifacts are COMPATIBLE_RESUME.
+  - Route CANCELLED, FILE_LOCKED, INVALID_OUTPUT_PATH, INTEGRITY_FAILURE,
+    INCOMPATIBLE_PLAYLIST, INCOMPATIBLE_CODEC, NOT_FOUND, DISK_FULL, PERMISSION_ERROR to
+    persist reason + category and return None (no retry, no switch).
+  - Persist segment_backend_used on DownloadJobState (default False) and block a second switch
+    with backend_switch_already_used, emitting the reserved backend_switch_blocked event.
+  - After a failed segment switch, return None and preserve artifacts (no re-entry into the
+    yt-dlp loop).
+  - Thread state_machine through _run_download_session/segment retries and call record_retry
+    only when a retry wait is actually scheduled; share the combined budget (6).
+  - In _tally_and_merge, record missing_required_fragment (reason_code) with error_category
+    NOT_FOUND/UNKNOWN when downloaded_count != len(segments) or any segment failed; preserve
+    artifacts and return None. Apply the same reason when a zero-exit yt-dlp result has
+    incomplete media.
+  - Add FINALIZING to JobPhase and emit a final progress snapshot with phase=FINALIZING and
+    eta_seconds=None during candidate validation/publication and file-access retries. Keep
+    verified_bytes_on_disk from job_state.verified_bytes and network_bytes_this_session from
+    job_state.network_bytes_this_session; never from yt-dlp's ~ estimate; keep is_estimate
+    on child-driven snapshots.
+  - Ensure verified_* counters only move forward (already in update_progress_counters).
+  - Update tests: test_progress, test_progress_display, test_hls_downloader,
+    test_ytdlp_downloader, test_download_state.
+
+extra_context: |
+  Researcher notes (2026-11-08):
+  - Reason classification primitives already exist. classify_http_status in retry_policies.py
+    maps 401/403/410 -> AUTH_EXPIRED, 429 -> RATE_LIMITED, 5xx -> SERVER_ERROR, 408 ->
+    CONNECTION_TIMEOUT. YtdlpLaunchResult already carries error_category, last_error_code,
+    http_status (currently always None), file_conflict, cancelled. _derive_last_error_code
+    extracts a 3-digit status from the child tail. Routing can be done without new parsing
+    code — only wiring.
+  - Refresh allowance exists but is not consumed on the segment path. _fetch_playlist_with_retry
+    calls state_machine.request_refresh("token_expired") before _handle_token_refresh and
+    aborts when the cap (2) is exhausted. _attempt_segment_resume calls refresh_stream
+    directly and never calls request_refresh, so the cap is bypassed there. Variant/quality
+    re-check already exists in _attempt_segment_resume (lines ~2087-2111) and returns
+    PRESERVE_AND_STOP on mismatch.
+  - Backend switch is unbounded today. download_with_ytdlp_with_resume_fallback can call
+    _attempt_segment_resume once per retry iteration; nothing prevents a second switch after
+    the first fails. The diagnostic event backend_switch_blocked is reserved in
+    STRUCTURED_DIAGNOSTIC_EVENTS but never emitted. No segment_backend_used field exists in
+    DownloadJobState.
+  - Network retry charging is mostly correct but not segment-aware. The yt-dlp loop increments
+    retry_count and calls record_retry only after the terminal-local check and before the
+    backoff wait, so local/file outcomes are not charged. The segment downloader does not call
+    record_retry at all, so its retries do not share the combined budget (6).
+  - Progress already separates verified disk bytes from network bytes. ProgressSnapshot has
+    verified_bytes_on_disk and network_bytes_this_session; both yt-dlp and segment paths
+    populate them from job_state. yt-dlp sets eta_seconds=progress_state.eta_seconds with
+    is_estimate=progress_state.is_estimate, so negative/unreliable ETAs are already filtered
+    by the parser. There is no FINALIZING phase in JobPhase.
+  - Missing-fragment handling exists but lacks a reason code. _tally_and_merge returns None
+    when downloaded_count != len(segments) and on any failed segment index; the caller
+    preserves artifacts. No state transition or reason_code is recorded for "missing required
+    fragment".
+  - Chosen approach (minimal):
+    1. Populate http_status on the yt-dlp result. In _download_with_ytdlp_result, set
+       http_status=int(last_error_code) when last_error_code is a 3-digit HTTP status, else
+       None. No new parsing.
+    2. Reason-based routing in download_with_ytdlp_with_resume_fallback. After the existing
+       terminal-local check, branch on result.error_category / http_status:
+       - CANCELLED -> record cancellation, return None.
+       - FILE_LOCKED, INVALID_OUTPUT_PATH, INTEGRITY_FAILURE, INCOMPATIBLE_PLAYLIST,
+         INCOMPATIBLE_CODEC, NOT_FOUND, DISK_FULL, PERMISSION_ERROR -> persist reason +
+         category, return None (no retry, no switch). Add these to the terminal set.
+       - AUTH_EXPIRED (401/403/410): consume refresh allowance first via
+         state_machine.request_refresh(...); on False, persist refresh_cap_exhausted, return
+         None. On True, refresh stream, run the existing quality/variant check; on mismatch
+         persist refresh_mismatch + INTEGRITY_FAILURE, return None. On success, attempt the
+         segment switch (step 4) with the refreshed binding.
+       - RATE_LIMITED (429): if a coordinator is present, await coordinator.pause(...)
+         (using pause_seconds); otherwise use _compute_backoff_delay(429, retry_count, None).
+         Honor any Retry-After parsed from the sanitized tail if present. Then retry yt-dlp
+         (do not switch backends for a pure rate limit).
+       - SERVER_ERROR, CONNECTION_TIMEOUT, CONNECTION_RESET, UNKNOWN with a network-ish
+         failure: bounded backoff retries (existing path). Only after the retry budget is
+         exhausted and artifacts are COMPATIBLE_RESUME may the single segment switch (step 4)
+         be attempted.
+    3. Charge a retry only when actually scheduled. Keep record_retry where the backoff wait
+       is actually performed. For the segment backend, thread state_machine through
+       _run_download_session (already present) and call record_retry(scope="segment", ...)
+       inside _fetch_playlist_with_retry and the segment retry loops only when a retry wait is
+       about to happen; on is_budget_exhausted() return None. This makes segment retries share
+       the combined budget instead of an independent counter.
+    4. Bounded backend switch (one per job). Add segment_backend_used: bool = False to
+       DownloadJobState (default False, persisted). Before calling _attempt_segment_resume:
+       - if segment_backend_used is True, emit backend_switch_blocked with
+         reason_code="backend_switch_already_used", persist, return None.
+       - set segment_backend_used = True, persist, then call _attempt_segment_resume.
+       - regardless of its result, do not return to the yt-dlp loop afterwards (break / return
+         its result) — this prevents unlimited alternation. On failure, return None and
+         preserve artifacts.
+       - pass the refreshed binding (from step 2) as stream_binding and the original
+         stream_variant_id.
+    5. HLS compatibility before/within the switch. Keep the switch attempt inside
+       _attempt_segment_resume, which already verifies quality + variant. Add one guard at its
+       start: consume refresh allowance via request_refresh when the switch is triggered by an
+       auth-expired result (already done in step 2, so do not double-count). The segment
+       downloader's existing checkpoint reconciliation handles compatible vs incompatible
+       manifests (quarantine + new generation), so an incompatible playlist cannot contribute
+       an old fragment. No new quarantine logic.
+    6. Fail on missing mandatory fragment. In _tally_and_merge, when downloaded_count !=
+       len(segments) or any segment failed, if state_machine is present transition to FAILED
+       (or PRESERVE_AND_STOP) with reason_code="missing_required_fragment" and
+       error_category=NOT_FOUND/UNKNOWN, then return None. Preserve artifacts (already). Add
+       the same reason when a zero-exit yt-dlp result has incomplete media
+       (missing_output/local_block).
+    7. Progress reporting. Add FINALIZING to JobPhase. In _download_with_ytdlp_result, emit a
+       final progress snapshot with phase=JobPhase.FINALIZING and eta_seconds=None during
+       candidate validation/publication and file-access retries. Keep verified_bytes_on_disk
+       from job_state.verified_bytes and network_bytes_this_session from
+       job_state.network_bytes_this_session (never from yt-dlp's ~ estimate); keep is_estimate
+       on child-driven snapshots. Ensure verified_* counters only move forward (already in
+       update_progress_counters).
+    8. No unlimited alternation. Enforce via: refresh cap (2), combined retry budget (6),
+       segment_backend_used flag (1), and the rule that a failed segment switch returns None
+       instead of re-entering the yt-dlp loop.
+  - Risks:
+    * http_status derivation from last_error_code depends on yt-dlp actually printing an HTTP
+      status; some network failures (DNS, timeout) yield no status and fall into the retry
+      bucket, which is acceptable but means routing is conservative.
+    * Adding segment_backend_used changes DownloadJobState (extra field with default) and
+      requires migration tolerance for old state files; follow the same default-and-tolerate
+      pattern used for artifact_* fields.
+    * Adding JobPhase.FINALIZING changes the JobPhase enum and any exhaustive match/display
+      code; verify progress display handles unknown phases gracefully.
+    * Refresh consumption before variant verification means a variant mismatch still spends one
+      refresh slot; this is intentional (the refresh happened) but should be documented. If the
+      variant check is moved before refresh, the cap semantics change.
+    * Sharing the combined budget between yt-dlp and segment paths could exhaust it faster on
+      jobs that legitimately need both; the existing cap (6) and refresh cap (2) are the agreed
+      bounds and should not be raised in this block.
+    * Segment-path retry charging requires careful placement to avoid double-counting when
+      _fetch_playlist_with_retry retries and then segment fan-out also retries; prefer charging
+      at the playlist level only, and keep per-segment retries inside the existing max_retries
+      budget without separate record_retry calls.
+
+files:
+  - path: src/vkdownloader/models/enums.py
+    targets:
+      - type: enum
+        name: JobPhase
+    semantic_anchors:
+      finalizing_after:
+        type: enum_member
+        value: VERIFYING
+    changes:
+      - action: add_enum_member
+        description: >
+          Add FINALIZING = "finalizing" to JobPhase. Progress display must render it as a
+          non-downloading phase (phase-aware description, no misleading ETA/speed) like the
+          other non-DOWNLOADING phases.
+
+  - path: src/vkdownloader/services/state_machine.py
+    targets:
+      - type: class
+        name: DownloadJobState
+    semantic_anchors:
+      segment_backend_after:
+        type: field
+        value: artifact_classification
+    changes:
+      - action: add_field
+        description: >
+          Add to DownloadJobState (default so old state files remain valid):
+            segment_backend_used: bool = False
+          Keep model_config extra="forbid". Persist through the existing atomic writer.
+          No migration required; missing key tolerated via default.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: dataclass
+        name: YtdlpLaunchResult
+      - type: function
+        name: _download_with_ytdlp_result
+      - type: function
+        name: download_with_ytdlp_with_resume_fallback
+      - type: function
+        name: _attempt_segment_resume
+    semantic_anchors:
+      http_status_populate_in:
+        type: function
+        name: _download_with_ytdlp_result
+      routing_in:
+        type: function
+        name: download_with_ytdlp_with_resume_fallback
+      switch_guard_in:
+        type: function
+        name: download_with_ytdlp_with_resume_fallback
+      compatibility_in:
+        type: function
+        name: _attempt_segment_resume
+    changes:
+      - action: populate_http_status
+        description: >
+          In _download_with_ytdlp_result, set http_status=int(last_error_code) when
+          last_error_code is a 3-digit HTTP status, else None, on every YtdlpLaunchResult
+          returned (success, failure, cancelled, file_locked, missing_output, local_block,
+          stall timeout, not found). No new parsing; reuse _derive_last_error_code output.
+      - action: reason_based_routing
+        description: >
+          In download_with_ytdlp_with_resume_fallback, after the existing terminal-local
+          check, branch on result.error_category / http_status as specified in goals:
+          CANCELLED -> record cancellation, return None; terminal local outcomes (FILE_LOCKED,
+          INVALID_OUTPUT_PATH, INTEGRITY_FAILURE, INCOMPATIBLE_PLAYLIST, INCOMPATIBLE_CODEC,
+          NOT_FOUND, DISK_FULL, PERMISSION_ERROR) -> persist reason + category, return None;
+          AUTH_EXPIRED -> consume refresh allowance first (request_refresh), refresh stream,
+          quality/variant check, then single segment switch with refreshed binding;
+          RATE_LIMITED -> coordinator.pause or backoff, retry yt-dlp (no switch);
+          SERVER_ERROR/CONNECTION_TIMEOUT/CONNECTION_RESET/UNKNOWN network -> bounded backoff
+          retries, then single segment switch only when budget exhausted and artifacts are
+          COMPATIBLE_RESUME.
+      - action: terminal_local_expansion
+        description: >
+          Expand the terminal-local set to include INCOMPATIBLE_PLAYLIST, INCOMPATIBLE_CODEC,
+          NOT_FOUND, DISK_FULL, PERMISSION_ERROR (in addition to FILE_LOCKED,
+          INVALID_OUTPUT_PATH, INTEGRITY_FAILURE). Persist reason_code accordingly
+          (file_lock_conflict for file lock; staging_candidate_failed otherwise; or a
+          category-specific reason).
+      - action: bounded_backend_switch
+        description: >
+          Before calling _attempt_segment_resume, check state_machine.job_state.segment_backend_used.
+          If True, emit backend_switch_blocked (reason_code="backend_switch_already_used"),
+          persist, return None. Otherwise set True, persist, then call _attempt_segment_resume;
+          regardless of result do not re-enter the yt-dlp loop — return its result or None.
+          Pass refreshed binding as stream_binding and the original stream_variant_id.
+      - action: no_unlimited_alternation
+        description: >
+          Ensure a failed segment switch returns None instead of looping back to yt-dlp.
+          Preserve artifacts on failure.
+      - action: missing_fragment_reason
+        description: >
+          When a zero-exit yt-dlp result has incomplete media (missing_output/local_block),
+          persist reason_code="missing_required_fragment" and error_category per the result,
+          then return None.
+      - action: progress_finalizing
+        description: >
+          In _download_with_ytdlp_result, emit a final ProgressSnapshot with
+          phase=JobPhase.FINALIZING and eta_seconds=None during candidate validation,
+          publication, and file-access retries. Use verified_bytes from job_state.verified_bytes
+          and network_bytes from job_state.network_bytes_this_session; keep is_estimate from the
+          child progress state. Invoke progress_snapshot_callback when provided.
+      - action: add_parameter
+        description: >
+          Add http_status-aware refresh consumption is already in _attempt_segment_resume;
+          ensure request_refresh is called there when the switch is triggered by an
+          auth-expired result (do not double-count if already consumed in routing).
+
+  - path: src/vkdownloader/services/segment_downloader.py
+    targets:
+      - type: function
+        name: _fetch_playlist_with_retry
+      - type: function
+        name: _tally_and_merge
+      - type: function
+        name: _run_download_session
+      - type: function
+        name: download_hls_with_resume
+    semantic_anchors:
+      retry_charge_in:
+        type: function
+        name: _fetch_playlist_with_retry
+      missing_fragment_in:
+        type: function
+        name: _tally_and_merge
+    changes:
+      - action: charge_retry_only_when_scheduled
+        description: >
+          Thread state_machine through _run_download_session (already present) and call
+          record_retry(scope="segment", ...) inside _fetch_playlist_with_retry and the segment
+          retry loops only when a retry wait is actually about to happen. On
+          is_budget_exhausted() return None. Keep per-segment retries inside the existing
+          max_retries budget without separate record_retry calls (charge at playlist level
+          only) to avoid double-counting.
+      - action: honor_combined_budget
+        description: >
+          Before each retry wait, check state_machine.is_budget_exhausted(); if exhausted,
+          persist FAILED_RETRY_BUDGET and return None.
+      - action: missing_required_fragment
+        description: >
+          In _tally_and_merge, when downloaded_count != len(segments) or any segment failed,
+          if state_machine is present persist reason_code="missing_required_fragment" and
+          error_category=NOT_FOUND (or UNKNOWN) and transition to FAILED/PRESERVE_AND_STOP
+          when legal, then return None. Preserve artifacts (already).
+      - action: progress_finalizing
+        description: >
+          Emit a final ProgressSnapshot with phase=JobPhase.FINALIZING and eta_seconds=None
+          during merge/publication/finalization in download_hls_with_resume. Keep verified bytes
+          from job_state and network bytes from the current session.
+
+  - path: src/vkdownloader/services/progress.py
+    targets:
+      - type: module
+        name: progress
+    changes:
+      - action: reexport_finalizing
+        description: >
+          JobPhase is re-exported from models.enums; no code change beyond the enum addition.
+          Ensure snapshot_to_legacy and eta_from_snapshot handle FINALIZING like other
+          non-downloading phases (eta None).
+
+  - path: src/vkdownloader/services/progress_display.py
+    targets:
+      - type: class
+        name: RichProgressReporter
+    changes:
+      - action: render_finalizing
+        description: >
+          update_snapshot already treats any phase != DOWNLOADING as non-downloading (phase-aware
+          description, eta text). Ensure FINALIZING is covered by the same branch and does not
+          fall through to the downloading ETA rendering. No new column needed.
+
+  - path: tests/test_progress.py
+    targets:
+      - type: module
+        name: test_progress
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for: JobPhase.FINALIZING exists and is a non-downloading phase;
+          ProgressSnapshot with phase=FINALIZING accepts eta_seconds=None; verified bytes and
+          network bytes are carried separately; no percent/ETA is used as proof.
+
+  - path: tests/test_progress_display.py
+    targets:
+      - type: module
+        name: test_progress_display
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for: update_snapshot renders FINALIZING phase-aware description without
+          misleading ETA/speed; negative/unreliable ETAs are not displayed.
+
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: module
+        name: test_hls_downloader
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for: 429 observes server delay/coordinator pause; 5xx retries bounded;
+          missing required fragment returns None with reason_code missing_required_fragment;
+          combined budget shared with segment retries; no unlimited alternation.
+
+  - path: tests/test_ytdlp_downloader.py
+    targets:
+      - type: module
+        name: test_ytdlp_downloader
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for: http_status populated on YtdlpLaunchResult from last_error_code;
+          403 triggers exactly one refresh then segment switch; 429 observes Retry-After/coordinator;
+          5xx retries bounded; terminal local outcomes do not retry or switch; segment_backend_used
+          blocks a second switch (backend_switch_blocked); failed switch returns None and preserves
+          artifacts; missing_output/local_block persists missing_required_fragment.
+
+  - path: tests/test_download_state.py
+    targets:
+      - type: module
+        name: test_download_state
+    changes:
+      - action: add_tests
+        description: >
+          Add tests for: DownloadJobState accepts segment_backend_used (default False) and
+          round-trips through the atomic writer; old state files without the field still validate;
+          CommitRecoveryDirective unchanged (DESTINATION_CONFLICT already present from D4).
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    changes:
+      - action: update_status
+        description: >
+          Mark D5 as ready with task path .ai/tasks/todo/D5_network_fallback_progress.yaml.
+          Leave D6 pending.
+
+acceptance_criteria:
+  - http_status is populated on YtdlpLaunchResult for reason-based routing.
+  - Confirmed 401/403/410 route through the bounded refresh path, consuming the refresh
+    allowance before invoking refresh and verifying the refreshed stream is the same variant.
+  - 429 honors Retry-After/coordinator pause and retries yt-dlp without backend switch.
+  - 5xx/timeout retries are bounded by the combined budget.
+  - Manifest mismatch, integrity errors, cancellation, and local errors route to stop/recovery
+    without retry or switch.
+  - A network retry is charged only when actually scheduled; segment retries share the combined
+    budget (6).
+  - At most one segment-backend transition per job (persisted segment_backend_used); a second
+    attempt emits backend_switch_blocked and returns None.
+  - The original variant binding is propagated and numeric quality is rechecked on switch;
+    a compatible segment checkpoint is reused, otherwise a new segment download is reported and
+    yt-dlp artifacts are preserved.
+  - An incompatible playlist cannot contribute an old fragment to the final MP4 (existing
+    checkpoint reconciliation/quarantine).
+  - A failed segment switch returns None and preserves artifacts (no unlimited alternation).
+  - Missing required fragment after retries yields reason_code missing_required_fragment and
+    returns None.
+  - JobPhase.FINALIZING exists and is emitted during file retry/publish; verified disk bytes are
+    separate from yt-dlp estimates and current-session network bytes; no percent/ETA is used as
+    proof.
+  - test_progress, test_progress_display, test_hls_downloader, test_ytdlp_downloader, and
+    test_download_state pass for the new behaviors.
+  - ruff and mypy pass for changed Python files.
+  - Execution plan status for D5 is updated.
+
+verification_steps:
+  - uv run ruff check src/vkdownloader/models/enums.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/segment_downloader.py src/vkdownloader/services/progress.py src/vkdownloader/services/progress_display.py
+  - uv run mypy src/vkdownloader/models/enums.py src/vkdownloader/services/state_machine.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/segment_downloader.py src/vkdownloader/services/progress.py src/vkdownloader/services/progress_display.py
+  - uv run pytest tests/test_progress.py tests/test_progress_display.py tests/test_hls_downloader.py tests/test_ytdlp_downloader.py tests/test_download_state.py -q
+
+constraints:
+  - No production code distortion for tests; do not change production source in this planning task.
+  - Preserve contracts: _download_with_ytdlp external Path | None; YtdlpLaunchResult additive.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
+  - No unlimited alternation; return None after a failed segment switch.
+  - deep_decode remains off for ordinary finalization (D4 contract).
+  - Legacy discovery remains read-only.
+  - Quarantine remains rename-only; no media copy.
+  - Verified counters only move forward; never roll back on child restart.

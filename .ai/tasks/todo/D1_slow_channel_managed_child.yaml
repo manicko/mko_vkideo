@@ -1,0 +1,275 @@
+# Implementation task for Block D1 — Slow channel & managed child process.
+# Semantic units only; no line numbers. Based on .ai/tasks/templates/task_template.yaml.
+
+id: task_D1_slow_channel_managed_child
+
+title: D1 — Slow channel and managed child process (--throttled-rate removal, --ignore-config, diagnostic low-speed warning)
+
+priority: high
+
+depends_on:
+  - task_D0_reproduction_correlation
+
+# Plan/audit source
+source_reference: .ai/plans/vkdownloader_download_restart_plan.md
+source_section: "D1. Slow channel & managed child process"
+source_blocks:
+  - "D1 — Slow channel & managed child process"
+
+description: >
+  Remove yt-dlp's hidden throttled-rate re-extraction trigger from the managed child command,
+  make the managed argv ignore external yt-dlp configuration files, repurpose throttled_rate as a
+  diagnostic-only sustained low-speed threshold, remove the dead throttled_rate key from library-mode
+  extraction, and add a repeat-suppressed diagnostic warning in both progress readers. Update
+  configuration defaults/docs and affected tests. Preserve the external Path | None contract and do
+  not add any watchdog/retry behavior.
+
+goals:
+  - Change Settings.throttled_rate to default 0 with bounds ge=0, le=1000000 and updated description.
+  - Remove --throttled-rate from _build_ytdlp_cli_command and add --ignore-config.
+  - Remove throttled_rate from extractor._extract_with_ytdlp ydl_opts.
+  - Add sustained, byte-count-based, repeat-suppressed low-speed diagnostic warning in progress readers.
+  - Update .env.example and docs/11-guides/configuration.md (threshold semantics + external config boundary).
+  - Update affected tests and add low-speed warning sampling/suppression tests.
+  - Update execution plan status for D0/D1.
+
+# Extra context from plan/research (verbatim highlights)
+extra_context: |
+  Researcher notes (2026-11-07):
+  - yt-dlp --throttled-rate semantics: sustained low speed raises ThrottledDownload (subclass of
+    ReExtractInfo), causing hidden re-extraction. Default in yt-dlp is None (disabled); passing 0
+    is equivalent to disabled. Removing the flag disables the check entirely.
+  - --ignore-config: skips system + user config files, making argv reproducible and preventing an
+    external config from reintroducing --throttled-rate or changing .part/fragment-skip policy.
+    Compatibility boundary: users relying on global yt-dlp config (proxy, cookies, output templates)
+    lose automatic application. Managed invocation already passes cookies via stdin, User-Agent,
+    Referer, quality, and output template explicitly. Proxy can still be supplied through
+    HTTP_PROXY/HTTPS_PROXY env vars.
+  - Diagnostic low-speed warning (sustained sampling):
+    - Measure speed only from downloaded byte counts parsed from progress lines
+      (_parse_ytdlp_progress_state -> downloaded), never from percent or ETA.
+    - Compute bytes/sec over a sliding window of the last N samples (recommend N=3) spanning at
+      least the sustained window (recommend >=3s, matching yt-dlp's own 3s check).
+    - Warn only when the sustained rate is positive but below throttled_rate (when throttled_rate > 0);
+      if 0, disable the warning. Do not change task state or trigger refresh.
+    - Suppress repeats: emit at most once per low-speed episode; reset the episode flag when the rate
+      recovers above threshold or bytes stop growing. Additionally cooldown (recommend 30s) between
+      warnings in a long episode.
+    - Keep three situations distinct: (a) low speed with byte growth -> diagnostic warning only;
+      (b) no byte growth -> existing download_stall_timeout path; (c) finalization wait -> separate phase.
+    - Do not use percent/ETA as proof of progress/completion.
+  - Config contract:
+    - Settings.throttled_rate: default 0 (disable), bounds ge=0, le=1000000. Positive values are
+      interpreted as the diagnostic low-speed threshold. Old positive values (50000..1000000) remain valid.
+    - Minimal recommendation is ge=0, le=1000000 to keep validation simple and backward-compatible.
+  - Extractor library-mode:
+    - _extract_with_ytdlp passes "throttled_rate" in ydl_opts. Extraction uses download=False, so
+      media is not downloaded and throttled_rate has no effect. Remove the key to eliminate dead
+      config coupling.
+
+files:
+  - path: src/vkdownloader/config.py
+    targets:
+      - type: field
+        name: throttled_rate
+    changes:
+      - action: modify_field
+        description: >
+          Set default=0, ge=0, le=1000000. Update description to state that the value is a diagnostic
+          low-speed threshold in bytes/sec (0 disables), no longer an abort/re-extract trigger, and that
+          the managed yt-dlp child ignores external config files.
+
+  - path: src/vkdownloader/services/ytdlp_downloader.py
+    targets:
+      - type: function
+        name: _build_ytdlp_cli_command
+      - type: function
+        name: _download_with_ytdlp
+      - type: function
+        name: _monitor_progress
+      - type: function
+        name: _drain_output
+    semantic_anchors:
+      insert_after:
+        type: literal
+        value: "--no-warnings"
+      insert_before:
+        type: literal
+        value: "--socket-timeout"
+    changes:
+      - action: remove_lines
+        description: >
+          Remove the "--throttled-rate" / str(settings.throttled_rate) pair from the base command list.
+      - action: add_flag
+        description: >
+          Add "--ignore-config" to the base command list (membership only; placement after --no-warnings
+          is acceptable). This makes argv reproducible and prevents external config from reintroducing
+          throttled re-extraction.
+      - action: add_class
+        description: >
+          Add a module-level, importable helper class `LowSpeedWarningTracker` in ytdlp_downloader.py.
+          Constructor signature:
+            LowSpeedWarningTracker(threshold_bytes_per_sec: int, *, sample_count: int = 3,
+            min_window_seconds: float = 3.0, cooldown_seconds: float = 30.0)
+          Method:
+            observe(self, downloaded: int, *, now: float | None = None) -> bool
+          Behavior:
+            - threshold_bytes_per_sec <= 0: disabled; return False without logging or state mutation.
+            - Maintain a sliding window of the last `sample_count` (monotonic timestamp, downloaded bytes)
+              samples.
+            - If fewer than `sample_count` samples have been observed, or the time span between first and
+              last sample is < min_window_seconds, return False.
+            - Compute rate = (last_downloaded - first_downloaded) / span when span > 0, otherwise 0.
+            - If rate <= 0 (no byte growth): reset the low-speed episode and cooldown; return False
+              (existing download_stall_timeout path remains responsible).
+            - If rate >= threshold: reset the low-speed episode; return False.
+            - If 0 < rate < threshold:
+                - If no warning has been emitted in the current episode, or
+                  (now - last_warning_at) >= cooldown_seconds:
+                    emit module logger warning event "ytdlp_low_speed" with fields
+                    rate_bytes_per_sec (float), threshold_bytes_per_sec (int), sample_count (int),
+                    window_seconds (float), downloaded (int); set last_warning_at=now and mark the episode
+                    as warned; return True.
+                - Otherwise return False (suppressed repeat).
+            - Reset the episode flag when the rate recovers above threshold or bytes stop growing.
+            - The helper must not mutate download/task state, invoke callbacks, or trigger refresh.
+      - action: integrate_helper
+        description: >
+          In _download_with_ytdlp, instantiate one LowSpeedWarningTracker(settings.throttled_rate) before
+          creating reader tasks. In both _monitor_progress and _drain_output, after
+          progress_state = _parse_ytdlp_progress_state(decoded), call
+          low_speed_tracker.observe(progress_state.downloaded) when progress_state is not None.
+          Ignore the boolean return value. Keep all existing progress callback and snapshot behavior.
+
+  - path: src/vkdownloader/services/extractor.py
+    targets:
+      - type: method
+        name: _extract_with_ytdlp
+    changes:
+      - action: remove_key
+        description: >
+          Remove "throttled_rate": self.settings.throttled_rate from ydl_opts. Update the docstring to no
+          longer mention throttled_rate among propagated Settings fields.
+
+  - path: .env.example
+    targets:
+      - type: file
+        name: .env.example
+    changes:
+      - action: update_setting_comment
+        description: >
+          Change the throttled_rate example to default 0 and add comments explaining diagnostic-only
+          semantics (positive value is a sustained low-speed warning threshold; 0 disables), that managed
+          yt-dlp no longer aborts/re-extracts on low speed, and the --ignore-config boundary (global
+          yt-dlp config files are not loaded; proxy via HTTP_PROXY/HTTPS_PROXY).
+
+  - path: docs/11-guides/configuration.md
+    targets:
+      - type: table_row
+        name: throttled_rate
+    changes:
+      - action: update_row
+        description: >
+          Set default to 0 and range to 0-1000000. Describe throttled_rate as a diagnostic low-speed
+          threshold in bytes/sec for sustained sampling in the yt-dlp progress reader; positive values only
+          emit a ytdlp_low_speed warning, with no download abort, state change, or refresh; 0 disables.
+      - action: add_section
+        description: >
+          Add an "External yt-dlp configuration boundary" subsection documenting that the managed child
+          passes --ignore-config, so system/user yt-dlp config files are not loaded; managed invocation
+          passes cookies via stdin, User-Agent, Referer, quality, and output template explicitly; proxy
+          configuration continues to work through HTTP_PROXY/HTTPS_PROXY environment variables.
+
+  - path: tests/test_config.py
+    targets:
+      - type: function
+        name: test_throttled_rate_default
+      - type: function
+        name: test_throttled_rate_validation
+      - type: method
+        name: test_no_ambient_product_variable_reaches_settings
+    changes:
+      - action: update_assertion
+        description: >
+          test_throttled_rate_default asserts 0. test_throttled_rate_validation accepts 0 and 1000000 and
+          rejects -1 and 1000001 (bounds are now ge=0). Environment isolation assertion expects
+          throttled_rate == 0.
+
+  - path: tests/test_hls_downloader.py
+    targets:
+      - type: method
+        name: test_cli_command_includes_throttled_rate
+      - type: method
+        name: test_cli_command_custom_values
+    changes:
+      - action: update_contract
+        description: >
+          Replace the old includes-throttled-rate assertion with the new contract: "--throttled-rate" not in
+          cmd and "--ignore-config" in cmd. Rename the test to test_cli_command_excludes_throttled_rate if
+          desired. In test_cli_command_custom_values, remove the --throttled-rate assertion and keep -N and
+          --http-chunk-size assertions; throttled_rate may remain in the custom Settings as threshold
+          reachability only.
+
+  - path: tests/test_extractor.py
+    targets:
+      - type: method
+        name: test_extract_with_ytdlp_propagates_settings_to_ydl_opts
+    changes:
+      - action: remove_assertion
+        description: >
+          Remove the assertion on ydl_opts["throttled_rate"]. Optionally assert "throttled_rate" not in
+          ydl_opts. Keep socket_timeout, retries, and fragment_retries assertions.
+
+  - path: tests/test_ytdlp_low_speed.py
+    targets:
+      - type: module
+        name: test_ytdlp_low_speed
+    changes:
+      - action: add_tests
+        description: >
+          Add unit tests for LowSpeedWarningTracker covering:
+            1. threshold 0 disables warnings (no logger.warning) even with sustained low samples.
+            2. fewer than sample_count samples produce no warning.
+            3. window shorter than min_window_seconds produces no warning.
+            4. sustained rate below threshold over >=3s with 3 samples emits exactly one warning.
+            5. repeated low samples in the same episode are suppressed until cooldown.
+            6. after cooldown_seconds elapses, a new warning is emitted.
+            7. recovery above threshold resets the episode; a later low episode emits again.
+            8. no byte growth (rate <= 0) emits no warning and resets episode state.
+            9. helper uses downloaded byte counts, not percent/ETA (API accepts only downloaded + now).
+          Patch module logger to assert event name "ytdlp_low_speed" and fields. Use deterministic now
+          values; do not sleep.
+
+  - path: .ai/plans/01-vkdownloader-download-restart-execution.md
+    targets:
+      - type: table
+        name: blocks
+    changes:
+      - action: update_status
+        description: >
+          Mark D0 as completed and D1 as ready with task path
+          .ai/tasks/todo/D1_slow_channel_managed_child.yaml.
+
+acceptance_criteria:
+  - Settings.throttled_rate defaults to 0 with bounds 0..1000000 and updated description.
+  - _build_ytdlp_cli_command contains neither --throttled-rate nor its value and contains --ignore-config.
+  - extractor._extract_with_ytdlp ydl_opts does not contain throttled_rate.
+  - Progress readers instantiate one LowSpeedWarningTracker and call observe(downloaded) for each parsed progress line.
+  - Low-speed warning fires only for sustained positive rates below threshold, at most once per episode plus cooldown, and resets on recovery or no byte growth.
+  - Warning does not mutate download state, callbacks, snapshots, or refresh behavior.
+  - .env.example and docs/11-guides/configuration.md reflect diagnostic threshold semantics and external config boundary.
+  - Affected config/CLI/extractor tests are updated and pass.
+  - New low-speed warning tests pass.
+  - ruff and mypy pass for changed Python files.
+
+verification_steps:
+  - uv run ruff check src/vkdownloader/config.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/extractor.py
+  - uv run mypy src/vkdownloader/config.py src/vkdownloader/services/ytdlp_downloader.py src/vkdownloader/services/extractor.py
+  - uv run pytest tests/test_config.py tests/test_extractor.py tests/test_hls_downloader.py tests/test_ytdlp_low_speed.py -q
+
+constraints:
+  - Preserve external contract Path | None of _download_with_ytdlp.
+  - No watchdog, retry, or state-machine changes.
+  - No production distortion for tests; tests must follow updated contract.
+  - Semantic anchors only; no line numbers.
+  - Do not change audit phase files.
